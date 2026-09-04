@@ -1,0 +1,64 @@
+"""M-017: how much of the shipped book's target turnover would live have refused, by capital.
+
+The vol-target k is scale-free in the backtest because gross P&L, turnover cost and funding are all
+linear in the weights (config/live.demo.yaml).  ``max_participation`` is the one live constraint that
+is not, so this is the curve that says at what account size that identity stops being a good
+approximation and k has to be re-derived under an impact-aware cost model.
+
+It measures and changes nothing: ``ParticipationModel`` is an instrument, and the book it scores is
+bit-for-bit the one ``beidou research backtest`` scores (tests/alpha/test_book_guard_replay.py).
+"""
+
+from __future__ import annotations
+
+from beidou_alpha.backtest import ParticipationModel, run_backtest
+from beidou_alpha.overlays.exposure import BookGuardParams
+from beidou_cli.research_cmd import _entry, _load, _membership, _model, _resolve_symbols
+from beidou_live.composition import cost_model
+from beidou_shared.config import load_yaml
+
+CAPITALS = (1_000.0, 10_000.0, 100_000.0, 1_000_000.0, 10_000_000.0)
+STRATEGY = "tsmom"
+ROOT = ".beidou/data"
+INTERVAL = "1h"
+
+
+def main() -> None:
+    profile = load_yaml("config/live.demo.yaml")
+    entry = _entry(STRATEGY, "config/alpha_registry.yaml", "")
+    chosen = _resolve_symbols(ROOT, "", INTERVAL, "pit")
+    panel = _load(ROOT, chosen, INTERVAL, None, None, True)
+    membership = _membership(ROOT, "pit", panel, 0)
+    model = _model(entry, profile, INTERVAL, None)
+    cost = cost_model(load_yaml("config/costs.yaml"), use_funding=True)
+    weights, _c, _p = model.evaluate(panel, membership)
+
+    portfolio = profile.get("portfolio", {}) or {}
+    guards = BookGuardParams(
+        max_weight=float(portfolio.get("max_weight", 0.15)),
+        max_gross=float(portfolio.get("max_gross", 2.0)),
+        daily_loss_pause=float((profile.get("guards", {}) or {}).get("daily_loss_pause", -0.05)),
+    )
+    rate = float(portfolio.get("max_participation", 0.02))
+    window = int((profile.get("pool", {}) or {}).get("liquidity_window", 24))
+
+    baseline = run_backtest(panel, weights, cost, guards=guards)
+    base = baseline.summary()["annualized_sharpe"]
+    print(f"strategy={STRATEGY}  bars={len(baseline.weights)}  max_participation={rate}  window={window}")
+    print(f"baseline net Sharpe {base:.4f} - unchanged at every capital below, and asserted per row\n")
+    print(f"{'capital (USDT)':>16} {'refused turnover':>18} {'capped bars':>13} {'share of bars':>15}")
+    print("-" * 66)
+    for capital in CAPITALS:
+        result = run_backtest(
+            panel, weights, cost, guards=guards, participation=ParticipationModel(capital, rate, window)
+        )
+        g = result.summary()["guards"]
+        assert result.summary()["annualized_sharpe"] == base, "the instrument moved the book"
+        print(
+            f"{capital:>16,.0f} {g['refused_turnover_share']:>17.2%} "
+            f"{g['participation_capped_bars']:>13,} {g['participation_capped_bars'] / g['bars']:>14.2%}"
+        )
+
+
+if __name__ == "__main__":
+    main()

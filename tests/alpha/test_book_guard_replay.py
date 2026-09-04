@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from beidou_alpha.backtest import CostModel, run_backtest
+from beidou_alpha.backtest import CostModel, ParticipationModel, run_backtest
 from beidou_alpha.overlays.exposure import BookGuardParams, clamp_book, hold_or_reduce
 from beidou_alpha.panel import Panel
 
@@ -20,7 +20,7 @@ BARS = 240
 SYMBOLS = ["AAAUSDT", "BBBUSDT"]
 
 
-def _panel(returns: np.ndarray) -> Panel:
+def _panel(returns: np.ndarray, quote_volume: float = 1.0) -> Panel:
     index = pd.date_range("2024-01-01", periods=BARS, freq="1h", tz="UTC")
     close = pd.DataFrame(100.0 * np.cumprod(1.0 + returns, axis=0), index=index, columns=SYMBOLS)
     frames = {
@@ -31,7 +31,7 @@ def _panel(returns: np.ndarray) -> Panel:
                 "low": close[symbol],
                 "close": close[symbol],
                 "volume": 1.0,
-                "quote_volume": 1.0,
+                "quote_volume": quote_volume,
             },
             index=index,
         )
@@ -49,11 +49,15 @@ def test_replay_is_bit_for_bit_inert_when_neither_guard_binds() -> None:
     on = run_backtest(panel, weights, cost, guards=BookGuardParams())
     pd.testing.assert_frame_equal(off.weights, on.weights)
     pd.testing.assert_series_equal(off.portfolio_net, on.portfolio_net)
-    assert on.summary()["guards"] == {
+    guards = on.summary()["guards"]
+    # gross 0.10 against the default 0.5% maintenance rate: the requirement is 5 bp of equity
+    assert guards.pop("min_margin_buffer") > 1000.0
+    assert guards == {
         "replayed": True,
         "gross_capped_bars": 0,
         "daily_loss_pause_bars": 0,
         "bars": len(on.weights),
+        "liquidation_touches": 0,
     }
     assert off.summary().get("guards") is None
 
@@ -101,3 +105,125 @@ def test_clamp_and_hold_or_reduce_are_the_primitives_live_shares() -> None:
     # only moves toward zero: same sign and smaller, or flat
     moved = hold_or_reduce(np.array([0.2, 0.05, -0.1, 0.1]), np.array([0.1, 0.1, 0.2, -0.1]))
     assert moved.tolist() == [0.1, 0.05, 0.0, 0.0]
+
+
+def test_margin_buffer_is_recorded_and_never_touches_liquidation_on_the_shipped_book() -> None:
+    """M-016: the claim "liquidation is unreachable at gross 2.0" becomes a number.
+
+    It was true before this instrument existed - `margin_cap` 0.40, `max_weight` 0.15 and the -5% pause
+    all sit far in front of it - but nothing stated it, and D-037 is the standing lesson that a correct
+    fact no instrument reports is indistinguishable from an unproven one.
+    """
+    rng = np.random.default_rng(7)
+    panel = _panel(rng.normal(0.0, 0.002, size=(BARS, len(SYMBOLS))))
+    weights = pd.DataFrame(0.05, index=panel.close.index, columns=SYMBOLS)
+    result = run_backtest(panel, weights, CostModel(turnover_bps=7.0), guards=BookGuardParams())
+    events = result.guard_events
+    assert events is not None
+    assert "margin_buffer" in events.columns
+    guards = result.summary()["guards"]
+    assert guards["liquidation_touches"] == 0
+    # gross 0.10 at the default 0.5% maintenance rate -> equity is ~2000x the requirement
+    assert guards["min_margin_buffer"] > 100.0
+
+
+def test_the_margin_buffer_collapses_and_records_a_touch_when_maintenance_eats_the_equity() -> None:
+    """The instrument has to be able to fire, or reporting 0 touches proves nothing.
+
+    Drives it from the maintenance rate rather than the book: at a rate this absurd the requirement is
+    0.9x equity, so an ordinary adverse bar crosses it.  This is the test that stops `liquidation_touches`
+    from being zero by construction.
+    """
+    returns = np.zeros((BARS, len(SYMBOLS)))
+    returns[40, 0] = -0.15  # one leg of a gross-2.0 book -> a -15% book return
+    panel = _panel(returns)
+    weights = pd.DataFrame(1.0, index=panel.close.index, columns=SYMBOLS)
+    result = run_backtest(
+        panel,
+        weights,
+        CostModel(turnover_bps=0.0),
+        guards=BookGuardParams(max_weight=1.0, max_gross=2.0),
+        maintenance_margin_rate=0.45,
+    )
+    events = result.guard_events
+    assert events is not None
+    guards = result.summary()["guards"]
+    assert guards["liquidation_touches"] >= 1, "a -15% bar against a 0.9x requirement must touch"
+    assert guards["min_margin_buffer"] < 1.0
+    touched = events["margin_buffer"] <= 1.0
+    assert touched.any() and events.loc[touched, "margin_buffer"].min() == pytest.approx(0.85 / 0.9, rel=1e-6)
+
+
+def test_a_flat_book_has_no_maintenance_requirement_and_so_infinite_buffer() -> None:
+    panel = _panel(np.zeros((BARS, len(SYMBOLS))))
+    weights = pd.DataFrame(0.0, index=panel.close.index, columns=SYMBOLS)
+    result = run_backtest(panel, weights, CostModel(turnover_bps=0.0), guards=BookGuardParams())
+    guards = result.summary()["guards"]
+    assert guards["liquidation_touches"] == 0
+    assert guards["min_margin_buffer"] == float("inf")
+
+
+def test_the_participation_instrument_does_not_move_the_book() -> None:
+    """M-017: it measures what live would refuse.  It must not change what the backtest scores.
+
+    `max_participation` is out of scope as a *constraint* (config/live.demo.yaml:31-38: k must be
+    re-derived under an impact-aware cost model, recorded as not done).  This is the measurement that
+    says how urgent that is, so it is only honest if it leaves every published number where it was.
+    """
+    rng = np.random.default_rng(7)
+    panel = _panel(rng.normal(0.0, 0.002, size=(BARS, len(SYMBOLS))), quote_volume=1_000.0)
+    weights = pd.DataFrame(0.05, index=panel.close.index, columns=SYMBOLS)
+    cost = CostModel(turnover_bps=7.0)
+    off = run_backtest(panel, weights, cost, guards=BookGuardParams())
+    on = run_backtest(
+        panel,
+        weights,
+        cost,
+        guards=BookGuardParams(),
+        participation=ParticipationModel(capital=10_000.0, max_participation=0.02),
+    )
+    pd.testing.assert_frame_equal(off.weights, on.weights)
+    pd.testing.assert_series_equal(off.portfolio_net, on.portfolio_net)
+    assert off.summary()["guards"].get("participation_capped_bars") is None
+    assert on.summary()["guards"]["participation_capped_bars"] >= 1
+
+
+def test_the_refused_share_is_the_notional_live_would_have_truncated() -> None:
+    """Constant weights, so the only order is the opening one: the arithmetic is checkable by hand."""
+    panel = _panel(np.zeros((BARS, len(SYMBOLS))), quote_volume=1_000.0)
+    weights = pd.DataFrame(0.05, index=panel.close.index, columns=SYMBOLS)
+    result = run_backtest(
+        panel,
+        weights,
+        CostModel(turnover_bps=0.0),
+        guards=BookGuardParams(),
+        # allowed = 0.02 x 1,000 = 20 per symbol; wanted = 0.05 x 10,000 = 500
+        participation=ParticipationModel(capital=10_000.0, max_participation=0.02),
+    )
+    guards = result.summary()["guards"]
+    assert guards["participation_capped_bars"] == 1
+    assert guards["refused_turnover_share"] == pytest.approx((500.0 - 20.0) / 500.0)
+
+
+def test_a_full_exit_is_never_refused_because_live_exempts_closes() -> None:
+    """rebalancer.py:128 -- `closing` is target==0 while holding, and :154 exempts exactly that.
+
+    Getting out is always executable; a partial adjustment is not.  The instrument has to reproduce
+    that asymmetry or it would overstate what live refuses.
+    """
+    panel = _panel(np.zeros((BARS, len(SYMBOLS))), quote_volume=1_000.0)
+    weights = pd.DataFrame(0.05, index=panel.close.index, columns=SYMBOLS)
+    weights.iloc[120:] = 0.0
+    result = run_backtest(
+        panel,
+        weights,
+        CostModel(turnover_bps=0.0),
+        guards=BookGuardParams(),
+        participation=ParticipationModel(capital=10_000.0, max_participation=0.02),
+    )
+    events = result.guard_events
+    assert events is not None
+    exit_bar = events.index[events["desired_notional"] > 0][-1]
+    assert events.loc[exit_bar, "desired_notional"] == pytest.approx(2 * 0.05 * 10_000.0)
+    assert events.loc[exit_bar, "refused_notional"] == 0.0
+    assert result.summary()["guards"]["participation_capped_bars"] == 1  # only the opening bar

@@ -13,6 +13,13 @@ Costs charged on the execution bar: ``turnover_bps`` per unit of |Δw|,
 ``carry_bps_per_bar`` per unit of |w| (flat adverse carry, legacy diagnostic)
 and, when ``use_funding``, the actual settled funding ``w * rate`` (longs pay
 positive funding).
+
+When ``guards`` replays the book, it also reports a margin buffer: post-bar equity
+over the maintenance requirement ``gross * maintenance_margin_rate``, so 1.0 is the
+liquidation line.  It is an instrument, not a guard - nothing reads it back into the
+book.  Its limit is the same continuous-rebalancing assumption the replay already
+makes: the book is a fraction of *current* equity and returns are close-to-close, so
+the buffer cannot see an intra-bar path that liquidates and recovers inside one bar.
 """
 
 from __future__ import annotations
@@ -39,6 +46,41 @@ class CostModel:
     def __post_init__(self) -> None:
         if self.turnover_bps < 0 or self.carry_bps_per_bar < 0:
             raise ValueError("cost parameters must be non-negative")
+
+
+@dataclass(frozen=True)
+class ParticipationModel:
+    """The live participation cap (T-S03), measured but never applied.
+
+    ``beidou_live.rebalancer.plan_rebalance`` truncates any non-closing order above
+    ``max_participation * average quote volume``.  The backtest does not apply it - re-deriving the
+    vol-target k under an impact-aware cost model is recorded as out of scope in
+    ``config/live.demo.yaml`` - so this reports how much of the target turnover live would have
+    refused, and changes nothing about the book that is scored.
+
+    ``capital`` exists because the cap is the first thing here that is not scale-free: weights, costs
+    and funding are all fractions of equity, while the cap is an absolute notional.
+    """
+
+    capital: float
+    max_participation: float
+    window: int = 24  # bars averaged, matching `LiveEngine.liquidity_window`
+
+    def __post_init__(self) -> None:
+        if self.capital <= 0:
+            raise ValueError("capital must be positive")
+        if self.max_participation <= 0:
+            raise ValueError("max_participation must be positive")
+        if self.window < 1:
+            raise ValueError("window must be at least one bar")
+
+
+def average_quote_volume(panel: Panel, columns: list[str], window: int) -> pd.DataFrame:
+    """Trailing mean quote volume per bar, the same quantity ``LiveEngine._liquidity`` sends live."""
+    source = panel.quote_volume
+    if source is None:
+        source = panel.volume * panel.close
+    return source[columns].rolling(window, min_periods=1).mean()
 
 
 @dataclass
@@ -73,7 +115,14 @@ class BacktestResult:
                 "gross_capped_bars": int(self.guard_events["gross_capped"].sum()),
                 "daily_loss_pause_bars": int(self.guard_events["daily_loss_pause"].sum()),
                 "bars": len(self.guard_events),
+                "min_margin_buffer": float(self.guard_events["margin_buffer"].min()),
+                "liquidation_touches": int((self.guard_events["margin_buffer"] <= 1.0).sum()),
             }
+            if "refused_notional" in self.guard_events.columns:
+                desired = float(self.guard_events["desired_notional"].sum())
+                refused = float(self.guard_events["refused_notional"].sum())
+                out["guards"]["participation_capped_bars"] = int((self.guard_events["refused_notional"] > 0).sum())
+                out["guards"]["refused_turnover_share"] = refused / desired if desired > 0 else 0.0
         return out
 
     def per_symbol_summary(self) -> dict[str, dict[str, Any]]:
@@ -99,6 +148,8 @@ def run_backtest(
     cost: CostModel | None = None,
     execution: Execution = "open_to_close",
     guards: BookGuardParams | None = None,
+    maintenance_margin_rate: float = 0.005,
+    participation: ParticipationModel | None = None,
 ) -> BacktestResult:
     """``weights``: decision-time target weights (fraction of equity), index = decision bars.
 
@@ -126,7 +177,14 @@ def run_backtest(
     guard_events: pd.DataFrame | None = None
     if guards is not None:
         decision_times = pd.DatetimeIndex(panel.close.index[panel.close.index.get_indexer(executed.index) - 1])
-        executed, guard_events = _replay_book_guards(executed, decision_times, rets, funding, cost, guards)
+        liquidity = (
+            average_quote_volume(panel, columns, participation.window).reindex(decision_times).to_numpy(dtype=float)
+            if participation is not None
+            else None
+        )
+        executed, guard_events = _replay_book_guards(
+            executed, decision_times, rets, funding, cost, guards, maintenance_margin_rate, participation, liquidity
+        )
     gross = executed * rets
     delta = executed.diff()
     delta.iloc[0] = executed.iloc[0]
@@ -155,6 +213,9 @@ def _replay_book_guards(
     funding: pd.DataFrame | None,
     cost: CostModel,
     params: BookGuardParams,
+    maintenance_margin_rate: float,
+    participation: ParticipationModel | None = None,
+    liquidity: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Bar-by-bar replay of the caps and the daily-loss pause on the equity path they themselves produce.
 
@@ -173,6 +234,9 @@ def _replay_book_guards(
     out = np.empty_like(values)
     capped = np.zeros(len(values), dtype=bool)
     paused = np.zeros(len(values), dtype=bool)
+    buffers = np.full(len(values), np.inf)
+    desired_notional = np.zeros(len(values))
+    refused_notional = np.zeros(len(values))
     days = pd.DatetimeIndex(decision_times).normalize().to_numpy()
     held = np.zeros(values.shape[1])
     equity = 1.0
@@ -192,9 +256,28 @@ def _replay_book_guards(
         charge = float(np.abs(row - held).sum()) * turnover_rate + float(np.abs(row).sum()) * carry_rate
         if fees is not None:
             charge += float(row @ fees[t])
+        if participation is not None and liquidity is not None:
+            wanted = np.abs(row - held) * participation.capital * equity
+            cap = liquidity[t] * participation.max_participation
+            # live exempts a full close (`closing`: target 0 while holding) and never caps a symbol
+            # whose liquidity is unknown, because `plan_rebalance` requires `cap is not None and cap > 0`
+            exempt = ((row == 0.0) & (held != 0.0)) | ~np.isfinite(cap) | (cap <= 0.0)
+            desired_notional[t] = float(wanted.sum())
+            refused_notional[t] = float(np.where(exempt, 0.0, np.maximum(0.0, wanted - cap)).sum())
+        maintenance = float(np.abs(row).sum()) * maintenance_margin_rate
+        if maintenance > 0.0:
+            buffers[t] = (1.0 + realised - charge) / maintenance
         equity *= 1.0 + (realised - charge)
         held = row
-    events = pd.DataFrame({"gross_capped": capped, "daily_loss_pause": paused}, index=executed.index)
+    columns: dict[str, np.ndarray] = {
+        "gross_capped": capped,
+        "daily_loss_pause": paused,
+        "margin_buffer": buffers,
+    }
+    if participation is not None:
+        columns["desired_notional"] = desired_notional
+        columns["refused_notional"] = refused_notional
+    events = pd.DataFrame(columns, index=executed.index)
     return pd.DataFrame(out, index=executed.index, columns=executed.columns), events
 
 

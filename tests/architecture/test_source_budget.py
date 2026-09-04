@@ -223,8 +223,43 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # until then.  The report prints the first gate because the code returns on it first.  Honest note, same
 # as the ninth and fifteenth raises: found by an operator asking whether history could substitute for the
 # 30-day window, not by a test.
+# Seventeenth raise, 2026-09-05, with the sentence the rule requires: +19 in beidou_alpha for the margin
+# buffer the guard replay now reports (M-016).  Buys no capability and changes no number the project has
+# published: the replay's weights, net returns and both guard counts are untouched, and the instrument is
+# read by nobody in the book.  It exists because "liquidation is unreachable at gross 2.0" was true and
+# unstated.  `margin_cap` 0.40, `max_weight` 0.15 and the -5% pause all sit far in front of it, so the
+# conclusion was right - but D-037 is the standing lesson that a correct fact no instrument reports is
+# indistinguishable from an unproven one, and the shipped book now prints the distance instead of relying
+# on the argument.  Measured on the inertness fixture: 1,999x the requirement.  The audit is
+# docs/analysis/2026-09-05-backtest-guard-external-audit.md, so "an outside audit" resolves in-repo.  Two limits recorded so the
+# number is not read for more than it says.  It inherits the replay's continuous-rebalancing assumption -
+# the book is a fraction of *current* equity, so it deleverages as equity falls and the buffer is a
+# function of the bar's return and gross, not of the equity level.  And it is close-to-close, so an
+# intra-bar path that liquidates and recovers inside one hour is invisible to it; seeing that needs the
+# drifted-position model this module's docstring already flags as its one approximation against live.
+# The test that earns the raise is the second one, not the first: an instrument that reports zero touches
+# proves nothing until something makes it fire, so a 0.45 maintenance rate drives the buffer under 1.0 on
+# an ordinary bar.  Honest note: found by an outside audit of this repo, not by a test.
+# Eighteenth raise, 2026-09-05, with the sentence the rule requires: +64 in beidou_alpha for the
+# participation instrument (M-017).  Same shape as the seventeenth and the same restraint: it reports
+# what `beidou_live.rebalancer.plan_rebalance` would have refused and applies nothing, so weights, net
+# returns and every published Sharpe are bit-for-bit what they were - asserted, not asserted-to.
+# It is deliberately NOT the fix.  `config/live.demo.yaml` already records the real one: the vol-target
+# k is scale-free only because gross P&L, turnover cost and funding are all linear in the weights, that
+# identity "proves nothing about a world with market impact", and k must be re-derived under an
+# impact-aware cost model - "recorded as out of scope, not as done".  Building that model here would
+# have moved a registered book on an auditor's initiative.  This measures how urgent it is instead.
+# `capital` is the honest cost of the instrument: it is the first parameter in this module that is not
+# scale-free, because the cap is an absolute notional while everything else is a fraction of equity.
+# Two fidelity details are in the code rather than here because they change the number: a full close is
+# exempt (live's `closing`), and a symbol with unknown liquidity is never capped (live requires
+# `cap is not None and cap > 0`) - without the second, the measurement would refuse every early bar.
+# Honest note: found by an outside audit, whose first write-up had the exemption backwards - it claimed
+# only risk-adding orders were capped, when live exempts full closes alone.  The test encodes the real
+# rule, which is why it is worth having a test rather than a paragraph.  Curve in scratchpad/participation_capacity_sweep.py;
+# audit and its correction in docs/analysis/2026-09-05-backtest-guard-external-audit.md.
 CEILING = {
-    "beidou_alpha": 4_756,
+    "beidou_alpha": 4_839,
     "beidou_live": 4_198,
     "beidou_cli": 2_582,
     "beidou_data": 1_258,
