@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 
 INCOME_TYPES = ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE")
@@ -76,12 +76,41 @@ def strategy_shares(
     return {k: abs(value) / total for k, value in signed.items() if abs(value) > 1e-12}
 
 
+def split_by_origin(
+    income_rows: list[dict[str, Any]], own_trade_ids: Collection[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(rows from fills the loop placed, rows from fills it did not) — D-032.
+
+    Only a row that names a ``tradeId`` can be classified.  FUNDING_FEE carries none, and funding accrues
+    on a position regardless of who opened it, so those rows stay with the book: this splits *who traded*,
+    not *who is exposed*.
+
+    The case this exists for: on 2026-09-04 the operator flattened the whole book by hand and its +26.30
+    realised P&L was attributed to tsmom.  That is right in economic terms - tsmom chose and held those
+    positions - but it compressed a whole holding period's unrealised P&L into one bar, and M-010 reads a
+    per-bar income series, so mean and variance both move.  Splitting keeps the operator's P&L in the
+    ledger (it is real money) while keeping it out of the series that judges the strategy.
+    """
+    own: list[dict[str, Any]] = []
+    foreign: list[dict[str, Any]] = []
+    known = {str(trade_id) for trade_id in own_trade_ids}
+    for row in income_rows:
+        trade_id = str(row.get("tradeId") or "")
+        (foreign if trade_id and trade_id not in known else own).append(row)
+    return own, foreign
+
+
 def attribute(
     income_rows: list[dict[str, Any]],
     contributions: Mapping[str, Mapping[str, float]],
     strategy_weights: Mapping[str, float],
+    *,
+    own_trade_ids: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    by_symbol = summarize_income(income_rows)
+    """``own_trade_ids``: when given, fills outside it are reported under ``foreign`` and kept out of
+    ``by_strategy`` / ``by_symbol`` / ``total`` (D-032).  ``None`` attributes everything, as before."""
+    rows, foreign_rows = (income_rows, []) if own_trade_ids is None else split_by_origin(income_rows, own_trade_ids)
+    by_symbol = summarize_income(rows)
     by_strategy: dict[str, float] = {}
     unattributed = 0.0
     for symbol, bucket in by_symbol.items():
@@ -91,10 +120,17 @@ def attribute(
             continue
         for strategy, share in shares.items():
             by_strategy[strategy] = by_strategy.get(strategy, 0.0) + share * bucket["total"]
+    foreign_by_symbol = summarize_income(foreign_rows)
     return {
         "by_symbol": by_symbol,
         "by_strategy": by_strategy,
         "unattributed": unattributed,
         "total": sum(bucket["total"] for bucket in by_symbol.values()),
         "external_flows": external_flows(income_rows),
+        "foreign": {
+            "by_symbol": foreign_by_symbol,
+            "total": sum(bucket["total"] for bucket in foreign_by_symbol.values()),
+            "rows": len(foreign_rows),
+            "reconciled": own_trade_ids is not None,
+        },
     }

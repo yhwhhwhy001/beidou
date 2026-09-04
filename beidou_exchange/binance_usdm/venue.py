@@ -197,11 +197,25 @@ class BinanceUsdmVenue:
         return [parse_order_ack(row) for row in payload]
 
     async def income(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        return await self._paged("/fapi/v1/income", start_ms, end_ms)
+
+    async def user_trades(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """Fills in the window, across all symbols (D-032).
+
+        An income row names a ``tradeId`` but not the order that produced it, so income alone cannot tell
+        a fill the loop placed from one the operator placed by hand.  A userTrades row carries both ``id``
+        (that same trade id) and ``orderId``, which is the join back to what the loop recorded in
+        trades.jsonl.  Verified against demo-fapi 2026-09-04: the endpoint accepts a window with no
+        ``symbol`` and returned all 68 fills of the hour.
+        """
+        return await self._paged("/fapi/v1/userTrades", start_ms, end_ms)
+
+    async def _paged(self, path: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         cursor = int(start_ms)
         for _ in range(50):
             page = await self._client.get(
-                "/fapi/v1/income", {"startTime": cursor, "endTime": int(end_ms), "limit": 1000}, signed=True
+                path, {"startTime": cursor, "endTime": int(end_ms), "limit": 1000}, signed=True
             )
             if not page:
                 break

@@ -69,6 +69,10 @@ class Venue(Protocol):
         """Now on the venue's clock.  ``income`` bounds are venue timestamps, not host ones."""
         ...
 
+    async def user_trades(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """Fills in the window, carrying both the trade id and the order id (D-032)."""
+        ...
+
 
 class UniverseUpdate(Protocol):
     """Result of a universe refresh (structural; see ``beidou_data.pool.UniverseUpdate``)."""

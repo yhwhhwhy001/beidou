@@ -86,12 +86,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # seventh - which is worth a line here: with concurrent authors the ratchet is doing double duty as a merge
 # detector, and that is a feature.  Noted honestly: non-alpha growth against the 90% target, buying plumbing
 # correctness rather than signal.
+# Eighth raise, 2026-09-04, with the sentence the rule requires: +124 in beidou_live and +14 in
+# beidou_exchange for D-032, the foreign-fill reconciliation.  The operator flattened the book by hand and
+# its +26.30 realised P&L was attributed to tsmom.  That is right in economic terms - tsmom chose and held
+# those positions - but it crystallised a whole holding period into one bar, and M-010 reads a per-bar
+# income series, so both mean and variance moved.  `external_flows` could not catch it: that only knows
+# TRANSFER rows, and a manual close is REALIZED_PNL.  An income row names a tradeId and nothing else about
+# provenance, so the split needs a /fapi/v1/userTrades join (tradeId -> orderId -> our own order log).
+# Most of the addition is that join plus the docstrings recording why "attribute everything" is wrong here
+# and why a failed reconciliation must fall back to it anyway rather than reclassify a cycle's P&L as
+# somebody else's.  This one lands on the live/exchange side again; the honest note is that the whole
+# family of raises since the audit has been instrumentation, which is what the operator keeps asking for
+# and what the alpha-share target keeps counting against us.
 CEILING = {
     "beidou_alpha": 3_683,
-    "beidou_live": 3_596,
+    "beidou_live": 3_720,
     "beidou_cli": 2_419,
     "beidou_data": 1_082,
-    "beidou_exchange": 525,
+    "beidou_exchange": 539,
     "beidou_shared": 280,
 }
 

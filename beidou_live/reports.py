@@ -445,6 +445,10 @@ def daily_payload(
     by_strategy: dict[str, float] = {}
     by_symbol: dict[str, float] = {}
     commissions = funding = realized = 0.0
+    foreign_total = 0.0
+    foreign_rows = 0
+    foreign_by_symbol: dict[str, float] = {}
+    unreconciled = 0
     for row in attributions:
         for strategy, value in (row.get("by_strategy") or {}).items():
             by_strategy[strategy] = by_strategy.get(strategy, 0.0) + float(value)
@@ -453,6 +457,15 @@ def daily_payload(
             commissions += float(bucket.get("COMMISSION", 0.0))
             funding += float(bucket.get("FUNDING_FEE", 0.0))
             realized += float(bucket.get("REALIZED_PNL", 0.0))
+        # D-032: P&L from fills the loop did not place is real money and stays in the report, but it is
+        # not the strategy's and must not reach the series M-010 judges the strategy by.
+        foreign = row.get("foreign") or {}
+        foreign_total += float(foreign.get("total", 0.0) or 0.0)
+        foreign_rows += int(foreign.get("rows", 0) or 0)
+        for symbol, bucket in (foreign.get("by_symbol") or {}).items():
+            foreign_by_symbol[symbol] = foreign_by_symbol.get(symbol, 0.0) + float(bucket.get("total", 0.0))
+        if "foreign" in row and not foreign.get("reconciled"):
+            unreconciled += 1
     statuses: dict[str, int] = {}
     traded = 0.0
     for row in trades:
@@ -481,6 +494,12 @@ def daily_payload(
         "funding": funding,
         "pnl_by_strategy": by_strategy,
         "pnl_by_symbol": by_symbol,
+        "foreign_fills": {
+            "total": foreign_total,
+            "rows": foreign_rows,
+            "by_symbol": foreign_by_symbol,
+            "unreconciled_cycles": unreconciled,
+        },
         "guard_events": {event: guard_events.count(event) for event in set(guard_events)},
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
@@ -653,6 +672,18 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ),
             ("PnL by strategy", payload["pnl_by_strategy"] or {"none": 0}),
             ("PnL by symbol", payload["pnl_by_symbol"] or {"none": 0}),
+            (
+                # D-032: fills nobody in this loop placed - an operator flatten, a manual hedge
+                "Foreign fills, excluded from the strategy series (D-032)",
+                {
+                    "total": payload["foreign_fills"]["total"],
+                    "rows": payload["foreign_fills"]["rows"],
+                    "by_symbol": json_dumps(payload["foreign_fills"]["by_symbol"]),
+                    "cycles_that_could_not_reconcile": payload["foreign_fills"]["unreconciled_cycles"],
+                }
+                if payload["foreign_fills"]["rows"] or payload["foreign_fills"]["unreconciled_cycles"]
+                else {"none": 0},
+            ),
             ("Guard events", payload["guard_events"] or {"none": 0}),
             (
                 "Expectations (validation reports)",

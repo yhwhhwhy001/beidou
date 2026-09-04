@@ -108,6 +108,7 @@ class LiveEngine:
         self.rules: dict[str, Any] = {}
         self.exits = ExitOverlay(config.exits, config.interval_ms)
         self._alignment_alerted = False
+        self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
 
@@ -381,6 +382,7 @@ class LiveEngine:
             )
             reports.append(report)
             self.store.append_trade({"bar_open_ms": bar_open_ms, **report.to_dict()})
+            self._remember_order(report)
             record["orders"].append(report.to_dict())
         record["quarantined"] = self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
@@ -404,6 +406,7 @@ class LiveEngine:
             )
             reports.append(report)
             self.store.append_trade({"bar_open_ms": None, "flatten": True, **report.to_dict()})
+            self._remember_order(report)
         return reports
 
     # --- helpers ----------------------------------------------------------------
@@ -575,6 +578,40 @@ class LiveEngine:
             "jumped": jumped,
         }
 
+    def _remember_order(self, report: ExecutionReport) -> None:
+        """Keep the D-032 order-id set current within a run; a fill of this order must not read as foreign."""
+        if report.ack is not None and report.ack.order_id:
+            self._placed_order_ids().add(str(report.ack.order_id))
+
+    async def _own_trade_ids(self, since: int, now: int) -> set[str] | None:
+        """Trade ids in the window that came from an order this loop placed (D-032).
+
+        An income row names a ``tradeId`` and nothing else about provenance; a userTrades row carries that
+        id plus the ``orderId``, and every order the loop placed is in trades.jsonl with its order id.  So
+        the join is income.tradeId -> userTrades.orderId -> our own order ids.
+
+        Returns ``None`` when the reconciliation cannot be done - the venue has no userTrades, or the call
+        failed.  ``None`` means "attribute everything as before", which is the old behaviour: a monitor
+        that cannot run must not silently reclassify a whole cycle's P&L as somebody else's.
+        """
+        probe = getattr(self.venue, "user_trades", None)
+        if not callable(probe):
+            return None
+        try:
+            fills = await probe(since, now)
+        except Exception as exc:  # never a reason for a cycle to fail
+            logger.warning("userTrades unavailable (%s); attributing every fill to the book", exc)
+            return None
+        return {str(fill.get("id")) for fill in fills if str(fill.get("orderId")) in self._placed_order_ids()}
+
+    def _placed_order_ids(self) -> set[str]:
+        """Order ids this loop got an ack for, from its own append-only trade log."""
+        if self._own_orders is None:
+            self._own_orders = {
+                str(row["order_id"]) for row in self.store.read_jsonl(self.store.trades_path) if row.get("order_id")
+            }
+        return self._own_orders
+
     def venue_now_ms(self) -> int:
         """Now on the venue's clock, falling back to the host's for venues that do not keep an offset."""
         probe = getattr(self.venue, "venue_time_ms", None)
@@ -623,8 +660,24 @@ class LiveEngine:
         flows = external_flows(rows)
         flows["rebaselined"] = False
         if rows and self.state.last_contributions:
-            result = attribute(rows, self.state.last_contributions, self.config.strategy_weights)
-            if result["by_symbol"]:
+            own_trade_ids = await self._own_trade_ids(since, now)
+            result = attribute(
+                rows, self.state.last_contributions, self.config.strategy_weights, own_trade_ids=own_trade_ids
+            )
+            foreign = result["foreign"]
+            if foreign["rows"]:
+                logger.warning(
+                    "%d income row(s) totalling %+.2f USDT came from fills this loop did not place (%s); "
+                    "reported under `foreign`, kept out of the strategy series",
+                    foreign["rows"],
+                    foreign["total"],
+                    ", ".join(sorted(foreign["by_symbol"])) or "no symbol",
+                )
+                await self.alerts.send(
+                    f"beidou: {foreign['rows']} foreign fill row(s) {foreign['total']:+.2f} USDT "
+                    f"({', '.join(sorted(foreign['by_symbol'])) or 'no symbol'}) excluded from strategy attribution"
+                )
+            if result["by_symbol"] or foreign["rows"]:
                 self.store.append_attribution(
                     {"bar_open_ms": self.state.last_bar_ms or bar_open_ms, "since_ms": since, "until_ms": now, **result}
                 )
