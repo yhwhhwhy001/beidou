@@ -1,5 +1,16 @@
 {
   "generated_at": "2026-09-04",
+  "gross_vs_cost_decomposition": {
+    "b_oos_gross_sharpe": 2.0579,
+    "control_oos_gross_sharpe": 1.95,
+    "cost_share_of_gain": 0.09,
+    "delta_gross_annualised_return": 0.0465,
+    "delta_gross_sharpe": 0.1079,
+    "delta_net_annualised_return": 0.0509,
+    "delta_net_sharpe": 0.1418,
+    "note": "same weights re-priced at zero turnover cost, point-in-time universe, OOS slice (44,995 bars, 5.14y)",
+    "reading": "only 9% of cell B's gain is the saved turnover cost; the rest is the timing change from holding a position through a wider band"
+  },
   "kind": "p10-portfolio-smoothing-index",
   "note": "`research overlay` reports do not record portfolio params, so the four runs are otherwise indistinguishable; this index maps each report to the profile that produced it.",
   "registry": "config/alpha_registry.yaml at d3b5087 (tsmom sign-mode + flow_short probe)",
@@ -86,5 +97,30 @@
       "sha256": "87a17c4b15dd7971dd43138969d9550fc5758d3d6dde7b12746c44936191cc00"
     }
   ],
+  "static_confirmation": {
+    "note": "cell B vs control on the static 14-symbol universe (robustness, D-013)",
+    "runs": [
+      {
+        "baseline": {
+          "oos_mdd": -0.14177479519415281,
+          "oos_sharpe": 1.3770507024131142,
+          "turnover_units": 253.64875354007506
+        },
+        "config": "control",
+        "report": "reports/research/overlay-20260904T030758Z.json",
+        "sha256": "efe3dfdcbd453b6e4293050771942f40519b88074b56c241e5507bb5e51e2d7d"
+      },
+      {
+        "baseline": {
+          "oos_mdd": -0.13636365621010083,
+          "oos_sharpe": 1.4793308611978782,
+          "turnover_units": 223.64475940761224
+        },
+        "config": "B",
+        "report": "reports/research/overlay-20260904T030813Z.json",
+        "sha256": "403be3402cdf9665c79a88df69c26a7a535bb2976ac3cfb319272c86533ed494"
+      }
+    ]
+  },
   "universe_mode": "pit"
 }
