@@ -34,6 +34,8 @@ class LiveState:
     last_clock_skew_ms: float | None = None  # venue time minus host time at the last cycle
     last_guard_reasons: list[str] = field(default_factory=list)  # edge-trigger for the guard alert
     consecutive_errors: int = 0
+    restarts: int = 0  # process restarts since the state file was created (M-004)
+    restarted_at: str | None = None
     cycles: int = 0
     started_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)

@@ -11,6 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from beidou_alpha.panel import Panel
 from beidou_live.engine import LiveEngine
 from beidou_live.state import StateStore
@@ -139,3 +141,125 @@ async def test_a_failed_cycle_leaves_a_durable_row(august_panel: Panel, tmp_path
     assert "equity" not in failed[0], "no equity, so the drift check keeps ignoring it"
     assert failed[0]["targets"] == ok["targets"], "the targets still in force are carried"
     assert any("cycle failed" in text for text in alerts.sent)
+
+
+async def test_the_score_behind_every_position_survives_in_the_append_only_log(
+    august_panel: Panel, tmp_path: Path
+) -> None:
+    """T-L07: (bar, strategy, score, weight) must be reconstructable after state.json has been overwritten."""
+    world = _world(august_panel, tmp_path)
+    engine, market, store = world["engine"], world["market"], world["store"]
+    await engine.startup()
+    bar = market.bar_open_ms(world["cursor"] - 1)
+    first = await engine.run_cycle(bar)
+    market.cursor += 1
+    await engine.run_cycle(bar + 3_600_000)  # state.json now holds only the second cycle's contributions
+
+    rows = [json.loads(line) for line in store.cycles_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    row = next(r for r in rows if r["bar_open_ms"] == bar)
+    assert row["contributions"], "the first cycle's scores must still be readable"
+    traced = {
+        symbol: (row["bar"], strategy, score, row["targets"].get(symbol))
+        for strategy, scores in row["contributions"].items()
+        for symbol, score in scores.items()
+    }
+    assert traced, "at least one position traces back to a strategy and its score"
+    for symbol, (_bar, _strategy, score, weight) in traced.items():
+        assert score != 0.0 and weight is not None, symbol
+    assert set(row["contributions"]) == set(first["contributions"])
+
+
+async def test_failed_cycles_back_off_exponentially_up_to_an_hour(august_panel: Panel, tmp_path: Path) -> None:
+    """M-004: the loop paces its own retries; launchd's ThrottleInterval only paces process restarts."""
+    world = _world(august_panel, tmp_path)
+    engine, clock = world["engine"], world["clock"]
+    await engine.startup()
+
+    async def boom(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("venue unreachable")
+
+    engine.run_cycle = boom  # type: ignore[method-assign]
+    slept: list[float] = []
+    original = clock.sleep
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+        await original(0.0)
+
+    clock.sleep = record  # type: ignore[method-assign]
+    bar = world["market"].bar_open_ms(world["cursor"] - 1)
+    for i in range(5):
+        assert await engine.guarded_cycle(bar + i * 3_600_000) is None
+    assert slept == [60.0, 120.0, 240.0, 480.0, 960.0]
+
+    engine.state.consecutive_errors = 30  # a long outage must not sleep past the cap
+    assert engine.backoff_seconds() == 3600.0
+
+
+async def test_a_restart_is_counted(august_panel: Panel, tmp_path: Path) -> None:
+    """M-004: 'restarts < 3/day' needs a counter; a first start is not a restart."""
+    world = _world(august_panel, tmp_path)
+    engine, market = world["engine"], world["market"]
+    assert engine.state.restarts == 0 and engine.state.restarted_at is None
+    await engine.startup()
+    await engine.run_cycle(market.bar_open_ms(world["cursor"] - 1))
+
+    revived = LiveEngine(
+        engine.config,
+        model=_model(),
+        market=market,
+        venue=world["venue"],
+        clock=world["clock"],
+        store=StateStore(tmp_path / "live"),
+    )
+    assert revived.state.restarts == 1 and revived.state.restarted_at is not None
+
+
+def test_per_order_notional_cap_limits_a_single_order(august_panel: Panel) -> None:
+    """T-E02: §10.2 put a per-order notional cap in the guard; it actually lives in the rebalancer, untested."""
+    from decimal import Decimal
+
+    from beidou_live.rebalancer import RebalanceParams, plan_rebalance
+    from tests.fakes.fake_venue import DEFAULT_RULES
+
+    equity = 100_000.0
+    prices = {"BTCUSDT": 50_000.0}
+    rules = {"BTCUSDT": DEFAULT_RULES["BTCUSDT"]}
+    uncapped, _ = plan_rebalance(
+        {"BTCUSDT": 0.10},
+        managed_symbols=["BTCUSDT"],
+        equity=equity,
+        positions={},
+        prices=prices,
+        rules=rules,
+        bar_open_ms=0,
+        params=RebalanceParams(no_trade_band=0.0),
+    )
+    assert uncapped and float(uncapped[0].quantity) * prices["BTCUSDT"] == pytest.approx(10_000.0, rel=1e-3)
+
+    capped, _ = plan_rebalance(
+        {"BTCUSDT": 0.10},
+        managed_symbols=["BTCUSDT"],
+        equity=equity,
+        positions={},
+        prices=prices,
+        rules=rules,
+        bar_open_ms=0,
+        params=RebalanceParams(no_trade_band=0.0, max_order_notional=2_500.0),
+    )
+    assert capped, "the cap trims the order, it does not drop it"
+    assert float(capped[0].quantity) * prices["BTCUSDT"] <= 2_500.0
+    assert capped[0].quantity < uncapped[0].quantity
+
+    # a cap below one step cannot produce a valid order and must be reported, not silently rounded to zero
+    dropped, skipped = plan_rebalance(
+        {"BTCUSDT": 0.10},
+        managed_symbols=["BTCUSDT"],
+        equity=equity,
+        positions={},
+        prices=prices,
+        rules=rules,
+        bar_open_ms=0,
+        params=RebalanceParams(no_trade_band=0.0, max_order_notional=float(Decimal("0.00001") * 50_000)),
+    )
+    assert dropped == [] and skipped and skipped[0]["reason"] == "ORDER_CAP_BELOW_STEP"

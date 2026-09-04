@@ -99,6 +99,9 @@ class LiveEngine:
         self.pool = pool
         self.universe_sink = universe_sink
         self.state: LiveState = store.load()
+        if self.state.cycles > 0:  # M-004: this process is a restart, not a first start
+            self.state.restarts = self.state.restarts + 1
+            self.state.restarted_at = utc_now_iso()
         persisted = list(self.state.universe) if config.universe_refresh else []
         self.universe: list[str] = persisted or list(config.universe)
         self.rules: dict[str, Any] = {}
@@ -223,6 +226,10 @@ class LiveEngine:
             )
             if self.state.consecutive_errors >= self.config.max_consecutive_errors:
                 raise
+            # M-004: back off exponentially, capped at an hour, before the next attempt.  launchd's
+            # ThrottleInterval only paces process restarts; a loop that stays up and retries a failing
+            # venue every cycle needs its own brake, and the plan capped it at 1h.
+            await self.clock.sleep(self.backoff_seconds())
             return None
         self.state.consecutive_errors = 0
         return record
@@ -597,6 +604,10 @@ class LiveEngine:
             statuses.append(status)
         return statuses
 
+    def backoff_seconds(self) -> float:
+        """Delay after a failed cycle: 60s doubling per consecutive error, capped at 1 hour (M-004)."""
+        return float(min(3600.0, 60.0 * 2 ** max(0, self.state.consecutive_errors - 1)))
+
     async def _announce_guards(self, decision: GuardDecision, bar_open_ms: int) -> None:
         """Alert on every change of the guard state, in both directions (M-001).
 
@@ -622,6 +633,13 @@ class LiveEngine:
         # is over.  It has to be cleared *before* the save: clearing it in ``guarded_cycle`` afterwards left the
         # stale count on disk until the next cycle wrote, and a restart in that window loaded a phantom error.
         self.state.consecutive_errors = 0
+        # T-L07: every position change must trace back to (bar, strategy, score, weight).  The score lives in
+        # `contributions`, which state.json overwrites every cycle, so without this line the trail is gone within
+        # the hour; cycles.jsonl is append-only and already carries the bar and the final weights.
+        record["contributions"] = {
+            strategy: {symbol: float(value) for symbol, value in values.items() if value}
+            for strategy, values in contributions.items()
+        }
         self.state.last_bar_ms = int(record["bar_open_ms"])
         self.state.last_targets = dict(record["targets"])
         # per-strategy memory for the hold seed (D-005): symbols that left the managed set keep their last

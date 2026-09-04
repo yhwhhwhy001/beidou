@@ -314,6 +314,12 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     show_default=True,
     help="configurations of this strategy already tried in earlier rounds (added to the DSR denominator)",
 )
+@click.option(
+    "--holdout-months",
+    default=0,
+    show_default=True,
+    help="reserve the last N months (KILL-006): they are cut before folds are built and never seen by this run",
+)
 def research_validate(
     strategy: str,
     params: str,
@@ -337,12 +343,35 @@ def research_validate(
     purge: int,
     cpcv_groups: int,
     prior_trials: int,
+    holdout_months: int,
 ) -> None:
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    # KILL-006: the reserved tail is cut here, before folds, membership or costs touch it, so nothing in this
+    # run can see it.  It is recorded in the report, which is what makes the reservation checkable later:
+    # a promise in prose is not a holdout, and every OOS number produced without one has been selected on.
+    holdout: dict[str, Any] | None = None
+    if holdout_months > 0:
+        last = pd.Timestamp(panel.index[-1])
+        cutoff = last - pd.DateOffset(months=holdout_months)
+        held = panel.slice(start=cutoff)
+        panel = panel.slice(end=cutoff)
+        if len(panel.index) < 2:
+            raise click.ClickException(f"--holdout-months {holdout_months} leaves no training data")
+        holdout = {
+            "months": holdout_months,
+            "start": str(cutoff),
+            "end": str(last),
+            "bars_reserved": len(held.index),
+            "bars_used": len(panel.index),
+        }
+        click.echo(
+            f"holdout: reserving {holdout['bars_reserved']} bars from {cutoff.date()} to {last.date()} "
+            f"({holdout_months} months); this run sees {holdout['bars_used']} bars"
+        )
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     combos = _grid(strategy, grid, entry.params)
@@ -428,6 +457,7 @@ def research_validate(
         "interval": interval,
         "universe_mode": universe_mode,
         "min_tenure": min_tenure,
+        "holdout": holdout,
         "symbols": panel.symbols,
         "range": {"start": str(common_index[0]), "end": str(common_index[-1]), "bars": n_bars},
         "costs": cost.__dict__,
@@ -469,6 +499,10 @@ def research_validate(
         f"Validation: {strategy} — {verdict}",
         [
             ("Range", report["range"]),
+            (
+                "Holdout (KILL-006)",
+                holdout or {"months": 0, "note": "no tail reserved: every bar was available to this run"},
+            ),
             ("Best params (full sample)", params_by_key[best_key]),
             ("Full sample", report["full_sample"]),
             ("Walk-forward (out of sample)", {k: v for k, v in wf_summary.items() if k != "chosen_params"}),

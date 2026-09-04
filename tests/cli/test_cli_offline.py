@@ -338,3 +338,78 @@ def test_research_book_offline(tmp_path: Path, august_dir: Path) -> None:
     assert len((out / "trials.jsonl").read_text().splitlines()) == 1
     replay = json.loads(sorted(out.glob("book-tsmom-xsmom-*.json"))[-1].read_text())
     assert replay["universes"]["static"]["sleeve_standalone"]["multiple_testing"]["n_trials"] == 4
+
+
+def test_validate_reserves_a_holdout_tail(tmp_path: Path) -> None:
+    """KILL-006: --holdout-months cuts the tail before folds and records the reservation in the report."""
+    import numpy as np
+
+    root = tmp_path / "data"
+    store = KlineStore(root)
+    step = 3_600_000
+    bars = 24 * 30 * 6  # six months of hourly bars, so a one-month tail still leaves a training set
+    base = 1_700_000_000_000 // step * step - bars * step
+    rng = np.random.default_rng(11)
+    for symbol in SYMBOLS:
+        close = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.004, bars)))
+        opens = [base + i * step for i in range(bars)]
+        store.append(
+            symbol,
+            "1h",
+            pd.DataFrame(
+                {
+                    "open_time": opens,
+                    "open": close,
+                    "high": close * 1.001,
+                    "low": close * 0.999,
+                    "close": close,
+                    "volume": np.full(bars, 1000.0),
+                    "close_time": [o + step - 1 for o in opens],
+                }
+            ),
+        )
+    out = tmp_path / "reports"
+    args = [
+        "research",
+        "validate",
+        "--strategy",
+        "tsmom",
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--out",
+        str(out),
+        "--no-funding",
+        "--params",
+        '{"horizons": [5, 20, 50], "vol_window": 100}',
+        "--grid",
+        "{}",
+        "--folds",
+        "3",
+        "--min-train",
+        "1000",
+        "--purge",
+        "5",
+        "--cpcv-groups",
+        "4",
+        "--min-history",
+        "0",
+    ]
+    runner = CliRunner()
+    assert runner.invoke(main, args).exit_code == 0
+    full = json.loads(sorted(out.glob("tsmom-validation-*.json"))[-1].read_text())
+    assert full["holdout"] is None, "no reservation unless it is asked for"
+
+    result = runner.invoke(main, [*args, "--holdout-months", "1"])
+    assert result.exit_code == 0, result.output
+    report_path = sorted(out.glob("tsmom-validation-*.json"))[-1]
+    held = json.loads(report_path.read_text())
+    assert held["holdout"]["months"] == 1 and held["holdout"]["bars_reserved"] > 600
+    assert held["range"]["bars"] < full["range"]["bars"], "the reserved tail is genuinely absent from the run"
+    assert pd.Timestamp(held["range"]["end"]) <= pd.Timestamp(held["holdout"]["start"])
+    assert "Holdout" in report_path.with_suffix(".md").read_text()
+
+    # asking for more than the data can spare is refused rather than silently ignored
+    refused = runner.invoke(main, [*args, "--holdout-months", "600"])
+    assert refused.exit_code != 0 and "leaves no training data" in str(refused.output) + str(refused.exception)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -169,3 +170,52 @@ def test_order_request_validation() -> None:
     with pytest.raises(ValueError):
         OrderRequest("BTCUSDT", Side.BUY, Decimal("1"), "x" * 37)
     assert json.dumps({"ok": True})
+
+
+async def test_rate_limit_honours_retry_after_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T-L03: a 429 with Retry-After must be waited out and retried, not raised at the caller."""
+    state = {"calls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "7"},
+                json={"code": -1003, "msg": "Too many requests; current limit is 2400 request weight per 1 MINUTE."},
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    slept: list[float] = []
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", record)
+    client = BinanceRestClient(DEMO, "k", "s", transport=httpx.MockTransport(handler))
+    assert (await client.get("/fapi/v1/klines")) == {"ok": True}
+    assert state["calls"] == 2, "the request is retried once"
+    assert slept and slept[0] >= 7.0, f"Retry-After must dominate the backoff, slept {slept}"
+    await client.aclose()
+
+
+async def test_rate_limit_gives_up_after_max_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A venue that stays rate limited surfaces a retryable VenueError instead of hanging."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "1"}, json={"code": -1003, "msg": "Too many requests"})
+
+    slept: list[float] = []
+
+    async def instant(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", instant)
+    client = BinanceRestClient(DEMO, "k", "s", transport=httpx.MockTransport(handler), max_retries=2)
+    with pytest.raises(VenueError) as info:
+        await client.get("/fapi/v1/klines")
+    # the venue's own error is surfaced rather than a wrapper, and it stays marked retryable so the
+    # cycle is skipped and retried instead of killing the loop
+    assert info.value.retryable and info.value.code == -1003 and "Too many requests" in str(info.value)
+    assert len(slept) == 2, f"one sleep per retry, not per attempt: {slept}"
+    await client.aclose()

@@ -118,12 +118,20 @@ def data_status(root: str, interval: str) -> None:
     """Show stored symbols, row counts and last bar."""
     store = KlineStore(root)
     universe = read_universe(root)
+    holes = 0
     for symbol in store.symbols(interval):
         last = store.last_open_time(symbol, interval)
         stamp = "" if last is None else time.strftime("%Y-%m-%d %H:%M", time.gmtime(last / 1000))
         flag = "*" if symbol in universe else " "
-        click.echo(f"{flag} {symbol:<12} rows={store.count(symbol, interval):>7} last={stamp} UTC")
+        # T-D01: a monthly archive plus a REST tail can leave a hole that a backtest reads as a jump
+        gaps = store.gaps(symbol, interval)
+        holes += len(gaps)
+        note = (
+            "" if not gaps else f"  GAPS={len(gaps)} first={time.strftime('%Y-%m-%d', time.gmtime(gaps[0][0] / 1000))}"
+        )
+        click.echo(f"{flag} {symbol:<12} rows={store.count(symbol, interval):>7} last={stamp} UTC{note}")
     click.echo(f"universe: {', '.join(universe) if universe else '<not selected>'}")
+    click.echo(f"gaps: {holes} missing stretch(es) across {len(store.symbols(interval))} symbols")
 
 
 @data.group("pool")

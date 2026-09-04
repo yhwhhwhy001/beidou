@@ -140,3 +140,37 @@ def test_parse_exchange_info() -> None:
     }
     rules = parse_exchange_info(payload)
     assert str(rules["BTCUSDT"].min_notional) == "100" and rules["BTCUSDT"].tradable
+
+
+def test_store_reports_gaps_after_a_merge_with_a_hole(tmp_path: Path) -> None:
+    """T-D01: the contract's second half — after the REST tail is merged, open_time must be contiguous."""
+    from beidou_data.store import interval_ms
+
+    store = KlineStore(tmp_path)
+    step = interval_ms("1h")
+    base = 1_700_000_000_000 // step * step
+
+    def frame(opens: list[int]) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "open_time": opens,
+                "open": [1.0] * len(opens),
+                "high": [1.0] * len(opens),
+                "low": [1.0] * len(opens),
+                "close": [1.0] * len(opens),
+                "volume": [1.0] * len(opens),
+                "close_time": [o + step - 1 for o in opens],
+            }
+        )
+
+    store.append("BTCUSDT", "1h", frame([base + i * step for i in range(5)]))
+    assert store.gaps("BTCUSDT", "1h") == [], "a contiguous series has no gaps"
+
+    # the archive month ends, and the REST tail resumes two bars later
+    store.append("BTCUSDT", "1h", frame([base + i * step for i in (7, 8)]))
+    gaps = store.gaps("BTCUSDT", "1h")
+    assert gaps == [(base + 4 * step, base + 7 * step)], gaps
+
+    store.append("BTCUSDT", "1h", frame([base + i * step for i in (5, 6)]))  # the hole is patched
+    assert store.gaps("BTCUSDT", "1h") == []
+    assert store.count("BTCUSDT", "1h") == 9

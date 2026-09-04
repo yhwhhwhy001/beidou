@@ -11,6 +11,15 @@ from beidou_data.binance_public import KLINE_COLUMNS
 FUNDING_COLUMNS: tuple[str, ...] = ("funding_time", "funding_rate", "mark_price")
 
 
+def interval_ms(interval: str) -> int:
+    """Bar length in milliseconds ("1h" -> 3_600_000); mirrors beidou_alpha.panel without importing it."""
+    unit = interval[-1]
+    scale = {"m": 60, "h": 3600, "d": 86400}.get(unit)
+    if scale is None or not interval[:-1].isdigit():
+        raise ValueError(f"unsupported interval {interval!r}")
+    return int(interval[:-1]) * scale * 1000
+
+
 class KlineStore:
     def __init__(self, root: str | Path = ".beidou/data") -> None:
         self.root = Path(root)
@@ -38,6 +47,21 @@ class KlineStore:
         merged.to_parquet(tmp, index=False)
         tmp.replace(path)
         return len(merged)
+
+    def gaps(self, symbol: str, interval: str) -> list[tuple[int, int]]:
+        """Missing stretches in the stored series as ``(after_open_time, before_open_time)`` pairs (T-D01).
+
+        The archive is monthly and the tail comes from REST, so a merge can leave a hole that
+        nothing else would notice: ``append`` dedupes and sorts but never checks continuity, and a
+        backtest silently treats a hole as a jump.  Both 2022 archive-wide outages were found this way.
+        """
+        frame = self.load(symbol, interval)
+        if len(frame) < 2:
+            return []
+        step = interval_ms(interval)
+        opens = frame["open_time"].astype("int64").to_numpy()
+        deltas = opens[1:] - opens[:-1]
+        return [(int(opens[i]), int(opens[i + 1])) for i, delta in enumerate(deltas) if delta != step]
 
     def load(self, symbol: str, interval: str, start_ms: int | None = None, end_ms: int | None = None) -> pd.DataFrame:
         path = self.path(symbol, interval)

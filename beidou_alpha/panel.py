@@ -155,9 +155,16 @@ class Panel:
         )
 
     def slice(self, start: pd.Timestamp | str | None = None, end: pd.Timestamp | str | None = None) -> Panel:
-        """Rows with ``start <= open_time < end``."""
-        start_ts = None if start is None else pd.Timestamp(start, tz="UTC")
-        end_ts = None if end is None else pd.Timestamp(end, tz="UTC")
+        """Rows with ``start <= open_time < end``; bounds may be naive (read as UTC) or already tz-aware."""
+
+        def as_utc(value: pd.Timestamp | str | None) -> pd.Timestamp | None:
+            if value is None:
+                return None
+            stamp = pd.Timestamp(value)
+            return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+
+        start_ts = as_utc(start)
+        end_ts = as_utc(end)
 
         def cut(frame: pd.DataFrame) -> pd.DataFrame:
             mask = pd.Series(True, index=frame.index)
