@@ -64,12 +64,22 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # backtest silently excluded it behind a log line.  This one grows the wrong package and the alpha share
 # with it; the alternative was leaving three instruments reading zero, which is the failure mode this
 # whole file exists to make visible.
+# Sixth raise, 2026-09-04, with the sentence the rule requires: +36 in beidou_live and +11 in
+# beidou_exchange for D-030, the income window.  A wrong host clock is invisible on the auth path - a
+# -1021 makes the REST client resync and retry, so a signed request's `timestamp` is always
+# venue-correct - but `startTime`/`endTime` on /fapi/v1/income are plain query parameters and were
+# passed through untouched.  With the host an hour behind, the loop asked for an hour-old window:
+# measured after an operator flatten, 96 rows worth +23.98 USDT sat at venue times 07:51-07:53 while
+# the loop queried [06:53, 06:58] and ingested nothing.  Income was not lost, it arrived an hour late
+# and was attributed to the book held an hour after it earned it, which is the one corruption M-010
+# cannot absorb.  Most of the addition is `venue_time_ms` plus the docstrings recording why the
+# obvious simplification - "just use self.clock like everything else" - is the bug.
 CEILING = {
     "beidou_alpha": 3_683,
-    "beidou_live": 3_515,
+    "beidou_live": 3_551,
     "beidou_cli": 2_419,
     "beidou_data": 1_082,
-    "beidou_exchange": 514,
+    "beidou_exchange": 525,
     "beidou_shared": 280,
 }
 

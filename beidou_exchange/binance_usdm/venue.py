@@ -80,6 +80,17 @@ class BinanceUsdmVenue:
     async def sync_clock(self) -> int:
         return await self._client.sync_clock()
 
+    def venue_time_ms(self) -> int:
+        """Now, on the venue's clock, from the offset the signed-request path already maintains.
+
+        Signed requests are immune to a wrong host clock: a -1021 makes the client resync and retry, so
+        their ``timestamp`` is venue-correct.  Query *parameters* are not: ``startTime``/``endTime`` on
+        /fapi/v1/income are passed through untouched, so a host clock an hour behind (measured
+        2026-09-04) asks for an hour-old window and cannot see anything that has happened since.  This is
+        the accessor the income watermark uses so both ends of that window are on the venue's clock.
+        """
+        return int(time.time() * 1000) + self._client.clock_offset_ms
+
     async def rules(self) -> dict[str, InstrumentRules]:
         if not self._rules or time.monotonic() - self._rules_at > RULES_TTL_SECONDS:
             payload = await self._client.get("/fapi/v1/exchangeInfo")

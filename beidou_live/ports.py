@@ -65,6 +65,10 @@ class Venue(Protocol):
 
     async def income(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]: ...
 
+    def venue_time_ms(self) -> int:
+        """Now on the venue's clock.  ``income`` bounds are venue timestamps, not host ones."""
+        ...
+
 
 class UniverseUpdate(Protocol):
     """Result of a universe refresh (structural; see ``beidou_data.pool.UniverseUpdate``)."""

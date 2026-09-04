@@ -129,6 +129,15 @@ class LiveEngine:
                 "an enabled signal reads funding history but the market data port cannot supply it; "
                 "refusing to trade an unvalidated configuration (KILL-027)"
             )
+        sync = getattr(self.venue, "sync_clock", None)
+        if callable(sync):
+            # Establish the venue offset deterministically instead of leaving it to the first -1021 to
+            # discover: the income window (D-030) reads it, and a zero offset there is a silent hour of
+            # missing attribution rather than a loud error.
+            try:
+                logger.info("venue clock offset: %+.1fs", int(await sync()) / 1000.0)
+            except Exception as exc:
+                logger.warning("could not sync the venue clock (%s); the income window falls back to the host", exc)
         self.rules = await self.venue.rules()
         tradable = [symbol for symbol in self.universe if symbol in self.rules and self.rules[symbol].tradable]
         dropped = sorted(set(self.universe) - set(tradable))
@@ -527,6 +536,17 @@ class LiveEngine:
             "jumped": jumped,
         }
 
+    def venue_now_ms(self) -> int:
+        """Now on the venue's clock, falling back to the host's for venues that do not keep an offset."""
+        probe = getattr(self.venue, "venue_time_ms", None)
+        if not callable(probe):
+            return self.clock.now_ms()
+        try:
+            return int(probe())
+        except Exception as exc:  # never a reason for a cycle to fail
+            logger.warning("venue clock unavailable (%s); using the host clock for the income window", exc)
+            return self.clock.now_ms()
+
     async def _ingest_income(self, bar_open_ms: int, equity: float) -> dict[str, Any]:
         """Income rows since the last cycle: strategy attribution plus external cash-flow detection.
 
@@ -537,14 +557,26 @@ class LiveEngine:
         non-comparable, so they re-baseline the day-start equity and the
         high-water mark and are flagged on the cycle record for the drift
         check to skip.
+
+        Both ends of the window are on the *venue's* clock (D-030).  ``startTime``/``endTime`` are query
+        parameters, so unlike a signed request's ``timestamp`` they are not corrected by the -1021 resync:
+        with the host an hour behind the venue (measured 2026-09-04) the loop asked for an hour-old window
+        and could not see anything more recent.  Proven the same day: after a manual flatten, 96 rows worth
+        +23.98 USDT sat at venue times 07:51-07:53 while the loop was querying [06:53, 06:58] and ingesting
+        nothing.  Income was not lost - it arrived an hour late, attributed to the book held an hour after
+        it was earned, which is exactly the corruption M-010 cannot tolerate.  The first cycle after this
+        change queries from the old host-basis watermark to venue-now, one wider window that recovers the
+        gap; from then on the watermark is venue-basis and the window is contiguous.
         """
-        now = self.clock.now_ms()
+        now = self.venue_now_ms()
         since = self.state.last_income_ms or now
         if since > now:
-            # The host clock moved backwards (measured: -3,612 s on 2026-09-04), so the watermark is in the
-            # future.  Querying [since, now] is rejected with -1023 and aborts the whole cycle before it can
-            # trade; moving the watermark back would silently drop the income in between.  Skip ingestion for
-            # this cycle, keep the watermark, and let the cycle trade.
+            # The watermark is in the future, so [since, now] would be rejected with -1023 and abort the
+            # whole cycle before it can trade; moving the watermark back would silently drop the income in
+            # between.  Skip ingestion for this cycle, keep the watermark, and let the cycle trade.  Reached
+            # on 2026-09-04 when the host clock moved backwards by 3,612 s, and still reachable now that the
+            # window is venue-basis: the venue's clock can move too, and a venue that cannot be reached
+            # falls this back to the host's.
             skew = since - now
             logger.warning("income watermark is %d ms ahead of the clock; skipping ingestion this cycle", skew)
             return {"total": 0.0, "rows": 0, "by_type": {}, "rebaselined": False, "clock_skew_ms": skew}
