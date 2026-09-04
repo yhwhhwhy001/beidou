@@ -26,4 +26,8 @@ scratchpad/*.json
 .DS_Store
 
 # agent worktrees and session scratch (a parallel session lives here)
-.claude/
+# agent worktrees are 65M of repo copies and never belong in a commit; the skills dir does.
+# `.claude/*` rather than `.claude/` on purpose: git will not descend into an excluded DIRECTORY,
+# so a `!` re-include under it never fires.  Excluding the contents instead leaves that door open.
+.claude/*
+!.claude/skills/

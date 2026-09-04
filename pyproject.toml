@@ -45,7 +45,10 @@ beidou = "beidou_cli:main"
 target-version = "py312"
 line-length = 120
 force-exclude = true
-exclude = [".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", "build", "dist", ".beidou", "reports"]
+# `.claude/skills` is vendored third-party MIT content, not our source.  Ruff formats python blocks
+# inside markdown, and that reference file is a catalogue of deliberately WRONG code - reformatting the
+# anti-patterns would edit an upstream project to no benefit and make the vendored copy diverge.
+exclude = [".git", ".venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", "build", "dist", ".beidou", "reports", ".claude/skills"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "DTZ"]

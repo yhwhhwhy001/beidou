@@ -22,3 +22,7 @@ python3.12 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
 ```
 
 Proprietary — 保留所有权利。
+
+例外：`.claude/skills/backtest-guard/` 是两个第三方 MIT 项目的合并版（回测工程审查 +
+策略逻辑对抗审查），按 MIT 保留原始许可证于该目录内，不适用上面这行。它是审查这个
+仓库时用的那把尺子——`docs/analysis/2026-09-05-backtest-guard-external-audit.md` 是它的产出。
