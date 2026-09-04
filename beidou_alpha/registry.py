@@ -95,6 +95,37 @@ def parse_registry(payload: Mapping[str, Any]) -> Registry:
     )
 
 
+def evidence_params(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The parameter set a report actually validated: ``best_params``, or the sleeve's params in a book report."""
+    if str(report.get("kind", "")) == "book":
+        sleeve = report.get("sleeve")
+        params = sleeve.get("params") if isinstance(sleeve, Mapping) else None
+    else:
+        params = report.get("best_params")
+    return params if isinstance(params, Mapping) else None
+
+
+def param_problems(
+    entry: StrategyEntry, report: Mapping[str, Any], canonical: Callable[[str, Mapping[str, Any]], Mapping[str, Any]]
+) -> list[str]:
+    """The configuration that runs must be the configuration the cited report validated.
+
+    The digest check proves the report has not been edited; it says nothing about the params next to
+    it in the registry.  Without this, editing a parameter silently detaches the live book from its
+    evidence - the same failure as KILL-027, one level up.
+    """
+    validated = evidence_params(report)
+    if validated is None:
+        return [f"{entry.id}: evidence report records no parameters to check against"]
+    live = canonical(entry.id, entry.params)
+    cited = canonical(entry.id, validated)
+    differing = sorted(key for key in set(live) | set(cited) if live.get(key) != cited.get(key))
+    if not differing:
+        return []
+    detail = ", ".join(f"{key}: registry {live.get(key)!r} vs evidence {cited.get(key)!r}" for key in differing)
+    return [f"{entry.id}: registry params differ from the cited evidence ({detail})"]
+
+
 def evidence_problems(
     entry: StrategyEntry,
     exists: Callable[[str], bool],
@@ -102,6 +133,7 @@ def evidence_problems(
     *,
     read_report: Callable[[str], Mapping[str, Any]] | None = None,
     book_fraction: float | None = None,
+    canonical_params: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> list[str]:
     """KILL-015: an enabled strategy must cite a validation report that exists and matches its digest.
 
@@ -121,10 +153,13 @@ def evidence_problems(
     elif len(digest) != 64 or sha256_of(path) != digest:
         problems.append(f"{entry.id}: evidence digest mismatch for {path}")
     verdict = str(entry.evidence.get("verdict", "")).upper()
+    report_ok = not problems
     if verdict == PROBE_VERDICT:
-        problems.extend(_probe_problems(entry, path, read_report, book_fraction, report_ok=not problems))
+        problems.extend(_probe_problems(entry, path, read_report, book_fraction, report_ok=report_ok))
     elif verdict and verdict not in {"PASS", "WEAK_PASS"}:
         problems.append(f"{entry.id}: evidence verdict {verdict} does not allow live use")
+    if read_report is not None and canonical_params is not None and report_ok:
+        problems.extend(param_problems(entry, read_report(path), canonical_params))
     return problems
 
 

@@ -15,6 +15,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "multi-horizon time-series momentum (TrendAlpha port)",
         tsmom.TsmomParams().warmup_bars,
         warmup=lambda params: tsmom.TsmomParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(tsmom.TsmomParams.from_mapping(params)),
         uses_funding=lambda params: tsmom.TsmomParams.from_mapping(params).uses_funding,
     ),
     "xsmom": SignalSpec(
@@ -24,6 +25,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "cross-sectional momentum / relative strength, market-neutral",
         xsmom.XsmomParams().warmup_bars,
         warmup=lambda params: xsmom.XsmomParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(xsmom.XsmomParams.from_mapping(params)),
     ),
     "carry": SignalSpec(
         "carry",
@@ -32,6 +34,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "funding-rate carry (short high funding, long low funding)",
         carry.CarryParams().warmup_bars,
         warmup=lambda params: carry.CarryParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(carry.CarryParams.from_mapping(params)),
         uses_funding=lambda params: True,
     ),
     "meanrev": SignalSpec(
@@ -41,6 +44,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "robust z-score mean reversion with trend gate and explicit exits",
         meanrev.MeanrevParams().warmup_bars,
         warmup=lambda params: meanrev.MeanrevParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(meanrev.MeanrevParams.from_mapping(params)),
     ),
     "breakout": SignalSpec(
         "breakout",
@@ -49,6 +53,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "ATR-normalised Donchian breakout with volume/breadth confirmation",
         breakout.BreakoutParams().warmup_bars,
         warmup=lambda params: breakout.BreakoutParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(breakout.BreakoutParams.from_mapping(params)),
     ),
     "flow": SignalSpec(
         "flow",
@@ -57,6 +62,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "taker-buy order-flow imbalance scaled by volume expansion",
         flow.FlowParams().warmup_bars,
         warmup=lambda params: flow.FlowParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(flow.FlowParams.from_mapping(params)),
     ),
     "residual": SignalSpec(
         "residual",
@@ -65,6 +71,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "beta-neutral residual momentum vs BTC",
         residual.ResidualParams().warmup_bars,
         warmup=lambda params: residual.ResidualParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(residual.ResidualParams.from_mapping(params)),
     ),
 }
 

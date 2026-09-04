@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry, evidence_problems
+from beidou_alpha.signals import get_signal
 from beidou_data.live_feed import PublicMarketData
 from beidou_data.pool import LivePool
 from beidou_data.universe import UniverseConfig
@@ -133,6 +134,9 @@ def registry_evidence_problems(registry: Registry) -> list[str]:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def canonical(strategy_id: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return get_signal(strategy_id).canonical_params(params)
+
     problems: list[str] = []
     for entry in registry.enabled:
         fraction = registry.books[entry.book].fraction if entry.book in registry.books else None
@@ -143,6 +147,7 @@ def registry_evidence_problems(registry: Registry) -> list[str]:
                 sha256_of=sha256_of,
                 read_report=read_report,
                 book_fraction=fraction,
+                canonical_params=canonical,
             )
         )
     return problems

@@ -14,6 +14,16 @@ from beidou_alpha.panel import Panel
 SignalFunction = Callable[[Panel, Mapping[str, Any]], pd.DataFrame]
 WarmupFunction = Callable[[Mapping[str, Any]], int]
 FundingPredicate = Callable[[Mapping[str, Any]], bool]
+CanonicalFunction = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+
+
+def jsonable(value: Any) -> Any:
+    """Tuples to lists, recursively, so params that came from YAML and from JSON compare equal."""
+    if isinstance(value, tuple | list):
+        return [jsonable(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): jsonable(item) for key, item in value.items()}
+    return value
 
 
 @dataclass(frozen=True)
@@ -25,6 +35,7 @@ class SignalSpec:
     warmup_bars: int = 0  # under the default params
     warmup: WarmupFunction | None = None  # under arbitrary (registry) params
     uses_funding: FundingPredicate | None = None  # does the signal read ``panel.funding`` under these params?
+    canonical: CanonicalFunction | None = None  # params with this signal's defaults applied
 
     def warmup_for(self, params: Mapping[str, Any]) -> int:
         """Bars of history the signal needs under *these* params, not under the defaults.
@@ -44,6 +55,18 @@ class SignalSpec:
         from the one that was validated (KILL-027).
         """
         return bool(self.uses_funding(params)) if self.uses_funding is not None else False
+
+    def canonical_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Params with the signal's defaults filled in, in a form two sources can be compared in.
+
+        A registry entry lists only what the operator chose to write; a validation report records
+        the full parameter set.  Comparing them raw makes an identical configuration look different,
+        which is why the comparison goes through the signal's own parameter object.
+        """
+        filled = self.canonical(params) if self.canonical is not None else params
+        result = jsonable(filled)
+        assert isinstance(result, dict)
+        return result
 
 
 def scores_to_targets(
