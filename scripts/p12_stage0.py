@@ -3,6 +3,11 @@
 Pre-registered in docs/RESEARCH_LOG.md before this ran.  Measures two things and nothing else:
 
   (a) the share of symbol-refreshes an ILLIQ > m x median screen would change, for m in {2, 4, 8};
+      CORRECTION (stage 1, same day): the median here is taken over the SELECTED MEMBERS of a refresh,
+      while the pre-registered rule normalises by the median of the CANDIDATE SET - about 81x larger.
+      This file's numbers therefore describe a tighter, un-pre-registered screen; its PROCEED verdict
+      does not apply to the pre-registered one, which stage 1 measured as inert.  Kept unchanged because
+      it is the record of what was run; see the P12 stage 1 section of docs/RESEARCH_LOG.md.
   (b) the dispersion of log(ILLIQ) among the members of a refresh, because a screen needs something
       to rank on.
 
