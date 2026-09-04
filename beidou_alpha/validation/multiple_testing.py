@@ -180,7 +180,7 @@ def probability_of_backtest_overfitting(
 
 
 def oos_selection_threshold(oos_returns: np.ndarray, *, n_trials: int, bars_per_year: float) -> dict[str, Any]:
-    """D-027: the out-of-sample Sharpe a strategy must clear given how many configurations were tried.
+    """D-028: the out-of-sample Sharpe a strategy must clear given how many configurations were tried.
 
     Walk-forward embeds the selection that happens *inside* a fold; nothing in D-020 is sensitive to the
     selection that happens *across rounds*, and the Newey-West t is not a second condition because on

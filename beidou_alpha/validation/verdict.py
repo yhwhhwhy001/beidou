@@ -7,7 +7,7 @@ Sharpe are hard gates.  The deflated Sharpe ratio stays in every report but no l
 it haircuts the *in-sample* Sharpe for selection, while walk-forward selection already happens
 inside the training folds.
 
-D-027 (2026-09-04) closes what that left open.  The Newey-West t was never a second condition:
+D-028 (2026-09-04) closes what that left open.  The Newey-West t was never a second condition:
 on hourly net returns it equals the Sharpe times the square root of years to within 0.1%, so over
 a five-year window "t >= 2" is looser than the "Sharpe >= 1" beside it, and it only bites below
 four years - it is a short-sample guard, and is documented as one.  The condition that is actually
@@ -36,7 +36,7 @@ class VerdictThresholds:
     max_pbo: float = 0.30
     min_cost_stress_sharpe: float = 0.0
     min_trials_for_pbo: int = 4
-    enforce_oos_selection: bool = True  # D-027: the OOS Sharpe must clear the deflated threshold
+    enforce_oos_selection: bool = True  # D-028: the OOS Sharpe must clear the deflated threshold
 
 
 def decide(report: dict[str, Any], thresholds: VerdictThresholds | None = None) -> tuple[str, list[str]]:

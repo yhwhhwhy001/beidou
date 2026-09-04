@@ -1,4 +1,4 @@
-"""D-027: the verdict gains a condition that is actually sensitive to cross-round selection."""
+"""D-028: the verdict gains a condition that is actually sensitive to cross-round selection."""
 
 from __future__ import annotations
 

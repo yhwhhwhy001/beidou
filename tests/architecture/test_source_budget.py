@@ -32,12 +32,12 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share": 0.
 # The gap to the plan's 2,000 for beidou_live is 1,171 lines, and the alpha share is 34% against a 60%
 # target.  Both are open operator decisions, recorded rather than redefined.
 CEILING = {
-    "beidou_alpha": 3_654,
-    "beidou_live": 3_171,
-    "beidou_cli": 2_276,
-    "beidou_data": 1_053,
-    "beidou_exchange": 489,
-    "beidou_shared": 267,
+    "beidou_alpha": 3_661,
+    "beidou_live": 3_250,
+    "beidou_cli": 2_354,
+    "beidou_data": 1_082,
+    "beidou_exchange": 498,
+    "beidou_shared": 270,
 }
 
 

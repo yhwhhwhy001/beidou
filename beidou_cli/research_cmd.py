@@ -498,7 +498,7 @@ def research_validate(
         "best_params": params_by_key[best_key],
         "full_sample": results[best_key].summary(),
         "walk_forward": wf_summary,
-        # D-027: the OOS Sharpe a strategy must clear given how many configurations were tried on it.
+        # D-028: the OOS Sharpe a strategy must clear given how many configurations were tried on it.
         "oos_selection": oos_selection_threshold(
             wf.oos_returns.to_numpy(dtype=float), n_trials=pooled["n_trials"], bars_per_year=bpy
         ),
@@ -527,7 +527,7 @@ def research_validate(
             ("Walk-forward (out of sample)", {k: v for k, v in wf_summary.items() if k != "chosen_params"}),
             ("CPCV", {k: v for k, v in cpcv.items() if k != "chosen"}),
             ("Multiple testing", mt),
-            ("Selection-deflated OOS threshold (D-027)", report["oos_selection"]),
+            ("Selection-deflated OOS threshold (D-028)", report["oos_selection"]),
             (
                 "Stability",
                 {
@@ -577,7 +577,7 @@ def research_validate(
     )
     click.echo(
         f"oos selection threshold={_fmt(report['oos_selection']['threshold_annual'])} "
-        f"at {report['oos_selection']['n_trials']} trials (D-027)"
+        f"at {report['oos_selection']['n_trials']} trials (D-028)"
     )
     click.echo(f"VERDICT: {verdict} {reasons if reasons else ''}")
     click.echo(f"report: {path} sha256={digest}")
