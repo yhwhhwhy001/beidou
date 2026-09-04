@@ -32,6 +32,15 @@ class MarketData(Protocol):
         """Latest settled funding rate per symbol (fraction per 8h)."""
         ...
 
+    async def funding_history(self, symbols: Sequence[str], start_ms: int) -> dict[str, pd.Series]:
+        """Settled funding rates per symbol since ``start_ms``, indexed by UTC settlement time.
+
+        Aligned onto bar open times by ``Panel.from_frames`` exactly as the
+        research store does, so a funding-consuming signal sees the same panel
+        live as in validation (KILL-027).
+        """
+        ...
+
 
 class Venue(Protocol):
     """The exchange account we trade on (demo/testnet)."""
@@ -107,9 +116,13 @@ class SignalModel(Protocol):
     @property
     def min_history_bars(self) -> int: ...
 
+    @property
+    def needs_funding(self) -> bool: ...
+
     def targets(
         self,
         bars: Mapping[str, pd.DataFrame],
         funding: Mapping[str, float],
         previous: Mapping[str, Mapping[str, float]] | None = None,
+        funding_history: Mapping[str, pd.Series] | pd.DataFrame | None = None,
     ) -> TargetSet: ...

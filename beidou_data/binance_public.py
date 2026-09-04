@@ -241,6 +241,14 @@ class AsyncPublicClient:
         assert isinstance(payload, list)
         return payload
 
+    async def funding_rate(self, symbol: str, start_ms: int, limit: int = MAX_FUNDING_LIMIT) -> pd.DataFrame:
+        """Settled funding rates since ``start_ms`` (one page; 1000 settlements cover a year of 8h funding)."""
+        rows = await self.get(
+            "/fapi/v1/fundingRate",
+            {"symbol": symbol, "startTime": int(start_ms), "limit": min(limit, MAX_FUNDING_LIMIT)},
+        )
+        return funding_to_frame(rows)
+
     async def ticker_24h(self) -> list[dict[str, Any]]:
         payload = await self.get("/fapi/v1/ticker/24hr")
         assert isinstance(payload, list)

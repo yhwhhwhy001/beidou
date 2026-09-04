@@ -106,6 +106,11 @@ class AlphaModel:
         signal_warmup = max(get_signal(entry.id).warmup_for(entry.params) for entry in self.entries)
         return max(signal_warmup, self.portfolio.covariance_halflife, self.portfolio.vol_halflife) + 1
 
+    @property
+    def needs_funding(self) -> bool:
+        """True when any enabled signal reads funding history under its registry params (KILL-027)."""
+        return any(get_signal(entry.id).needs_funding(entry.params) for entry in self.entries)
+
     def strategy_scores(self, panel: Panel) -> dict[str, pd.DataFrame]:
         return {entry.id: get_signal(entry.id).compute(panel, entry.params) for entry in self.entries}
 
@@ -184,6 +189,7 @@ class AlphaModel:
         bars: Mapping[str, pd.DataFrame],
         funding: Mapping[str, float],
         previous: PreviousTargets | None = None,
+        funding_history: Mapping[str, pd.Series] | pd.DataFrame | None = None,
     ) -> TargetWeights:
         """Live entry point: closed bars per symbol -> latest target weights.
 
@@ -192,10 +198,16 @@ class AlphaModel:
         ``previous`` is the last cycle's contributions: a sub-threshold score keeps the held
         target (D-005) even when the sub-threshold stretch is longer than the request window,
         exactly as in a full-history backtest (E-042).  ``funding`` (latest rate per symbol) is
-        accepted for the port's sake; no enabled signal consumes it here, and a signal that
-        needs funding *history* must not be enabled without wiring it into the panel (KILL-027).
+        accepted for the port's sake and unused; ``funding_history`` (settled rates per symbol,
+        indexed by settlement time) becomes ``panel.funding`` exactly as ``load_panel`` builds
+        it for research, and is mandatory whenever an enabled signal reads it (KILL-027).
         """
-        panel = Panel.from_frames(bars, interval=self.interval)
+        if self.needs_funding and funding_history is None:
+            raise ValueError(
+                "an enabled signal reads funding history but none was supplied; the live path would trade "
+                "an unvalidated configuration (KILL-027)"
+            )
+        panel = Panel.from_frames(bars, interval=self.interval, funding=funding_history)
         if len(panel.index) < self.warmup_bars:
             raise ValueError(f"need at least {self.warmup_bars} closed bars, got {len(panel.index)}")
         weights, combined, per_strategy = self.evaluate(panel, previous=previous)

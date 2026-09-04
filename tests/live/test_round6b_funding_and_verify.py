@@ -1,0 +1,274 @@
+"""Round 6b (KILL-027 / M-011): funding history reaches the live panel, and the live output is verifiable offline.
+
+The bug this closes: a signal that reads ``panel.funding`` got ``None`` on the live path while the
+registry evidence claimed the modifier was on, so the loop traded a configuration nobody validated.
+The fix is declarative — a signal says whether it needs funding, the model refuses to run without it,
+and the engine refuses to start when the market port cannot supply it.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import replace
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from beidou_alpha.ensemble import TargetWeights
+from beidou_alpha.model import AlphaModel
+from beidou_alpha.panel import Panel
+from beidou_alpha.portfolio import PortfolioParams
+from beidou_alpha.registry import StrategyEntry
+from beidou_alpha.signals import get_signal
+from beidou_alpha.signals.tsmom import TsmomParams
+from beidou_data.binance_public import funding_to_frame
+from beidou_data.live_feed import funding_series
+from beidou_live.engine import LiveEngine
+from beidou_live.inputs import first_open_ms, model_inputs, required_history
+from beidou_live.reconciler import take_snapshot
+from beidou_live.state import LiveState, StateStore
+from beidou_live.verify import compare_targets
+from tests.alpha.test_signal_suite import _synthetic_panel
+from tests.fakes.fake_venue import FakeVenue
+from tests.live.fakes import FakeClock, FakeMarketData
+from tests.live.test_live_loop import SYMBOLS, _config, _model, _prices
+
+CROWDING = {"crowding_window": 72, "crowding_cut": 0.7, "crowding_penalty": 0.5}
+WEEKLY = {"horizons": [24, 72, 168], "horizon_weights": [0.2, 0.3, 0.5]}
+
+
+def _model_with(params: dict, min_history_bars: int = 0) -> AlphaModel:
+    entry = StrategyEntry("tsmom", params={**TsmomParams(vol_window=100).__dict__, **WEEKLY, **params})
+    return AlphaModel(
+        entries=(entry,),
+        portfolio=PortfolioParams(covariance_halflife=48, vol_halflife=24),
+        interval="1h",
+        min_history_bars=min_history_bars,
+    )
+
+
+def _frames(panel: Panel) -> dict[str, pd.DataFrame]:
+    fields = ("open", "high", "low", "close", "volume", "quote_volume", "taker_buy_base", "taker_buy_quote")
+    return {
+        symbol: pd.DataFrame(
+            {field: getattr(panel, field)[symbol] for field in fields if getattr(panel, field) is not None}
+        )
+        for symbol in panel.symbols
+    }
+
+
+def _settled(panel: Panel) -> dict[str, pd.Series]:
+    """Funding as the public endpoint returns it: only the settlements, not a value on every bar."""
+    assert panel.funding is not None
+    return {symbol: panel.funding[symbol][panel.funding[symbol] != 0.0] for symbol in panel.symbols}
+
+
+# --- a signal declares whether it reads funding ---------------------------------------------------
+
+
+def test_signals_declare_their_funding_use() -> None:
+    tsmom = get_signal("tsmom")
+    assert not tsmom.needs_funding({**WEEKLY, "crowding_window": 0})
+    assert tsmom.needs_funding({**WEEKLY, **CROWDING})
+    assert not tsmom.needs_funding({**WEEKLY, **CROWDING, "crowding_penalty": 0.0})  # inert modifier
+    assert get_signal("carry").needs_funding({})  # carry is nothing but funding
+    assert not get_signal("xsmom").needs_funding({})
+    assert _model_with({**CROWDING}).needs_funding and not _model_with({"crowding_window": 0}).needs_funding
+
+
+def test_targets_refuse_to_run_a_funding_signal_without_history() -> None:
+    panel = _synthetic_panel(seed=5, n_bars=600)
+    model = _model_with(CROWDING)
+    with pytest.raises(ValueError, match="KILL-027"):
+        model.targets(_frames(panel), {})
+    assert model.targets(_frames(panel), {}, funding_history=_settled(panel)).weights  # supplied -> runs
+    assert _model_with({"crowding_window": 0}).targets(_frames(panel), {}).weights  # not needed -> unchanged
+
+
+# --- the live panel equals the research panel (the actual KILL-027 closer) --------------------------
+
+
+def test_live_funding_history_reproduces_the_research_panel() -> None:
+    panel = _synthetic_panel(seed=11, n_bars=900)
+    model = _model_with(CROWDING)
+    _weights, _combined, research = model.evaluate(panel)  # research path: panel.funding from the store
+    live = model.targets(_frames(panel), {}, funding_history=_settled(panel))  # live path: settled rates only
+    for symbol in panel.symbols:
+        assert live.contributions["tsmom"][symbol] == pytest.approx(
+            float(research["tsmom"].iloc[-1].fillna(0.0)[symbol]), abs=1e-12
+        ), symbol
+    # and the modifier is not a no-op on this panel, so the parity above is a real comparison
+    without = _model_with({"crowding_window": 0}).targets(_frames(panel), {})
+    assert any(abs(live.contributions["tsmom"][s] - without.contributions["tsmom"][s]) > 1e-9 for s in panel.symbols), (
+        "the crowding modifier changed nothing here; pick a seed where it bites"
+    )
+
+
+def test_funding_series_maps_settlements_to_utc_times() -> None:
+    frame = funding_to_frame(
+        [
+            {"fundingTime": 1_700_000_000_000, "fundingRate": "0.0001", "markPrice": "1"},
+            {"fundingTime": 1_700_028_800_000, "fundingRate": "-0.0002", "markPrice": "1"},
+        ]
+    )
+    series = funding_series(frame)
+    assert list(series.values) == [0.0001, -0.0002]
+    assert series.index[0] == pd.Timestamp(1_700_000_000_000, unit="ms", tz="UTC")
+    assert funding_series(funding_to_frame([])).empty
+
+
+# --- the cycle fetches funding only when the model needs it ----------------------------------------
+
+
+async def test_model_inputs_fetch_funding_history_only_when_needed(august_panel: Panel) -> None:
+    funding = pd.DataFrame(0.0, index=august_panel.index, columns=august_panel.symbols)
+    funding.iloc[::8] = 0.0001
+    market = FakeMarketData(august_panel, cursor=400, funding_history=funding)
+    plain = await model_inputs(market, _model(), SYMBOLS, "1h", 300)
+    assert plain.funding_history is None and not market.funding_history_calls
+    assert plain.bars and plain.dropped == []
+    hungry = await model_inputs(market, _model_with(CROWDING), SYMBOLS, "1h", 300)
+    assert hungry.funding_history is not None and len(market.funding_history_calls) == 1
+    requested_symbols, start_ms = market.funding_history_calls[0]
+    assert sorted(requested_symbols) == sorted(SYMBOLS)
+    assert start_ms == min(first_open_ms(frame) or 0 for frame in hungry.bars.values())
+    assert all((series != 0.0).all() for series in hungry.funding_history.values())  # settlements only
+    assert hungry.to_dict()["funding_history"] is True
+
+
+async def test_startup_refuses_a_funding_model_when_the_port_cannot_supply_history(
+    august_panel: Panel, tmp_path: Path
+) -> None:
+    class NoFundingHistory:
+        """A market port from before D-021: closed bars and the latest rate, nothing else."""
+
+        def __init__(self, inner: FakeMarketData) -> None:
+            self._inner = inner
+
+        async def closed_bars(self, symbols: Sequence[str], interval: str, limit: int) -> dict[str, pd.DataFrame]:
+            return await self._inner.closed_bars(symbols, interval, limit)
+
+        async def funding_rates(self, symbols: Sequence[str]) -> dict[str, float]:
+            return await self._inner.funding_rates(symbols)
+
+    market = FakeMarketData(august_panel, cursor=400)
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, 400))
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model_with(CROWDING),
+        market=NoFundingHistory(market),  # type: ignore[arg-type]
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=StateStore(tmp_path / "live"),
+    )
+    with pytest.raises(RuntimeError, match="funding history"):
+        await engine.startup()
+    assert venue.order_log == []
+
+
+async def test_cycle_passes_funding_history_through_to_the_model(august_panel: Panel, tmp_path: Path) -> None:
+    funding = pd.DataFrame(0.0, index=august_panel.index, columns=august_panel.symbols)
+    funding.iloc[::8] = 0.0002
+    market = FakeMarketData(august_panel, cursor=400, funding_history=funding)
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, 400))
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model_with(CROWDING),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=StateStore(tmp_path / "live"),
+    )
+    await engine.startup()
+    record = await engine.run_cycle(market.bar_open_ms(399))
+    assert record["inputs"]["funding_history"] is True and market.funding_history_calls
+    assert not record["skip"] and record["targets"]
+
+
+# --- M-011: the last cycle reproduces offline ------------------------------------------------------
+
+
+def _state(bar_ms: int, contributions: dict[str, dict[str, float]], targets: dict[str, float]) -> LiveState:
+    return LiveState(last_bar_ms=bar_ms, last_contributions=contributions, last_targets=targets)
+
+
+def _targets(bar: pd.Timestamp, contributions: dict[str, dict[str, float]], weights: dict[str, float]) -> TargetWeights:
+    return TargetWeights(as_of=bar, weights=weights, contributions=contributions, combined={})
+
+
+def test_verify_reports_a_faithful_reproduction() -> None:
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    contributions = {"tsmom": {"BTCUSDT": 0.34, "ETHUSDT": -0.2}}
+    weights = {"BTCUSDT": 0.031, "ETHUSDT": -0.02}
+    result = compare_targets(
+        _targets(bar, contributions, weights), _state(int(bar.timestamp() * 1000), contributions, weights)
+    )
+    assert result["ok"] and result["bar_matched"]
+    assert result["max_contribution_diff"] == 0.0 and result["max_target_diff"] == 0.0
+    assert result["contribution_diffs"] == {"tsmom": {}} and result["strategies_not_in_state"] == []
+
+
+def test_verify_flags_a_drifted_contribution_and_a_stale_bar() -> None:
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    state = _state(int(bar.timestamp() * 1000), {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031})
+    drifted = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.17}}, {"BTCUSDT": 0.031}), state)
+    assert not drifted["ok"] and drifted["bar_matched"]
+    assert drifted["max_contribution_diff"] == pytest.approx(0.17)
+    assert drifted["contribution_diffs"]["tsmom"]["BTCUSDT"] == pytest.approx(0.17)
+    assert "no longer reproduces" in drifted["note"]
+    stale = compare_targets(
+        _targets(bar + pd.Timedelta(hours=1), {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031}), state
+    )
+    assert not stale["ok"] and not stale["bar_matched"] and "another bar" in stale["note"]
+    # a target difference alone is informational: exits / throttle / guards act after the model
+    exited = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.0}), state)
+    assert exited["ok"] and exited["max_target_diff"] == pytest.approx(0.031)
+    assert exited["target_diffs"] == {"BTCUSDT": pytest.approx(0.031)}
+
+
+def test_verify_flags_a_strategy_the_state_never_saw() -> None:
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    state = _state(int(bar.timestamp() * 1000), {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031})
+    added = compare_targets(
+        _targets(bar, {"tsmom": {"BTCUSDT": 0.34}, "flow": {"BTCUSDT": -0.1}}, {"BTCUSDT": 0.031}), state
+    )
+    assert not added["ok"] and added["strategies_not_in_state"] == ["flow"]
+
+
+def test_required_history_matches_the_engine() -> None:
+    weekly = _model_with({"crowding_window": 0}, min_history_bars=720)
+    assert required_history(weekly, 400) == 720 + weekly.warmup_bars
+    assert required_history(weekly, 5_000) == 5_000  # the profile floor wins when it is larger
+
+
+async def test_gross_before_comes_from_position_risk_not_the_account_payload(
+    august_panel: Panel, tmp_path: Path
+) -> None:
+    """The venue's account payload may carry no positions array; the cycle report must not read 0.0 then."""
+
+    class NoPositionsInAccount(FakeVenue):
+        async def account(self):  # type: ignore[no-untyped-def]
+            state = await super().account()
+            return replace(state, positions={})  # what demo-fapi actually returns
+
+    market = FakeMarketData(august_panel, cursor=400)
+    venue = NoPositionsInAccount(balance=10_000.0, prices=_prices(august_panel, 400))
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model(),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=StateStore(tmp_path / "live"),
+    )
+    await engine.startup()
+    opened = await engine.run_cycle(market.bar_open_ms(399))
+    assert opened["gross_before"] == 0.0  # genuinely flat before the first fills
+    assert opened["orders"], "the first cycle should open the book"
+    market.cursor += 1
+    held = await engine.run_cycle(market.bar_open_ms(market.cursor - 1))
+    assert held["gross_before"] > 0.0, "a fully invested book must not report a flat gross"
+    snapshot = await take_snapshot(engine.venue, engine.managed_symbols())
+    assert snapshot.account.gross_notional() == 0.0  # the account payload really is empty here
+    assert snapshot.gross_notional() > 0.0

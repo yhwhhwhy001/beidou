@@ -10,6 +10,15 @@ import pandas as pd
 from beidou_data.binance_public import DEFAULT_BASE_URL, AsyncPublicClient, drop_unclosed
 
 
+def funding_series(frame: pd.DataFrame) -> pd.Series:
+    """Settled rates indexed by UTC settlement time (the shape ``Panel.from_frames`` aligns onto bar opens)."""
+    if frame.empty:
+        return pd.Series(dtype=float)
+    times = pd.to_datetime(frame["funding_time"].astype("int64"), unit="ms", utc=True)
+    series = pd.Series(frame["funding_rate"].astype(float).to_numpy(), index=pd.DatetimeIndex(times))
+    return series.groupby(level=0).sum()
+
+
 class PublicMarketData:
     def __init__(
         self, base_url: str = DEFAULT_BASE_URL, *, concurrency: int = 4, client: AsyncPublicClient | None = None
@@ -53,3 +62,13 @@ class PublicMarketData:
                 except (TypeError, ValueError):
                     continue
         return rates
+
+    async def _funding_one(self, symbol: str, start_ms: int) -> tuple[str, pd.Series]:
+        async with self._semaphore:
+            frame = await self._client.funding_rate(symbol, start_ms)
+        return symbol, funding_series(frame)
+
+    async def funding_history(self, symbols: Sequence[str], start_ms: int) -> dict[str, pd.Series]:
+        """Settled funding since ``start_ms`` per symbol (one public request each; see ``MarketData``)."""
+        results = await asyncio.gather(*(self._funding_one(symbol, start_ms) for symbol in symbols))
+        return dict(results)

@@ -15,6 +15,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "multi-horizon time-series momentum (TrendAlpha port)",
         tsmom.TsmomParams().warmup_bars,
         warmup=lambda params: tsmom.TsmomParams.from_mapping(params).warmup_bars,
+        uses_funding=lambda params: tsmom.TsmomParams.from_mapping(params).uses_funding,
     ),
     "xsmom": SignalSpec(
         "xsmom",
@@ -31,6 +32,7 @@ SIGNALS: dict[str, SignalSpec] = {
         "funding-rate carry (short high funding, long low funding)",
         carry.CarryParams().warmup_bars,
         warmup=lambda params: carry.CarryParams.from_mapping(params).warmup_bars,
+        uses_funding=lambda params: True,
     ),
     "meanrev": SignalSpec(
         "meanrev",

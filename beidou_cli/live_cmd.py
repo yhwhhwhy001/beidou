@@ -29,11 +29,13 @@ from beidou_live.config import (
     universe_sink,
 )
 from beidou_live.engine import LiveEngine
+from beidou_live.inputs import required_history
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
 from beidou_live.reports import daily_markdown, daily_payload, expectations_from_evidence
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
+from beidou_live.verify import verify_live_targets
 
 
 def _paper_venue(market_url: str, balance: float, state_path: Path) -> PaperVenue:
@@ -180,6 +182,45 @@ def _store_for(payload: dict[str, Any], paper: bool) -> StateStore:
     return build_store(payload)
 
 
+@live.command("verify")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--paper", is_flag=True, help="verify the paper-mode state directory instead")
+@click.option("--tolerance", default=1e-9, show_default=True, help="max |difference| per contribution")
+@click.option("--check", is_flag=True, help="exit non-zero when the last cycle's contributions do not reproduce")
+@click.option("--data-root", default=".beidou/data", show_default=True)
+def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_root: str) -> None:
+    """M-009: recompute the last cycle's model output from public data + state.json and diff it (KILL-027 monitor).
+
+    Reads only.  Contributions must reproduce to the tolerance; a target difference is informational
+    because state.json holds the post-throttle / post-exit / post-guard targets.
+    """
+    _logging(False)
+    payload = load_profile(profile)
+    model, registry = build_model_from_profile(payload)
+    store = _store_for(payload, paper)
+    state = store.load()
+    if state.last_bar_ms is None:
+        raise click.ClickException("no completed cycle in state.json yet")
+    if state.stopped_books:
+        model = model.without_books(list(state.stopped_books))
+    universe = list(dict.fromkeys([*state.universe, *state.leaving])) or resolve_universe(payload, None, data_root)
+    config = live_config(payload, universe, registry, dry_run=True)
+    market = build_market_data(payload)
+
+    async def main() -> dict[str, Any]:
+        try:
+            return await verify_live_targets(
+                model, market, universe, config.interval, required_history(model, config.history_bars), state, tolerance
+            )
+        finally:
+            await market.aclose()
+
+    result = asyncio.run(main())
+    click.echo(json.dumps(result, indent=2, sort_keys=True, default=str))
+    if check and not result.get("ok"):
+        raise click.ClickException(str(result.get("note")))
+
+
 @live.command("flatten")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--yes", is_flag=True, help="confirm closing every position with reduce-only market orders")
@@ -260,4 +301,4 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None) ->
     click.echo(f"written {directory / f'{chosen}.md'}")
 
 
-__all__ = ["live_flatten", "live_kill_switch", "live_run", "live_status", "report_daily"]
+__all__ = ["live_flatten", "live_kill_switch", "live_run", "live_status", "live_verify", "report_daily"]

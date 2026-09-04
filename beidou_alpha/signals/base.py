@@ -13,6 +13,7 @@ from beidou_alpha.panel import Panel
 
 SignalFunction = Callable[[Panel, Mapping[str, Any]], pd.DataFrame]
 WarmupFunction = Callable[[Mapping[str, Any]], int]
+FundingPredicate = Callable[[Mapping[str, Any]], bool]
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class SignalSpec:
     description: str = ""
     warmup_bars: int = 0  # under the default params
     warmup: WarmupFunction | None = None  # under arbitrary (registry) params
+    uses_funding: FundingPredicate | None = None  # does the signal read ``panel.funding`` under these params?
 
     def warmup_for(self, params: Mapping[str, Any]) -> int:
         """Bars of history the signal needs under *these* params, not under the defaults.
@@ -33,6 +35,15 @@ class SignalSpec:
         if self.warmup is None:
             return self.warmup_bars
         return int(self.warmup(params))
+
+    def needs_funding(self, params: Mapping[str, Any]) -> bool:
+        """Whether the signal consumes funding-rate history under these params.
+
+        The live loop must then fetch that history into the panel; a signal
+        that silently gets ``funding=None`` trades a different configuration
+        from the one that was validated (KILL-027).
+        """
+        return bool(self.uses_funding(params)) if self.uses_funding is not None else False
 
 
 def scores_to_targets(

@@ -26,6 +26,7 @@ from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardParams, evaluate_guards
+from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
@@ -113,6 +114,13 @@ class LiveEngine:
                 f"the model needs {self.history_bars} closed bars per cycle (min_history "
                 f"{getattr(self.model, 'min_history_bars', 0)} + warmup {getattr(self.model, 'warmup_bars', 0)}) "
                 f"but the market data port serves at most {MAX_HISTORY_BARS}"
+            )
+        if bool(getattr(self.model, "needs_funding", False)) and not callable(
+            getattr(self.market, "funding_history", None)
+        ):
+            raise RuntimeError(
+                "an enabled signal reads funding history but the market data port cannot supply it; "
+                "refusing to trade an unvalidated configuration (KILL-027)"
             )
         self.rules = await self.venue.rules()
         tradable = [symbol for symbol in self.universe if symbol in self.rules and self.rules[symbol].tradable]
@@ -202,21 +210,17 @@ class LiveEngine:
     @property
     def history_bars(self) -> int:
         """Closed bars requested per cycle: the listing-age filter plus the model's warmup under its real params."""
-        needed = int(getattr(self.model, "min_history_bars", 0)) + int(getattr(self.model, "warmup_bars", 0))
-        return max(self.config.history_bars, needed)
+        return required_history(self.model, self.config.history_bars)
 
     async def run_cycle(self, bar_open_ms: int) -> dict[str, Any]:
         config = self.config
         universe_update = await self._maybe_refresh_universe(bar_open_ms)
         managed = self.managed_symbols()
-        bars = await self.market.closed_bars(managed, config.interval, self.history_bars)
-        usable = {symbol: frame for symbol, frame in bars.items() if frame is not None and len(frame) >= 2}
-        if not usable:
-            raise RuntimeError("no closed bars returned for the universe")
-        funding = await self.market.funding_rates(managed)
+        inputs = await model_inputs(self.market, self.model, managed, config.interval, self.history_bars)
+        usable = inputs.bars
         mark = getattr(self.venue, "mark", None)
         if callable(mark):  # paper venue: marks follow the newest closed bar
-            mark({symbol: float(frame["close"].iloc[-1]) for symbol, frame in usable.items()})
+            mark(latest_closes(usable))
         snapshot = await take_snapshot(self.venue, managed)
         self._roll_day(bar_open_ms, snapshot.equity)
         self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
@@ -226,7 +230,9 @@ class LiveEngine:
             else await self._ingest_income(bar_open_ms, snapshot.equity)
         )
         probes = await self._check_probes(bar_open_ms)
-        targets = self.model.targets(usable, funding, previous=self.state.last_contributions)
+        targets = self.model.targets(
+            usable, inputs.funding, previous=self.state.last_contributions, funding_history=inputs.funding_history
+        )
         latest_bar_ms = int(targets.as_of.timestamp() * 1000)
         # exposure throttle (D-015): one scalar on the whole book, driven by venue equity vs its high-water mark
         hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
@@ -265,13 +271,14 @@ class LiveEngine:
             "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
             "as_of_ms": latest_bar_ms,
             "equity": snapshot.equity,
-            "gross_before": snapshot.account.gross_notional(),
+            "gross_before": snapshot.gross_notional(),
             "guard_reasons": list(decision.reasons),
             "skip": decision.skip_cycle,
             "dry_run": config.dry_run,
             "universe": list(self.universe),
             "leaving": list(self.state.leaving),
             "universe_update": universe_update,
+            "inputs": inputs.to_dict(),
             "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
             "exit_events": exit_events,

@@ -26,10 +26,18 @@ class FakeClock:
 class FakeMarketData:
     """Serves closed bars from a Panel up to a movable cursor (exclusive)."""
 
-    def __init__(self, panel: Panel, cursor: int, funding: Mapping[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        panel: Panel,
+        cursor: int,
+        funding: Mapping[str, float] | None = None,
+        funding_history: pd.DataFrame | None = None,
+    ) -> None:
         self.panel = panel
         self.cursor = cursor
         self.funding = dict(funding or {})
+        self.funding_frame = funding_history  # bars x symbols settled rates (0 off-settlement), like Panel.funding
+        self.funding_history_calls: list[tuple[list[str], int]] = []
         self.lag_bars = 0
         self.fail_next = 0
 
@@ -57,3 +65,18 @@ class FakeMarketData:
 
     async def funding_rates(self, symbols: Sequence[str]) -> dict[str, float]:
         return {symbol: self.funding.get(symbol, 0.0) for symbol in symbols}
+
+    async def funding_history(self, symbols: Sequence[str], start_ms: int) -> dict[str, pd.Series]:
+        """Settled rates since ``start_ms`` (only the non-zero settlements, as the public endpoint returns them)."""
+        self.funding_history_calls.append((list(symbols), int(start_ms)))
+        out: dict[str, pd.Series] = {}
+        for symbol in symbols:
+            if self.funding_frame is None or symbol not in self.funding_frame.columns:
+                out[symbol] = pd.Series(dtype=float)
+                continue
+            series = self.funding_frame[symbol]
+            stamps = pd.DatetimeIndex(series.index)
+            since = stamps >= pd.Timestamp(start_ms, unit="ms", tz="UTC")
+            settled = series[since & (series != 0.0)]
+            out[symbol] = settled.astype(float)
+        return out

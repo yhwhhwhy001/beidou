@@ -81,6 +81,11 @@ class TsmomParams:
     def warmup_bars(self) -> int:
         return max(self.horizons) + 1
 
+    @property
+    def uses_funding(self) -> bool:
+        """The crowding modifier is the only part of tsmom that reads funding history."""
+        return self.crowding_window > 0 and self.crowding_penalty > 0
+
 
 def _tanh(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(np.tanh(frame.to_numpy(dtype=float)), index=frame.index, columns=frame.columns)

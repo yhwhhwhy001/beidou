@@ -27,6 +27,15 @@ class Snapshot:
             return {}
         return {symbol: position.notional / self.account.equity for symbol, position in self.positions.items()}
 
+    def gross_notional(self) -> float:
+        """Sum of |notional| over the managed positions, from ``positionRisk`` — the loop's only position truth.
+
+        Not ``AccountState.gross_notional()``: the venue's account payload does not always carry a
+        positions array, and when it does not that method silently returns 0.0, which made a fully
+        invested book look flat in ``cycles.jsonl``.
+        """
+        return sum(abs(position.notional) for position in self.positions.values())
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "equity": self.account.equity,
