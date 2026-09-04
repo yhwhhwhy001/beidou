@@ -35,6 +35,16 @@ portfolio:
   # universe with the shipped book: OOS Sharpe 1.7347 -> 1.8764, OOS drawdown -12.79% -> -12.90%, turnover
   # 287 -> 253.  Evidence: reports/research/paired-p10-band-20260904T030015Z.json.  Live falsifier: turnover must
   # fall by roughly 12%; if it does not, live and backtest execution semantics have diverged (KILL-027's pattern).
+  # Two further checks (this session, reports/research/p10-portfolio-smoothing-20260904.json): the static
+  # 14-symbol universe agrees in direction, 1.3771 -> 1.4793 with the same -11.8% turnover and a better
+  # drawdown, so this is not one universe's artefact (the check P5 taught us to run); and only 9% of the
+  # gain is the saved turnover cost - re-pricing the same weights at zero cost still leaves +0.108 of the
+  # +0.142 Sharpe - so this is a timing change from holding through a wider band, not an efficiency saving.
+  # That makes it the portfolio-layer twin of conviction_mode sign (D-024: the edge is direction, not
+  # magnitude) and, for the same reason, a real behaviour change carrying real selection pressure.
+  # Note the layer: tsmom's cited evidence (181803Z) was validated at band 0.25, so the strategy-layer
+  # evidence pointer no longer describes the construction; the portfolio-layer evidence is the P10 index
+  # above.  The startup gate compares registry params only, so it cannot see this - a known gap.
   no_trade_rel_band: 0.40     # ...or smaller than 40% of the current position (same-direction resizes only)
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 pool:
