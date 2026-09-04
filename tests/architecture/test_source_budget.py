@@ -31,13 +31,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share": 0.
 # closed KILL-042.  Final measurement after the whole remediation: alpha 3,654, live 3,171, cli 2,276.
 # The gap to the plan's 2,000 for beidou_live is 1,171 lines, and the alpha share is 34% against a 60%
 # target.  Both are open operator decisions, recorded rather than redefined.
+# Third raise, 2026-09-04, and the sentence the rule requires: +16 in beidou_exchange and +10 in
+# beidou_shared, for the position parser.  demo-fapi's /fapi/v2/account rows carry a correct `notional`
+# but no `markPrice`, and the parser derived notional as qty x mark, so every account-derived position
+# came out at zero: `gross_notional()` read 0.00 while fifteen positions held 2,884 USDT of exposure.
+# The same rows spell it `unrealizedProfit` where positionRisk spells it `unRealizedProfit`.  Most of the
+# 26 lines are the docstring recording those two disagreements, which is the part that stops the next
+# reader from "simplifying" the parser back into the bug.
 CEILING = {
     "beidou_alpha": 3_661,
     "beidou_live": 3_368,
     "beidou_cli": 2_390,
     "beidou_data": 1_082,
-    "beidou_exchange": 498,
-    "beidou_shared": 270,
+    "beidou_exchange": 514,
+    "beidou_shared": 280,
 }
 
 

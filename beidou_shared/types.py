@@ -61,9 +61,19 @@ class Position:
     mark_price: float
     unrealized_pnl: float = 0.0
     leverage: int = 0
+    venue_notional: float | None = None  # the venue's own figure, when it supplies one
 
     @property
     def notional(self) -> float:
+        """Signed notional: the venue's own number when given, else qty x mark.
+
+        demo-fapi's /fapi/v2/account rows carry a correct ``notional`` but no
+        ``markPrice``, so deriving it from the mark silently produced zero for every
+        account-derived position - which is why ``gross_notional()`` read 0 while
+        fifteen positions were open.
+        """
+        if self.venue_notional is not None:
+            return self.venue_notional
         return self.qty * self.mark_price
 
     @property

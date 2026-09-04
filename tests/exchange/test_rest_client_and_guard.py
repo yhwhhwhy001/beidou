@@ -219,3 +219,43 @@ async def test_rate_limit_gives_up_after_max_retries(monkeypatch: pytest.MonkeyP
     assert info.value.retryable and info.value.code == -1003 and "Too many requests" in str(info.value)
     assert len(slept) == 2, f"one sleep per retry, not per attempt: {slept}"
     await client.aclose()
+
+
+def test_account_rows_and_position_rows_are_both_parsed_faithfully() -> None:
+    """demo-fapi's two position payloads disagree; neither may be turned into a silently wrong number."""
+    from beidou_exchange.binance_usdm.venue import parse_position
+
+    # /fapi/v2/account: carries notional, no markPrice, lowercase unrealizedProfit, leverage "0"
+    account_row = {
+        "symbol": "ZECUSDT",
+        "positionAmt": "0.169",
+        "entryPrice": "872.08",
+        "notional": "161.36289000",
+        "unrealizedProfit": "13.98137000",
+        "leverage": "0",
+        "initialMargin": "92233720368.54775807",
+    }
+    parsed = parse_position(account_row)
+    assert parsed is not None
+    assert parsed.notional == pytest.approx(161.36289), "the venue's own notional, not qty x a missing mark"
+    assert parsed.mark_price == 0.0, "no mark price was supplied and none is invented"
+    assert parsed.unrealized_pnl == pytest.approx(13.98137), "the account spelling is accepted too"
+
+    # /fapi/v2/positionRisk: carries markPrice and the other spelling, but no notional
+    risk_row = {
+        "symbol": "ZECUSDT",
+        "positionAmt": "0.169",
+        "entryPrice": "872.08",
+        "markPrice": "954.81",
+        "unRealizedProfit": "13.98137000",
+        "leverage": "0",
+    }
+    from_risk = parse_position(risk_row)
+    assert from_risk is not None
+    assert from_risk.notional == pytest.approx(0.169 * 954.81), "falls back to qty x mark when told nothing else"
+    assert from_risk.unrealized_pnl == pytest.approx(13.98137)
+
+    assert parse_position({"symbol": "X", "positionAmt": "0"}) is None
+    # a short keeps its sign in both directions
+    short = parse_position({**account_row, "positionAmt": "-0.169", "notional": "-161.36289000"})
+    assert short is not None and short.notional < 0

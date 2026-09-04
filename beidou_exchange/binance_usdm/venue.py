@@ -39,16 +39,32 @@ def parse_order_ack(payload: dict[str, Any]) -> OrderAck:
 
 
 def parse_position(payload: dict[str, Any]) -> Position | None:
+    """One position from either /fapi/v2/positionRisk or a /fapi/v2/account row.
+
+    The two payloads disagree in ways that are silent rather than loud, so nothing here
+    derives a number the venue did not supply (observed on demo-fapi 2026-09-04):
+
+    * account rows carry ``notional`` but no ``markPrice``; computing the notional from a
+      missing mark gave zero for every position while fifteen were open;
+    * account rows spell it ``unrealizedProfit``, positionRisk ``unRealizedProfit``;
+    * ``leverage`` reads "0" in both, so it is not a usable record of what was set -
+      ``state.leverage_set`` is.
+    """
     qty = _float(payload.get("positionAmt"))
     if qty == 0.0:
         return None
+    raw_notional = payload.get("notional")
+    unrealized = payload.get("unRealizedProfit")
+    if unrealized is None:
+        unrealized = payload.get("unrealizedProfit")
     return Position(
         symbol=str(payload.get("symbol", "")),
         qty=qty,
         entry_price=_float(payload.get("entryPrice")),
         mark_price=_float(payload.get("markPrice")),
-        unrealized_pnl=_float(payload.get("unRealizedProfit")),
+        unrealized_pnl=_float(unrealized),
         leverage=int(_float(payload.get("leverage"), 0.0)),
+        venue_notional=None if raw_notional is None else _float(raw_notional),
     )
 
 
