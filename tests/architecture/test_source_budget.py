@@ -128,11 +128,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the three reads like a tidy-up that a later simplification would happily undo, and the reason it is
 # wrong has to sit next to the code, not in this file.  Alpha growth that buys no signal, which the
 # alpha-share target rightly keeps counting against us.
+# Eleventh raise, 2026-09-04, with the sentence the rule requires, and the first one that moves the alpha
+# share in the intended direction: +694 in beidou_alpha for the candidate-signal miner recovered from the V2 tree
+# (a typed expression language and an enumerating search), +159 in beidou_data for the dataset manifest, and
+# +103 in beidou_cli for `research mine` plus recording that manifest in every validate report.  The alpha
+# share goes 32.4% -> 34.8%; every previous raise moved it the wrong way, which is the tension the 90%
+# target exists to expose.  The miner is worth its lines only because it does NOT bring V2's evaluation
+# stack with it: a candidate compiles to an ordinary SignalSpec, so walk-forward, CPCV, the trials ledger
+# and the D-020/D-028 verdict judge it unchanged.  Most of beidou_data's addition is the manifest's stated
+# limit - it detects replacement and drift, not in-place corruption of individual bars - which is the part
+# that stops a later reader from trusting it for something it does not do.
 CEILING = {
-    "beidou_alpha": 3_778,
+    "beidou_alpha": 4_472,
     "beidou_live": 3_788,
-    "beidou_cli": 2_419,
-    "beidou_data": 1_092,
+    "beidou_cli": 2_522,
+    "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,
 }

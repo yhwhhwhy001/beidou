@@ -83,4 +83,17 @@ def get_signal(signal_id: str) -> SignalSpec:
         raise KeyError(f"unknown signal {signal_id!r}; known: {sorted(SIGNALS)}") from exc
 
 
-__all__ = ["SIGNALS", "SignalSpec", "get_signal", "scores_to_targets"]
+def register(spec: SignalSpec) -> SignalSpec:
+    """Add a generated signal to this process's registry, so ``AlphaModel`` can resolve it like any other.
+
+    Mined candidates are the only generated signals, and they are namespaced ``mined_<hash>``.  Anything
+    outside that namespace is hand-written and evidence-backed, so overwriting it is refused rather than
+    allowed to shadow a validated signal with a search result.
+    """
+    if not spec.id.startswith("mined_"):
+        raise ValueError(f"only mined_* ids may be registered at runtime, not {spec.id!r}")
+    SIGNALS[spec.id] = spec
+    return spec
+
+
+__all__ = ["SIGNALS", "SignalSpec", "get_signal", "register", "scores_to_targets"]

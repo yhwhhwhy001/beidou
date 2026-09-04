@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
+from beidou_alpha.mining import enumerate_candidates, to_signal
 from beidou_alpha.model import AlphaModel
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, apply_drawdown_throttle
@@ -25,6 +26,7 @@ from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, combine
 from beidou_alpha.registry import StrategyEntry, registry_fingerprint
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
+from beidou_alpha.signals import register as register_signal
 from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.decompose import decompose_book
@@ -45,6 +47,7 @@ from beidou_alpha.validation.stability import cost_stress, parameter_neighborhoo
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_evaluate, walk_forward_folds
 from beidou_cli import research
+from beidou_data.manifest import build_manifest
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import FundingStore, KlineStore
 from beidou_live.composition import build_model, cost_model, load_panel, load_registry, portfolio_params, read_universe
@@ -485,6 +488,11 @@ def research_validate(
         "portfolio": _model(
             StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
         ).portfolio.__dict__,
+        # The data this verdict was computed from.  Everything else here already names itself - the report
+        # has a digest, the registry a fingerprint, the construction another - but the dataset did not, and
+        # on 2026-09-04 the membership table was rebuilt monthly -> daily while the profile still described
+        # it as monthly.  A verdict that cannot say which data produced it is a pointer waiting to go stale.
+        "dataset": build_manifest(root, interval).to_dict(),
         "folds": folds,
         "min_train": min_train,
         "purge": purge,
@@ -1584,4 +1592,116 @@ def research_decompose(
     for line in lines:
         click.echo(line)
     click.echo(f"increments: {json.dumps(payload['increments'])}")
+    click.echo(f"report: {path} sha256={digest}")
+
+
+@research.command("mine")
+@_common_options
+@click.option("--top", default=12, show_default=True, help="candidates to print, ranked by full-sample Sharpe")
+@click.option("--max-complexity", default=8, show_default=True)
+@click.option("--max-lookback", default=1400, show_default=True, help="more than the loop can fetch is a bug (E-042)")
+def research_mine(
+    strategy: str,
+    params: str,
+    root: str,
+    symbols: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    profile: str,
+    registry_path: str,
+    costs_path: str,
+    execution: str,
+    funding: bool,
+    out: str,
+    min_history: int | None,
+    universe_mode: str,
+    min_tenure: int,
+    top: int,
+    max_complexity: int,
+    max_lookback: int,
+) -> None:
+    """Enumerate candidate expressions and rank them full-sample.  This produces a SHORTLIST, not evidence.
+
+    Nothing here touches the trials ledger, because nothing here is a verdict: ranking hundreds of
+    expressions on the full sample *is* selection, and filing the winner as a result would be the mistake
+    D-020 exists to prevent.  What it prints instead is how many distinct expressions the search
+    evaluated - pass that to ``research validate --prior-trials`` when promoting one, or the DSR
+    denominator will never learn the search happened.  ``--strategy`` is inherited from the shared
+    options and ignored here; the candidates are the strategies.
+    """
+    profile_payload = load_yaml(profile)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    panel = _load(root, chosen, interval, start, end, funding)
+    membership = _membership(root, universe_mode, panel, min_tenure)
+    cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    portfolio = portfolio_params(profile_payload)
+    history = (
+        min_history
+        if min_history is not None
+        else int((profile_payload.get("portfolio", {}) or {}).get("min_history_bars", 720))
+    )
+    search = enumerate_candidates(max_complexity=max_complexity, max_lookback=max_lookback)
+    click.echo(
+        f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
+        f"({json.dumps(search.rejected)}) on {len(panel.symbols)} symbols x {len(panel.index)} bars"
+    )
+    rows: list[dict[str, Any]] = []
+    for candidate in search.candidates:
+        spec = register_signal(to_signal(candidate))
+        model = AlphaModel(
+            entries=(StrategyEntry(id=spec.id, params=dict(spec.default_params)),),
+            portfolio=portfolio,
+            interval=interval,
+            min_history_bars=history,
+        )
+        try:
+            weights, _combined, _per = model.evaluate(panel, membership)
+            result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
+        except Exception as exc:  # a candidate that cannot be evaluated is dropped, never silently scored
+            rows.append({**candidate.to_dict(), "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        net = result.portfolio_net
+        rows.append(
+            {
+                **candidate.to_dict(),
+                "sharpe": sharpe(net, panel.bars_per_year),
+                "net_return": compound(net),
+                "max_drawdown": max_drawdown(net),
+                "turnover": float(result.turnover.sum()),
+            }
+        )
+    scored = [row for row in rows if row.get("sharpe") is not None]
+    scored.sort(key=lambda row: -float(row["sharpe"]))
+    payload = {
+        "kind": "mine-shortlist",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "universe_mode": universe_mode,
+        "declared_trials": search.declared_trials,
+        "evaluated": search.evaluated,
+        "rejected": search.rejected,
+        "symbols": panel.symbols,
+        "range": [str(panel.index[0]), str(panel.index[-1])],
+        "dataset": build_manifest(root, interval).to_dict(),
+        "candidates": rows,
+        "not_evidence": (
+            "full-sample ranking over a search; promote a candidate only through `research validate "
+            f"--prior-trials {search.declared_trials}` on the point-in-time universe (D-013/D-020)"
+        ),
+    }
+    lines = [
+        f"| {row['hash']} | {row['sharpe']:.3f} | {row['max_drawdown']:.3f} | {row['expression']} |"
+        for row in scored[:top]
+    ]
+    markdown = "\n".join(["| hash | sharpe | mdd | expression |", "| --- | --- | --- | --- |", *lines])
+    path, digest = _write(out, "mine-shortlist", payload, markdown)
+    for row in scored[:top]:
+        click.echo(
+            f"  {row['hash']}  sharpe={row['sharpe']:6.3f}  mdd={row['max_drawdown']:7.3f}  "
+            f"turnover={row['turnover']:8.1f}  lookback={row['lookback']:>4}  {row['expression']}"
+        )
+    failed = [row for row in rows if "error" in row]
+    if failed:
+        click.echo(f"{len(failed)} candidate(s) could not be evaluated; see the report")
+    click.echo(f"declare --prior-trials {search.declared_trials} when validating any of these")
     click.echo(f"report: {path} sha256={digest}")
