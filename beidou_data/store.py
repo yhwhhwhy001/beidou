@@ -54,6 +54,11 @@ class KlineStore:
         The archive is monthly and the tail comes from REST, so a merge can leave a hole that
         nothing else would notice: ``append`` dedupes and sorts but never checks continuity, and a
         backtest silently treats a hole as a jump.  Both 2022 archive-wide outages were found this way.
+
+        A reported gap is not always a sync failure.  It can also be an absence upstream: a listing
+        boundary (PUMPUSDT's first bar is 2025-07-10 07:00, so the "missing" hours before it never
+        existed), a delisted symbol whose history the venue no longer serves (LITUSDT, BNXUSDT), or a
+        venue outage.  Re-fetching the range is what tells the two apart, so this stays a pure query.
         """
         frame = self.load(symbol, interval)
         if len(frame) < 2:
