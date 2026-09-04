@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-09-04",
+  "kind": "p10-portfolio-smoothing-index",
+  "note": "`research overlay` reports do not record portfolio params, so the four runs are otherwise indistinguishable; this index maps each report to the profile that produced it.",
+  "registry": "config/alpha_registry.yaml at d3b5087 (tsmom sign-mode + flow_short probe)",
+  "rule": "pre-registered: turnover <= -15% AND oos_sharpe >= control AND oos_mdd worsening <= 2pp",
+  "runs": [
+    {
+      "baseline": {
+        "average_absolute_exposure": 0.4713595249948353,
+        "oos_mdd": -0.12791017131839633,
+        "oos_sharpe": 1.7346656195120824,
+        "turnover_units": 287.33140994440987
+      },
+      "config": "control",
+      "portfolio": {
+        "covariance_halflife": null,
+        "max_gross": 2.0,
+        "max_weight": 0.15,
+        "no_trade_band": 0.005,
+        "no_trade_rel_band": 0.25,
+        "vol_halflife": null,
+        "vol_target": 0.15
+      },
+      "report": "reports/research/overlay-20260904T024318Z.json",
+      "sha256": "241698b8c60c3551be4e2656507a887dfb3068e1491c5bd186796e246bd87ba6"
+    },
+    {
+      "baseline": {
+        "average_absolute_exposure": 0.42909903659118837,
+        "oos_mdd": -0.13802083763360495,
+        "oos_sharpe": 1.521203615135513,
+        "turnover_units": 228.9726429749713
+      },
+      "config": "A",
+      "portfolio": {
+        "covariance_halflife": 336,
+        "max_gross": 2.0,
+        "max_weight": 0.15,
+        "no_trade_band": 0.005,
+        "no_trade_rel_band": 0.25,
+        "vol_halflife": 168,
+        "vol_target": 0.15
+      },
+      "report": "reports/research/overlay-20260904T024516Z.json",
+      "sha256": "8691bf39bf94b47fdf3e4cf7ee36682a1a603c45124f83bf9239fbb0b0825a5f"
+    },
+    {
+      "baseline": {
+        "average_absolute_exposure": 0.4808843485874295,
+        "oos_mdd": -0.12895960274736284,
+        "oos_sharpe": 1.8764205415245494,
+        "turnover_units": 253.34472717292036
+      },
+      "config": "B",
+      "portfolio": {
+        "covariance_halflife": null,
+        "max_gross": 2.0,
+        "max_weight": 0.15,
+        "no_trade_band": 0.005,
+        "no_trade_rel_band": 0.4,
+        "vol_halflife": null,
+        "vol_target": 0.15
+      },
+      "report": "reports/research/overlay-20260904T024717Z.json",
+      "sha256": "7102ee68d97970bd7a103f7c7c8aa108724ba6e32f83eaf454c9a1133507a65f"
+    },
+    {
+      "baseline": {
+        "average_absolute_exposure": 0.43986187597096305,
+        "oos_mdd": -0.1470868389772626,
+        "oos_sharpe": 1.6147960207891934,
+        "turnover_units": 210.08701735701794
+      },
+      "config": "C",
+      "portfolio": {
+        "covariance_halflife": 336,
+        "max_gross": 2.0,
+        "max_weight": 0.15,
+        "no_trade_band": 0.005,
+        "no_trade_rel_band": 0.4,
+        "vol_halflife": 168,
+        "vol_target": 0.15
+      },
+      "report": "reports/research/overlay-20260904T024916Z.json",
+      "sha256": "87a17c4b15dd7971dd43138969d9550fc5758d3d6dde7b12746c44936191cc00"
+    }
+  ],
+  "universe_mode": "pit"
+}
