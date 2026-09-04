@@ -12,23 +12,36 @@ registry does not.  Reading 1.5445 as the shipped configuration's score is wrong
 It does not touch reports/research/trials.jsonl: counting a verification re-run as new trials would
 inflate the DSR denominator for every future report.  Pure computation, no side effects.
 
-RESULT, 2026-09-05 - the recomputation DISAGREES with the log, and only on one arm:
+RESULT, 2026-09-05 - the recomputation disagrees with the log, and the cause is dated:
 
-    arm                        RESEARCH_LOG:385      recomputed (min_train 4000 / 8000)
-    crowding off (registry)    1.6450 / t 3.7333     1.6521 / 3.7824    1.7122 / 3.7301
-    crowding on                1.5291 / t 3.4798     1.7647 / 4.0266    1.7850 / 3.8776
+    arm                        RESEARCH_LOG:385      recomputed (146 syms, same cutoff)
+    crowding off (registry)    1.6450 / t 3.7333     1.6745 / t 3.8321
+    crowding on                1.5291 / t 3.4798     1.8027 / t 4.1177   <- sign of the comparison flips
 
-The off arm reproduces; the on arm does not, and it moves the comparison the other way.  min_train is
-not the cause (both fold protocols agree).  The arm that differs is the only one that consumes funding,
-and RESEARCH_LOG:353 records that before D-023 a funding-consuming configuration could run silently
-without the history - "把 `crowding_window` 改回 72 现在要么正确运行、要么明确失败，不会再有第三种结果"
-exists because there had been a third outcome.  181803Z ran 2026-09-03, before that hole was closed;
-the funding panel is complete today (977,327 settled cells, 205/205 symbols, from 2021-01-01).
+Not symbols (146 vs today's 205), not the cutoff, not min_train (4000 and 8000 agree): all three were
+held fixed and the on arm still wins.  The cause is that 181803Z ran 2026-09-03 18:18, and D-034
+landed 2026-09-04 20:44 (b0cc08a).  Its own docstring says what it fixed:
 
-That is a hypothesis with named evidence, not a finding: this script cannot show what 181803Z was fed.
-What it does show is that the number the crowding decision rests on is not reproducible today.  Flipping
-`crowding_window` on this basis would be wrong - a registered change needs `research validate`, which
-registers its trials.  This only says the question is open again.
+    Binance stamps fundingTime one to forty-seven milliseconds past the hour, and does so unevenly
+    over time (34% of BTCUSDT's 2021 settlements land exactly on the hour against 85% of its 2024
+    ones).  Matching a settlement to a bar open by equality therefore dropped 43.7% of the
+    441,678-row archive onto a silent zero ... and the share missing differed from fold to fold.
+
+The crowding modifier's only input is the trailing CROSS-SECTIONAL rank of funding.  In 181803Z it was
+ranking a panel missing 43.7% of its settlements, with the missing share drifting by year and by fold.
+That explains all three symptoms at once: the on arm moves (its input was corrupted), the off arm
+barely does (it pays funding as a cost but never reads it as a signal), and the per-fold picks were
+[72, 0, 72, 72, 0] then against all-72 now, because the handicap varied fold to fold.
+
+552ca9a re-ran tsmom's evidence under the corrected funding the same evening - but added exactly one
+row to trials.jsonl, crowding_window=0.  Only the off arm was re-scored.  So config/alpha_registry.yaml
+still gives "on this evidence the modifier is a small negative (OOS 1.53 with vs 1.65 without)" as the
+standing reason for crowding_window: 0, and that evidence predates the fix to the data the modifier
+reads.
+
+This does not say the modifier should be re-enabled.  It says the comparison it was rejected on has
+not been made since its input was corrected.  A registered change needs `beidou research validate`,
+which registers its trials; this script deliberately does not.
 """
 
 from __future__ import annotations

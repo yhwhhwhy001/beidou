@@ -132,24 +132,36 @@
   若 tsmom 收的是杠杆需求的钱, carry 应当能赚; 它不赚。这是测量不是论证,
   该分支关闭。edge 归属仍待陈述, 但候选空间已显著收窄。
 
-  【2026-09-05 更新二 · 新发现】决策所依赖的证据不可复现。
-  位置: docs/RESEARCH_LOG.md:344 引用 `scratchpad/verify_d020.py` —— **该文件
-        不在仓库中**, 与 commit 3a4d7fd 回头修复的 P14 指针属同一类问题。
-  复算(scratchpad/verify_crowding_arms.py, 不写账本):
+  【2026-09-05 更新二 · 已证实】crowding 停用所依据的证据, 早于修复其输入的补丁。
 
-        臂                    RESEARCH_LOG:385     复算 min_train 4000 / 8000
-        crowding off          1.6450 / t 3.7333    1.6521/3.7824  1.7122/3.7301
-        crowding on           1.5291 / t 3.4798    1.7647/4.0266  1.7850/3.8776
+  时序(全部可由 git 核对):
+    09-03 18:18  tsmom-validation-20260903T181803Z 跑出两臂 1.5291(开) / 1.6450(关)
+    09-04 09:47  68f151c 把"重开 crowding"定为**证据问题**
+    09-04 10:25  41c2f21 采纳 conviction_mode sign(改 tsmom 构造)
+    09-04 20:44  b0cc08a  D-034 —— "half the funding was never charged"
+    09-04 21:26  552ca9a  在修正后的 funding 下重跑证据, trials.jsonl **只 +1 条**
+                          (param_key 里 crowding_window=0 —— **只重跑了关闭臂**)
 
-  关闭臂可复现, 开启臂不可复现, 且**比较方向反转**。min_train 不是原因。
-  差异集中在唯一消费资金费率的那条臂上; RESEARCH_LOG:353 记载 D-023 之前
-  消费 funding 的配置可以静默跑完("不会再有第三种结果"这句话的存在即证明
-  曾有第三种结果), 而 181803Z 跑于 2026-09-03、早于该洞关闭, 今日 funding
-  面板已完整(977,327 结算格 / 205 列 / 自 2021-01-01)。
-  **这是有具名证据的假设, 不是结论**: 本脚本无法证明 181803Z 当时被喂了什么。
-  它能证明的是: crowding 决策所依据的数字今天不可复现。
-  处置: 不据此翻转 registry —— 已注册的改动需要 `research validate`(会登记试验),
-        那是操作者的决定。本项只把问题重新打开。
+  D-034 修的是什么(其 docstring 原文): Binance 的 fundingTime 落在整点后 1-47 毫秒且
+  随年份不均匀(BTCUSDT 2021 年 34% 落整点 vs 2024 年 85%), 按等值匹配 bar open
+  **把 441,678 行档案的 43.7% 丢进静默的零**, "the share missing differed from fold to fold"。
+
+  为什么这恰好作废两臂比较: crowding 修正的**唯一输入**是趋势资金费率的
+  **横截面排名**(signals/tsmom.py:145)。181803Z 里它排的是一张缺了 43.7%、
+  且缺失比例逐年逐折漂移的面板。
+
+  复算(scratchpad/verify_crowding_arms.py, 固定 146 标的 + 同截止, 不写账本):
+        crowding off  1.6450(记录) → 1.6745      关闭臂几乎不动
+        crowding on   1.5291(记录) → **1.8027**   开启臂反转
+  三个症状一次解释: 开启臂动(输入被污染)、关闭臂几乎不动(它付资金费但不读它做信号)、
+  逐折选择当时是 [72,0,72,72,0] 而今天全 72("缺失比例逐折不同")。
+  已排除的其他解释: 标的数(146 vs 205)、截止日、min_train(4000 与 8000 一致)。
+
+  现状: config/alpha_registry.yaml:41 仍以
+        "on this evidence the modifier is a small negative (OOS 1.53 with vs 1.65 without)"
+        作为 crowding_window: 0 的成文理由, 而该证据早于修复其输入的补丁。
+  本项**不主张**重开 crowding, 只主张: **它被否决所依据的那次比较, 在其输入被修正后
+  从未重做过。** 已注册的改动需要 `beidou research validate`(会登记试验), 是操作者的决定。
 
 [原始条目] tsmom 的 edge 归属未陈述 —— 待作者答复
   维度: 1.2 谁在对手盘
