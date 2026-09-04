@@ -335,6 +335,29 @@ def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
     }
 
 
+def plan_gaps(store: StateStore, day: str) -> dict[str, Any]:
+    """Symbols the planner could not act on, and why - including the band's own live falsifier.
+
+    ``blocked_entry`` and ``blocked_exit`` are the structural cases: a target smaller than the absolute
+    band can never open from flat, and a position smaller than the band can never be closed to zero, so
+    those symbols are stuck for as long as the target stays that size.  They are worth naming because
+    they look identical, in every other instrument, to a symbol that simply did not need trading.
+    ``band_held`` counts the ordinary suppressed resize, which is what P10 cell B registered as its live
+    falsifier when it widened ``no_trade_rel_band`` to 0.40 and predicted roughly 12% less turnover.
+    """
+    rows = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
+    gaps = [gap for row in rows for gap in (row.get("skipped") or [])]
+    counted: dict[str, int] = {}
+    for gap in gaps:
+        counted[str(gap.get("reason"))] = counted.get(str(gap.get("reason")), 0) + 1
+    return {
+        "by_reason": counted,
+        "band_held": counted.get("NO_TRADE_BAND", 0),
+        "blocked_entry": sorted({str(g.get("symbol")) for g in gaps if g.get("reason") == "BAND_BLOCKS_ENTRY"}),
+        "blocked_exit": sorted({str(g.get("symbol")) for g in gaps if g.get("reason") == "BAND_BLOCKS_EXIT"}),
+    }
+
+
 def clock_health(store: StateStore, day: str, *, interval_ms: int = 3_600_000) -> dict[str, Any]:
     """D-025: how far this day's cycles sat from the venue clock, and whether the report's own labels are wrong.
 
@@ -511,6 +534,7 @@ def daily_payload(
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
+        "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
         "data_coverage": data_coverage(store),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
@@ -685,6 +709,16 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 else {"none": 0},
             ),
             ("Guard events", payload["guard_events"] or {"none": 0}),
+            (
+                # A planner that acts on nothing must still say what it looked at (P10 cell B's falsifier)
+                "Plan gaps (no-trade band)",
+                {
+                    "band_held_symbol_cycles": payload["plan_gaps"]["band_held"],
+                    "blocked_entry": json_dumps(payload["plan_gaps"]["blocked_entry"]),
+                    "blocked_exit": json_dumps(payload["plan_gaps"]["blocked_exit"]),
+                    "by_reason": json_dumps(payload["plan_gaps"]["by_reason"]),
+                },
+            ),
             (
                 "Expectations (validation reports)",
                 {

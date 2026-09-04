@@ -98,9 +98,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # somebody else's.  This one lands on the live/exchange side again; the honest note is that the whole
 # family of raises since the audit has been instrumentation, which is what the operator keeps asking for
 # and what the alpha-share target keeps counting against us.
+# Ninth raise, 2026-09-04, with the sentence the rule requires: +68 in beidou_live for two silences the
+# operator hit on the same day.  The first is the leverage record: `state.leverage_set` was consulted to
+# decide whether to POST, but nothing on this venue can report the setting back - positionRisk v2 and v3,
+# the account rows and symbolConfig all read 0 or null - so the cache was authoritative over a venue it
+# could not observe, and after an account reset took the setting back to its default the loop never
+# re-sent it.  Startup now re-asserts unconditionally; most of the addition is the docstring recording
+# which four endpoints were checked, because "just skip the POST when it already matches" is exactly the
+# simplification that restores the bug.  The second is the no-trade band, whose skip was the most common
+# outcome of a cycle and the only one that left no trace at all: a bare `continue`.  CYSUSDT sat in the
+# universe for a day with a -41 USDT target against a 54 USDT absolute band - scored every cycle, ordered
+# never - and no instrument in the system could name it, because a symbol the band can never let in and a
+# symbol that did not need trading produced identical records.  BAND_BLOCKS_ENTRY/EXIT separate the
+# structural cases from the ordinary suppressed resize, and `plan_gaps` puts all three in the daily report
+# where the ordinary count doubles as P10 cell B's registered turnover falsifier.  Non-alpha growth again,
+# and again buying observability rather than signal; the honest note is that both of these were found by
+# looking at the live account rather than by any test, which is what the instrumentation is for.
 CEILING = {
     "beidou_alpha": 3_683,
-    "beidou_live": 3_720,
+    "beidou_live": 3_788,
     "beidou_cli": 2_419,
     "beidou_data": 1_082,
     "beidou_exchange": 539,
