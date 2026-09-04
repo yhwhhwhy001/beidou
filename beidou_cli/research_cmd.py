@@ -22,7 +22,7 @@ from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, combine_books
-from beidou_alpha.registry import StrategyEntry
+from beidou_alpha.registry import StrategyEntry, registry_fingerprint
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals.base import scores_to_targets
@@ -787,6 +787,9 @@ def research_overlay(
     report: dict[str, Any] = {
         "kind": "overlay",
         "strategies": [e.id for e in model.entries],
+        # D-024: an overlay decides on the ensemble, so it is only valid for the registry it ran against.
+        "registry": registry_fingerprint(registry, lambda sid, params: get_signal(sid).canonical_params(params)),
+        "portfolio": model.portfolio.__dict__,
         "interval": interval,
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
@@ -810,6 +813,18 @@ def research_overlay(
         "Overlay evidence: " + ", ".join(report["strategies"]),
         [
             ("Range", report["range"]),
+            (
+                "Registry this was computed against (D-024)",
+                {
+                    "digest": report["registry"]["digest"],
+                    "ensemble": report["registry"]["ensemble_method"],
+                    "books": json.dumps(report["registry"]["books"]),
+                    **{
+                        f"{sid} params": json.dumps(row["params"], sort_keys=True)
+                        for sid, row in report["registry"]["strategies"].items()
+                    },
+                },
+            ),
             ("Baseline (no overlay)", {k: v for k, v in baseline.items() if k != "fold_sharpes"}),
             ("Candidates", lines),
             ("Recommendation (D-017)", {k: json.dumps(v) for k, v in recommendation.items()}),
@@ -819,6 +834,7 @@ def research_overlay(
     for line in lines:
         click.echo(line)
     click.echo(f"recommendation: {json.dumps(recommendation)}")
+    click.echo(f"registry digest: {report['registry']['digest']}")
     click.echo(f"report: {path} sha256={digest}")
 
 

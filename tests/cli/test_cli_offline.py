@@ -255,6 +255,15 @@ def test_research_pit_universe_and_overlay_offline(tmp_path: Path, august_dir: P
     assert overlay["baseline"]["oos_sharpe"] is not None
     assert [row["kind"] for row in overlay["candidates"]] == ["exits", "exits", "exits", "throttle"]
     assert set(overlay["recommendation"]) == {"exits", "throttle"}
+    # D-024: the report says which registry it decided against, so a later reader can tell if it expired
+    fingerprint = overlay["registry"]
+    assert len(fingerprint["digest"]) == 64 and fingerprint["ensemble_method"] == "mean"
+    assert set(fingerprint["strategies"]) == set(overlay["strategies"])
+    tsmom_params = fingerprint["strategies"]["tsmom"]["params"]
+    assert tsmom_params["horizons"] == [5, 20, 50] and tsmom_params["vol_window"] == 100  # what this run used
+    assert tsmom_params["conviction_mode"] == "score"  # an unwritten default is filled in, not left absent
+    assert overlay["portfolio"]["max_weight"] > 0
+    assert f"registry digest: {fingerprint['digest']}" in result.output
     assert "recommendation:" in result.output
 
 

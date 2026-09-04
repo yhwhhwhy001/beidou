@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -93,6 +95,38 @@ def parse_registry(payload: Mapping[str, Any]) -> Registry:
         strategies=tuple(entries),
         books=books,
     )
+
+
+def registry_fingerprint(
+    registry: Registry, canonical: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """The configuration a report was produced under: what runs, not how the file happens to be written.
+
+    A report that decides something about the *ensemble* (``research overlay``) is only valid for the
+    registry it was computed against, and a registry can change under a long research run - that is how
+    a take-profit conclusion once came to rest on evidence that had expired fifteen minutes earlier.
+    Hashing the file cannot express this: editing a comment would change the digest, while a parameter
+    edited inside an existing line looks like any other change.  The digest is taken over the enabled
+    entries, with parameters canonicalised through each signal's own parameter object so an unwritten
+    default and an explicit one agree, plus the ensemble method and the book fractions.  Pure: the
+    caller supplies the canonicaliser and does the file I/O.
+    """
+    strategies = {
+        entry.id: {
+            "book": entry.book,
+            "weight": entry.weight,
+            "params": dict(canonical(entry.id, entry.params) if canonical is not None else entry.params),
+        }
+        for entry in registry.enabled
+    }
+    payload: dict[str, Any] = {
+        "ensemble_method": registry.ensemble_method,
+        "turnover_penalty": registry.turnover_penalty,
+        "books": {name: spec.fraction for name, spec in sorted(registry.books.items())},
+        "strategies": strategies,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return {"digest": digest, **payload}
 
 
 def evidence_params(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
