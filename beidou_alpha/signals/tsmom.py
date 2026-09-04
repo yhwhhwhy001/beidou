@@ -18,6 +18,14 @@ std.  "vol_scaled" is the pre-registered alternative in which ``vol`` matters:
 ``return_scale`` becomes the number of h-bar standard deviations that saturates
 the score.  At weekly horizons the slope term is nearly inert (mean |contribution|
 0.02 vs 0.32 for momentum); it is likewise kept for parity.
+
+``conviction_mode`` (H-001, pre-registered in round 7) decides whether the
+score's *magnitude* is traded at all.  "score" is the validated form.  "sign"
+replaces every actionable score by its sign, so the book expresses direction
+only; sub-threshold scores are untouched and therefore still mean NO_ACTION,
+and an exact 0.0 is still an explicit exit.  The crowding modifier, when it is
+on, keeps its threshold effect (a shrunk score can fall below the entry
+threshold) but loses its magnitude effect, so it is applied first.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ class TsmomParams:
     crowding_cut: float = 0.7
     crowding_penalty: float = 0.5
     momentum_mode: str = "fixed"  # fixed | vol_scaled (see module docstring)
+    conviction_mode: str = "score"  # score | sign (H-001: trade direction only, see module docstring)
 
     def __post_init__(self) -> None:
         if len(self.horizons) != len(self.horizon_weights) or not self.horizons:
@@ -68,6 +77,8 @@ class TsmomParams:
             raise ValueError("invalid crowding parameters")
         if self.momentum_mode not in {"fixed", "vol_scaled"}:
             raise ValueError("momentum_mode must be 'fixed' or 'vol_scaled'")
+        if self.conviction_mode not in {"score", "sign"}:
+            raise ValueError("conviction_mode must be 'score' or 'sign'")
 
     @classmethod
     def from_mapping(cls, params: Mapping[str, Any]) -> TsmomParams:
@@ -136,6 +147,22 @@ def apply_crowding_modifier(score: pd.DataFrame, funding: pd.DataFrame | None, p
     return score.mask(crowded_long | crowded_short, score * (1.0 - p.crowding_penalty))
 
 
+def apply_conviction_mode(score: pd.DataFrame, p: TsmomParams) -> pd.DataFrame:
+    """H-001: in "sign" mode an actionable score becomes +-1; everything else passes through.
+
+    Only ``|score| >= entry_threshold`` is rewritten, so the actionable set, the
+    NO_ACTION (hold) stretches and the explicit 0.0 exits are exactly the ones
+    "score" mode produces.  The result equals ``sign`` of the target frame the
+    validated configuration would have held.
+    """
+    if p.conviction_mode != "sign":
+        return score
+    actionable = score.abs() >= p.entry_threshold
+    signs = pd.DataFrame(np.sign(score.to_numpy(dtype=float)), index=score.index, columns=score.columns)
+    return score.mask(actionable, signs)
+
+
 def compute(panel: Panel, params: Mapping[str, Any]) -> pd.DataFrame:
     p = TsmomParams.from_mapping(params)
-    return apply_crowding_modifier(tsmom_scores(panel.close, p), panel.funding, p)
+    crowded = apply_crowding_modifier(tsmom_scores(panel.close, p), panel.funding, p)
+    return apply_conviction_mode(crowded, p)

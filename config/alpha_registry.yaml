@@ -28,6 +28,7 @@ strategies:
       slope_scale: 0.01
       entry_threshold: 0.20
       vol_window: 400
+      conviction_mode: sign     # H-001: trade the direction of the weekly signal, not its magnitude (adopted 2026-09-04)
       crowding_window: 0        # modifier off (the cut/penalty below are inert; kept so the params equal the report's best_params).
                                 # NOTE: this is now an evidence question, not a plumbing one.  Round 6b (D-023) wired
                                 # funding history into the live panel and made a signal declare its need, so a
@@ -51,9 +52,21 @@ strategies:
     # - the mixture is the conservative number, and best_params still equal these params.
     # DSR p 0.26 at 69 trials (reported, not a veto), PBO 0.55 at N=2 (informational).  The 133239Z report (crowding
     # 0.5, DSR p 0.0002 from a degenerate pooled variance) is superseded; the modifier never ran live (E-040).
+    # 2026-09-04 H-001 (operator decision): `conviction_mode: sign` adopted.  Pre-registered rule, fixed before the
+    # run: adopt only if OOS Sharpe >= baseline - 0.05 AND OOS max drawdown improves AND turnover falls.  All three
+    # hold (OOS 1.6450 -> 1.6026, MDD -13.53% -> -11.75%, turnover 357.4 -> 263.8, cost share 14.57% -> 11.69%).
+    # The honest reading is not "better" but "magnitude carries no return information": the two OOS net-return
+    # streams correlate 0.966 and their per-bar difference has a Newey-West t of -0.047 (p 0.96); a weekly block
+    # bootstrap puts the Sharpe difference at [-0.238, +0.151].  What is bought is lower turnover and a shallower
+    # drawdown; what is paid is a coarser position grain (average absolute exposure 0.383 -> 0.445).
+    # Evidence below is the single-configuration report (grid 1) because `validate` picks best_params by full-sample
+    # Sharpe, which the baseline wins; under D-020 the sign arm passes on its own: OOS 1.6026, Newey-West t 3.686,
+    # five folds positive, CPCV q05 1.23, 0% negative paths, cost x2 1.47.  Live arbiter: M-010 income attribution
+    # over 30 days, plus a turnover check - if turnover does not fall by roughly a quarter, live and backtest
+    # execution semantics have diverged again (that is how KILL-027 was found).
     evidence:
-      report: reports/research/tsmom-validation-20260903T181803Z.json
-      sha256: 382300429187cff0e829ff528b892a121589562f06e4dcd557d761886573cd8a
+      report: reports/research/tsmom-validation-20260904T020459Z.json
+      sha256: 466419e8caaa6018aee9765c19cd139ee4c6e395073ec33418328a416b3c40f4
       verdict: PASS
   - id: xsmom
     enabled: false
