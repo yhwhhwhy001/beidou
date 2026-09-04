@@ -154,9 +154,11 @@ Inversion：要让这次复查白做，只需"把两处偏差当作噪声不修�
 
 | Metric | Claim | 指标 | 阈值 | 窗口 | 失败动作 |
 | --- | --- | --- | --- | --- | --- |
-| M-009 | C-014 | 每周期实盘 target 与"同一面板离线复现"的最大差 | > 1e-9 | 持续 | 告警、停止计入证据 |
-| M-010 | C-015 | 基于 income 的 30 天策略 Sharpe vs 时点 OOS 1.53（±2 s.e.） | z < −2 | 30 天（从 P1～P3 落地后起算） | 复查 / 停用 |
-| M-011 | C-018 | 非交易性权益跳变次数 | ≥ 1 | 持续 | 该日不计入 M-010 |
+| M-010 | C-015 | 基于 income 的 30 天策略 Sharpe vs 时点 OOS（±2 s.e.） | z < −2 | 30 天（从 2026-09-04 02:27Z 重启起算） | 复查 / 停用 |
+| M-011 | C-014 | 上一周期的 contributions 与离线复现的最大差（`beidou live verify`） | > 1e-9 | 每小时（`com.beidou.check`） | 告警、停止计入证据 |
+| M-012 | C-018 | 非交易性现金流与时钟偏差（`cycles.jsonl` 的 `external_flows` / `clock`） | 任一非零 | 持续 | 该 bar 不计入 M-010 |
+
+编号说明：初稿把复现指标写作 M-009、现金流指标写作 M-011，与并行会话的探针止损 M-009、以及后来实现的 `live verify` 撞号。上表是最终编号，正文其余处提到的 M-009 一律指探针止损（`docs/analysis/2026-09-03-exits-pool-sizing.md`）。
 
 ---
 
@@ -189,3 +191,18 @@ Inversion：要让这次复查白做，只需"把两处偏差当作噪声不修�
 | 实盘重启 | **待定（操作者决定）** | 在 tsmom 证据指针问题解决前不重启；13:37Z 的旧进程继续运行 |
 
 KILL 状态更新：KILL-027 仍 OPEN（证据指针），但"实盘 ≠ 验证"的两处代码偏差已修并有同构测试守护；KILL-028 CLOSED（P1/P4）；KILL-029 CLOSED（P3；操作者确认为手动重置）；KILL-032 CLOSED（P8）；KILL-034 MITIGATED（文档 + vol_scaled 备选）；KILL-030/031 仍 MITIGATED。Final Decision 不变：**Weak GO**，重启与证据指针由操作者裁决。
+
+---
+
+## 13. 方案对照复查（2026-09-04）与后续交付
+
+对 §6 的方案表逐项复查,发现四项遗漏,按建议顺序处理。**KILL-027 于本次正式关闭**:参数一致(现在由测试守护而非人工核对)、资金费率管线落地、同构测试就位、证据指针已更新。剩余 OPEN 项:无 P0。
+
+| 复查发现 | 处理 |
+| --- | --- |
+| 证据门只校验报告身份,不校验参数——KILL-027 高一层的同类失败 | **已修**(82d898d):`SignalSpec.canonical_params` 补齐默认值后逐键比对,`registry.param_problems` 报出每个不一致的键与两边的值;validation 报告读 `best_params`,book 报告读 `sleeve.params`;`tests/alpha/test_evidence_gate.py` 用在架 registry 做守护 |
+| M-011 是手动命令,没人跑 | **已修**(389fbea):循环每周期用行情端口已有的服务器时间调用测一次时钟偏差,写进 `cycles.jsonl.clock` 与心跳,超阈值边沿告警;`deploy/run_check.sh` + `com.beidou.check.plist` 每小时跑 `live status --check` 与 `live verify --check` 并推送失败。装载 launchd 是操作者动作 |
+| P10(波动率估计/相对带)掉在两个会话之间,无人认领 | 本会话认领,见下 |
+| §10 指标编号与并行会话撞号、§12 执行记录过期 | 本节修订;M-011 = 复现检查,M-012 = 现金流/时钟 |
+
+**P5 的一次教训(如实记录)。** 首次重跑(02:08–02:10Z)结论是"按 D-017 双通过规则关闭止盈 6σ",静态 universe 上差 0.01 Sharpe 未过。随后发现并行会话在 02:25:58Z 合入了 `conviction_mode: sign`,而该次重跑用的是改动前的 score 模式账本——**证据比结论早了 15 分钟就过期了**。该结论已作废,未据此改动任何实盘配置;正在用当前 registry 重跑。方法论上的收获:overlay 这类"在集成上做决策"的证据必须记录它所依据的 registry 摘要,否则无法判断是否过期。
