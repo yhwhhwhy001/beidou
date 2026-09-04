@@ -1,5 +1,42 @@
 """Multi-horizon time-series momentum (vectorised port of the legacy ``TrendAlpha`` formula).
 
+Edge, stated.  The external audit in ``docs/analysis/2026-09-05-backtest-guard-external-audit.md``
+asked what this is paid for and found no answer anywhere in the repo, which is a fair thing to have
+been missing from the one strategy that trades.
+
+*What it is paid for.*  Bearing trend risk that discretionary holders shed too slowly.  The
+counterparty is the late leveraged long: the flow that adds exposure after a move is established and
+is forced out when it reverses.  Behavioural, not structural - nothing in the perpetual's settlement
+mechanics protects it - so it should be expected to decay as participants adapt, and the walk-forward
+re-runs are how that is watched rather than assumed away.
+
+*What it is not, measured rather than argued.*  It is not funding carry in disguise.  If the return
+were compensation for supplying leverage to perpetual longs, the carry signal would collect it
+directly.  It does not: carry in rank mode is gross -6% over five years, and round 4's reading
+(RESEARCH_LOG) is that the funding rate roughly equals expected drift - funding in this universe is
+fairly priced.  That closes the branch the audit raised, that tsmom and carry might be one trade
+wearing two hats.
+
+*Where funding does enter* is the crowding modifier below, and its shape argues for the statement
+above rather than against it.  Re-validated 2026-09-05 under D-034's corrected funding
+(``tsmom-validation-20260904T193707Z``; all five folds select the modifier), the per-fold effect is:
+
+    fold   test period          off     on    delta
+    1      2021-06 -> 2022-07   1.45   1.63   +0.18
+    2      2022-07 -> 2023-07   0.50   0.90   +0.40
+    3      2023-07 -> 2024-08   2.51   2.59   +0.08
+    4      2024-08 -> 2025-08   1.10   1.10    0.00
+    5      2025-08 -> 2026-09   2.66   2.56   -0.10
+
+It helps most where the base is weakest and costs a little where the base is strongest.  That is a
+tail-mitigation profile, not a return enhancer: shrinking a long the whole market is already paying to
+hold is the strategy declining to *be* the late leveraged long, which is the edge statement applied to
+itself.
+
+*Held as a hypothesis, not a finding.*  None of this is a mechanism test.  The fold pattern is
+consistent with the story and does not prove it, five folds is five observations, and the pattern was
+read after the fact.  The live arbiter is M-010 income attribution over 30 days.
+
 score = clip( (0.40*momentum + 0.25*slope + 0.10*persistence*direction) / 0.75 , -1, 1 )
 
 momentum_h    = tanh(ret_h / max(vol, return_scale))            (momentum_mode "fixed", the validated form)

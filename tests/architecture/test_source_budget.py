@@ -258,8 +258,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # only risk-adding orders were capped, when live exempts full closes alone.  The test encodes the real
 # rule, which is why it is worth having a test rather than a paragraph.  Curve in scratchpad/participation_capacity_sweep.py;
 # audit and its correction in docs/analysis/2026-09-05-backtest-guard-external-audit.md.
+# Nineteenth raise, 2026-09-05, with the sentence the rule requires: +37 in beidou_alpha, all of it the
+# edge statement in signals/tsmom.py.  No code, no behaviour, no number moves.  The external audit asked
+# what the one strategy that trades is paid for and found the answer nowhere in the repo - the docstring
+# was the formula and nothing else - and this page is the wrong place to argue that a comment can be
+# worth 37 lines, so: it names the counterparty (the late leveraged long), marks the edge behavioural
+# rather than structural so its decay is expected rather than surprising, and records the measured
+# NEGATIVE that narrows it - carry in rank mode is gross -6% over five years, so this is not funding
+# carry in disguise.  It also carries the per-fold table of the crowding modifier, because the modifier
+# helps most where the base is weakest (fold 2, 0.50 -> 0.90) and costs a little where it is strongest
+# (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
+# would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
+# was read after the fact, five folds is five observations, and M-010 is the live arbiter.
 CEILING = {
-    "beidou_alpha": 4_839,
+    "beidou_alpha": 4_876,
     "beidou_live": 4_198,
     "beidou_cli": 2_582,
     "beidou_data": 1_258,
