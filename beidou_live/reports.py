@@ -318,16 +318,19 @@ def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
     ]
     entered: list[str] = []
     left: list[str] = []
+    quarantined: list[str] = []
     for row in rows:
         update = row.get("universe_update") or {}
         entered.extend(str(s) for s in (update.get("entered") or []))
         left.extend(str(s) for s in (update.get("left") or []))
+        quarantined.extend(str(s) for s in (row.get("quarantined") or []))
     return {
         "exits": exits,
         "exit_count": len(exits),
         "by_rule": {rule: sum(1 for e in exits if e["rule"] == rule) for rule in {str(e["rule"]) for e in exits}},
         "pool_entered": entered,
         "pool_left": left,
+        "pool_quarantined": quarantined,  # D-031: the falsifier is counted here, not asserted in a docstring
         "pool_changes": len(entered) + len(left),
     }
 
@@ -726,6 +729,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "by_rule": json_dumps((payload.get("events") or {}).get("by_rule") or {}),
                     "pool_entered": json_dumps((payload.get("events") or {}).get("pool_entered") or []),
                     "pool_left": json_dumps((payload.get("events") or {}).get("pool_left") or []),
+                    "pool_quarantined": json_dumps((payload.get("events") or {}).get("pool_quarantined") or []),
                 },
             ),
             (

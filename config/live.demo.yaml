@@ -57,6 +57,14 @@ pool:
   refresh: daily
   candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
   liquidity_window: 24        # bars averaged for the participation cap
+  # D-031: a symbol rejected on this many consecutive cycles - while the venue was accepting orders for
+  # other symbols in the same cycle - leaves the universe and exits reduce-only, returning only when the
+  # daily refresh selects it again.  This is the delisting/precision/max-position case the pool had no
+  # answer for: before it, a symbol the venue refuses to trade kept its slot indefinitely.  It can only
+  # reduce exposure, never add, so it carries no directional prior; the pre-registered falsifier is that
+  # more than two firings in 30 days without a venue incident means the threshold, not the symbol, is wrong.
+  # `beidou report daily` counts firings under `pool_quarantined`.
+  quarantine_after: 3
 exits:                        # bar-close exit overlay in daily-vol units (D-012); 0 disables a rule.
   # 2026-09-04 (P11, operator instruction: the live book must carry a price stop).  Re-run of the
   # pre-registered D-017 grid on the CURRENT construction - the previous overlay evidence (02:34Z) was

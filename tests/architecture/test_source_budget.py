@@ -74,9 +74,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # and was attributed to the book held an hour after it earned it, which is the one corruption M-010
 # cannot absorb.  Most of the addition is `venue_time_ms` plus the docstrings recording why the
 # obvious simplification - "just use self.clock like everything else" - is the bug.
+# Seventh raise, 2026-09-04, with the sentence the rule requires: +45 more in beidou_live for D-031's
+# venue-health quarantine and for the D-014 entry-side fix it exposed.  The fix is the part worth the lines:
+# `leaving` was being read as "outside the pool", but it is filtered to symbols that still hold a position,
+# so in the cycle after a departing symbol was flattened the loop opened a fresh position in it - 952 USDT
+# of a name that had left the pool the day before, reproduced in a test before it was believed.  Most of the
+# 45 lines are the two docstrings recording why quarantine needs evidence from another symbol in the same
+# cycle, and why the entry side follows the universe while the exit side follows positions; deleting either
+# comment restores a bug that looks like a simplification.  Three of the four raises on this page landed the
+# same day from two sessions working in parallel, and this one had to be renumbered twice - fifth to sixth to
+# seventh - which is worth a line here: with concurrent authors the ratchet is doing double duty as a merge
+# detector, and that is a feature.  Noted honestly: non-alpha growth against the 90% target, buying plumbing
+# correctness rather than signal.
 CEILING = {
     "beidou_alpha": 3_683,
-    "beidou_live": 3_551,
+    "beidou_live": 3_596,
     "beidou_cli": 2_419,
     "beidou_data": 1_082,
     "beidou_exchange": 525,

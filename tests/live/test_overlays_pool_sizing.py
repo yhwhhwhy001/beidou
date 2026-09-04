@@ -18,8 +18,9 @@ from beidou_live.engine import LiveEngine
 from beidou_live.exits import ExitOverlay
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.rebalancer import PlannedOrder, RebalanceParams, plan_rebalance
+from beidou_live.reports import exit_and_pool_events
 from beidou_live.state import StateStore
-from beidou_shared.types import InstrumentRules, Position, Side
+from beidou_shared.types import InstrumentRules, Position, Side, VenueError
 from tests.fakes.fake_venue import DEFAULT_RULES, FakeVenue
 from tests.live.fakes import FakeClock, FakeMarketData
 from tests.live.test_live_loop import SYMBOLS, _config, _model, _prices
@@ -224,6 +225,47 @@ async def test_engine_refreshes_universe_daily_and_flattens_what_leaves(august_p
         pool=FakePool([]),
     )
     assert fresh.universe == [s for s in SYMBOLS if s != "SOLUSDT"]
+
+
+async def test_a_symbol_the_venue_keeps_rejecting_is_quarantined(august_panel: Panel, tmp_path: Path) -> None:
+    """D-031: rejected on N consecutive cycles and the symbol leaves the pool; a venue-wide refusal does not."""
+    world = _world(august_panel, tmp_path, quarantine_after=3, universe_refresh=True, pool=FakePool([]))
+    engine, venue, market = world["engine"], world["venue"], world["market"]
+    await engine.startup()
+    accepted = venue.place_order
+    refused: set[str] = set()
+
+    async def refuse(request: Any) -> Any:
+        if request.symbol in refused:
+            raise VenueError("Order's notional must be no smaller than minNotional", code=-4164)
+        return await accepted(request)
+
+    venue.place_order = refuse  # type: ignore[method-assign]
+
+    # Every symbol refused: an account-wide condition the guards own, so no streak is built at all.
+    refused.update(SYMBOLS)
+    bar = market.bar_open_ms(world["cursor"] - 1)
+    record = await engine.run_cycle(bar)
+    assert [o["status"] for o in record["orders"]] == ["REJECTED"] * len(record["orders"]) and record["orders"]
+    assert record["quarantined"] == [] and engine.state.reject_streak == {}
+
+    # Only SOL refused, and the venue demonstrably works for the others: three cycles and it is out.
+    refused.clear()
+    refused.add("SOLUSDT")
+    for step in range(1, 4):
+        market.cursor += 1
+        record = await engine.run_cycle(bar + step * 3_600_000)
+        assert [o["symbol"] for o in record["orders"] if o["status"] == "REJECTED"] == ["SOLUSDT"]
+    assert record["quarantined"] == ["SOLUSDT"]
+    assert "SOLUSDT" not in engine.universe and engine.state.universe == engine.universe
+    assert "SOLUSDT" in engine.state.leaving and engine.state.reject_streak == {}
+
+    # It is exit-only now: the target is zero and the order is reduce-only, whatever the signal wants.
+    market.cursor += 1
+    after = await engine.run_cycle(bar + 4 * 3_600_000)
+    assert after["targets"]["SOLUSDT"] == 0.0
+    assert all(o["reduce_only"] for o in after["orders"] if o["symbol"] == "SOLUSDT")
+    assert exit_and_pool_events(world["store"], str(after["bar"])[:10])["pool_quarantined"] == ["SOLUSDT"]
 
 
 async def test_leverage_refusal_does_not_stop_startup(august_panel: Panel, tmp_path: Path) -> None:

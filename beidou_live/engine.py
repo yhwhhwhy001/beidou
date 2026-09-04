@@ -67,6 +67,7 @@ class LiveConfig:
     margin_buffer: float = 0.10
     universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
     liquidity_window: int = 24
+    quarantine_after: int = 0  # D-031: rejected cycles before a symbol leaves the universe (0 = off)
     probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
     max_bar_alignment_ms: int = 60_000  # how far the wake-up may sit from a real bar boundary (D-025)
 
@@ -280,8 +281,15 @@ class LiveEngine:
         raw = {symbol: float(weight) for symbol, weight in targets.weights.items()}
         for symbol in managed:
             raw.setdefault(symbol, 0.0)
-        for symbol in self.state.leaving:  # left the universe: only the exit remains
-            raw[symbol] = 0.0
+        # D-014's exit side follows positions, but its ENTRY side follows the universe.  Reading `leaving`
+        # here instead of the universe left a hole: `leaving` is filtered to symbols that still hold a
+        # position a few lines above, so the cycle after a departing symbol is flattened it is still in
+        # `managed` (that list was built before the filter), the model still scores it, and nothing zeroes
+        # it - the loop opened a fresh 952 USDT long in a symbol that had left the pool the day before.
+        pool = set(self.universe)
+        for symbol in raw:
+            if symbol not in pool:
+                raw[symbol] = 0.0
         throttled = {symbol: weight * scalar for symbol, weight in raw.items()}
         # exit overlay (D-012): venue positions are the reference, state persists across restarts
         adjusted, exit_states, exit_events = self.exits.apply(
@@ -374,6 +382,7 @@ class LiveEngine:
             reports.append(report)
             self.store.append_trade({"bar_open_ms": bar_open_ms, **report.to_dict()})
             record["orders"].append(report.to_dict())
+        record["quarantined"] = self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
         self._finish_cycle(record, targets.contributions)
         return record
@@ -398,6 +407,36 @@ class LiveEngine:
         return reports
 
     # --- helpers ----------------------------------------------------------------
+    def _quarantine(self, reports: Sequence[ExecutionReport]) -> list[str]:
+        """D-031: a symbol the venue keeps rejecting leaves the universe and takes the reduce-only exit path.
+
+        Evidence, not suspicion.  A streak only advances when the same cycle placed a non-rejected order
+        somewhere else, so an account-wide condition - margin, clock skew, an IP ban - can never empty the
+        pool through this path; that belongs to the guards, which own stopping the whole book.  The cost of
+        that choice is a blind spot: a cycle whose single order is rejected proves nothing about the symbol,
+        so it does not count.  A cycle that places no order for a symbol is silent rather than exonerating,
+        so the streak survives the no-trade band.  Recovery is the pool's decision alone: a quarantined
+        symbol returns only when the daily refresh selects it again.
+
+        Pre-registered falsifier (2026-09-04): if this fires more than twice in 30 days with no venue
+        incident behind it, ``quarantine_after`` is too tight and the rule is what is broken, not the symbol.
+        """
+        after = self.config.quarantine_after
+        placed = {report.order.symbol for report in reports}
+        rejected = {report.order.symbol for report in reports if report.status == "REJECTED"}
+        if after <= 0 or not rejected or rejected == placed:
+            return []
+        streak = {symbol: count for symbol, count in self.state.reject_streak.items() if symbol not in placed}
+        streak.update({symbol: self.state.reject_streak.get(symbol, 0) + 1 for symbol in rejected})
+        hit = sorted(symbol for symbol, count in streak.items() if count >= after and symbol in self.universe)
+        self.state.reject_streak = {symbol: count for symbol, count in streak.items() if symbol not in hit}
+        if hit:
+            self.universe = [symbol for symbol in self.universe if symbol not in hit]
+            self.state.universe = list(self.universe)
+            self.state.leaving = list(dict.fromkeys([*self.state.leaving, *hit]))
+            logger.warning("quarantined after %d rejected cycles, exiting reduce-only: %s", after, hit)
+        return hit
+
     async def _maybe_refresh_universe(self, bar_open_ms: int) -> dict[str, Any] | None:
         """Once per UTC day: re-rank through the pool; what leaves is flattened, what enters waits for history."""
         if not self.config.universe_refresh or self.pool is None:

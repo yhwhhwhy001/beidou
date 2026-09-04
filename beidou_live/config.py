@@ -88,6 +88,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         margin_buffer=float(portfolio.get("margin_buffer", 0.10)),
         universe_refresh=str(pool.get("refresh", "never")).lower() != "never",
         liquidity_window=int(pool.get("liquidity_window", 24)),
+        quarantine_after=int(pool.get("quarantine_after", 0)),
         probes=probes_from_registry(registry),
         max_bar_alignment_ms=int(float(guards.get("max_bar_alignment_seconds", 60.0)) * 1000),
     )

@@ -28,6 +28,7 @@ class LiveState:
     universe: list[str] = field(default_factory=list)  # last refreshed universe (D-014)
     universe_day: str | None = None
     leaving: list[str] = field(default_factory=list)  # symbols that left the universe but still hold a position
+    reject_streak: dict[str, int] = field(default_factory=dict)  # consecutive rejected orders per symbol (D-031)
     stopped_books: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )  # probe books closed by their stop rule (D-019)
