@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
 import numpy as np
 import pandas as pd
 
 from beidou_data.pool import (
+    LivePool,
     membership_at_bars,
     membership_summary,
     point_in_time_membership,
@@ -70,3 +72,54 @@ def test_tenure_mask_is_causal_and_cumulative() -> None:
     assert established["A"].tolist() == [False, True, True, True]
     assert established["B"].tolist() == [False, False, False, True]  # second selection counts even after a gap
     pd.testing.assert_frame_equal(tenure_mask(membership, 1), membership)
+
+
+class _FakeDailyClient:
+    """The public-data half of a live refresh: 24h tickers, and daily bars whose count is the listing age."""
+
+    DAY_MS = 86_400_000
+
+    def __init__(self, ages: dict[str, int], volumes: dict[str, float], now_ms: int) -> None:
+        self.ages, self.volumes, self.now_ms = ages, volumes, now_ms
+
+    async def server_time_ms(self) -> int:
+        return self.now_ms
+
+    async def ticker_24h(self) -> list[dict[str, object]]:
+        return [{"symbol": s, "quoteVolume": v} for s, v in self.volumes.items()]
+
+    async def klines(self, symbol: str, interval: str, limit: int) -> pd.DataFrame:
+        bars = min(self.ages[symbol], limit)
+        opens = [self.now_ms - (bars - i) * self.DAY_MS for i in range(bars)]
+        return pd.DataFrame(
+            {
+                "open_time": opens,
+                "close_time": [o + self.DAY_MS - 1 for o in opens],
+                "quote_volume": [self.volumes[symbol] for _ in opens],
+            }
+        )
+
+
+def test_live_pool_applies_the_same_listing_age_filter_as_research() -> None:
+    """G1: a listing too young for ``point_in_time_membership`` must not take a live slot either.
+
+    The two halves of D-013 have to agree, or the live book runs on fewer names than the backtest that
+    justified it: ``min_history_bars`` refuses to trade the young name, but the pool has already spent
+    one of ``top_n`` slots on it, and nothing reports the difference.
+    """
+    now_ms = 1_700_000_000_000
+    ages = {"OLDUSDT": 400, "MIDUSDT": 400, "NEWUSDT": 9, "PINUSDT": 5}
+    volumes = {"NEWUSDT": 9e9, "OLDUSDT": 5e9, "MIDUSDT": 4e9, "PINUSDT": 3e9}
+    config = UniverseConfig(top_n=2, enter_rank=2, exit_rank=3, min_age_days=30, always_include=("PINUSDT",))
+    update = asyncio.run(LivePool(_FakeDailyClient(ages, volumes, now_ms), config).select((), _rules(list(ages))))
+    assert "NEWUSDT" not in update.symbols  # ranks first by volume, nine days old
+    assert "PINUSDT" not in update.symbols  # a pin is not a way around the age filter either
+    assert list(update.symbols) == ["OLDUSDT", "MIDUSDT"]
+
+    # ... and research, given the same ages and volumes, selects the same two names.
+    days = pd.date_range(end=pd.Timestamp(now_ms, unit="ms", tz="UTC").normalize(), periods=400, freq="D")
+    daily = pd.DataFrame({s: [volumes[s]] * len(days) for s in ages}, index=days)
+    for symbol, age in ages.items():
+        daily.loc[days[: len(days) - age], symbol] = np.nan
+    membership = point_in_time_membership(daily, config, refresh="D", start=str(days[-1].date()))
+    assert sorted(membership.columns[membership.iloc[-1]]) == ["MIDUSDT", "OLDUSDT"]

@@ -24,7 +24,7 @@ from beidou_data.pool import (
 )
 from beidou_data.store import FundingStore, KlineStore
 from beidou_data.sync import sync_funding, sync_klines
-from beidou_data.universe import UniverseConfig, eligible_symbols, select_universe
+from beidou_data.universe import UniverseConfig, eligible_symbols
 from beidou_live.composition import read_universe, write_universe
 from beidou_shared.binance_rules import parse_exchange_info
 from beidou_shared.config import load_yaml
@@ -87,28 +87,11 @@ def data_sync(
             )
             for error in report.errors:
                 click.echo(f"    ! {error}")
-        volume_30d = _trailing_quote_volume(store, candidate_list, config, now_ms)
-        selected = select_universe(volume_30d, rules, config, previous=read_universe(root))
-        path = write_universe(
-            root, selected, {"selected_at_ms": now_ms, "interval": config.interval, "volume_30d": volume_30d}
-        )
-        click.echo(f"universe ({len(selected)}): {', '.join(selected)}")
-        click.echo(f"written {path}")
-
-
-def _trailing_quote_volume(
-    store: KlineStore, symbols: list[str], config: UniverseConfig, now_ms: int
-) -> dict[str, float]:
-    window_ms = config.volume_lookback_days * 86_400_000
-    volumes: dict[str, float] = {}
-    for symbol in symbols:
-        if not store.exists(symbol, config.interval):
-            continue
-        frame = store.load(symbol, config.interval, start_ms=now_ms - window_ms)
-        if frame.empty:
-            continue
-        volumes[symbol] = float(frame["quote_volume"].sum())
-    return volumes
+    # Downloading is this command's whole job.  It used to rank the store's 1h volume and write
+    # `universe.json` as well, which gave the file two meanings depending on which command ran last:
+    # on 2026-09-04 it held PUMPUSDT from a manual sync while the loop traded CYSUSDT from its own
+    # daily refresh, and research reads this file as "the universe".  One writer, one ranking rule.
+    click.echo("selection unchanged: `beidou data pool refresh` re-ranks and writes universe.json (D-014)")
 
 
 @data.command("status")

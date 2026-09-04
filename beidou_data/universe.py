@@ -84,21 +84,3 @@ def rank_with_hysteresis(
     ordered = sorted(keep, key=lambda s: rank.get(s, 10**6))
     limit = max(top_n, exit_rank) + len(pinned)
     return ordered[:limit]
-
-
-def select_universe(
-    volume_by_symbol: Mapping[str, float],
-    rules: Mapping[str, InstrumentRules],
-    config: UniverseConfig,
-    previous: Iterable[str] = (),
-) -> list[str]:
-    """Live/research selection against venue rules (tradable, quote asset, min notional)."""
-    return rank_with_hysteresis(
-        volume_by_symbol,
-        eligible_symbols(rules, config),
-        previous,
-        enter_rank=config.enter_rank,
-        exit_rank=config.exit_rank,
-        top_n=config.top_n,
-        always_include=config.always_include,
-    )

@@ -209,9 +209,14 @@ def refresh_selection(
     previous: Sequence[str],
     at_ms: int,
 ) -> UniverseUpdate:
+    """Rank what the caller measured.  ``volume_by_symbol`` is the eligibility set, pins included.
+
+    ``point_in_time_membership`` drops a symbol that is too young *before* pinning, so a pin only survives
+    if it was measurable that day.  Live has to intersect the same way or the two disagree about pins.
+    """
     selected = rank_with_hysteresis(
         volume_by_symbol,
-        eligible_symbols(rules, config),
+        [symbol for symbol in eligible_symbols(rules, config) if symbol in volume_by_symbol],
         previous,
         enter_rank=config.enter_rank,
         exit_rank=config.exit_rank,
@@ -239,13 +244,14 @@ class LivePool:
         self._candidates = candidates or 3 * config.top_n
         self._semaphore = asyncio.Semaphore(concurrency)
 
-    async def _volume(self, symbol: str, days: int, now_ms: int) -> tuple[str, float]:
+    async def _volume(self, symbol: str, days: int, now_ms: int) -> tuple[str, float, int]:
+        """Trailing quote volume, and the closed daily bars behind it so ``select`` can apply the age filter."""
         async with self._semaphore:
-            frame = await self._client.klines(symbol, DAILY, days + 1)
+            frame = await self._client.klines(symbol, DAILY, max(days, self.config.min_age_days) + 1)
         closed = drop_unclosed(frame, now_ms)
         if closed.empty:
-            return symbol, 0.0
-        return symbol, float(closed["quote_volume"].tail(days).sum())
+            return symbol, 0.0, 0
+        return symbol, float(closed["quote_volume"].tail(days).sum()), len(closed)
 
     async def select(self, previous: Sequence[str], rules: Mapping[str, InstrumentRules]) -> UniverseUpdate:
         now_ms = await self._client.server_time_ms()
@@ -260,5 +266,10 @@ class LivePool:
         candidates = [symbol for symbol in candidates if symbol in eligible]
         days = self.config.volume_lookback_days
         results = await asyncio.gather(*(self._volume(symbol, days, now_ms) for symbol in candidates))
-        volumes = dict(results)
+        # D-013's listing-age filter, live half.  Research ranks a symbol only once it has ``min_age_days``
+        # daily bars; a live pool that skips the test spends one of ``top_n`` slots on a listing the model
+        # then refuses to trade (``min_history_bars``), so the book runs on fewer names than the backtest
+        # that justified it - and nothing reports the gap.  A fetch failure raises out of ``gather`` and the
+        # engine keeps yesterday's universe (T-P05), so ``bars`` here is always a measurement, never a miss.
+        volumes = {symbol: volume for symbol, volume, bars in results if bars >= self.config.min_age_days}
         return refresh_selection(volumes, rules, self.config, previous, now_ms)

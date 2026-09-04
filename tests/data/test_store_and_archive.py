@@ -9,8 +9,9 @@ import pytest
 
 from beidou_data.archive import ChecksumMismatch, Month, month_range, parse_checksum, verify_zip, zip_to_frame
 from beidou_data.binance_public import drop_unclosed, klines_to_frame
+from beidou_data.pool import refresh_selection
 from beidou_data.store import FundingStore, KlineStore, funding_per_bar
-from beidou_data.universe import UniverseConfig, select_universe
+from beidou_data.universe import UniverseConfig
 from beidou_shared.binance_rules import parse_exchange_info
 from beidou_shared.types import InstrumentRules
 
@@ -112,14 +113,14 @@ def test_universe_hysteresis_and_filters() -> None:
     config = UniverseConfig(
         top_n=15, enter_rank=15, exit_rank=20, always_include=("S29USDT",), max_min_notional_usdt=20
     )
-    chosen = select_universe(volume, rules, config)
+    chosen = refresh_selection(volume, rules, config, (), 0).symbols
     assert "BIGUSDT" not in chosen and "XBUSD" not in chosen
     assert "S29USDT" in chosen
-    assert chosen[:15] == [f"S{i}USDT" for i in range(15)]
+    assert list(chosen[:15]) == [f"S{i}USDT" for i in range(15)]
     # S16 is rank 17: not entering fresh, but retained when previously held
     assert "S16USDT" not in chosen
-    assert "S16USDT" in select_universe(volume, rules, config, previous=["S16USDT"])
-    assert "S25USDT" not in select_universe(volume, rules, config, previous=["S25USDT"])  # beyond exit_rank
+    assert "S16USDT" in refresh_selection(volume, rules, config, ["S16USDT"], 0).symbols
+    assert "S25USDT" not in refresh_selection(volume, rules, config, ["S25USDT"], 0).symbols  # beyond exit_rank
 
 
 def test_parse_exchange_info() -> None:
