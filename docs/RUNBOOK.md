@@ -38,6 +38,7 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 ## Registry 里的书（`config/alpha_registry.yaml`）
 
 - `books.<name>.fraction` —— 独立小书的风险预算比例；策略用 `book: <name>` 归属，未写的属于主书。
+- **资金费率的限制**：实盘的行情端口只提供最近的资金费率、不提供历史，因此任何消费资金费率历史的设置（tsmom 的 `crowding_window > 0`、`carry` 信号）在实盘会被静默跳过，回测与实盘就会跑成两套东西（第六轮的 KILL-027 就是这么发生的）。当前 tsmom 跑 `crowding_window: 0`，没有影响；在资金费率历史的管线落地前不要重新打开它。
 - 探针书（D-019）：`evidence.verdict: ACCEPT`（来自 `beidou research book`）+ `probe` 块（`accepted_by`、`accepted_on`、`stop: {window_days, max_loss}`、`review_after_days`）。启动时核对报告种类、对象与 fraction；缺任何一项 `beidou live run` 拒绝启动。当前：`flow_short`（flow 只做空，1/3 预算，30 天 −1% 自动止损，2026-12-02 复审）。
 
 ## 排障
