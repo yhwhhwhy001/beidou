@@ -413,3 +413,58 @@ def test_validate_reserves_a_holdout_tail(tmp_path: Path) -> None:
     # asking for more than the data can spare is refused rather than silently ignored
     refused = runner.invoke(main, [*args, "--holdout-months", "600"])
     assert refused.exit_code != 0 and "leaves no training data" in str(refused.output) + str(refused.exception)
+
+
+def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
+    """KILL-013 asks for a >40% cost share to be flagged; the plan asks the parameter grid to be visible."""
+    from beidou_cli.research_cmd import _cost_flag, _grid_table
+
+    assert _cost_flag(0.39) == "" and _cost_flag(None) == ""
+    flagged = _cost_flag(0.55)
+    assert "55%" in flagged and "KILL-013" in flagged
+
+    params = {"a": {"window": 24, "scale": 0.05}, "b": {"window": 48, "scale": 0.05}}
+    rows = _grid_table(params, {"a": 1.2, "b": 0.4})
+    assert rows[0].startswith("window=24") and "sharpe=1.20" in rows[0], rows
+    assert rows[1].startswith("window=48"), "ranked by Sharpe, best first"
+    assert "scale" not in rows[0], "a parameter that does not vary is noise in the table"
+    assert _grid_table({"only": {"window": 24}}, {"only": None}) == ["single configuration: sharpe=n/a"]
+
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "validate",
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--params",
+            '{"horizons": [5, 20, 50]}',
+            "--grid",
+            '{"vol_window": [100, 200]}',
+            "--folds",
+            "3",
+            "--min-train",
+            "300",
+            "--purge",
+            "5",
+            "--cpcv-groups",
+            "4",
+            "--min-history",
+            "0",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    markdown = sorted(out.glob("tsmom-validation-*.md"))[-1].read_text()
+    assert "Grid (full-sample Sharpe per configuration)" in markdown
+    assert "vol_window=100" in markdown and "vol_window=200" in markdown
+    assert "parameter_neighbourhood" in markdown

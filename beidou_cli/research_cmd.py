@@ -279,12 +279,22 @@ def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2f}"
 
 
+COST_SHARE_LIMIT = 0.40  # KILL-013: above this, turnover is eating the edge and the result is not investable
+
+
+def _cost_flag(cost_share: float | None) -> str:
+    """KILL-013 asks for costs above 40% of gross to be flagged, not merely printed."""
+    if cost_share is None or cost_share <= COST_SHARE_LIMIT:
+        return ""
+    return f"  ** COSTS EAT {cost_share:.0%} OF GROSS (> {COST_SHARE_LIMIT:.0%}, KILL-013) **"
+
+
 def _echo_summary(summary: dict[str, Any], benchmark: dict[str, Any] | None = None) -> None:
     click.echo(
         f"bars={summary['bars']} gross={summary['gross_return']:.4f} net={summary['net_return']:.4f} "
         f"sharpe={_fmt(summary['annualized_sharpe'])} mdd={summary['max_drawdown']:.4f} "
         f"turnover={summary['turnover_units']:.1f} exposure={summary['average_absolute_exposure']:.3f} "
-        f"cost_share={_fmt(summary['cost_share_of_gross'])}"
+        f"cost_share={_fmt(summary['cost_share_of_gross'])}{_cost_flag(summary['cost_share_of_gross'])}"
     )
     if benchmark:
         click.echo(f"benchmark: gross={benchmark['gross_return']:.4f} sharpe={_fmt(benchmark['sharpe'])}")
@@ -513,8 +523,13 @@ def research_validate(
                 {
                     "time_split_sharpes": report["stability"]["time_split_sharpes"],
                     "worst_neighbour_degradation": neighbourhood["worst_degradation"],
+                    "parameter_neighbourhood": {
+                        key: f"down={_fmt(value.get('down'))} base={_fmt(neighbourhood['base'])} up={_fmt(value.get('up'))}"
+                        for key, value in (neighbourhood.get("neighbours") or {}).items()
+                    },
                 },
             ),
+            ("Grid (full-sample Sharpe per configuration)", _grid_table(params_by_key, full_sharpes_raw)),
             ("Cost stress (Sharpe)", stress),
             ("Verdict", {"verdict": verdict, "reasons": reasons or ["-"]}),
         ],
@@ -1444,6 +1459,27 @@ def research_book(
     click.echo(f"checks: {json.dumps(checks)}")
     click.echo(f"BOOK VERDICT: {book_verdict} {reasons if reasons else ''} {notes if notes else ''}")
     click.echo(f"report: {path} sha256={digest}")
+
+
+def _grid_table(params_by_key: Mapping[str, Mapping[str, Any]], sharpes: Mapping[str, float | None]) -> list[str]:
+    """Every configuration tried in this run with its full-sample Sharpe, varying parameters only.
+
+    The plan asked for a parameter stability view; the report printed a single
+    worst-neighbour number and hid the grid it already had in ``trial_sharpes``.
+    Only parameters that actually differ across the grid are shown, so a
+    one-configuration run renders a single line instead of thirteen defaults.
+    """
+    if not params_by_key:
+        return []
+    keys = sorted({key for params in params_by_key.values() for key in params})
+    varying = [k for k in keys if len({str(p.get(k)) for p in params_by_key.values()}) > 1]
+    ranked = sorted(params_by_key, key=lambda k: (sharpes.get(k) is None, -(sharpes.get(k) or 0.0)))
+    lines = []
+    for key in ranked:
+        params = params_by_key[key]
+        shown = ", ".join(f"{k}={params.get(k)}" for k in varying) if varying else "single configuration"
+        lines.append(f"{shown}: sharpe={_fmt(sharpes.get(key))}")
+    return lines
 
 
 def _grid_of(grid: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
