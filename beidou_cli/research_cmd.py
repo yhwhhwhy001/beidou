@@ -434,6 +434,12 @@ def research_validate(
         "execution": execution,
         "grid_size": len(combos),
         "grid": json.loads(grid) if grid else DEFAULT_GRIDS.get(strategy, {}),
+        # D-024: a strategy's numbers are produced by a portfolio construction, so the report has to say which
+        # one.  Without this a band or half-life change in the profile silently detaches the live book from its
+        # cited evidence, and the startup gate cannot see it because it compares signal params only.
+        "portfolio": _model(
+            StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
+        ).portfolio.__dict__,
         "folds": folds,
         "min_train": min_train,
         "purge": purge,

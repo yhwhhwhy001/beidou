@@ -96,6 +96,10 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
     assert validation["folds"] == 3 and validation["min_train"] == 300 and validation["purge"] == 5
     assert validation["grid"] == {"vol_window": [100, 200], "entry_threshold": [0.2, 0.3]}
     assert len(validation["trial_sharpes"]) == 4 and validation["ledger"]["ledger_rows"] == 0
+    # D-024: the report says which portfolio construction produced these numbers, so a later band or
+    # half-life change in the profile is detectable rather than silent
+    assert validation["portfolio"]["no_trade_rel_band"] is not None
+    assert validation["portfolio"]["vol_target"] > 0 and validation["portfolio"]["max_weight"] > 0
     assert "noise_null" in validation["multiple_testing"]
     # an exact replay of the same grid on the same data is not charged twice (ledger dedupe)
     result = runner.invoke(
