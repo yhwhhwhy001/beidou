@@ -30,6 +30,7 @@ from beidou_live.config import (
     universe_sink,
 )
 from beidou_live.engine import LiveEngine
+from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
@@ -173,7 +174,22 @@ def live_run(
     show_default=True,
     help="tolerated distance between the wake-up and a real bar boundary (a whole-bar offset is fine)",
 )
-def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float | None, max_skew_seconds: float) -> None:
+@click.option(
+    "--min-success-rate",
+    default=0.95,
+    show_default=True,
+    help="M-001: fail the check when fewer than this share of recent cycles completed",
+)
+@click.option("--min-success-window", default=24, show_default=True, help="hours of cycles the rate covers")
+def live_status(
+    profile: str,
+    paper: bool,
+    check: bool,
+    max_age_seconds: float | None,
+    max_skew_seconds: float,
+    min_success_rate: float,
+    min_success_window: int,
+) -> None:
     """Show heartbeat and state written by the running loop."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
@@ -210,6 +226,26 @@ def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float |
             problems.append(f"heartbeat is {age:.0f}s old (> {threshold:.0f}s)")
         if heartbeat.get("phase") == "ERROR" and int(heartbeat.get("consecutive_errors", 0)) >= 3:
             problems.append(f"loop erroring: {heartbeat.get('error')}")
+    # M-001: what share of the loop's own cycles completed, from the append-only log rather than the heartbeat
+    health = cycle_health(
+        store.read_jsonl(store.cycles_path),
+        now=datetime.now(UTC),
+        window_hours=float(min_success_window),
+        restarted_at=state.restarted_at,
+    )
+    if health.success_rate is None:
+        click.echo(f"cycles: none in the last {health.window_hours:.0f}h")
+    else:
+        click.echo(
+            f"cycles: {health.success_rate:.1%} of {health.attempts} completed in the last "
+            f"{health.window_hours:.0f}h ({health.failures} failed); {health.clean_days} clean day(s); "
+            f"{health.restarts_note()}"
+        )
+        if health.success_rate < min_success_rate:
+            problems.append(
+                f"cycle success rate {health.success_rate:.1%} < {min_success_rate:.0%} "
+                f"({health.failures} of {health.attempts} failed, last at {health.last_failure})"
+            )
     if problems:
         raise click.ClickException("; ".join(problems))
 
