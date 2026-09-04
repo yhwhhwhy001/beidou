@@ -113,17 +113,23 @@ def test_live_targets_hold_previous_strategy_targets(august_panel: Panel) -> Non
 
 
 def test_shipped_registry_live_path_matches_research_path() -> None:
-    """KILL-027 guard: the live path (no funding frame) must produce the research path's targets and weights.
+    """KILL-027 guard: the live path must produce the research path's targets and weights.
 
     Weights are compared against the research construction with its no-trade band switched off,
     because that band is the *position* recursion and live gets it from the rebalancer instead
     (D-033).  Everything else - conviction, vol targeting, caps, book fractions - must be identical.
+
+    ``funding_history`` is passed because the shipped registry consumes it (``crowding_window`` 72,
+    re-enabled 2026-09-05), exactly as ``LiveEngine._cycle`` passes ``inputs.funding_history``.  Before
+    that it was omitted, and this docstring said "no funding frame" - which is the state KILL-027 exists
+    to make impossible: a funding-consuming registry whose live path silently runs without funding.
+    Omit it here and ``AlphaModel.targets`` raises, which is the guard working, not a fixture defect.
     """
     registry = load_registry(ROOT / "config/alpha_registry.yaml")
     model = build_model(registry, load_yaml(ROOT / "config/live.demo.yaml"))
     panel = _synthetic_panel(seed=3, n_symbols=6, n_bars=1600, with_funding=True)
     weights, _combined, per_strategy = model.evaluate(panel, band=False)
-    live = model.targets(_frames(panel), {})
+    live = model.targets(_frames(panel), {}, funding_history=panel.funding)
     assert live.as_of == panel.index[-1]
     for strategy, frame in per_strategy.items():
         expected = frame.iloc[-1].fillna(0.0)
@@ -152,7 +158,11 @@ def test_live_weights_do_not_depend_on_the_length_of_the_request_window() -> Non
     frames = _frames(panel)
 
     def live(n: int) -> dict[str, float]:
-        return model.targets({symbol: frame.iloc[-n:] for symbol, frame in frames.items()}, {}).weights
+        return model.targets(
+            {symbol: frame.iloc[-n:] for symbol, frame in frames.items()},
+            {},
+            funding_history=panel.funding,
+        ).weights
 
     def gap(left: dict[str, float], right: dict[str, float]) -> float:
         return max(abs(left[symbol] - right[symbol]) for symbol in panel.symbols)

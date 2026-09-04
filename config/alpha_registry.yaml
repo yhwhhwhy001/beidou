@@ -21,6 +21,24 @@ strategies:
     # claimed it, and on the point-in-time universe the modifier is a negative contribution (full-sample Sharpe
     # 1.64 with vs 1.72 without).  What runs is now exactly what is validated; re-open only with funding wired into
     # the live panel AND a pre-registered point-in-time walk-forward against this control.
+    # 2026-09-05 RE-ENABLED, and the reason the round-6 rejection did not survive re-examination.  That
+    # rejection cited "on this evidence the modifier is a small negative (OOS 1.53 with vs 1.65 without)",
+    # which is tsmom-validation-20260903T181803Z, run 09-03 18:18.  D-034 (b0cc08a) landed 09-04 20:44:
+    # `fundingTime` lands one to forty-seven milliseconds past the hour and unevenly by year, so matching a
+    # settlement to a bar open by equality had dropped 43.7% of the 441,678-row archive onto a silent zero,
+    # "and the share missing differed from fold to fold".  This modifier reads exactly one thing - the trailing
+    # CROSS-SECTIONAL rank of funding - so 181803Z ranked a panel missing 43.7% of its settlements.  552ca9a
+    # re-ran the evidence under the corrected funding the same evening but added ONE ledger row
+    # (crowding_window=0): only the control arm was re-scored, so the comparison itself was never redone.
+    # Redone 2026-09-05 as a registered two-arm run (193707Z, the evidence below): all five folds select the
+    # modifier, OOS 1.7647 / NW t 4.0266, consistency 1.00, CPCV 1.795 / q05 1.338 / 0% negative, cost x2 1.68,
+    # PBO 0.136 - against 181803Z's PBO 0.5484, which fails D-020's own hard gate.  The PBO collapse is the
+    # tell: a corrupted input destabilises per-fold selection, and PBO is what measures that.
+    # Recorded honestly: this is a 2-point grid, so PBO at N=2 stays informational by our own convention, and
+    # D-020's two PASS conditions are not independent over a 5-year window (RESEARCH_LOG:344) - the verdict
+    # rests on one Sharpe gate plus three hard gates, not on two independent tests.
+    # Found by the external audit in docs/analysis/2026-09-05-backtest-guard-external-audit.md; the ledger-free
+    # recomputation that first caught it is scratchpad/verify_crowding_arms.py and agrees to the digit.
     params:
       horizons: [168, 336, 720]
       horizon_weights: [0.2, 0.3, 0.5]
@@ -33,14 +51,12 @@ strategies:
       # evidence and the startup params gate would refuse to start.
       vol_window: 400
       conviction_mode: sign     # H-001: trade the direction of the weekly signal, not its magnitude (adopted 2026-09-04)
-      crowding_window: 0        # modifier off (the cut/penalty below are inert; kept so the params equal the report's best_params).
-                                # NOTE: this is now an evidence question, not a plumbing one.  Round 6b (D-023) wired
-                                # funding history into the live panel and made a signal declare its need, so a
-                                # funding-consuming setting (crowding_window > 0, or carry) is no longer silently
-                                # skipped - startup refuses it instead.  Re-enabling still needs its own point-in-time
-                                # re-validation under D-020: on this evidence the modifier is a small negative
-                                # (OOS 1.53 with vs 1.65 without).  A running loop only picks up the plumbing after
-                                # a restart; see docs/RUNBOOK.md.
+      crowding_window: 72       # modifier ON (re-enabled 2026-09-05; see the D-034 paragraph below).
+                                # It consumes funding, so `SignalSpec.needs_funding` is now true for tsmom: a live
+                                # panel without `funding_history` makes `AlphaModel.targets` raise and
+                                # `beidou live run` refuse to start, rather than running the modifier silently
+                                # inactive as it did before D-023 (that failure mode is E-040 / KILL-027).
+                                # A RUNNING LOOP ONLY PICKS THIS UP AFTER A RESTART; see docs/RUNBOOK.md.
       crowding_cut: 0.7
       crowding_penalty: 0.5
     # 2026-09-03 round 5: re-validated on the point-in-time universe (146 symbols that were ever top-15 by 30-day
@@ -123,8 +139,8 @@ strategies:
     # The ledger was charged one trial for this run.  What DID move is what the report now records: its
     # `portfolio` block reads vol_target 0.30, so from here the gate compares a construction that is real.
     evidence:
-      report: reports/research/tsmom-validation-20260904T145321Z.json
-      sha256: 41b0369280fef16d85b3dea1f6f5465a97fe03177b04e22e4930bc718cf48630
+      report: reports/research/tsmom-validation-20260904T193707Z.json
+      sha256: b239abeb865a78b5cc58ce4710071e778ecb6c551def6351a8415c17df56b544
       verdict: PASS
   - id: xsmom
     enabled: false
