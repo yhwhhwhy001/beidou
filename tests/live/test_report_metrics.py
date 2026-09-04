@@ -227,3 +227,30 @@ def test_weekly_report_flags_a_week_that_broke_the_promotion_budget(tmp_path: Pa
     payload = weekly_payload(_store(tmp_path, cycles), day)
     assert payload["promotions"] == 2 > payload["promotion_budget"]
     assert "within_budget | no" in weekly_markdown(payload)
+
+
+def test_effort_share_measures_new_work_not_the_accumulated_tree() -> None:
+    """The 90% target governs the next line written; the tree's 22% is sunk (operator decision 2026-09-04)."""
+    from beidou_live.reports import ALPHA_EFFORT_TARGET, effort_share
+
+    result = effort_share(
+        {
+            "beidou_alpha/signals/tsmom.py": 80,
+            "tests/alpha/test_signal_suite.py": 10,
+            "docs/RESEARCH_LOG.md": 10,
+            "beidou_live/engine.py": 100,
+            "reports/research/tsmom-validation-x.json": 5_000,
+        }
+    )
+    assert result["lines"] == {"alpha": 90, "research": 10, "infrastructure": 100}
+    assert result["total"] == 200, "generated evidence is not effort"
+    assert result["alpha_share"] == pytest.approx(0.5) and result["on_target"] is False
+    assert result["target"] == ALPHA_EFFORT_TARGET == 0.90
+
+
+def test_effort_share_counts_a_test_with_the_thing_it_tests() -> None:
+    from beidou_live.reports import effort_share
+
+    assert effort_share({"tests/alpha/test_x.py": 10})["alpha_share"] == 1.0
+    assert effort_share({"tests/live/test_x.py": 10})["alpha_share"] == 0.0
+    assert effort_share({})["alpha_share"] is None

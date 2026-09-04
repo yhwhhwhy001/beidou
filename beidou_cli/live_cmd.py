@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -414,12 +415,35 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         raise SystemExit(1)
 
 
+def _changed_lines(commits: int) -> dict[str, int] | None:
+    """Lines added plus removed per path over the last N commits, or None outside a git checkout."""
+    try:
+        raw = subprocess.run(
+            ["git", "log", "--numstat", "--format=", f"-{max(1, commits)}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    totals: dict[str, int] = {}
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        added, removed, path = parts
+        count = (int(added) if added.isdigit() else 0) + (int(removed) if removed.isdigit() else 0)
+        totals[path] = totals.get(path, 0) + count
+    return totals or None
+
+
 @report.command("weekly")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
 @click.option("--date", "day", default=None, help="YYYY-MM-DD, the last day of the week (default: today UTC)")
 @click.option("--out", default=None, help="directory for the report (default: profile paths.reports_dir/weekly)")
-def report_weekly(profile: str, paper: bool, day: str | None, out: str | None) -> None:
+@click.option("--commits", default=40, show_default=True, help="commits to measure the alpha effort share over")
+def report_weekly(profile: str, paper: bool, day: str | None, out: str | None, commits: int) -> None:
     """The plan's weekly research report: the week's decisions next to the week's evidence."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
@@ -430,7 +454,12 @@ def report_weekly(profile: str, paper: bool, day: str | None, out: str | None) -
         report_path = Path(str((entry.evidence or {}).get("report", "")))
         if report_path.exists():
             evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
-    data = weekly_payload(store, chosen, expectations=expectations_from_evidence(evidence))
+    data = weekly_payload(
+        store,
+        chosen,
+        expectations=expectations_from_evidence(evidence),
+        changed_lines=_changed_lines(commits),
+    )
     markdown = weekly_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "weekly")
     directory.mkdir(parents=True, exist_ok=True)

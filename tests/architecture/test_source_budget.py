@@ -19,7 +19,11 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGES = ("beidou_alpha", "beidou_live", "beidou_cli", "beidou_data", "beidou_exchange", "beidou_shared")
 
 # The plan's budget, kept here so the gap between intent and reality stays legible.
-PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share": 0.60}
+# The plan's original budget, plus the operator's 2026-09-04 revision of the alpha share from 60% to 90%.
+# The share is deliberately NOT asserted against the tree: reaching 90% of lines would mean 68,706 lines of
+# signal code against today's 3,661, and bloated signal code is what the V5 rebuild deleted.  The 90% target
+# governs newly authored work and is measured per week by `beidou report weekly` (reports.effort_share).
+PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree": 0.60, "alpha_share_effort": 0.90}
 
 # Measured 2026-09-04 after the audit remediation.  A ceiling, not a target: lower is always fine.
 #
@@ -30,7 +34,10 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share": 0.
 # this is that sentence.  It then failed a second time on beidou_alpha, for the sign-bucketed IC that
 # closed KILL-042.  Final measurement after the whole remediation: alpha 3,654, live 3,171, cli 2,276.
 # The gap to the plan's 2,000 for beidou_live is 1,171 lines, and the alpha share is 34% against a 60%
-# target.  Both are open operator decisions, recorded rather than redefined.
+# target, revised to 90% for new work on 2026-09-04.  Both are open operator decisions, recorded rather
+# than redefined.  Noted without irony intended: instrumenting the 90% alpha target cost non-alpha lines,
+# in beidou_live and beidou_cli, which is the tension the target exists to make visible rather than a
+# reason to skip measuring it.
 # Third raise, 2026-09-04, and the sentence the rule requires: +16 in beidou_exchange and +10 in
 # beidou_shared, for the position parser.  demo-fapi's /fapi/v2/account rows carry a correct `notional`
 # but no `markPrice`, and the parser derived notional as qty x mark, so every account-derived position
@@ -40,8 +47,8 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share": 0.
 # reader from "simplifying" the parser back into the bug.
 CEILING = {
     "beidou_alpha": 3_661,
-    "beidou_live": 3_368,
-    "beidou_cli": 2_390,
+    "beidou_live": 3_423,
+    "beidou_cli": 2_419,
     "beidou_data": 1_082,
     "beidou_exchange": 514,
     "beidou_shared": 280,
@@ -74,4 +81,4 @@ def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined(
     # back inside the plan, this test starts failing and the decision can simply be closed.
     assert non_alpha > PLAN_BUDGET["non_alpha_total"], "non-alpha is back inside the plan; close the decision"
     assert measured["beidou_live"] > PLAN_BUDGET["beidou_live"], "beidou_live is back inside the plan"
-    assert alpha_share < PLAN_BUDGET["alpha_share"], "alpha share recovered; close the decision"
+    assert alpha_share < PLAN_BUDGET["alpha_share_tree"], "alpha share recovered; close the decision"

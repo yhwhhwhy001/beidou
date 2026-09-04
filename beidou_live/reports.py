@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from typing import Any
@@ -432,7 +432,50 @@ def daily_payload(
     }
 
 
-def weekly_payload(store: StateStore, day: str, *, expectations: dict[str, Any] | None = None) -> dict[str, Any]:
+ALPHA_EFFORT_TARGET = 0.90  # operator decision 2026-09-04; see docs/RESEARCH_LOG.md
+
+
+def effort_share(changed_lines: Mapping[str, int]) -> dict[str, Any]:
+    """How much of a period's authored work went into alpha, against the 90% target.
+
+    The target cannot be read off the source tree: reaching 90% of *lines* would mean 68,706 lines of
+    signal code against today's 3,661, and bloated signal code is exactly what the V5 rebuild deleted.
+    The accumulated 22% is sunk - an exchange client, a live loop, a data pipeline and a CLI have a floor
+    that does not shrink because the goal changed.  What the goal can govern is the *next* line written,
+    so this measures the share of newly authored lines, and generated evidence under ``reports/`` is
+    excluded because writing a report is not effort.
+
+    Tests are counted with the thing they test, since a test for the exit overlay is live-loop work and a
+    test for a signal is alpha work.
+    """
+    buckets: dict[str, int] = {"alpha": 0, "research": 0, "infrastructure": 0}
+    for path, lines in changed_lines.items():
+        if path.startswith("reports/"):
+            continue
+        if path.startswith(("beidou_alpha/", "tests/alpha/")):
+            buckets["alpha"] += lines
+        elif path.startswith(("docs/RESEARCH_LOG", "docs/analysis/")):
+            buckets["research"] += lines
+        else:
+            buckets["infrastructure"] += lines
+    total = sum(buckets.values())
+    share = (buckets["alpha"] + buckets["research"]) / total if total else None
+    return {
+        "lines": buckets,
+        "total": total,
+        "alpha_share": share,
+        "target": ALPHA_EFFORT_TARGET,
+        "on_target": None if share is None else share >= ALPHA_EFFORT_TARGET,
+    }
+
+
+def weekly_payload(
+    store: StateStore,
+    day: str,
+    *,
+    expectations: dict[str, Any] | None = None,
+    changed_lines: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
     """The plan's weekly research report, which was listed as a deliverable and never built.
 
     Its job is not to add numbers but to put the week's decisions next to the week's evidence: how many
@@ -461,6 +504,7 @@ def weekly_payload(store: StateStore, day: str, *, expectations: dict[str, Any] 
         "income": income,
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),
+        "effort": effort_share(changed_lines) if changed_lines is not None else None,
     }
 
 
@@ -495,6 +539,17 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
                 or {"none": 0},
             ),
             ("Legs (M-008)", (payload.get("legs") or {}).get("pnl") or {"none": 0}),
+            (
+                "Effort share (target 90% on alpha)",
+                {
+                    "alpha_share": _fmt_pct((payload.get("effort") or {}).get("alpha_share")),
+                    "target": _fmt_pct((payload.get("effort") or {}).get("target")),
+                    "on_target": (payload.get("effort") or {}).get("on_target"),
+                    "lines": json_dumps((payload.get("effort") or {}).get("lines") or {}),
+                }
+                if payload.get("effort")
+                else {"none": 0},
+            ),
             (
                 "Margin (M-007)",
                 {
