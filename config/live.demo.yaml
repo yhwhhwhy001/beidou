@@ -152,6 +152,12 @@ drawdown_throttle:            # scale the whole book down between `start` and `s
   # Overlay evidence 2026-09-03: on the point-in-time universe OOS Sharpe 1.55 -> 1.45 (exactly the -0.10 limit) for
   # OOS MDD -16.7% -> -14.8%, and fold 2 (2022-11 -> 2023-11, the recovery) turns negative: the classic whipsaw of a
   # drawdown throttle.  Boundary case, left disabled (D-017).
+  # 2026-09-04 (P13): the `start` / `stop` / `floor` numbers below were calibrated at `vol_target 0.15`
+  # and their meaning moved when it went to 0.30 - a 5% drawdown is now about half as rare an event as it
+  # was, so these thresholds would bite earlier and more often than anything measured them at.  Still
+  # disabled, so nothing changes today; re-running D-017 is a PRECONDITION of ever enabling them, not
+  # something to do afterwards.  Recorded here rather than only in the log, because this is the line
+  # someone would flip.
   enabled: false
   start: 0.05
   stop: 0.20

@@ -19,6 +19,9 @@ reports/daily/
 .env
 .env.*
 
+# scratchpad scripts ARE committed (they reproduce adoption decisions); their outputs are not
+scratchpad/*.json
+
 # OS
 .DS_Store
 
