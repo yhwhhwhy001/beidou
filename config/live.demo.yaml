@@ -48,9 +48,12 @@ portfolio:
   no_trade_rel_band: 0.40     # ...or smaller than 40% of the current position (same-direction resizes only)
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 pool:
-  # Re-rank once per UTC day with the hysteresis in universe.yaml (D-014); never = static.  The research membership
-  # table is rebuilt at the same daily cadence (`beidou data pool history --refresh D`) so validation trades the
-  # universe the loop would actually have held (round 6; monthly refresh churned 7.3 names/month, daily 11.8).
+  # Re-rank once per UTC day with the hysteresis in universe.yaml (D-014); never = static.
+  # The research membership table on disk is still MONTHLY (69 refreshes, 146 members), not daily.  An earlier
+  # version of this comment claimed it had been rebuilt at the live cadence; it had not, and the audit caught the
+  # claim rather than the data.  The measured difference is 2.73% of symbol-bars, and matching it needs hourly
+  # history for 63 more symbols plus a re-run of every piece of evidence, so it is carried as a priced residual in
+  # the KILL-018 family rather than silently assumed away.  Every validation to date used the monthly table.
   refresh: daily
   candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
   liquidity_window: 24        # bars averaged for the participation cap

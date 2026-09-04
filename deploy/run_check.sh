@@ -33,4 +33,13 @@ for check in status verify; do
     notify "$check" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
   fi
 done
+# The drift verdict used to be computed and then discarded: nothing ever sent it anywhere.  `report daily
+# --check` exits non-zero on an ALERT - equity drift, per-strategy income drift (M-002/M-010), or more
+# construction changes in a week than the plan allows.
+if output="$("$REPO/.venv/bin/beidou" report daily --check 2>&1)"; then
+  echo "[$(stamp)] ok   report"
+else
+  failed=1
+  notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+fi
 exit "$failed"

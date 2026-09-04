@@ -360,7 +360,8 @@ def live_kill_switch(profile: str, engage: bool) -> None:
 @click.option(
     "--out", default=None, help="directory for the markdown/json report (default: profile paths.reports_dir/daily)"
 )
-def report_daily(profile: str, paper: bool, day: str | None, out: str | None) -> None:
+@click.option("--check", is_flag=True, help="exit non-zero when the report is in ALERT (for the hourly monitor)")
+def report_daily(profile: str, paper: bool, day: str | None, out: str | None, check: bool) -> None:
     """Render the daily attribution report (with drift vs validation expectations) from the live state files."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
@@ -381,6 +382,30 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None) ->
     )
     click.echo(markdown)
     click.echo(f"written {directory / f'{chosen}.md'}")
+    # The drift status was computed and then thrown away: nothing ever sent it anywhere.
+    alerts: list[str] = []
+    for name, block in (("equity", data.get("drift") or {}), ("income", data.get("income_drift") or {})):
+        if str(block.get("status")) == "ALERT":
+            detail = block.get("reasons") or [
+                f"{strategy}: z={row.get('z'):.1f}"
+                for strategy, row in (block.get("by_strategy") or {}).items()
+                if row.get("z") is not None and row["z"] < -2.0
+            ]
+            alerts.append(f"{name} drift ALERT: {'; '.join(str(d) for d in detail)}")
+    window = data.get("evidence_window") or {}
+    if int(window.get("changes_7d") or 0) > 1:
+        # the plan allowed one promotion per week and nothing ever counted them
+        alerts.append(
+            f"{window['changes_7d']} construction changes in the last 7 days; the plan allows one promotion per week"
+        )
+    if alerts:
+        message = f"beidou {chosen}: " + " | ".join(alerts)
+        click.echo(message, err=True)
+        webhook = str((payload.get("alerts", {}) or {}).get("webhook_url", ""))
+        if webhook:
+            asyncio.run(WebhookAlerts(webhook).send(message))
+    if check and alerts:
+        raise SystemExit(1)
 
 
 __all__ = ["live_flatten", "live_kill_switch", "live_run", "live_status", "live_verify", "report_daily"]
