@@ -356,25 +356,50 @@ async def _cycle_with_skew(august_panel: Panel, tmp_path: Path, offset_ms: int) 
     return record, alerts, engine
 
 
-async def test_a_drifting_host_clock_is_measured_and_alerted_once(august_panel: Panel, tmp_path: Path) -> None:
+async def test_a_whole_bar_offset_is_an_accepted_state_not_an_alarm(august_panel: Panel, tmp_path: Path) -> None:
+    """D-025: the host clock is the reference, so an offset of whole bars is fine — the loop still wakes on a
+    closed bar.  Measured live on 2026-09-04: 3,611,932 ms, which is one bar plus 12 s."""
     record, alerts, engine = await _cycle_with_skew(august_panel, tmp_path, offset_ms=3_612_000)
-    assert record["clock"]["beyond_tolerance"] is True
-    assert record["clock"]["skew_ms"] == pytest.approx(3_612_000, abs=60_000)
-    assert engine.state.last_clock_skew_ms == pytest.approx(record["clock"]["skew_ms"])
-    drift_alerts = [a for a in alerts.sent if "host clock" in a]
-    assert len(drift_alerts) == 1 and "UTC-day rollover" in drift_alerts[0]
-    assert not record["skip"] and record["orders"], "a drifting clock must not stop the loop from trading"
-    engine.market.cursor += 1  # type: ignore[attr-defined]
-    again = await engine.run_cycle(engine.market.bar_open_ms(engine.market.cursor - 1))  # type: ignore[attr-defined]
+    clock = record["clock"]
+    assert clock["skew_ms"] == pytest.approx(3_612_000, abs=5_000)
+    assert clock["whole_bars"] == 1
+    assert clock["alignment_ms"] == pytest.approx(12_000, abs=5_000)
+    assert clock["beyond_tolerance"] is False and clock["jumped"] is False
+    assert not [a for a in alerts.sent if "clock" in a], "a constant whole-bar offset must not page anyone"
+    assert not record["skip"] and record["orders"]
+    assert engine.state.last_clock_skew_ms == pytest.approx(clock["skew_ms"])
+
+
+async def test_a_wake_up_in_the_middle_of_a_bar_is_flagged(august_panel: Panel, tmp_path: Path) -> None:
+    """What actually endangers the cycle: waking 15 minutes off a bar boundary, so the newest bar may be open."""
+    record, alerts, _ = await _cycle_with_skew(august_panel, tmp_path, offset_ms=900_000)
+    clock = record["clock"]
+    assert clock["alignment_ms"] == pytest.approx(900_000, abs=5_000)
+    assert clock["beyond_tolerance"] is True
+    assert len([a for a in alerts.sent if "clock" in a]) == 1
+    assert not record["skip"], "the guard reports; it does not stop the loop"
+
+
+async def test_the_alignment_alert_is_edge_triggered(august_panel: Panel, tmp_path: Path) -> None:
+    _record, alerts, engine = await _cycle_with_skew(august_panel, tmp_path, offset_ms=900_000)
+    market = engine.market
+    market.cursor += 1  # type: ignore[attr-defined]
+    again = await engine.run_cycle(market.bar_open_ms(market.cursor - 1))  # type: ignore[attr-defined]
     assert again["clock"]["beyond_tolerance"] is True
-    assert len([a for a in alerts.sent if "host clock" in a]) == 1  # edge-triggered, not once per hour
+    assert len([a for a in alerts.sent if "clock" in a]) == 1, "one alert per episode, not one per hour"
 
 
-async def test_a_healthy_clock_is_recorded_without_noise(august_panel: Panel, tmp_path: Path) -> None:
-    record, alerts, _ = await _cycle_with_skew(august_panel, tmp_path, offset_ms=1_500)
-    assert record["clock"]["beyond_tolerance"] is False
-    assert abs(record["clock"]["skew_ms"]) < 60_000
-    assert not [a for a in alerts.sent if "host clock" in a]
+async def test_a_clock_jump_between_cycles_is_reported(august_panel: Panel, tmp_path: Path) -> None:
+    """A jump remaps every label and can send the income watermark backwards — the -1023 of 2026-09-04."""
+    _record, alerts, engine = await _cycle_with_skew(august_panel, tmp_path, offset_ms=3_612_000)
+    assert not [a for a in alerts.sent if "clock" in a]
+    market = engine.market
+    market.offset_ms = 12_000  # type: ignore[attr-defined]  the venue stays put; the host clock jumped an hour
+    market.cursor += 1  # type: ignore[attr-defined]
+    after = await engine.run_cycle(market.bar_open_ms(market.cursor - 1))  # type: ignore[attr-defined]
+    assert after["clock"]["jumped"] is True
+    assert after["clock"]["beyond_tolerance"] is False  # still aligned, but the mapping changed
+    assert [a for a in alerts.sent if "jumped" in a]
 
 
 async def test_a_port_without_a_clock_probe_is_not_an_error(august_panel: Panel, tmp_path: Path) -> None:
@@ -390,7 +415,7 @@ async def test_a_port_without_a_clock_probe_is_not_an_error(august_panel: Panel,
     )
     await engine.startup()
     record = await engine.run_cycle(market.bar_open_ms(399))
-    assert record["clock"] == {"skew_ms": None, "beyond_tolerance": False}
+    assert record["clock"]["skew_ms"] is None and record["clock"]["beyond_tolerance"] is False
     assert not record["skip"]
 
 

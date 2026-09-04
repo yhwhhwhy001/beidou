@@ -57,7 +57,9 @@ drawdown_throttle:            # scale the whole book down between `start` and `s
 guards:
   daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%
   stale_bars_max: 2           # skip the cycle if the newest closed bar is older than 2 intervals
-  max_clock_skew_seconds: 60  # host vs venue; beyond this the loop alerts (the records are wrong, the trading is not)
+  # D-025: the host clock is the reference (operator decision).  A constant offset is accepted; what is guarded
+  # is how far the wake-up sits from a real bar boundary, and any jump between cycles.
+  max_bar_alignment_seconds: 60
   kill_switch_path: .beidou/live/KILL_SWITCH
 paths:
   state_dir: .beidou/live

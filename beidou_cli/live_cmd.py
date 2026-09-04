@@ -167,7 +167,12 @@ def live_run(
     help="exit non-zero when the heartbeat is stale or the loop is erroring (cron/launchd alerts)",
 )
 @click.option("--max-age-seconds", default=None, type=float, help="staleness threshold (default: 2 x interval)")
-@click.option("--max-skew-seconds", default=60.0, show_default=True, help="host-vs-venue clock skew tolerated")
+@click.option(
+    "--max-skew-seconds",
+    default=60.0,
+    show_default=True,
+    help="tolerated distance between the wake-up and a real bar boundary (a whole-bar offset is fine)",
+)
 def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float | None, max_skew_seconds: float) -> None:
     """Show heartbeat and state written by the running loop."""
     payload = load_profile(profile)
@@ -184,11 +189,15 @@ def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float |
     if skew is None:
         click.echo("clock: venue time unavailable (skipped)")
     else:
-        click.echo(f"clock: venue is {skew:+.1f}s from this host")
-        if abs(skew) > max_skew_seconds:
+        span = float(interval_seconds(interval))
+        alignment = ((skew + span / 2) % span) - span / 2
+        click.echo(f"clock: venue is {skew:+.1f}s from this host ({alignment:+.1f}s from a bar boundary)")
+        # D-025: the host clock is the reference, so a whole-bar offset is accepted; the remainder is what
+        # decides whether the loop wakes on a bar the venue has already closed.
+        if abs(alignment) > max_skew_seconds:
             problems.append(
-                f"host clock is {skew:+.1f}s from the venue (> {max_skew_seconds:.0f}s): cycle timestamps and the "
-                "UTC-day rollover are wrong even while the trading is not"
+                f"the wake-up sits {alignment:+.1f}s from a bar boundary (> {max_skew_seconds:.0f}s): the loop "
+                "may act on a bar that has not closed at the venue"
             )
     if heartbeat is None:
         problems.append("no heartbeat")

@@ -15,7 +15,7 @@
 | 启动实盘（launchd 已托管） | `launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist`；手动：`deploy/run_live.sh` |
 | 状态 / 健康检查 | `beidou live status --check` |
 | 核对实盘输出可复现（M-011） | `beidou live verify --check`（用公共数据 + `state.json` 离线重算上一周期的 contributions；差异必须为 0） |
-| 检查主机时钟与交易所的偏差 | `beidou live status --check`（偏差 > 60s 非零退出；`--max-skew-seconds` 可调） |
+| 检查唤醒时刻与 bar 边界的对齐 | `beidou live status --check`（对齐误差 > 60s 非零退出；整数个 bar 的偏移不算问题，D-025） |
 | 定时跑上面两项（每小时 :10） | `cp deploy/com.beidou.check.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.check.plist` |
 | 一键平仓 | `beidou live flatten --yes` |
 | 停止加仓（可逆） | `beidou live kill-switch --engage` / `--release` |
@@ -73,5 +73,6 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - `beidou live verify`：contributions 必须逐币复现（`ok: true`）；`target_diffs` 非零只是提示——退出层 / 节流 / 护栏在模型之后动作。`bar_matched: false` 说明 `state.json` 来自另一根 bar，等下一周期再跑。2026-09-04 01:00Z 的实测：两本书差异均为 0.0。
 - `cycles.jsonl` 的 `gross_before` 自 D-023 起按 `positionRisk` 的仓位求和；此前恒为 0（账户报文不带 positions 数组），满仓也显示为空仓。
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
-- **每周期的时钟测量**（D-023 补充）：循环每个周期用行情端口已有的服务器时间调用测一次主机与交易所的偏差，写进 `cycles.jsonl.clock` 与心跳的 `clock_skew_ms`；超过 `guards.max_clock_skew_seconds`（默认 60）时告警**一次**（边沿触发，不会每小时刷屏）。探测失败不影响周期。这条是为了让漂移在第一根 bar 就暴露，而不是等它变成交易所拒单。
+- **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
+- 当前实测：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
 - **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check` 与 `live verify --check`，失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。

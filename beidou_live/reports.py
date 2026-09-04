@@ -17,9 +17,16 @@ from beidou_live.state import StateStore
 
 
 def _day_of(record: dict[str, Any]) -> str | None:
-    bar = record.get("bar_open_ms")
-    if isinstance(bar, int | float):
-        return datetime.fromtimestamp(bar / 1000, tz=UTC).strftime("%Y-%m-%d")
+    """The UTC day a record belongs to, preferring the bar its data carried (D-025).
+
+    ``bar_open_ms`` is derived from the host clock, which is the reference for scheduling but may sit a
+    whole bar away from the venue's; ``as_of_ms`` comes from the klines themselves.  Bucketing by the
+    data keeps a day's report describing the day that was actually traded.
+    """
+    for key in ("as_of_ms", "bar_open_ms"):
+        value = record.get(key)
+        if isinstance(value, int | float):
+            return datetime.fromtimestamp(value / 1000, tz=UTC).strftime("%Y-%m-%d")
     stamp = record.get("at")
     return str(stamp)[:10] if stamp else None
 

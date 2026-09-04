@@ -66,7 +66,7 @@ class LiveConfig:
     universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
     liquidity_window: int = 24
     probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
-    max_clock_skew_ms: int = 60_000  # host vs venue; beyond this every timestamp the loop writes is wrong
+    max_bar_alignment_ms: int = 60_000  # how far the wake-up may sit from a real bar boundary (D-025)
 
     @property
     def interval_ms(self) -> int:
@@ -101,6 +101,7 @@ class LiveEngine:
         self.universe: list[str] = persisted or list(config.universe)
         self.rules: dict[str, Any] = {}
         self.exits = ExitOverlay(config.exits, config.interval_ms)
+        self._alignment_alerted = False
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
 
@@ -439,40 +440,60 @@ class LiveEngine:
         return out
 
     async def _clock_skew(self) -> dict[str, Any]:
-        """Venue time minus host time, measured every cycle from the market port's own server-time call.
+        """Where the host clock sits relative to the venue's, and whether that endangers the cycle (D-025).
 
-        The host clock decides every timestamp the loop writes - the cycle `bar`, the heartbeat `at`, the
-        UTC-day boundary that triggers the pool refresh - and a drift of 3,612 s went unnoticed on
-        2026-09-04 until it surfaced as a venue rejection.  The measurement is free (the port already asks
-        the venue for its time) and must never be the reason a cycle fails, so every error is swallowed.
+        The operator's decision is that the host clock is the reference, so a *constant* offset is an
+        accepted state, not a fault: with an offset close to a whole number of intervals the loop still
+        wakes just after a real bar close and trades the bar that just closed.  What is dangerous is the
+        remainder - how far the wake-up sits from a real bar boundary - and a *jump*, which remaps every
+        label and can send the income watermark backwards (the -1023 of 2026-09-04).  Both are watched
+        here; the raw offset is recorded but never alerted on.  The probe is free (the port already asks
+        the venue for its time) and must never be why a cycle fails, so every error is swallowed.
         """
         probe = getattr(self.market, "server_time_ms", None)
         if not callable(probe):
-            return {"skew_ms": None, "beyond_tolerance": False}
+            return {"skew_ms": None, "alignment_ms": None, "whole_bars": None, "beyond_tolerance": False}
         try:
             before = self.clock.now_ms()
             server = int(await probe())
             after = self.clock.now_ms()
         except Exception as exc:
             logger.warning("clock skew probe failed (%s); continuing", exc)
-            return {"skew_ms": None, "beyond_tolerance": False}
+            return {"skew_ms": None, "alignment_ms": None, "whole_bars": None, "beyond_tolerance": False}
+        interval = self.config.interval_ms
         skew = float(server - (before + after) / 2)
-        beyond = abs(skew) > self.config.max_clock_skew_ms
+        alignment = ((skew + interval / 2) % interval) - interval / 2  # signed distance to a bar boundary
+        beyond = abs(alignment) > self.config.max_bar_alignment_ms
         previous = self.state.last_clock_skew_ms
+        jumped = previous is not None and abs(skew - previous) > interval / 2
         self.state.last_clock_skew_ms = skew
         if beyond:
             logger.warning(
-                "host clock is %.1fs from the venue: orders and guards are unaffected, but every timestamp "
-                "this loop writes is wrong by that much",
+                "the wake-up sits %.1fs from a real bar boundary (offset %.0fs); the loop may act on a bar "
+                "that has not closed at the venue",
+                alignment / 1000.0,
                 skew / 1000.0,
             )
-            if previous is None or abs(previous) <= self.config.max_clock_skew_ms:
-                await self.alerts.send(
-                    f"beidou: host clock is {skew / 1000.0:+.0f}s from the venue (tolerance "
-                    f"{self.config.max_clock_skew_ms / 1000.0:.0f}s); cycle timestamps and the UTC-day "
-                    "rollover are wrong until the operator corrects the system clock"
-                )
-        return {"skew_ms": skew, "beyond_tolerance": beyond}
+        if jumped:
+            logger.warning(
+                "host clock jumped %.0fs since the last cycle; labels before and after differ",
+                (skew - (previous or 0.0)) / 1000.0,
+            )
+        if (beyond and not self._alignment_alerted) or jumped:
+            self._alignment_alerted = True
+            await self.alerts.send(
+                f"beidou clock: offset {skew / 1000.0:+.0f}s, {alignment / 1000.0:+.1f}s from a bar boundary"
+                + (f", jumped {(skew - (previous or 0.0)) / 1000.0:+.0f}s since the last cycle" if jumped else "")
+            )
+        if not beyond:
+            self._alignment_alerted = False
+        return {
+            "skew_ms": skew,
+            "alignment_ms": alignment,
+            "whole_bars": round(skew / interval),
+            "beyond_tolerance": beyond,
+            "jumped": jumped,
+        }
 
     async def _ingest_income(self, bar_open_ms: int, equity: float) -> dict[str, Any]:
         """Income rows since the last cycle: strategy attribution plus external cash-flow detection.
@@ -582,6 +603,7 @@ class LiveEngine:
                 "exit_events": len(record.get("exit_events") or []),
                 "external_flows": (record.get("external_flows") or {}).get("total", 0.0),
                 "clock_skew_ms": (record.get("clock") or {}).get("skew_ms"),
+                "clock_alignment_ms": (record.get("clock") or {}).get("alignment_ms"),
                 "throttle_scalar": (record.get("throttle") or {}).get("scalar", 1.0),
                 "universe_size": len(self.universe),
                 "history_bars": self.history_bars,
