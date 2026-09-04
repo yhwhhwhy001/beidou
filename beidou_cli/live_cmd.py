@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ import click
 
 from beidou_alpha.panel import interval_seconds
 from beidou_cli import live, report
-from beidou_data.binance_public import PublicClient
+from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.composition import load_registry
 from beidou_live.config import (
@@ -35,7 +36,24 @@ from beidou_live.probe import probes_from_registry
 from beidou_live.reports import daily_markdown, daily_payload, expectations_from_evidence
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
-from beidou_live.verify import verify_live_targets
+from beidou_live.verify import last_recorded_as_of_ms, verify_live_targets
+
+
+def clock_skew_seconds(rest_url: str) -> float | None:
+    """Venue server time minus this host's clock, in seconds; ``None`` when the venue cannot be reached.
+
+    A drifting host clock does not stop the loop (the REST client measures its own offset for signing, and
+    the staleness guard is one-directional), but every timestamp the loop writes - the cycle `bar`, the
+    heartbeat `at`, the UTC-day boundary that triggers the pool refresh - comes from this clock.
+    """
+    try:
+        with PublicClient(rest_url, timeout=10.0, max_retries=1) as public:
+            before = time.time()
+            server = public.server_time_ms()
+            after = time.time()
+    except Exception:
+        return None
+    return (server - (before + after) / 2 * 1000) / 1000.0
 
 
 def _paper_venue(market_url: str, balance: float, state_path: Path) -> PaperVenue:
@@ -149,7 +167,8 @@ def live_run(
     help="exit non-zero when the heartbeat is stale or the loop is erroring (cron/launchd alerts)",
 )
 @click.option("--max-age-seconds", default=None, type=float, help="staleness threshold (default: 2 x interval)")
-def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float | None) -> None:
+@click.option("--max-skew-seconds", default=60.0, show_default=True, help="host-vs-venue clock skew tolerated")
+def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float | None, max_skew_seconds: float) -> None:
     """Show heartbeat and state written by the running loop."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
@@ -161,6 +180,16 @@ def live_status(profile: str, paper: bool, check: bool, max_age_seconds: float |
     interval = str((payload.get("market_data", {}) or {}).get("interval", "1h"))
     threshold = max_age_seconds if max_age_seconds is not None else 2.0 * interval_seconds(interval)
     problems: list[str] = []
+    skew = clock_skew_seconds(str((payload.get("market_data", {}) or {}).get("rest_url", DEFAULT_BASE_URL)))
+    if skew is None:
+        click.echo("clock: venue time unavailable (skipped)")
+    else:
+        click.echo(f"clock: venue is {skew:+.1f}s from this host")
+        if abs(skew) > max_skew_seconds:
+            problems.append(
+                f"host clock is {skew:+.1f}s from the venue (> {max_skew_seconds:.0f}s): cycle timestamps and the "
+                "UTC-day rollover are wrong even while the trading is not"
+            )
     if heartbeat is None:
         problems.append("no heartbeat")
     else:
@@ -210,7 +239,14 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
     async def main() -> dict[str, Any]:
         try:
             return await verify_live_targets(
-                model, market, universe, config.interval, required_history(model, config.history_bars), state, tolerance
+                model,
+                market,
+                universe,
+                config.interval,
+                required_history(model, config.history_bars),
+                state,
+                tolerance,
+                recorded_as_of_ms=last_recorded_as_of_ms(store),
             )
         finally:
             await market.aclose()

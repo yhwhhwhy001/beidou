@@ -1,4 +1,4 @@
-"""M-009: reproduce the last live cycle's model output offline and diff it against ``state.json`` (KILL-027 monitor).
+"""M-011: reproduce the last live cycle's model output offline and diff it against ``state.json`` (KILL-027 monitor).
 
 The reproduction builds its inputs through ``beidou_live.inputs`` (the same code the
 engine uses), seeds the hold with the state's own contributions and compares:
@@ -15,7 +15,7 @@ from typing import Any
 
 from beidou_live.inputs import model_inputs
 from beidou_live.ports import MarketData, SignalModel, TargetSet
-from beidou_live.state import LiveState
+from beidou_live.state import LiveState, StateStore
 
 
 def _diff(reference: Mapping[str, float], candidate: Mapping[str, float]) -> dict[str, float]:
@@ -23,10 +23,28 @@ def _diff(reference: Mapping[str, float], candidate: Mapping[str, float]) -> dic
     return {key: abs(float(reference.get(key, 0.0)) - float(candidate.get(key, 0.0))) for key in sorted(keys)}
 
 
-def compare_targets(targets: TargetSet, state: LiveState, tolerance: float = 1e-9) -> dict[str, Any]:
-    """Diff a freshly computed ``TargetSet`` against the persisted state of the last cycle."""
+def compare_targets(
+    targets: TargetSet,
+    state: LiveState,
+    tolerance: float = 1e-9,
+    recorded_as_of_ms: int | None = None,
+) -> dict[str, Any]:
+    """Diff a freshly computed ``TargetSet`` against the persisted state of the last cycle.
+
+    ``recorded_as_of_ms`` is the last cycle's ``as_of_ms`` — the bar the *data* was
+    stamped with.  Prefer it over ``state.last_bar_ms``, which is the bar the loop
+    *labelled* the cycle with from the host clock: when the two disagree the host
+    clock has drifted away from the venue's, and comparing against the label would
+    report a spurious mismatch for a cycle that in fact reproduces.
+    """
     as_of_ms = int(targets.as_of.timestamp() * 1000)
-    matched = state.last_bar_ms is not None and as_of_ms == int(state.last_bar_ms)
+    reference = recorded_as_of_ms if recorded_as_of_ms is not None else state.last_bar_ms
+    matched = reference is not None and as_of_ms == int(reference)
+    label_skew = (
+        None
+        if recorded_as_of_ms is None or state.last_bar_ms is None
+        else int(recorded_as_of_ms) - int(state.last_bar_ms)
+    )
     contributions: dict[str, dict[str, float]] = {}
     worst_contribution = 0.0
     for strategy, recorded in state.last_contributions.items():
@@ -45,6 +63,8 @@ def compare_targets(targets: TargetSet, state: LiveState, tolerance: float = 1e-
     return {
         "as_of_ms": as_of_ms,
         "state_bar_ms": state.last_bar_ms,
+        "recorded_as_of_ms": recorded_as_of_ms,
+        "bar_label_skew_ms": label_skew,
         "bar_matched": matched,
         "max_contribution_diff": worst_contribution,
         "contribution_diffs": contributions,
@@ -60,7 +80,24 @@ def compare_targets(targets: TargetSet, state: LiveState, tolerance: float = 1e-
             if not matched
             else "the model no longer reproduces the last cycle's contributions (config, code or data changed)"
         ),
+        "clock_note": (
+            None
+            if not label_skew
+            else f"the cycle was labelled {label_skew / 3_600_000:+.2f} h away from its own data: the host clock has "
+            "drifted from the venue's, so cycles.jsonl `bar` and heartbeat `at` are wrong (the trading is not)"
+        ),
     }
+
+
+def last_recorded_as_of_ms(store: StateStore) -> int | None:
+    """``as_of_ms`` of the newest non-dry-run cycle: the bar the data carried, independent of the host clock."""
+    for record in reversed(store.read_jsonl(store.cycles_path)):
+        if record.get("dry_run"):
+            continue
+        value = record.get("as_of_ms")
+        if isinstance(value, int | float):
+            return int(value)
+    return None
 
 
 async def verify_live_targets(
@@ -71,12 +108,13 @@ async def verify_live_targets(
     history_bars: int,
     state: LiveState,
     tolerance: float = 1e-9,
+    recorded_as_of_ms: int | None = None,
 ) -> dict[str, Any]:
     inputs = await model_inputs(market, model, symbols, interval, history_bars)
     targets = model.targets(
         inputs.bars, inputs.funding, previous=state.last_contributions, funding_history=inputs.funding_history
     )
-    return {"inputs": inputs.to_dict(), **compare_targets(targets, state, tolerance)}
+    return {"inputs": inputs.to_dict(), **compare_targets(targets, state, tolerance, recorded_as_of_ms)}
 
 
-__all__ = ["compare_targets", "verify_live_targets"]
+__all__ = ["compare_targets", "last_recorded_as_of_ms", "verify_live_targets"]

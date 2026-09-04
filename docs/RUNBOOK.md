@@ -14,6 +14,7 @@
 | 启动实盘（launchd 已托管） | `launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist`；手动：`deploy/run_live.sh` |
 | 状态 / 健康检查 | `beidou live status --check` |
 | 核对实盘输出可复现（M-011） | `beidou live verify --check`（用公共数据 + `state.json` 离线重算上一周期的 contributions；差异必须为 0） |
+| 检查主机时钟与交易所的偏差 | `beidou live status --check`（偏差 > 60s 非零退出；`--max-skew-seconds` 可调） |
 | 一键平仓 | `beidou live flatten --yes` |
 | 停止加仓（可逆） | `beidou live kill-switch --engage` / `--release` |
 | 日报 | `beidou report daily` |
@@ -69,3 +70,4 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - `state.json.last_contributions` 是 NO_ACTION 的 hold 种子（D-022），不要手动删除；删除等于把所有未触发信号的仓位归零一次。
 - `beidou live verify`：contributions 必须逐币复现（`ok: true`）；`target_diffs` 非零只是提示——退出层 / 节流 / 护栏在模型之后动作。`bar_matched: false` 说明 `state.json` 来自另一根 bar，等下一周期再跑。2026-09-04 01:00Z 的实测：两本书差异均为 0.0。
 - `cycles.jsonl` 的 `gross_before` 自 D-023 起按 `positionRisk` 的仓位求和；此前恒为 0（账户报文不带 positions 数组），满仓也显示为空仓。
+- **主机时钟漂移**（2026-09-04 实测 −3,612 s）：签名请求不受影响（REST 客户端自测偏移），过期护栏是单向的所以不会跳过周期，循环仍然在真实 bar 收盘后醒来、交易刚收盘的那根 bar——**错的是记录不是交易**：`cycles.jsonl` 的 `bar`/`bar_open_ms`、heartbeat 的 `at`、以及触发每日池刷新的 UTC 日界都来自本机时钟。`beidou live status --check` 会报出偏差；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）为准比对，并在 `bar_label_skew_ms` 里给出标签与数据的差。**校准系统时钟是操作者的动作**（系统设置里的自动对时），代码侧不做时间修正。

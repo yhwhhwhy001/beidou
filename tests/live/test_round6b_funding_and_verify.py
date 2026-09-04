@@ -28,7 +28,7 @@ from beidou_live.engine import LiveEngine
 from beidou_live.inputs import first_open_ms, model_inputs, required_history
 from beidou_live.reconciler import take_snapshot
 from beidou_live.state import LiveState, StateStore
-from beidou_live.verify import compare_targets
+from beidou_live.verify import compare_targets, last_recorded_as_of_ms
 from tests.alpha.test_signal_suite import _synthetic_panel
 from tests.fakes.fake_venue import FakeVenue
 from tests.live.fakes import FakeClock, FakeMarketData
@@ -272,3 +272,36 @@ async def test_gross_before_comes_from_position_risk_not_the_account_payload(
     snapshot = await take_snapshot(engine.venue, engine.managed_symbols())
     assert snapshot.account.gross_notional() == 0.0  # the account payload really is empty here
     assert snapshot.gross_notional() > 0.0
+
+
+def test_verify_prefers_the_data_bar_over_the_clock_label_when_the_host_drifts() -> None:
+    """A host clock an hour behind the venue labels the cycle wrongly; the data still reproduces (2026-09-04)."""
+    data_bar = pd.Timestamp("2026-09-04T02:00:00Z")
+    label_ms = int((data_bar - pd.Timedelta(hours=1)).timestamp() * 1000)  # what the drifted clock wrote
+    contributions = {"tsmom": {"BTCUSDT": 0.34}}
+    state = _state(label_ms, contributions, {"BTCUSDT": 0.031})
+    targets = _targets(data_bar, contributions, {"BTCUSDT": 0.031})
+    naive = compare_targets(targets, state)
+    assert not naive["ok"] and not naive["bar_matched"]  # comparing against the label alone: spurious failure
+    aware = compare_targets(targets, state, recorded_as_of_ms=int(data_bar.timestamp() * 1000))
+    assert aware["ok"] and aware["bar_matched"]
+    assert aware["bar_label_skew_ms"] == 3_600_000
+    assert aware["clock_note"] and "host clock has drifted" in aware["clock_note"]
+    assert (
+        compare_targets(
+            targets,
+            _state(int(data_bar.timestamp() * 1000), contributions, {"BTCUSDT": 0.031}),
+            recorded_as_of_ms=int(data_bar.timestamp() * 1000),
+        )["clock_note"]
+        is None
+    )
+
+
+def test_last_recorded_as_of_ms_ignores_dry_runs(tmp_path: Path) -> None:
+    store = StateStore(tmp_path)
+    assert last_recorded_as_of_ms(store) is None
+    store.append_cycle({"bar_open_ms": 1, "as_of_ms": 111, "dry_run": False})
+    store.append_cycle({"bar_open_ms": 2, "as_of_ms": 222, "dry_run": True})
+    assert last_recorded_as_of_ms(store) == 111
+    store.append_cycle({"bar_open_ms": 3, "as_of_ms": 333, "dry_run": False})
+    assert last_recorded_as_of_ms(store) == 333
