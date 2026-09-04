@@ -92,6 +92,83 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
     assert validation["verdict"] in {"PASS", "WEAK_PASS", "FAIL"}
     assert validation["grid_size"] == 4
     assert "sha256=" in result.output
+    # D-024: the report is reproducible from itself and records every trial it charged
+    assert validation["folds"] == 3 and validation["min_train"] == 300 and validation["purge"] == 5
+    assert validation["grid"] == {"vol_window": [100, 200], "entry_threshold": [0.2, 0.3]}
+    assert len(validation["trial_sharpes"]) == 4 and validation["ledger"]["ledger_rows"] == 0
+    assert "noise_null" in validation["multiple_testing"]
+    # an exact replay of the same grid on the same data is not charged twice (ledger dedupe)
+    result = runner.invoke(
+        main,
+        [
+            "research",
+            "validate",
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--params",
+            '{"horizons": [5, 20, 50]}',
+            "--grid",
+            '{"vol_window": [100, 200], "entry_threshold": [0.2, 0.3]}',
+            "--folds",
+            "3",
+            "--min-train",
+            "300",
+            "--purge",
+            "5",
+            "--cpcv-groups",
+            "4",
+            "--min-history",
+            "0",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    replay = json.loads(sorted(out.glob("tsmom-validation-*.json"))[-1].read_text())
+    assert replay["ledger"]["ledger_rows"] == 4 and replay["ledger"]["ledger_trials"] == 0
+    assert replay["multiple_testing"]["n_trials"] == validation["multiple_testing"]["n_trials"]
+    result = runner.invoke(
+        main,
+        [
+            "research",
+            "decompose",
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--params",
+            '{"vol_window": 100, "horizons": [5, 20, 50]}',
+            "--min-history",
+            "0",
+            "--folds",
+            "3",
+            "--min-train",
+            "300",
+            "--purge",
+            "5",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    decomposition = json.loads(next(out.glob("decompose-tsmom-*.json")).read_text())
+    assert set(decomposition["variants"]) == {
+        "full",
+        "constant_long",
+        "sign_only",
+        "long_only",
+        "short_only",
+        "equal_notional",
+    }
+    assert "signal_over_construction" in decomposition["increments"] and "increments:" in result.output
 
 
 def test_data_status_offline(tmp_path: Path, august_dir: Path) -> None:

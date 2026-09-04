@@ -191,3 +191,40 @@ def test_verdict_is_oos_first_and_dsr_is_informational() -> None:
     negative_paths = {**base, "cpcv": {"fraction_negative": 0.25}}
     verdict, reasons = decide(negative_paths)
     assert verdict == "FAIL" and any("fraction_negative" in r for r in reasons)
+
+
+def test_dsr_inputs_count_exact_replays_once() -> None:
+    """D-024: duplicate ledger rows and a re-run of the current grid on the same data are one trial each."""
+    from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, unique_trials
+
+    rows = [
+        TrialRecord("s", "k1", 1.6, 8760.0, "t1", "2021-01-31", "2026-09-03", 146, "run1"),
+        TrialRecord("s", "k1", 1.6, 8760.0, "t2", "2021-01-31", "2026-09-03", 146, "run2"),  # exact replay
+        TrialRecord("s", "k1", 1.7, 8760.0, "t3", "2021-01-31", "2026-09-03", 15, "run3"),  # other universe
+        TrialRecord("s", "k2", 0.4, 8760.0, "t4", "2021-03-02", "2026-09-03", 146, "run4"),
+    ]
+    assert [r.run_id for r in unique_trials(rows)] == ["run1", "run3", "run4"]
+    pooled = dsr_inputs(rows, {"k2": 0.4 / 8760**0.5}, 8760.0, current_range=("2021-03-02", "2026-09-03", 146))
+    assert pooled["ledger_trials"] == 2 and pooled["ledger_rows"] == 4
+    assert pooled["duplicate_rows"] == 1 and pooled["replayed_rows"] == 1
+    assert pooled["n_trials"] == 3 and pooled["pooled_sharpes"] == 3
+    naive = dsr_inputs(rows, {"k2": 0.4 / 8760**0.5}, 8760.0)
+    assert naive["ledger_trials"] == 3 and naive["n_trials"] == 4
+
+
+def test_noise_null_is_reported_next_to_the_pooled_dsr() -> None:
+    from beidou_alpha.validation.multiple_testing import multiple_testing_report, sampling_variance
+
+    rng = np.random.default_rng(21)
+    matrix = rng.normal(0.0002, 0.01, size=(3000, 4))
+    candidate = matrix[:, int(np.argmax(matrix.mean(axis=0)))]
+    report = multiple_testing_report(candidate, matrix, bars_per_year=8760.0, prior_trials=20)
+    noise = report["noise_null"]
+    assert 0.0 <= noise["dsr_p_value"] <= 1.0 and noise["expected_max_sharpe_annual"] > 0
+    assert math.isclose(noise["sharpe_variance_period"], sampling_variance(0.0, 3000), rel_tol=0.05)
+    assert sampling_variance(0.0, 1) == 0.0
+    # a wide pooled variance deflates harder than the sampling floor
+    wide = multiple_testing_report(
+        candidate, matrix, bars_per_year=8760.0, pooled_n_trials=24, pooled_sharpe_variance=1e-2
+    )
+    assert wide["dsr_p_value"] >= wide["noise_null"]["dsr_p_value"]
