@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -129,6 +130,51 @@ def registry_fingerprint(
     return {"digest": digest, **payload}
 
 
+def _same_param(left: Any, right: Any) -> bool:
+    """Tolerant equality for values that crossed a YAML/JSON boundary (0.4 vs 0.40, list vs tuple)."""
+    if isinstance(left, list | tuple) and isinstance(right, list | tuple):
+        return len(left) == len(right) and all(_same_param(a, b) for a, b in zip(left, right, strict=True))
+    if isinstance(left, bool) or isinstance(right, bool):
+        return bool(left) == bool(right)
+    if isinstance(left, int | float) and isinstance(right, int | float):
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-12)
+    return bool(left == right)
+
+
+CONSTRUCTION_KEYS: tuple[str, ...] = (
+    "vol_target",
+    "vol_halflife",
+    "covariance_halflife",
+    "min_asset_vol",
+    "max_weight",
+    "max_gross",
+    "max_scalar",
+    "no_trade_band",
+    "no_trade_rel_band",
+)
+
+
+def construction_problems(
+    entry: StrategyEntry, report: Mapping[str, Any], live_portfolio: Mapping[str, Any] | None
+) -> list[str]:
+    """The numbers in a strategy's evidence were produced by a portfolio construction; that must match too.
+
+    Adopting P10 cell B made the gap concrete: the live relative band moved 0.25 -> 0.40 while tsmom's
+    cited report had been validated at 0.25, and the gate could not see it because it compares signal
+    parameters only.  A report written before ``validate`` recorded its construction carries no
+    ``portfolio`` block; those are skipped rather than refused, since otherwise nothing in flight today
+    could start.  From the first report that carries the block, a silent divergence is refused.
+    """
+    recorded = report.get("portfolio")
+    if not isinstance(recorded, Mapping) or not recorded or live_portfolio is None:
+        return []
+    return [
+        f"{entry.id}: portfolio {key} is {live_portfolio.get(key)!r} live but {recorded.get(key)!r} in the cited evidence"
+        for key in CONSTRUCTION_KEYS
+        if key in recorded and not _same_param(live_portfolio.get(key), recorded.get(key))
+    ]
+
+
 def evidence_params(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """The parameter set a report actually validated: ``best_params``, or the sleeve's params in a book report."""
     if str(report.get("kind", "")) == "book":
@@ -168,6 +214,7 @@ def evidence_problems(
     read_report: Callable[[str], Mapping[str, Any]] | None = None,
     book_fraction: float | None = None,
     canonical_params: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
+    live_portfolio: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """KILL-015: an enabled strategy must cite a validation report that exists and matches its digest.
 
@@ -192,8 +239,11 @@ def evidence_problems(
         problems.extend(_probe_problems(entry, path, read_report, book_fraction, report_ok=report_ok))
     elif verdict and verdict not in {"PASS", "WEAK_PASS"}:
         problems.append(f"{entry.id}: evidence verdict {verdict} does not allow live use")
-    if read_report is not None and canonical_params is not None and report_ok:
-        problems.extend(param_problems(entry, read_report(path), canonical_params))
+    if read_report is not None and report_ok:
+        report = read_report(path)
+        if canonical_params is not None:
+            problems.extend(param_problems(entry, report, canonical_params))
+        problems.extend(construction_problems(entry, report, live_portfolio))
     return problems
 
 

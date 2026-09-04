@@ -104,7 +104,7 @@ def live_run(
     _logging(verbose)
     payload = load_profile(profile)
     model, registry = build_model_from_profile(payload)
-    problems = registry_evidence_problems(registry)
+    problems = registry_evidence_problems(registry, payload)
     if problems:
         for problem in problems:
             click.echo(f"evidence: {problem}")

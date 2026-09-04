@@ -20,7 +20,7 @@ from beidou_data.universe import UniverseConfig
 from beidou_exchange.binance_usdm.rest_client import BinanceRestClient
 from beidou_exchange.binance_usdm.venue import BinanceUsdmVenue
 from beidou_exchange.guard import WriteGuard
-from beidou_live.composition import build_model, load_registry, read_universe, write_universe
+from beidou_live.composition import build_model, load_registry, portfolio_params, read_universe, write_universe
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GuardParams
 from beidou_live.ports import UniverseUpdate
@@ -122,8 +122,15 @@ def universe_sink(data_root: str | Path) -> Callable[[UniverseUpdate], None]:
     return write
 
 
-def registry_evidence_problems(registry: Registry) -> list[str]:
-    """KILL-015 at startup; a probe book (D-019) must also cite an ACCEPTed book report at the registry's fraction."""
+def registry_evidence_problems(registry: Registry, profile: dict[str, Any] | None = None) -> list[str]:
+    """KILL-015 at startup: report exists, digest matches, params match, and the construction matches too.
+
+    ``profile`` supplies the live portfolio construction so a band or half-life change cannot detach the
+    book from its evidence unnoticed (D-026 records it; this refuses it).  Reports written before
+    ``validate`` recorded its construction have no ``portfolio`` block and are skipped, so nothing in
+    flight today is blocked.  A probe book (D-019) must also cite an ACCEPTed book report at the
+    registry's fraction.
+    """
 
     def sha256_of(path: str) -> str:
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -138,6 +145,7 @@ def registry_evidence_problems(registry: Registry) -> list[str]:
     def canonical(strategy_id: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
         return get_signal(strategy_id).canonical_params(params)
 
+    live_portfolio = portfolio_params(profile).__dict__ if profile is not None else None
     problems: list[str] = []
     for entry in registry.enabled:
         fraction = registry.books[entry.book].fraction if entry.book in registry.books else None
@@ -149,6 +157,7 @@ def registry_evidence_problems(registry: Registry) -> list[str]:
                 read_report=read_report,
                 book_fraction=fraction,
                 canonical_params=canonical,
+                live_portfolio=live_portfolio,
             )
         )
     return problems
