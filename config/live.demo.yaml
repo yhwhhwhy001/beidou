@@ -26,7 +26,16 @@ portfolio:
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
-  no_trade_rel_band: 0.25     # ...or smaller than 25% of the current position (same-direction resizes only)
+  # 2026-09-04 (operator decision, P10 cell B): widened 0.25 -> 0.40.  Two pre-registered rules disagreed on this
+  # cell - it passes round 7's R3 rule (OOS >= baseline + 0.05, drawdown worsening <= 1pp, turnover lower) and
+  # fails the later P10 rule only on its turnover threshold (-11.8% against -15% required).  The paired test,
+  # the same instrument that judged conviction_mode, says this one is not noise: all five walk-forward folds
+  # improve, the per-bar OOS return difference has a Newey-West t of 4.18, and a weekly block bootstrap puts the
+  # Sharpe difference at +0.142 with a 5-95% interval of [+0.064, +0.218].  Point estimates on the point-in-time
+  # universe with the shipped book: OOS Sharpe 1.7347 -> 1.8764, OOS drawdown -12.79% -> -12.90%, turnover
+  # 287 -> 253.  Evidence: reports/research/paired-p10-band-20260904T030015Z.json.  Live falsifier: turnover must
+  # fall by roughly 12%; if it does not, live and backtest execution semantics have diverged (KILL-027's pattern).
+  no_trade_rel_band: 0.40     # ...or smaller than 40% of the current position (same-direction resizes only)
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 pool:
   # Re-rank once per UTC day with the hysteresis in universe.yaml (D-014); never = static.  The research membership
