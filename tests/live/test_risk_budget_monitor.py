@@ -85,6 +85,34 @@ def test_volatility_outside_the_band_is_reported_as_such() -> None:
     assert cold["enforced"] and not cold["inside"]
 
 
+def test_a_rebaselined_cycle_is_not_a_return_in_the_volatility_estimate() -> None:
+    """E-044: a demo reset is a step in equity, not a market move.
+
+    `drawdown_state` already re-bases its high-water mark on these rows and `reports.drift_check`
+    already drops them; this estimator read them as returns.  It matters at this size: a reset taken
+    while the book is held moves equity by several percent in one bar, and a single +4.7% bar adds
+    0.163 of annualised vol over a full window - more than the whole [0.26, 0.38] band is wide.
+    """
+    params = RiskBudgetParams(min_vol_bars=10, vol_band=(0.26, 0.38))
+    quiet = _wiggle(0.003)
+    baseline = realised_vol(quiet, params)
+    assert baseline["enforced"] and baseline["inside"]
+
+    with_reset = [*quiet]
+    equity = float(quiet[-1]["equity"]) * 1.05  # the reset step itself
+    with_reset.append(_cycle(len(quiet), equity, external_flows={"rebaselined": True}))
+    for i in range(len(quiet) + 1, len(quiet) + 21):
+        equity *= 1.003 if i % 2 else 0.997
+        with_reset.append(_cycle(i, equity))
+
+    out = realised_vol(with_reset, params)
+    assert out["enforced"]
+    assert out["inside"], f"the reset step was read as volatility: {out['value']}"
+    assert out["value"] == pytest.approx(baseline["value"], abs=0.02)
+    # only the one return spanning the flow is dropped; the bars on either side still count
+    assert out["bars"] == len(with_reset) - 2
+
+
 def test_slippage_is_notional_weighted_and_signed_by_side() -> None:
     params = RiskBudgetParams(min_slippage_fills=2)
     trades = [

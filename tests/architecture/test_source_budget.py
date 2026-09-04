@@ -208,9 +208,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # rest is instrumentation against the 90% target, same as most of this page, and the honest note is
 # the same as the ninth raise's: this was found by an operator looking at the live account, not by a
 # test.
+# Sixteenth raise, 2026-09-05, with the sentence the rule requires: +9 in beidou_live so `realised_vol`
+# skips a bar that absorbed an external cash flow.  This is the cheapest raise on the page and the least
+# defensible as new capability, because it buys none: `drawdown_state` in the same file already re-bases
+# its high-water mark on exactly these rows and `reports.drift_check` already drops them, so the defect
+# was an inconsistency inside one module rather than a concept nobody had had.  The size is why it is not
+# cosmetic.  Today's reset injected -0.187% and would have added 0.0065 - harmless, but only because the
+# account was flattened before it was reset.  A reset taken while the book is held moves equity by several
+# percent in one bar, and one +4.7% bar adds 0.163 of annualised vol over a full window, which is wider
+# than the whole [0.26, 0.38] band: a single one could fire the ALERT on its own, and the memory says the
+# operator may reset at any time.  Recorded while here, because it changes what the daily report means:
+# the vol band does not arm on `min_vol_bars` around 2026-09-14 as the report's "52 bars, needs 240"
+# reads, but on the single-construction gate around 2026-10-04, and only if the construction is untouched
+# until then.  The report prints the first gate because the code returns on it first.  Honest note, same
+# as the ninth and fifteenth raises: found by an operator asking whether history could substitute for the
+# 30-day window, not by a test.
 CEILING = {
     "beidou_alpha": 4_756,
-    "beidou_live": 4_189,
+    "beidou_live": 4_198,
     "beidou_cli": 2_582,
     "beidou_data": 1_258,
     "beidou_exchange": 539,

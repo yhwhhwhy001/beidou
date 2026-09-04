@@ -102,12 +102,21 @@ def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) 
 
 
 def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
-    """Annualised volatility of the live equity path, enforced only on a single-construction window."""
+    """Annualised volatility of the live equity path, enforced only on a single-construction window.
+
+    A bar that absorbed an external cash flow (deposit, demo reset; E-044) is a step in equity, not a
+    return, and is skipped - as ``drawdown_state`` and ``reports.drift_check`` already do.  Not
+    cosmetic: one +4.7% reset bar adds 0.163 of annualised vol, wider than the [0.26, 0.38] band.
+    """
     cutoff = _latest_ms(rows) - params.vol_window_days * DAY_MS
     window = [row for row in rows if int(row.get("bar_open_ms") or 0) >= cutoff]
-    equities = [float(row["equity"]) for row in window if isinstance(row.get("equity"), int | float)]
+    priced = [row for row in window if isinstance(row.get("equity"), int | float)]
     constructions = {str(row.get("construction")) for row in window if row.get("construction")}
-    returns = [b / a - 1.0 for a, b in pairwise(equities) if a > 0]
+    returns = [
+        float(b["equity"]) / float(a["equity"]) - 1.0
+        for a, b in pairwise(priced)
+        if float(a["equity"]) > 0 and not (b.get("external_flows") or {}).get("rebaselined")
+    ]
     reason = None
     if len(returns) < params.min_vol_bars:
         reason = f"{len(returns)} bars, needs {params.min_vol_bars}"
