@@ -42,6 +42,22 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 - **资金费率**：round 6b（D-023）之后行情端口提供 `funding_history`，实盘面板与研究面板由同一份结算费率构成，消费资金费率的设置（tsmom 的 `crowding_window > 0`、`carry` 信号）**不再会被静默跳过**——信号自己声明需求，拿不到历史时 `AlphaModel.targets` 报错、`beidou live run` 拒绝启动（第六轮 KILL-027 的结构性关闭）。当前 tsmom 仍跑 `crowding_window: 0`：重新打开它是**证据问题**而不是管线问题，需要按 D-013/D-020 在时点 universe 上重验并更新 evidence 指针。
 - 探针书（D-019）：`evidence.verdict: ACCEPT`（来自 `beidou research book`）+ `probe` 块（`accepted_by`、`accepted_on`、`stop: {window_days, max_loss}`、`review_after_days`）。启动时核对报告种类、对象与 fraction；缺任何一项 `beidou live run` 拒绝启动。当前：`flow_short`（flow 只做空，1/3 预算，30 天 −1% 自动止损，2026-12-02 复审）。
 
+## 主机时钟漂移（2026-09-04 实测到 −3,612 秒）
+
+检测：
+
+```bash
+python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('https://fapi.binance.com/fapi/v1/time'))['serverTime'];print('drift %.1f s' % (time.time()*1000-s)/1000)"
+```
+
+影响与不影响：
+
+- **不影响下单**：REST 客户端会自己测出偏移并写进 `clock_offset_ms`（实测 3,611,691），签名请求照常成功。
+- **不影响过期护栏**：`expected_bar_ms - latest_bar_ms > stale_bars_max × interval` 是单向判断，慢钟只会让差值为负。
+- **不影响唤醒时刻**（当偏移接近整数个 interval 时）：本地 bar 边界与真实 bar 边界落在同一批真实时刻，循环仍在每个真实整点后不久运行，用的是刚收盘的那根真实 bar。
+- **影响记录**：`cycles.jsonl` 的 `bar` / `bar_open_ms` 与 `heartbeat.at` 会整体偏移，`bar` 与 `as_of_ms` 不再一致（`as_of_ms` 是真实的最新闭合 bar，可用它交叉核对）；日报的 UTC 日切也跟着偏移。
+- 校正主机时钟需要操作者本人（系统设置 / 需要密码），Agent 不做这件事。校正后重启循环即可，重启是幂等的。
+
 ## 排障
 
 - 心跳超时：`beidou live status --check`；看 `~/Library/Application Support/beidou/live.err.log`。
