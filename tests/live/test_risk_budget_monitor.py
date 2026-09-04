@@ -122,8 +122,9 @@ def test_status_collects_every_breached_reason() -> None:
     for i in range(40):
         equity *= 1.02 if i % 2 else 0.94  # violent, and ends deep below the peak
         rows.append(_cycle(i, equity))
-    trades = [{"bar_open_ms": rows[-1]["bar_open_ms"], "side": "BUY", "price": 100.0, "avg_price": 101.0,
-               "executed_qty": "1"}]
+    trades = [
+        {"bar_open_ms": rows[-1]["bar_open_ms"], "side": "BUY", "price": 100.0, "avg_price": 101.0, "executed_qty": "1"}
+    ]
     out = risk_budget_status(rows, trades, params)
     assert out["status"] == "ALERT"
     assert any("drawdown" in r for r in out["reasons"])
