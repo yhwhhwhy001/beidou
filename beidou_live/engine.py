@@ -27,7 +27,7 @@ from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
-from beidou_live.guards import GuardParams, evaluate_guards
+from beidou_live.guards import GuardDecision, GuardParams, evaluate_guards
 from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
@@ -201,6 +201,22 @@ class LiveEngine:
                     "consecutive_errors": self.state.consecutive_errors,
                 }
             )
+            # A failed cycle must leave a durable row: the heartbeat is overwritten by the next cycle, so
+            # without this the only trace of an outage is a log line (that is how the -1023 on 2026-09-04
+            # left no record).  No `equity` key, so the drift check keeps ignoring it; `bar_open_ms` puts it
+            # in the right day, and the targets still in force are carried so the daily report stays readable.
+            self.store.append_cycle(
+                {
+                    "bar_open_ms": bar_open_ms,
+                    "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
+                    "phase": "ERROR",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "consecutive_errors": self.state.consecutive_errors,
+                    "targets": dict(self.state.last_targets),
+                    "orders": [],
+                    "dry_run": self.config.dry_run,
+                }
+            )
             logger.exception("cycle %s failed", bar_open_ms)
             await self.alerts.send(
                 f"beidou cycle failed ({self.state.consecutive_errors}x): {type(exc).__name__}: {exc}"
@@ -295,6 +311,7 @@ class LiveEngine:
             "orders": [],
             "skipped": [],
         }
+        await self._announce_guards(decision, bar_open_ms)
         if decision.skip_cycle:
             self._finish_cycle(record, targets.contributions)
             return record
@@ -579,6 +596,26 @@ class LiveEngine:
                 await self.alerts.send(f"beidou: probe book {probe.book} ({probe.strategy}) stopped - {reason}")
             statuses.append(status)
         return statuses
+
+    async def _announce_guards(self, decision: GuardDecision, bar_open_ms: int) -> None:
+        """Alert on every change of the guard state, in both directions (M-001).
+
+        Edge-triggered: a stale-data stretch or an engaged kill switch alerts once when it
+        starts and once when it clears, rather than every hour or never.  Without this a
+        guard could stop the book trading for a whole day and leave nothing but a heartbeat
+        field, which is the opposite of what "unattended" is supposed to mean.
+        """
+        reasons = list(decision.reasons)
+        if reasons == self.state.last_guard_reasons:
+            return
+        bar = datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat()
+        if reasons:
+            skipped = " and the cycle was skipped" if decision.skip_cycle else ""
+            await self.alerts.send(f"beidou guards at {bar}: {', '.join(reasons)}{skipped}")
+        else:
+            await self.alerts.send(f"beidou guards cleared at {bar}: trading normally again")
+        logger.warning("guard state changed: %s -> %s", self.state.last_guard_reasons, reasons)
+        self.state.last_guard_reasons = reasons
 
     def _finish_cycle(self, record: dict[str, Any], contributions: Mapping[str, Mapping[str, float]]) -> None:
         # Reaching here means the cycle completed (a guard skip is a completed cycle too), so the error streak

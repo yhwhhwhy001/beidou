@@ -55,6 +55,7 @@ class FakeVenue:
         self.order_log: list[OrderRequest] = []
         self.income_log: list[dict[str, Any]] = []
         self.unknown_outcomes_to_inject = 0
+        self.fill_ratios: dict[str, float] = {}  # symbol -> fraction of the requested qty that fills (T-L04)
         self.errors_to_inject: list[Exception] = []
         self.calls: list[str] = []
         self._next_order_id = 1000
@@ -140,17 +141,21 @@ class FakeVenue:
             qty = min(qty, abs(current))
         elif Decimal(str(price)) * request.quantity < rules.min_notional:
             raise VenueError("Order's notional must be no smaller than minNotional", code=-4164)
-        signed = qty * request.side.sign
+        ratio = self.fill_ratios.get(request.symbol, 1.0)
+        filled = float(Decimal(str(qty * ratio)).quantize(rules.step_size, rounding=ROUND_DOWN))
+        signed = filled * request.side.sign
         self.order_log.append(request)
-        self._fill(request.symbol, signed, price)
+        if filled > 0:
+            self._fill(request.symbol, signed, price)
         self._next_order_id += 1
         ack = OrderAck(
             symbol=request.symbol,
             client_order_id=request.client_order_id,
             order_id=str(self._next_order_id),
             side=request.side,
-            status="FILLED",
-            executed_qty=Decimal(str(qty)).quantize(rules.step_size, rounding=ROUND_DOWN),
+            # a market order that could not be fully filled comes back CANCELED with a part done
+            status="FILLED" if filled >= qty else "CANCELED",
+            executed_qty=Decimal(str(filled)).quantize(rules.step_size, rounding=ROUND_DOWN),
             avg_price=price,
             reduce_only=request.reduce_only,
         )

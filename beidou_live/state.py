@@ -32,6 +32,7 @@ class LiveState:
         default_factory=dict
     )  # probe books closed by their stop rule (D-019)
     last_clock_skew_ms: float | None = None  # venue time minus host time at the last cycle
+    last_guard_reasons: list[str] = field(default_factory=list)  # edge-trigger for the guard alert
     consecutive_errors: int = 0
     cycles: int = 0
     started_at: str = field(default_factory=utc_now_iso)
