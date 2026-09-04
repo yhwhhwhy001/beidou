@@ -272,6 +272,7 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 - **复审**：`review_after_days: 90` → 自 2026-12-02 起日报的 `Probe books` 段标 REVIEW_DUE；届时按 M-009 用实盘归因决定去留，任何"调一调再看"都计入 flow 账本。
 - **上线前 dry-run**（2026-09-03 16:00Z bar，scratch 状态目录）：探针状态 OK、sleeve 当前无空头信号（tsmom 几乎全多头，`short_gate` 把顺势空头挡住）、0 笔订单。首批空头会出现在有卖出流且不处于强势趋势的币上。
 - **上线（2026-09-04 02:27Z）**：操作者要求先解决 tsmom 的证据指针问题（见下节 D-020），再在同一次重启里让探针书生效。重启前把另一会话未提交的在途改动存进 `stash@{0}` 与备份分支 `wip/round6b-beidou88`，在干净工作树上核验 HEAD `a4ee852`（ruff / mypy / 132 项测试全绿，CI 在分支与 main 均绿）后 `launchctl kickstart -k`。首个周期（bar 2026-09-04T01:00Z，心跳 02:28:36Z）：`phase OK`、护栏为空、`history_bars 1442`（第六轮窗口修正生效）、`probes {"flow_short": "OK"}`、`external_flows {total 0, rows 0}`、`last_contributions` 同时含 tsmom 与 flow。交易所侧 14 个仓位、名义 2,881 USDT（权益 10,758 的 26.8%），每个偏差都小于 53.8 USDT 的再平衡带，因此该周期 0 单——正确行为。探针首行：30 天归因 P&L +2.41 USDT（5 条归因记录，运行 1.1 天）。
+- **探针不是空转的（活跃度诊断，非试验，不计入账本）**：用当前 registry 配置在现有 universe 的存档数据上统计——过去 90 天有 **91.7%** 的 bar 至少持有一个空头，平均并行 **2.95** 个空头，小书自身 gross 约权益的 15.6%（按 1/3 缩放后约 5.2%）；近 30 天被做空最多的是 SUI(444 bar)、DOGE(369)、TRUMP(369)、XRP(319)。**上线当下恰好一个空头都没有**，因为周级动量普遍为正、`short_gate` 把顺势空头全部挡掉了——这是设计行为，不是故障；`last_contributions` 里 flow 全零时不必排查。
 - **已知的记录字段缺陷**：`cycles.jsonl` 的 `gross_before` 读 `AccountState.gross_notional()`，而 demo 的账户返回体不含 positions 数组，所以它恒为 0.0（14 个持仓时也是 0）。只影响记录，不被任何护栏使用；核对敞口要用 `positionRisk` 或日报。
 
 ### 本轮结论
