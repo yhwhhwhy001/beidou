@@ -70,4 +70,4 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - `state.json.last_contributions` 是 NO_ACTION 的 hold 种子（D-022），不要手动删除；删除等于把所有未触发信号的仓位归零一次。
 - `beidou live verify`：contributions 必须逐币复现（`ok: true`）；`target_diffs` 非零只是提示——退出层 / 节流 / 护栏在模型之后动作。`bar_matched: false` 说明 `state.json` 来自另一根 bar，等下一周期再跑。2026-09-04 01:00Z 的实测：两本书差异均为 0.0。
 - `cycles.jsonl` 的 `gross_before` 自 D-023 起按 `positionRisk` 的仓位求和；此前恒为 0（账户报文不带 positions 数组），满仓也显示为空仓。
-- **主机时钟漂移**（2026-09-04 实测 −3,612 s）：签名请求不受影响（REST 客户端自测偏移），过期护栏是单向的所以不会跳过周期，循环仍然在真实 bar 收盘后醒来、交易刚收盘的那根 bar——**错的是记录不是交易**：`cycles.jsonl` 的 `bar`/`bar_open_ms`、heartbeat 的 `at`、以及触发每日池刷新的 UTC 日界都来自本机时钟。`beidou live status --check` 会报出偏差；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）为准比对，并在 `bar_label_skew_ms` 里给出标签与数据的差。**校准系统时钟是操作者的动作**（系统设置里的自动对时），代码侧不做时间修正。
+- 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
