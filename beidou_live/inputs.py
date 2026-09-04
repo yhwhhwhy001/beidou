@@ -1,7 +1,7 @@
 """What one live cycle feeds the model: closed bars, the latest funding rates and, when the model reads it,
 funding history over the same window.
 
-Shared by the engine and by ``beidou live verify`` so the offline reproduction of a cycle (M-009) builds its
+Shared by the engine and by ``beidou live verify`` so the offline reproduction of a cycle (M-011) builds its
 inputs through exactly the same code as the cycle itself.
 """
 

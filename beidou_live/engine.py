@@ -9,6 +9,8 @@ cycle:   (new UTC day: universe refresh) -> closed bars (mainnet) -> venue snaps
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -156,6 +158,7 @@ class LiveEngine:
                 "leaving": list(self.state.leaving),
                 "leverage": dict(self.state.leverage_set),
                 "history_bars": self.history_bars,
+                "construction": construction_fingerprint(self.config),
                 "dry_run": self.config.dry_run,
                 "foreign_positions": sorted(snapshot.foreign_positions),
             }
@@ -282,6 +285,7 @@ class LiveEngine:
             "leaving": list(self.state.leaving),
             "universe_update": universe_update,
             "inputs": inputs.to_dict(),
+            "construction": construction_fingerprint(config)["digest"],
             "clock": clock,
             "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
@@ -607,6 +611,7 @@ class LiveEngine:
                 "throttle_scalar": (record.get("throttle") or {}).get("scalar", 1.0),
                 "universe_size": len(self.universe),
                 "history_bars": self.history_bars,
+                "construction": construction_fingerprint(self.config)["digest"][:12],
                 "probes": {str(p["book"]): str(p["status"]) for p in (record.get("probes") or [])},
                 "next_bar_close_ms": int(record["bar_open_ms"]) + 2 * self.config.interval_ms,
                 "dry_run": self.config.dry_run,
@@ -618,6 +623,54 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
+    """Digest of the portfolio construction a cycle ran under (D-026).
+
+    The registry fingerprint identifies the *signals*; the startup evidence gate compares *strategy*
+    params.  Neither can see the construction - the vol target, the caps, the no-trade bands, the exit
+    overlay, the throttle - even though changing one of them changes every weight.  Adopting P10 cell B
+    on 2026-09-04 made that concrete: the live band moved to 0.40 while tsmom's cited evidence had been
+    validated at 0.25, and nothing in the running record said so.  This does not gate anything; it makes
+    a live record self-describing, which is what a later reader needs.
+    """
+    payload = {
+        "guards": {
+            "max_gross": config.guards.max_gross,
+            "max_weight": config.guards.max_weight,
+            "daily_loss_pause": config.guards.daily_loss_pause,
+            "stale_bars_max": config.guards.stale_bars_max,
+        },
+        "rebalance": {
+            "no_trade_band": config.rebalance.no_trade_band,
+            "no_trade_rel_band": config.rebalance.no_trade_rel_band,
+            "max_participation": config.rebalance.max_participation,
+            "max_order_notional": config.rebalance.max_order_notional,
+        },
+        "exits": {
+            "stop_loss": config.exits.stop_loss,
+            "trailing_stop": config.exits.trailing_stop,
+            "take_profit": config.exits.take_profit,
+            "cooldown_bars": config.exits.cooldown_bars,
+            "vol_halflife": config.exits.vol_halflife,
+        },
+        "throttle": {
+            "enabled": config.throttle.enabled,
+            "start": config.throttle.start,
+            "stop": config.throttle.stop,
+            "floor": config.throttle.floor,
+        },
+        "leverage": {
+            "mode": config.leverage_mode,
+            "margin_cap": config.margin_cap,
+            "max_leverage": config.max_leverage,
+            "margin_buffer": config.margin_buffer,
+        },
+        "strategy_weights": dict(sorted(config.strategy_weights.items())),
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return {"digest": digest, **payload}
 
 
 def _without_books(model: SignalModel, books: Sequence[str]) -> SignalModel:

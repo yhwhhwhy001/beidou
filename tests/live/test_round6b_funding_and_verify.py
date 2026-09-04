@@ -440,3 +440,44 @@ async def test_a_recovered_cycle_clears_the_error_streak_on_disk(august_panel: P
     assert await engine.guarded_cycle(market.bar_open_ms(399)) is not None
     assert engine.state.consecutive_errors == 0
     assert store.load().consecutive_errors == 0, "the recovery must reach disk, not just memory"
+
+
+def test_the_construction_fingerprint_sees_what_the_evidence_gate_cannot(tmp_path: Path) -> None:
+    """D-026: changing the band changes every weight, and no registry check can see it."""
+    from dataclasses import replace as dc_replace
+
+    from beidou_alpha.overlays.exits import ExitParams
+    from beidou_live.engine import construction_fingerprint
+
+    base = _config(tmp_path)
+    same = construction_fingerprint(dc_replace(base, history_bars=base.history_bars + 1))
+    assert construction_fingerprint(base)["digest"] == same["digest"], "history_bars is not construction"
+    widened = dc_replace(base, rebalance=dc_replace(base.rebalance, no_trade_rel_band=0.40))
+    assert construction_fingerprint(widened)["digest"] != construction_fingerprint(base)["digest"]
+    assert construction_fingerprint(widened)["rebalance"]["no_trade_rel_band"] == 0.40
+    assert base.exits.take_profit == 0.0  # the loop-test config ships with the overlay off
+    exits_on = dc_replace(base, exits=ExitParams(take_profit=6.0))
+    assert construction_fingerprint(exits_on)["digest"] != construction_fingerprint(base)["digest"]
+    assert construction_fingerprint(exits_on)["exits"]["take_profit"] == 6.0
+
+
+async def test_a_cycle_records_the_construction_it_ran_under(august_panel: Panel, tmp_path: Path) -> None:
+    from beidou_live.engine import construction_fingerprint
+
+    market = FakeMarketData(august_panel, cursor=400)
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, 400))
+    store = StateStore(tmp_path / "live")
+    config = _config(tmp_path)
+    engine = LiveEngine(
+        config,
+        model=_model(),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=store,
+    )
+    await engine.startup()
+    started = store.read_heartbeat() or {}
+    assert started["construction"]["rebalance"]["no_trade_rel_band"] == config.rebalance.no_trade_rel_band
+    record = await engine.run_cycle(market.bar_open_ms(399))
+    assert record["construction"] == construction_fingerprint(config)["digest"]

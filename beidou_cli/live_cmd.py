@@ -227,7 +227,7 @@ def _store_for(payload: dict[str, Any], paper: bool) -> StateStore:
 @click.option("--check", is_flag=True, help="exit non-zero when the last cycle's contributions do not reproduce")
 @click.option("--data-root", default=".beidou/data", show_default=True)
 def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_root: str) -> None:
-    """M-009: recompute the last cycle's model output from public data + state.json and diff it (KILL-027 monitor).
+    """M-011: recompute the last cycle's model output from public data + state.json and diff it (KILL-027 monitor).
 
     Reads only.  Contributions must reproduce to the tolerance; a target difference is informational
     because state.json holds the post-throttle / post-exit / post-guard targets.
