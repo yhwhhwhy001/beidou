@@ -36,7 +36,7 @@ from beidou_live.probe import probes_from_registry
 from beidou_live.reports import daily_markdown, daily_payload, expectations_from_evidence
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
-from beidou_live.verify import last_recorded_as_of_ms, verify_live_targets
+from beidou_live.verify import cycle_clock, last_cycle, last_recorded_as_of_ms, verify_live_targets
 
 
 def clock_skew_seconds(rest_url: str) -> float | None:
@@ -252,6 +252,7 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
             await market.aclose()
 
     result = asyncio.run(main())
+    result["last_cycle_clock"] = cycle_clock(last_cycle(store))
     click.echo(json.dumps(result, indent=2, sort_keys=True, default=str))
     if check and not result.get("ok"):
         raise click.ClickException(str(result.get("note")))

@@ -66,6 +66,7 @@ class LiveConfig:
     universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
     liquidity_window: int = 24
     probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
+    max_clock_skew_ms: int = 60_000  # host vs venue; beyond this every timestamp the loop writes is wrong
 
     @property
     def interval_ms(self) -> int:
@@ -221,6 +222,7 @@ class LiveEngine:
         mark = getattr(self.venue, "mark", None)
         if callable(mark):  # paper venue: marks follow the newest closed bar
             mark(latest_closes(usable))
+        clock = await self._clock_skew()
         snapshot = await take_snapshot(self.venue, managed)
         self._roll_day(bar_open_ms, snapshot.equity)
         self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
@@ -279,6 +281,7 @@ class LiveEngine:
             "leaving": list(self.state.leaving),
             "universe_update": universe_update,
             "inputs": inputs.to_dict(),
+            "clock": clock,
             "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
             "exit_events": exit_events,
@@ -435,6 +438,42 @@ class LiveEngine:
                 out[symbol] = value
         return out
 
+    async def _clock_skew(self) -> dict[str, Any]:
+        """Venue time minus host time, measured every cycle from the market port's own server-time call.
+
+        The host clock decides every timestamp the loop writes - the cycle `bar`, the heartbeat `at`, the
+        UTC-day boundary that triggers the pool refresh - and a drift of 3,612 s went unnoticed on
+        2026-09-04 until it surfaced as a venue rejection.  The measurement is free (the port already asks
+        the venue for its time) and must never be the reason a cycle fails, so every error is swallowed.
+        """
+        probe = getattr(self.market, "server_time_ms", None)
+        if not callable(probe):
+            return {"skew_ms": None, "beyond_tolerance": False}
+        try:
+            before = self.clock.now_ms()
+            server = int(await probe())
+            after = self.clock.now_ms()
+        except Exception as exc:
+            logger.warning("clock skew probe failed (%s); continuing", exc)
+            return {"skew_ms": None, "beyond_tolerance": False}
+        skew = float(server - (before + after) / 2)
+        beyond = abs(skew) > self.config.max_clock_skew_ms
+        previous = self.state.last_clock_skew_ms
+        self.state.last_clock_skew_ms = skew
+        if beyond:
+            logger.warning(
+                "host clock is %.1fs from the venue: orders and guards are unaffected, but every timestamp "
+                "this loop writes is wrong by that much",
+                skew / 1000.0,
+            )
+            if previous is None or abs(previous) <= self.config.max_clock_skew_ms:
+                await self.alerts.send(
+                    f"beidou: host clock is {skew / 1000.0:+.0f}s from the venue (tolerance "
+                    f"{self.config.max_clock_skew_ms / 1000.0:.0f}s); cycle timestamps and the UTC-day "
+                    "rollover are wrong until the operator corrects the system clock"
+                )
+        return {"skew_ms": skew, "beyond_tolerance": beyond}
+
     async def _ingest_income(self, bar_open_ms: int, equity: float) -> dict[str, Any]:
         """Income rows since the last cycle: strategy attribution plus external cash-flow detection.
 
@@ -538,6 +577,7 @@ class LiveEngine:
                 "guard_reasons": record["guard_reasons"],
                 "exit_events": len(record.get("exit_events") or []),
                 "external_flows": (record.get("external_flows") or {}).get("total", 0.0),
+                "clock_skew_ms": (record.get("clock") or {}).get("skew_ms"),
                 "throttle_scalar": (record.get("throttle") or {}).get("scalar", 1.0),
                 "universe_size": len(self.universe),
                 "history_bars": self.history_bars,

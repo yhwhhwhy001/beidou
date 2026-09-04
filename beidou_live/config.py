@@ -89,6 +89,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         universe_refresh=str(pool.get("refresh", "never")).lower() != "never",
         liquidity_window=int(pool.get("liquidity_window", 24)),
         probes=probes_from_registry(registry),
+        max_clock_skew_ms=int(float(guards.get("max_clock_skew_seconds", 60.0)) * 1000),
     )
 
 

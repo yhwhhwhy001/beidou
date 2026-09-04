@@ -31,6 +31,7 @@ class LiveState:
     stopped_books: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )  # probe books closed by their stop rule (D-019)
+    last_clock_skew_ms: float | None = None  # venue time minus host time at the last cycle
     consecutive_errors: int = 0
     cycles: int = 0
     started_at: str = field(default_factory=utc_now_iso)

@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -24,6 +25,7 @@ from beidou_alpha.signals import get_signal
 from beidou_alpha.signals.tsmom import TsmomParams
 from beidou_data.binance_public import funding_to_frame
 from beidou_data.live_feed import funding_series
+from beidou_live.alerts import WebhookAlerts
 from beidou_live.engine import LiveEngine
 from beidou_live.inputs import first_open_ms, model_inputs, required_history
 from beidou_live.reconciler import take_snapshot
@@ -305,3 +307,88 @@ def test_last_recorded_as_of_ms_ignores_dry_runs(tmp_path: Path) -> None:
     assert last_recorded_as_of_ms(store) == 111
     store.append_cycle({"bar_open_ms": 3, "as_of_ms": 333, "dry_run": False})
     assert last_recorded_as_of_ms(store) == 333
+
+
+# --- item 2: the loop measures host-vs-venue skew every cycle -------------------------------------
+
+
+class SkewedMarket(FakeMarketData):
+    """A market port whose venue clock sits ``offset_ms`` away from the loop's own clock."""
+
+    def __init__(self, panel: Panel, cursor: int, offset_ms: int, clock: FakeClock) -> None:
+        super().__init__(panel, cursor)
+        self.offset_ms = offset_ms
+        self.clock = clock
+        self.server_time_calls = 0
+
+    async def server_time_ms(self) -> int:
+        self.server_time_calls += 1
+        return self.clock.now_ms() + self.offset_ms
+
+
+class RecordingAlerts(WebhookAlerts):
+    def __init__(self) -> None:
+        super().__init__("")
+        self.sent: list[str] = []
+
+    async def send(self, text: str) -> bool:
+        self.sent.append(text)
+        return True
+
+
+async def _cycle_with_skew(august_panel: Panel, tmp_path: Path, offset_ms: int) -> tuple[dict, RecordingAlerts, Any]:
+    probe = FakeMarketData(august_panel, cursor=400)
+    clock = FakeClock(probe.bar_open_ms(400) + 5_000)
+    market = SkewedMarket(august_panel, cursor=400, offset_ms=offset_ms, clock=clock)
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, 400))
+    alerts = RecordingAlerts()
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model(),
+        market=market,
+        venue=venue,
+        clock=clock,
+        store=StateStore(tmp_path / "live"),
+        alerts=alerts,
+    )
+    await engine.startup()
+    record = await engine.run_cycle(market.bar_open_ms(399))
+    return record, alerts, engine
+
+
+async def test_a_drifting_host_clock_is_measured_and_alerted_once(august_panel: Panel, tmp_path: Path) -> None:
+    record, alerts, engine = await _cycle_with_skew(august_panel, tmp_path, offset_ms=3_612_000)
+    assert record["clock"]["beyond_tolerance"] is True
+    assert record["clock"]["skew_ms"] == pytest.approx(3_612_000, abs=60_000)
+    assert engine.state.last_clock_skew_ms == pytest.approx(record["clock"]["skew_ms"])
+    drift_alerts = [a for a in alerts.sent if "host clock" in a]
+    assert len(drift_alerts) == 1 and "UTC-day rollover" in drift_alerts[0]
+    assert not record["skip"] and record["orders"], "a drifting clock must not stop the loop from trading"
+    engine.market.cursor += 1  # type: ignore[attr-defined]
+    again = await engine.run_cycle(engine.market.bar_open_ms(engine.market.cursor - 1))  # type: ignore[attr-defined]
+    assert again["clock"]["beyond_tolerance"] is True
+    assert len([a for a in alerts.sent if "host clock" in a]) == 1  # edge-triggered, not once per hour
+
+
+async def test_a_healthy_clock_is_recorded_without_noise(august_panel: Panel, tmp_path: Path) -> None:
+    record, alerts, _ = await _cycle_with_skew(august_panel, tmp_path, offset_ms=1_500)
+    assert record["clock"]["beyond_tolerance"] is False
+    assert abs(record["clock"]["skew_ms"]) < 60_000
+    assert not [a for a in alerts.sent if "host clock" in a]
+
+
+async def test_a_port_without_a_clock_probe_is_not_an_error(august_panel: Panel, tmp_path: Path) -> None:
+    market = FakeMarketData(august_panel, cursor=400)  # no server_time_ms
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, 400))
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model(),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=StateStore(tmp_path / "live"),
+    )
+    await engine.startup()
+    record = await engine.run_cycle(market.bar_open_ms(399))
+    assert record["clock"] == {"skew_ms": None, "beyond_tolerance": False}
+    assert not record["skip"]

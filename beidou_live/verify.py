@@ -89,6 +89,14 @@ def compare_targets(
     }
 
 
+def last_cycle(store: StateStore) -> Mapping[str, Any] | None:
+    """The newest non-dry-run cycle record, or ``None`` when the loop has not completed one."""
+    for record in reversed(store.read_jsonl(store.cycles_path)):
+        if not record.get("dry_run"):
+            return record
+    return None
+
+
 def last_recorded_as_of_ms(store: StateStore) -> int | None:
     """``as_of_ms`` of the newest non-dry-run cycle: the bar the data carried, independent of the host clock."""
     for record in reversed(store.read_jsonl(store.cycles_path)):
@@ -98,6 +106,20 @@ def last_recorded_as_of_ms(store: StateStore) -> int | None:
         if isinstance(value, int | float):
             return int(value)
     return None
+
+
+def cycle_clock(record: Mapping[str, Any] | None) -> dict[str, Any]:
+    """What the last cycle knew about the host clock: its measured skew, and whether income ingestion was skipped."""
+    if record is None:
+        return {"skew_ms": None, "beyond_tolerance": False, "income_skipped_ms": None}
+    clock = record.get("clock") or {}
+    flows = record.get("external_flows") or {}
+    return {
+        "skew_ms": clock.get("skew_ms"),
+        "beyond_tolerance": bool(clock.get("beyond_tolerance")),
+        # set when the income watermark was ahead of the clock, so that cycle attributed nothing (not a fault)
+        "income_skipped_ms": flows.get("clock_skew_ms"),
+    }
 
 
 async def verify_live_targets(
@@ -117,4 +139,4 @@ async def verify_live_targets(
     return {"inputs": inputs.to_dict(), **compare_targets(targets, state, tolerance, recorded_as_of_ms)}
 
 
-__all__ = ["compare_targets", "last_recorded_as_of_ms", "verify_live_targets"]
+__all__ = ["compare_targets", "cycle_clock", "last_cycle", "last_recorded_as_of_ms", "verify_live_targets"]
