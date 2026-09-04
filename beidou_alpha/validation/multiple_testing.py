@@ -179,6 +179,37 @@ def probability_of_backtest_overfitting(
     )
 
 
+def oos_selection_threshold(oos_returns: np.ndarray, *, n_trials: int, bars_per_year: float) -> dict[str, Any]:
+    """D-027: the out-of-sample Sharpe a strategy must clear given how many configurations were tried.
+
+    Walk-forward embeds the selection that happens *inside* a fold; nothing in D-020 is sensitive to the
+    selection that happens *across rounds*, and the Newey-West t is not a second condition because on
+    hourly returns it is the Sharpe times the square root of years to within 0.1%.  So the same deflation
+    the DSR applies in sample is applied here to the OOS series instead, which penalises exactly the
+    cross-round family selection and nothing else.
+
+    The null is the sampling distribution of one OOS Sharpe estimate, not the ledger's pooled dispersion:
+    that dispersion degenerated in both directions (near zero among near-duplicate trials, inflated by
+    heterogeneous ones) and is what round 7 was called to fix.  The threshold is derived, never chosen.
+    """
+    values = np.asarray(oos_returns, dtype=float)
+    values = values[np.isfinite(values)]
+    n_obs = int(values.size)
+    period = sharpe_per_period(values)
+    if n_obs < 3 or period is None:
+        return {"n_obs": n_obs, "n_trials": max(1, int(n_trials)), "variance": 0.0, "threshold_annual": None}
+    skew, kurt = moments(values)
+    variance = sampling_variance(period, n_obs, skew, kurt)
+    threshold = expected_max_sharpe(max(1, int(n_trials)), variance)
+    return {
+        "n_obs": n_obs,
+        "n_trials": max(1, int(n_trials)),
+        "variance": variance,
+        "threshold_annual": threshold * math.sqrt(bars_per_year),
+        "oos_sharpe_annual": period * math.sqrt(bars_per_year),
+    }
+
+
 def multiple_testing_report(
     candidate_returns: np.ndarray,
     trial_returns_matrix: np.ndarray,

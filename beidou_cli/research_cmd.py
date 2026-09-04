@@ -39,7 +39,7 @@ from beidou_alpha.validation.metrics import (
     time_series_ic,
     yearly_breakdown,
 )
-from beidou_alpha.validation.multiple_testing import multiple_testing_report
+from beidou_alpha.validation.multiple_testing import multiple_testing_report, oos_selection_threshold
 from beidou_alpha.validation.stability import cost_stress, parameter_neighborhood, time_split_sharpes
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_evaluate, walk_forward_folds
@@ -493,6 +493,10 @@ def research_validate(
         "best_params": params_by_key[best_key],
         "full_sample": results[best_key].summary(),
         "walk_forward": wf_summary,
+        # D-027: the OOS Sharpe a strategy must clear given how many configurations were tried on it.
+        "oos_selection": oos_selection_threshold(
+            wf.oos_returns.to_numpy(dtype=float), n_trials=pooled["n_trials"], bars_per_year=bpy
+        ),
         "cpcv": cpcv,
         "multiple_testing": mt,
         "stability": {
@@ -518,6 +522,7 @@ def research_validate(
             ("Walk-forward (out of sample)", {k: v for k, v in wf_summary.items() if k != "chosen_params"}),
             ("CPCV", {k: v for k, v in cpcv.items() if k != "chosen"}),
             ("Multiple testing", mt),
+            ("Selection-deflated OOS threshold (D-027)", report["oos_selection"]),
             (
                 "Stability",
                 {
@@ -564,6 +569,10 @@ def research_validate(
     )
     click.echo(
         f"dsr p={_fmt(mt['dsr_p_value'])} pbo={_fmt(mt['pbo'])} cost_stress={ {k: _fmt(v) for k, v in stress.items()} }"
+    )
+    click.echo(
+        f"oos selection threshold={_fmt(report['oos_selection']['threshold_annual'])} "
+        f"at {report['oos_selection']['n_trials']} trials (D-027)"
     )
     click.echo(f"VERDICT: {verdict} {reasons if reasons else ''}")
     click.echo(f"report: {path} sha256={digest}")

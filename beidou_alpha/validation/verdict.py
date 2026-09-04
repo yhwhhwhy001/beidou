@@ -5,8 +5,16 @@ OOS Sharpe and the Newey-West t-statistic of the OOS net returns decide PASS / W
 fold consistency, CPCV negative-path share, PBO (for grids of >= 4) and the doubled-cost
 Sharpe are hard gates.  The deflated Sharpe ratio stays in every report but no longer vetoes:
 it haircuts the *in-sample* Sharpe for selection, while walk-forward selection already happens
-inside the training folds; the cross-round family selection remains visible through the
-trials ledger count.  Before D-020 the DSR p-value (<= 0.05 / 0.10) was a veto, and its pooled
+inside the training folds.
+
+D-027 (2026-09-04) closes what that left open.  The Newey-West t was never a second condition:
+on hourly net returns it equals the Sharpe times the square root of years to within 0.1%, so over
+a five-year window "t >= 2" is looser than the "Sharpe >= 1" beside it, and it only bites below
+four years - it is a short-sample guard, and is documented as one.  The condition that is actually
+sensitive to selection deflates the *out-of-sample* Sharpe against the number of distinct
+configurations in the strategy's ledger, using the sampling distribution of an OOS Sharpe estimate
+as the null rather than the ledger's pooled dispersion.  Reports written before this field exists
+carry no ``oos_selection`` block and are not judged by it.  Before D-020 the DSR p-value (<= 0.05 / 0.10) was a veto, and its pooled
 variance was degenerate in both directions (near-zero with near-duplicate trials, inflated by
 legacy configurations); see docs/RESEARCH_LOG.md.
 """
@@ -28,6 +36,7 @@ class VerdictThresholds:
     max_pbo: float = 0.30
     min_cost_stress_sharpe: float = 0.0
     min_trials_for_pbo: int = 4
+    enforce_oos_selection: bool = True  # D-027: the OOS Sharpe must clear the deflated threshold
 
 
 def decide(report: dict[str, Any], thresholds: VerdictThresholds | None = None) -> tuple[str, list[str]]:
@@ -49,6 +58,12 @@ def decide(report: dict[str, Any], thresholds: VerdictThresholds | None = None) 
         reasons.append(f"oos_sharpe {oos:.2f} < {t.weak_oos_sharpe}")
     if oos_t is None or oos_t < t.weak_oos_t:
         reasons.append(f"oos_t_stat {oos_t} < {t.weak_oos_t}")
+    selection = report.get("oos_selection") or {}
+    threshold = selection.get("threshold_annual")
+    if t.enforce_oos_selection and threshold is not None and oos < threshold:
+        reasons.append(
+            f"oos_sharpe {oos:.2f} < the deflated threshold {threshold:.2f} at {selection.get('n_trials')} trials"
+        )
     if consistency is not None and consistency < t.min_fold_consistency:
         reasons.append(f"fold_consistency {consistency:.2f} < {t.min_fold_consistency}")
     if negative is not None and negative > t.max_cpcv_negative:
