@@ -109,9 +109,22 @@ strategies:
     # 205 symbols against 204.  Note the ledger charged the superseded run as a distinct trial (90 -> 91)
     # because its range end differs by two bars, so the open question of whether a re-run after a data
     # correction is the same trial did not have to be answered here - it was charged the conservative way.
+    # 2026-09-04 14:53Z: re-validated under the ADOPTED construction (P13, `vol_target` 0.15 -> 0.30).  The
+    # 131421Z pointer was measured at 0.15, so after the adoption the strategy-layer evidence no longer
+    # described the construction that runs - the same D-026 situation as the P10 band above, closed the same
+    # way, by re-running rather than by noting it.  The startup gate would have refused to start otherwise,
+    # which is `construction_problems` doing exactly its job; it caught this before the restart did.
+    # Same protocol, so the two are like for like: pit universe, single configuration (`conviction_mode: sign`),
+    # 5 folds, min_train 4000, purge 50, cpcv 6, 30 declared pre-ledger trials.  Verdict unchanged - PASS with
+    # no failing gate - and the numbers barely move, which is the point rather than a surprise: the vol target
+    # is a scalar on the weights, so it cancels out of a Sharpe except through the caps and the two guards.
+    # Walk-forward OOS Sharpe 1.6496 -> 1.66 with consistency 1.00, CPCV 1.71 / q05 1.35 / 0% negative,
+    # cost x2 1.55.  DSR p 0.28 at 91 trials, reported not a veto (D-020); OOS clears the D-028 threshold 1.10.
+    # The ledger was charged one trial for this run.  What DID move is what the report now records: its
+    # `portfolio` block reads vol_target 0.30, so from here the gate compares a construction that is real.
     evidence:
-      report: reports/research/tsmom-validation-20260904T131421Z.json
-      sha256: 881a7147bceab6538e22a812abd3ef374fa1c3545bb1cd20d2662d8485a5316e
+      report: reports/research/tsmom-validation-20260904T145321Z.json
+      sha256: 41b0369280fef16d85b3dea1f6f5465a97fe03177b04e22e4930bc718cf48630
       verdict: PASS
   - id: xsmom
     enabled: false

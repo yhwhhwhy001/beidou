@@ -1174,3 +1174,19 @@ D-016 当初的记录（「敞口不变」）本来就说明了这一点。第�
 - 冲击成本模型（真实资金前置，已列 Won't）；
 - `max_weight` / `max_gross` / `max_leverage` / `margin_cap` 一律不动——五参数耦合正是 legacy「八个标量相乘」的入口；
 - 本次分析的对抗审查由同一个 Agent 执行，**不能替代一次真正独立的复核**；同一会话在过程中犯过一次方法错误（用样本内 MDD 线性外推得到 k=5，被自助分布否定）并撤回过一个自己提的方向（按实际 gross 推导杠杆），两处都记在上文。
+
+### P13 补记（2026-09-04 14:53Z）：证据指针必须一起重跑，以及一次我造成的账本污染
+
+**两件事要如实记下。**
+
+**一、交付契约漏了一步，被启动门当场抓住。** 上面的验收（A-01/A-02）全部通过之后，合并前的 dry-run 打出 `evidence: tsmom: portfolio vol_target is 0.3 live but 0.15 in the cited evidence`——`construction_problems` 会拒绝实盘启动。若直接重启，`run_live.sh` 不带 `--allow-unvalidated`，launchd 会陷入每 60 秒重试的死循环，**系统会停摆**。
+
+我的分析把这一步漏了，原因是我读到的 `config/live.demo.yaml` 注释写着「The startup gate compares registry params only, so it cannot see this - a known gap」——那条注释已经过期，缺口在 D-029 那一批里被补上了。**注释跑在实现后面**，与本文件上方 pool 段记录过的是同一类错误，方向相反。
+
+处置按 registry 里 P10 cell B 的既有先例：**重跑而不是加注释**。同协议（时点 universe、单配置 `conviction_mode: sign`、5 折、min_train 4000、purge 50、cpcv 6、30 次声明先验），`tsmom-validation-20260904T145321Z`：走前 OOS Sharpe 1.6496 → **1.66**，一致性 1.00，CPCV 1.71 / q05 1.35 / 0% 负路径，成本 2× 1.55，DSR p 0.28（报告不否决），越过 D-028 阈值 1.10，**PASS**。数字几乎不动正是预期——vol_target 是权重上的标量，除了通过上限与两个护栏，它在 Sharpe 里会约掉。**账本因此 +1 次试验（91）。**
+
+**二、我的 dry-run 污染了实盘账本。** 第一次验证启动路径时我直接用了 `config/live.demo.yaml`，它的 `state_dir` 就是 `.beidou/live`，于是那次 dry-run 往实盘 `cycles.jsonl` 追加了一行 `dry_run: true` 的记录，并覆盖了 `heartbeat.json` 与 `state.json`（`restarts` 虚增 1）。影响有界：`beidou_live/reports.py` 的日报与周报都按 `not row.get("dry_run")` 过滤，所以报告不受影响；`state.json` 会被实盘进程下一轮或重启覆盖。残留是那一行记录和一次虚增的重启计数，**不删除，如实记在这里**。第二次验证改用独立 state 目录。教训写下来：**dry-run 默认写实盘状态目录**，这是个陷阱，验证启动路径时必须先覆盖 `paths.state_dir`。
+
+意外收获是它提前给出了 A-05 的预览：同一轮里目标 gross 由 0.2477 变成 **0.4954**，精确翻倍，13 张计划单，BTCUSDT 目标名义 354.81 → 651.17。
+
+**顺带记录：宿主时钟已被修正。** 20:03 本地那一轮记到 `host clock jumped -3612s`，此后 skew 稳定在 ±1 ms 内。此前所有实盘时间戳晚 1 小时的问题（D-030 的成因）从这一刻起消失，但已写入的记录不回头修改。
