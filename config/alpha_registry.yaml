@@ -27,6 +27,10 @@ strategies:
       return_scale: 0.20
       slope_scale: 0.01
       entry_threshold: 0.20
+      # Measured inert under conviction_mode sign: 400 / 100 / expanding give the SAME sign on every one of
+      # 4,668,384 symbol-bars, because the clip against return_scale always binds (E-043).  Kept rather than
+      # deleted: omitting it falls back to the dataclass default of 200, which would no longer equal the cited
+      # evidence and the startup params gate would refuse to start.
       vol_window: 400
       conviction_mode: sign     # H-001: trade the direction of the weekly signal, not its magnitude (adopted 2026-09-04)
       crowding_window: 0        # modifier off (the cut/penalty below are inert; kept so the params equal the report's best_params).
@@ -64,9 +68,22 @@ strategies:
     # five folds positive, CPCV q05 1.23, 0% negative paths, cost x2 1.47.  Live arbiter: M-010 income attribution
     # over 30 days, plus a turnover check - if turnover does not fall by roughly a quarter, live and backtest
     # execution semantics have diverged again (that is how KILL-027 was found).
+    # 2026-09-04 04:18Z: re-validated under the ADOPTED construction (no_trade_rel_band 0.40, P10 cell B).  The
+    # previous pointer (020459Z) was measured at band 0.25, so after the adoption the strategy-layer evidence no
+    # longer described the construction that runs - the D-026 gap, closed by re-running rather than by noting it.
+    # Same protocol as 020459Z (single configuration, point-in-time universe, 30 declared pre-ledger trials), so the
+    # two are like for like: walk-forward OOS Sharpe 1.7140 against 1.6026 at band 0.25, Newey-West t
+    # 3.95 over 44,995 OOS bars, folds [1.29, 0.63, 2.7, 1.58, 2.35], consistency 1.00,
+    # CPCV 1.80 / q05 1.37 / 0% negative, cost x2 1.62, full sample 1.7949
+    # / MDD -12.1%.  Turnover 233 against 264 and cost share 9.7% against 11.7%: the
+    # adoption's effect shows up in the evidence pipeline, not only in the paired test that justified it.
+    # DSR p 0.19 is reported, not a veto (D-020).
+    # The harder test also passes: the default 16-point grid at this band (040252Z, n=87 trials) gives OOS 1.376 with
+    # t 3.13 and PBO 0.015, and its full-sample best_params equal the params above.  Its headline is lower because
+    # folds 0-2 select entry_threshold/return_scale 0.3 there; a fold-selected mixture is not this configuration.
     evidence:
-      report: reports/research/tsmom-validation-20260904T020459Z.json
-      sha256: 466419e8caaa6018aee9765c19cd139ee4c6e395073ec33418328a416b3c40f4
+      report: reports/research/tsmom-validation-20260904T041838Z.json
+      sha256: 2287bf140a0e7d2523fb1f1688dd705aa6e175f1d1b6894417cbb36a3a6f82eb
       verdict: PASS
   - id: xsmom
     enabled: false
