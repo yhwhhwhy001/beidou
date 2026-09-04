@@ -161,7 +161,27 @@
         "on this evidence the modifier is a small negative (OOS 1.53 with vs 1.65 without)"
         作为 crowding_window: 0 的成文理由, 而该证据早于修复其输入的补丁。
   本项**不主张**重开 crowding, 只主张: **它被否决所依据的那次比较, 在其输入被修正后
-  从未重做过。** 已注册的改动需要 `beidou research validate`(会登记试验), 是操作者的决定。
+  从未重做过。**
+
+  【2026-09-05 已重做 · 操作者授权】`beidou research validate --strategy tsmom --universe pit
+  --grid '{"crowding_window": [0, 72]}' --folds 5 --min-train 4000 --purge 50 --cpcv-groups 6
+  --prior-trials 30` → 报告 tsmom-validation-20260904T193707Z.json, 账本 +2 条(现 61 + 30 申报)。
+
+    逐折选择    [72, 72, 72, 72, 72]   —— 五折全选开启臂(181803Z 当时是 [72,0,72,72,0])
+    OOS Sharpe  1.7647   NW t 4.0266   consistency 1.00
+    CPCV        mean 1.795  q05 1.338  负路径 0.00
+    PBO         0.136                  (181803Z 为 0.5484 —— 按 D-020 硬门本会 FAIL)
+    成本压力    x1 1.83 / x1.5 1.75 / x2 1.68
+    D-028       阈值 1.098 @ 93 次试验;  DSR p 0.2155(报告不否决)
+    VERDICT     PASS,  best_params.crowding_window = 72
+
+  与本报告 scratchpad 复算逐位一致(1.7647 / 4.0266), 互为交叉验证。
+  PBO 0.55 → 0.14 与"输入被污染"的解释一致: 被污染的臂使逐折选择不稳定, 而 PBO 正度量此。
+
+  **仍未改动 registry**, 且有一处耦合必须先说清: alpha_registry.yaml 当前是
+  `crowding_window: 0`, 而新证据的 best_params 是 72。KILL-027 的启动门比较 registry 参数
+  与报告参数, 因此**只重指 evidence 而不改参数会让实盘拒绝启动**——两者必须同一次改动。
+  改不改是操作者对实盘配置的决定, 不在审计范围内。
 
 [原始条目] tsmom 的 edge 归属未陈述 —— 待作者答复
   维度: 1.2 谁在对手盘
