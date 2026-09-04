@@ -358,6 +358,11 @@ class LiveEngine:
             "exit_events": exit_events,
             "probes": probes,
             "targets": decision.targets,
+            # The stage-1 sizing divisor per symbol, so the daily report can show that risk IS
+            # adapted per symbol - in the weight, where it belongs - next to the exchange leverage,
+            # which is uniform by construction and adapts to nothing (D-037).  `getattr` because
+            # this is observability: a model that cannot supply it must still be able to trade.
+            "asset_vol": dict(getattr(targets, "asset_vol", {}) or {}),
             "orders": [],
             "skipped": [],
         }

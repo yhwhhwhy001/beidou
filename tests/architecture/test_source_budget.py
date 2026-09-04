@@ -188,10 +188,30 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # from a cron job is a different risk from measuring it, and the ladder removes the discretion about WHAT
 # to do, not the step of a human doing it.  Non-alpha growth again, against the 90% target, and this one
 # has no excuse except that an unmeasured risk budget is worse.
+# Fifteenth raise, 2026-09-05, with the sentence the rule requires: +106 in beidou_live, +20 in
+# beidou_alpha and +8 in beidou_cli for M-015, because the operator has now asked the same question on
+# three separate days - why is every order at 5x - and the report was the reason it kept coming back.
+# D-037 had already answered it (maintenance margin is indexed by notional tier, not by the chosen
+# leverage, so the venue setting carries no risk; adaptation is stage 1's `vol_target / asset_vol`),
+# but it answered it in ARCHITECTURE.md, and the daily report showed `last_targets` with nothing to
+# read them against - so the only per-symbol number visible anywhere was the uniform 5x.  A true fact
+# that no instrument states is indistinguishable from an unproven one, which is this file's whole
+# subject.  The lines buy a falsifier rather than a display: `compression` is the risk-contribution
+# spread over the market-vol spread, it reads 0.13 on the live book (a 12.2x spread in annualised
+# volatility compressed to 1.6x in risk) and it converges on 1.00 if stage 1 is ever removed, so the
+# ALERT fires on the regression rather than on the question.  The obvious simplification a later
+# reader will reach for is recomputing sigma in the report from the klines archive instead of
+# recording it per cycle; that is shorter and answers a different question - a different bar, and
+# nothing tying it to the halflife the construction used - which is why `asset_vol` was extracted in
+# beidou_alpha and is carried on `TargetWeights` from the same panel the weights came from.  Twenty of
+# the 134 lines land in beidou_alpha and they delete a duplicated formula rather than adding one; the
+# rest is instrumentation against the 90% target, same as most of this page, and the honest note is
+# the same as the ninth raise's: this was found by an operator looking at the live account, not by a
+# test.
 CEILING = {
-    "beidou_alpha": 4_736,
-    "beidou_live": 4_083,
-    "beidou_cli": 2_574,
+    "beidou_alpha": 4_756,
+    "beidou_live": 4_189,
+    "beidou_cli": 2_582,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

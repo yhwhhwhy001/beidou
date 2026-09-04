@@ -19,6 +19,8 @@ from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, risk_budget_status
 from beidou_live.state import StateStore
 
+RISK_COMPRESSION_LIMIT = 0.50  # see `risk_adaptation`: a bound between "working" (0.13) and "stage 1 deleted" (1.0)
+
 
 def _day_of(record: dict[str, Any]) -> str | None:
     """The UTC day a record belongs to, preferring the bar its data carried (D-025).
@@ -485,6 +487,99 @@ def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _risk_adaptation_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """Same rule as `_risk_budget_lines`: a spread that could not be computed says why, not "n/a"."""
+    leverages = block.get("leverage_distinct")
+    venue = f"{leverages} distinct value(s) across the book" if leverages else "nothing set yet"
+    if not block.get("enforced"):
+        return {"status": f"not enforced ({block.get('reason', 'no reason recorded')})", "exchange leverage": venue}
+    return {
+        "status": f"{block.get('status')} - stage 1 removes {1.0 - float(block['compression']):.0%} of the "
+        f"market's dispersion (compression {block['compression']:.2f}, alert above {block['limit']:.2f})",
+        "market vol spread": f"{block['vol_spread']:.1f}x across {block['symbols']} held symbols",
+        "risk contribution spread": f"{block['risk_spread']:.1f}x - this is what sizing equalises",
+        "exchange leverage": f"{venue}; carries no risk here (D-037)",
+        "by symbol": json_dumps(
+            {
+                str(row["symbol"]): f"lev={row['leverage']}x vol={row['annual_vol']:.0%} "
+                f"w={row['weight']:+.4f} risk={row['risk']:.2%}"
+                for row in block.get("rows") or []
+            }
+        ),
+    }
+
+
+def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
+    """M-015: how much of each symbol's market volatility the sizing layer takes back out.
+
+    The operator has now asked three times why every symbol sits at the same exchange leverage,
+    and the report was the reason: it showed `last_targets` and nothing to read them against, so
+    the only per-symbol number visible anywhere was the venue's uniform 5x.  D-037 settled that
+    leverage carries no risk here - maintenance margin is indexed by notional tier, not by the
+    chosen leverage - and that adaptation happens in the weight instead, via stage 1's
+    ``vol_target / asset_vol``.  That was true and invisible, which is the same as unproven.
+
+    Two spreads, over the symbols the book actually holds:
+      vol_spread   max sigma / min sigma   - how different these markets are
+      risk_spread  max |w|sigma / min |w|sigma - how different their risk contributions are
+
+    ``compression = risk_spread / vol_spread`` is the instrument.  It is not a display: delete
+    stage 1 and weights stop depending on sigma, so risk_spread converges on vol_spread and this
+    reads 1.0.  Measured on the live book 2026-09-05 it reads 0.13 (vol 12.2x -> risk 1.6x).  The
+    0.50 limit is a wide bound placed between those two, not a derived threshold, because several
+    honest effects push it up: the no-trade band holds a stale weight while sigma moves under it,
+    ``max_weight`` binds on the calmest names, and a signal with magnitude (today's tsmom is pure
+    sign) puts conviction back into the numerator.
+
+    Refuses to answer rather than passing by default - a spread over one or two names is noise,
+    and cycles written before ``asset_vol`` was recorded carry no sigma at all.
+    """
+    cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
+    leverage = dict(store.load().leverage_set)
+    # Carried on every path, refusals included: it is the number the operator came here to look at,
+    # and "the venue is at one leverage for all 15 symbols" is a fact even on a day with no sigma.
+    distinct_leverage = len(set(leverage.values()))
+    refused = {"enforced": False, "rows": [], "leverage_distinct": distinct_leverage}
+    if not cycles:
+        return {**refused, "reason": f"no cycles on {day}"}
+    last = cycles[-1]
+    vols = last.get("asset_vol") or {}
+    targets = last.get("targets") or {}
+    if not vols:
+        return {**refused, "reason": "this cycle predates the asset_vol record"}
+    rows = [
+        {
+            "symbol": symbol,
+            "leverage": leverage.get(symbol),
+            "annual_vol": float(vols[symbol]),
+            "weight": float(weight),
+            "risk": abs(float(weight)) * float(vols[symbol]),
+        }
+        for symbol, weight in sorted(targets.items())
+        if symbol in vols and float(vols[symbol]) > 0 and abs(float(weight)) > 0
+    ]
+    held = sorted(rows, key=lambda row: row["risk"])
+    if len(held) < 3:
+        reason = f"only {len(held)} symbols carry a weight; a spread over that is noise"
+        return {**refused, "reason": reason, "rows": rows}
+    sigmas = [row["annual_vol"] for row in held]
+    vol_spread = max(sigmas) / min(sigmas)
+    risk_spread = held[-1]["risk"] / held[0]["risk"]
+    compression = risk_spread / vol_spread if vol_spread > 0 else None
+    return {
+        "enforced": True,
+        "reason": None,
+        "symbols": len(held),
+        "vol_spread": vol_spread,
+        "risk_spread": risk_spread,
+        "compression": compression,
+        "limit": RISK_COMPRESSION_LIMIT,
+        "status": "ALERT" if compression is not None and compression > RISK_COMPRESSION_LIMIT else "OK",
+        "leverage_distinct": distinct_leverage,
+        "rows": rows,
+    }
+
+
 def daily_payload(
     store: StateStore,
     day: str,
@@ -572,6 +667,7 @@ def daily_payload(
         "clock": clock_health(store, day),
         "data_coverage": data_coverage(store),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
+        "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
     }
 
@@ -844,6 +940,11 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     for row in (payload.get("probes") or [])
                 }
                 or {"none": 0},
+            ),
+            (
+                # Where per-symbol adaptation actually lives (D-037): the weight, not the leverage
+                "Risk adaptation per symbol (M-015)",
+                _risk_adaptation_lines(payload.get("risk_adaptation") or {}),
             ),
             ("Last targets", payload["last_targets"] or {"none": 0}),
         ],

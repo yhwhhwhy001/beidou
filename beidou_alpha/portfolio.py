@@ -64,14 +64,22 @@ def ewma_portfolio_vol(returns: pd.DataFrame, weights: pd.DataFrame, halflife: i
     return pd.Series(out, index=weights.index)
 
 
+def asset_vol(close: pd.DataFrame, params: PortfolioParams, bars_per_year: float) -> pd.DataFrame:
+    """Annualised per-symbol EWMA volatility, floored at ``min_asset_vol``: stage 1's divisor.
+
+    Named rather than inlined so the live report can display the number the construction
+    actually divided by.  A report that re-derives it is a report that can disagree with
+    the book while both look right, and the question this exists to answer - "is sizing
+    adapting to each symbol's market?" - is exactly the one a disagreement would corrupt.
+    """
+    return (ewm_vol(close, halflife=params.vol_halflife) * math.sqrt(bars_per_year)).clip(lower=params.min_asset_vol)
+
+
 def build_weights(
     targets: pd.DataFrame, close: pd.DataFrame, bars_per_year: float, params: PortfolioParams
 ) -> pd.DataFrame:
     aligned = targets.reindex(index=close.index, columns=close.columns)
-    asset_vol = (ewm_vol(close, halflife=params.vol_halflife) * math.sqrt(bars_per_year)).clip(
-        lower=params.min_asset_vol
-    )
-    stage1 = (aligned.fillna(0.0) * (params.vol_target / asset_vol)).fillna(0.0)
+    stage1 = (aligned.fillna(0.0) * (params.vol_target / asset_vol(close, params, bars_per_year))).fillna(0.0)
     returns = close.pct_change()
     portfolio_vol = ewma_portfolio_vol(returns, stage1, params.covariance_halflife, bars_per_year)
     scalar = (params.vol_target / portfolio_vol.where(portfolio_vol > 1e-12)).clip(upper=params.max_scalar).fillna(0.0)

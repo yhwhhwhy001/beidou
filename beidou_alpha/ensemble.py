@@ -16,6 +16,10 @@ class TargetWeights:
     weights: dict[str, float]
     contributions: dict[str, dict[str, float]] = field(default_factory=dict)
     combined: dict[str, float] = field(default_factory=dict)
+    # Observability, not part of the trading contract (``beidou_live.ports.TargetSet`` does not
+    # require it): the stage-1 sizing divisor at this bar, so a report can say what each symbol's
+    # market was doing when the weight was chosen instead of re-deriving it from a separate archive.
+    asset_vol: dict[str, float] = field(default_factory=dict)
 
 
 def combine_targets(
@@ -54,6 +58,7 @@ def snapshot(
     weights: pd.DataFrame,
     combined: pd.DataFrame,
     targets_by_strategy: Mapping[str, pd.DataFrame],
+    asset_vol: pd.Series | None = None,
 ) -> TargetWeights:
     """Latest row of the model outputs with NaN treated as flat."""
     as_of = pd.Timestamp(weights.index[-1])
@@ -66,4 +71,7 @@ def snapshot(
             for strategy, frame in targets_by_strategy.items()
         },
         combined={str(symbol): float(value) for symbol, value in combined.iloc[-1].fillna(0.0).items()},
+        asset_vol={}
+        if asset_vol is None
+        else {str(symbol): float(value) for symbol, value in asset_vol.dropna().items()},
     )

@@ -16,7 +16,7 @@ import pandas as pd
 
 from beidou_alpha.ensemble import TargetWeights, combine_targets, snapshot
 from beidou_alpha.panel import Panel
-from beidou_alpha.portfolio import PortfolioParams, build_weights, combine_books
+from beidou_alpha.portfolio import PortfolioParams, asset_vol, build_weights, combine_books
 from beidou_alpha.registry import MAIN_BOOK, Registry, StrategyEntry
 from beidou_alpha.signals import get_signal, scores_to_targets
 
@@ -238,4 +238,8 @@ class AlphaModel:
         if len(panel.index) < self.warmup_bars:
             raise ValueError(f"need at least {self.warmup_bars} closed bars, got {len(panel.index)}")
         weights, combined, per_strategy = self.evaluate(panel, previous=previous, band=False)
-        return snapshot(weights, combined, per_strategy)
+        # The same panel and the same params the weights were just built from, so the recorded
+        # divisor cannot describe a different bar than the weight it explains.
+        return snapshot(
+            weights, combined, per_strategy, asset_vol(panel.close, self.portfolio, panel.bars_per_year).iloc[-1]
+        )

@@ -411,6 +411,14 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         # P13's ladder: the thresholds were fixed before the change went live, so this says what to do
         # rather than that something looks off.  It alerts; a human still runs the one-line change.
         alerts.append("risk budget ALERT: " + "; ".join(str(r) for r in budget.get("reasons") or []))
+    adaptation = data.get("risk_adaptation") or {}
+    if str(adaptation.get("status")) == "ALERT":
+        # M-015: the weights stopped taking each symbol's volatility back out.  Loud rather than
+        # quiet because this is the layer D-037 pointed at when it ruled the leverage layer inert.
+        alerts.append(
+            f"risk adaptation ALERT: compression {adaptation.get('compression'):.2f} > "
+            f"{adaptation.get('limit'):.2f}; per-symbol sizing is no longer vol-scaled"
+        )
     window = data.get("evidence_window") or {}
     if int(window.get("changes_7d") or 0) > 1:
         # the plan allowed one promotion per week and nothing ever counted them
