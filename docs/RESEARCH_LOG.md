@@ -358,6 +358,36 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 
 决策编号：本会话第六轮的"请求窗口 + hold 种子"与并行会话的"OOS 优先判定"撞号，前者改为 **D-022**，本次新规则为 **D-023**。
 
+## 2026-09-04 · 第七轮：策略与因子模块的有效性复检——DSR 方差退化、信号-构建分解、预登记假设的裁决
+
+分析文档：`docs/analysis/2026-09-04-round7-strategy-factor-deep-analysis.md`（deep-analysis L 级，Weak GO；证据 E-054 ～ E-066、KILL-037 ～ KILL-044）。工具改动在分支 `refactor/alpha-round7`。本轮与第六轮（beidou-88）及 D-019（beidou-d6）三个会话并行；本轮只在独立 worktree 改代码，只向 `reports/research/` 追加了 R1、R2 两次 validate（共 18 行账本）。
+
+### 预登记规则（先写后跑）
+
+R1 时点 universe 上重跑第二轮的 16 点网格（`DEFAULT_GRIDS["tsmom"]`），horizons 只在 ≥4/5 折另选且全样本 Sharpe 高 ≥0.10 时才改；R2 拥挤度 {0, 0.5}：≥3/5 折选中且 OOS 不低于对照才保留；R3 组合层平滑 4 点（`vol_halflife/covariance_halflife/no_trade_rel_band` = 48/96/0.25 基线、168/336/0.25、168/336/0.40、336/336/0.40）：OOS ≥ 基线 +0.05 且 OOS MDD 恶化 ≤1pp 且换手更低才替换；R4 因子消融只做描述，8 个 diagnose 配置连同 R3 的 3 个候选作为申报先验计入下一次 tsmom validate。
+
+### 结果
+
+| 项 | 数字 | 结论 |
+| --- | --- | --- |
+| R1 `tsmom-validation-20260903T174552Z`（146 币，共同索引 2021-03-02 起，48,275 bars） | WFO OOS **1.48**，折 [1.14, 0.74, 1.68, 1.94, 1.94]，5/5 折选 168/336/720；CPCV 1.58 / q05 1.09 / 负 0；**PBO 0.001**；成本 2× 1.35；**DSR p 0.40**（49 试验，pooled 年化 std 0.65，E[max] 1.48 vs 候选 1.58） | 按当时规则 FAIL。133239Z 的 p 0.0002 是账本 5 条同质行造成的方差退化（第四轮"保留项 1"预言成真） |
+| DSR 敏感性（候选 1.58） | pooled 零假设 n=16/35/49/60 → p 0.17/0.33/0.40/0.45；仅本轮网格 → 0.05/0.11/0.15/0.17；单个 Sharpe 估计的抽样噪声（年化 s.e. 0.43）→ **0.03/0.06/0.07/0.09** | 6 年小时数据下，"49 次尝试里的最好者"离零假设期望最大值只有 0.2～1.4 个标准误 |
+| 实盘配置（拥挤度关，1.7158，全索引） | 旧算法 n 68、p 0.25；账本按签名去重后 n 64、p 0.17；noise-null p 0.05 | 两种零假设下判定不同；账本去重不改变判定方向 |
+| R2 `175236Z` | 折选择 [0.5, 0, 0.5, 0.5, 0]；单配置 OOS 0.5 = 1.53 vs 0 = **1.65**；CPCV 12/15 路径选 0；全样本 1.64 vs **1.72** | **拥挤度修正关闭**（与 registry `crowding_window: 0` 一致） |
+| R3 | 基线 OOS 1.65 / MDD −13.5% / 换手 357 / 成本占比 14.6%；三候选 OOS 1.47 / 1.49 / 1.41，换手 302 / 226 / 228，成本占比最低 10.7% | **全部否定**：省下的成本小于晚缩仓的损失；P10 关闭 |
+| R4 消融（时点，score 覆盖 12%） | 横截面 IC 24/72/168/336/720h = +0.010/+0.020/+0.033/+0.040/+0.042（NW t 2.0/2.4/2.7/2.6/1.9）；**时序 IC 全部为负**（−0.12～−0.27）；只留动量分量 IC 不变；斜率项惰性；336h 单独最强（t 3.1）、720h 最弱 | edge 在方向不在幅度；三分量里只有动量方向有效 |
+| 信号-构建分解（实盘等效配置） | full **1.72**（MDD −13.5%，换手 357）；constant_long（纯构建）**0.09**（MDD −33%）；sign_only **1.68**（MDD −11.7%，换手 264，成本 11.7%）；long_only 0.60；short_only 0.64；eq_notional（无构建）0.43（MDD −36%）；两腿：多 +66% / Sharpe 0.66，空 +132% / 0.97；多头币-bar 45%；与等权多头基准相关 −0.18（基准 Sharpe 0.58、MDD −83%） | 构建是放大器不是来源；书不是 crypto beta；空头腿贡献更大 |
+
+### 决定与后续
+
+- 操作者（经 beidou-d6）选择了分析文档 §6.1 的 Option B：判定规则改为 OOS 优先（走前 OOS Sharpe + Newey-West t），DSR 只报告不否决，由 beidou-d6 以 D-020 预登记后实施并重出 tsmom 证据。本轮的评价：可辩护（走前 OOS 已内嵌折内选择、NW t 不依赖账本），代价是跨轮的家族级选择只剩账本计数可见；因此 pooled 与 noise-null 两个 DSR 必须继续出现在每份报告里（M-012），实盘 income 归因是最终裁决（M-010）。
+- **对 D-020 落地结果的复核（本轮的最后一步）。** 新证据 `tsmom-validation-20260903T181803Z`（网格 {crowding_window: [0, 72]}，时点 146 币）：走前 OOS **1.5445**、NW t **3.503**、5 折全正、CPCV 1.65 / q05 1.26 / 负比例 0、成本 2× 1.43、DSR p 0.257（信息性）→ PASS；`best_params` 的 `crowding_window: 0` 与 registry 参数一致，本轮新增的参数门通过。两点如实记录：
+  1. **两个 PASS 条件不独立。** NW t 与 `Sharpe × √年数` 的比值为 1.001（3.5027 vs 3.5005）——HAC 修正在小时级净收益上几乎不改变 t。因此在 5.14 年的 OOS 窗口上，"t ≥ 2.0"等价于"Sharpe ≥ 0.88"，比并列的"Sharpe ≥ 1.0"更松；只有当 OOS 窗口短于 4 年时 t 门才更严。D-020 在本样本上实际是一道门而不是两道。这不改变 tsmom 的判定（两项都远超门槛），但下一轮应把第二条件换成对**选择**敏感的量（按 horizon 家族分池的 DSR，或折间 Sharpe 最小值）。
+  2. **头条 OOS 属于折内混合配置。** 逐折选择是 [72, 0, 72, 72, 0]，所以 1.5445 是混合的走前估计；registry 实际运行的单一 `crowding_window: 0` 自身的走前 OOS 是 1.65（`175236Z`）。偏差方向保守，但 registry 注释宜写明这一点。
+- 本轮交付（D-024，分支 `refactor/alpha-round7`）：`research decompose`（信号 vs 构建归因，纯函数 `beidou_alpha/validation/decompose.py`）；账本按 (param_key, range, symbols) 去重、当前网格的精确重放不重复计费；`multiple_testing.sampling_variance` 与报告字段 `noise_null`；validate 报告记录 `grid/folds/min_train/purge/cpcv_groups/trial_sharpes/ledger`；registry 启动门比较 registry 参数与报告参数（KILL-027 从此可检出）。
+- 下一轮预登记假设（本轮**不**采用，看到结果后才想到的）：H-001 `sign_only`（目标 = sign(score)）；H-002 horizon 权重向 336h 倾斜；H-003 `momentum_mode: vol_scaled` 两点网格。每个计入 tsmom 账本。
+- 未解释的观察（KILL-042）：时序 IC 显著为负而策略赚钱，与"幅度反向、方向有效"一致，但机制未单独验证；下一轮用非重叠标签按符号分桶复核。
+
 ## 2026-09-04 · 第七轮补充：H-001（`conviction_mode: sign`）按预登记规则执行
 
 规则在运行之前就写死在上一节与 `docs/analysis/2026-09-04-round7-strategy-factor-deep-analysis.md` 里，本节不修改它：**时点走前对照，样本外 Sharpe ≥ 基线 − 0.05、样本外 MDD 改善、换手更低，三条同时满足才采用**；计入 tsmom 账本。申报先验 38 = 27（既有）+ R3 的 3 个组合层候选 + R4 的 8 个诊断配置，按上一节的承诺照付。
@@ -382,13 +412,15 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 - 那为什么收益相同、成本更低，Sharpe 却略低？因为 `sign` 把每个可执行仓位放到满仓，平均敞口从 0.383 升到 0.445，波动率目标之后仍留下略高的实现波动。它买到的是更低的换手与更浅的回撤，付出的是略粗的仓位粒度。
 - 最差月份也更轻：score 的 −4.94% / −4.92% / −4.87% 对 sign 的 −4.63% / −4.13% / −3.95%。
 
-证据报告：`tsmom-validation-20260904T020211Z`（2 点网格，走前 OOS 1.61、DSR p 0.27、PBO 0.75、**PASS**；`best_params` 按全样本 Sharpe 选中 `score`）与 `tsmom-validation-20260904T020459Z`（`sign` 单配置，走前 OOS 1.6026、t 3.686、5 折全正、CPCV 1.68 / q05 1.23 / 负比例 0、成本 2× 1.47、DSR p 0.30、noise-null p 0.06，**PASS**）。后者是**同配置同数据的精确重放**，账本因此没有重复计费：报告的 `ledger` 段显示 `ledger_rows 44 / ledger_trials 40 / replayed_rows 1`。这是 D-021 去重规则第一次在真实账本上生效。
+证据报告：`tsmom-validation-20260904T020211Z`（2 点网格，走前 OOS 1.61、DSR p 0.27、PBO 0.75、**PASS**；`best_params` 按全样本 Sharpe 选中 `score`）与 `tsmom-validation-20260904T020459Z`（`sign` 单配置，走前 OOS 1.6026、t 3.686、5 折全正、CPCV 1.68 / q05 1.23 / 负比例 0、成本 2× 1.47、DSR p 0.30、noise-null p 0.06，**PASS**）。后者是**同配置同数据的精确重放**，账本因此没有重复计费：报告的 `ledger` 段显示 `ledger_rows 44 / ledger_trials 40 / replayed_rows 1`。这是 D-024 去重规则第一次在真实账本上生效。
 
 **两个操作性发现（本节的副产品）：**
 
-1. `research validate` 的 `best_params` 按**全样本 Sharpe**选，所以一个按预登记规则胜出、但全样本 Sharpe 略低的候选永远不会成为网格报告的 `best_params`。配合 D-021 的"registry 参数必须等于报告 `best_params`"启动门，采用这类候选**必须**另出一份单配置报告——这正是 020459Z 的用途。若以后这种情况变多，应让 `validate` 支持按预登记规则而不是全样本 Sharpe 选 best。
+1. `research validate` 的 `best_params` 按**全样本 Sharpe**选，所以一个按预登记规则胜出、但全样本 Sharpe 略低的候选永远不会成为网格报告的 `best_params`。配合已上线的"registry 参数必须等于报告 `best_params`"启动门（D-023），采用这类候选**必须**另出一份单配置报告——这正是 020459Z 的用途。若以后这种情况变多，应让 `validate` 支持按预登记规则而不是全样本 Sharpe 选 best。
 2. `sign` 抬高平均敞口（0.383 → 0.445）。gross 上限 2.0 与单币 15% 都没有被顶到，但这是采用前该看一眼的方向性变化。
 
-**结论与处置**：规则判 ADOPT，证据支持"幅度无信息"，收益不变、回撤与换手更好。这是一个 registry 变更，涉及实盘，**由操作者决定**；本会话不改 `config/alpha_registry.yaml`、不重启实盘。若采用，evidence 指向 `020459Z`，registry 加 `conviction_mode: sign`，并按 D-021 的参数门校验；实盘裁决仍是 M-010 的 30 天 income 归因，另加一条：换手若没有相应下降，说明实盘与回测的执行语义又出现了偏差。
+**结论与处置**：规则判 ADOPT，证据支持"幅度无信息"，收益不变、回撤与换手更好。**操作者决定采用**：registry 的 tsmom 加 `conviction_mode: sign`，evidence 指向 `020459Z`，由主线会话写入并通过启动门（D-023 的参数比对）。落地前核对过：实盘入口 `AlphaModel.targets()` 在真实池子上跑通且 tsmom 贡献只取 ±1；warmup 722、请求窗口 1442 根 bar 不变；时点全历史 gross 最高 1.75（上限 2.0 从未触顶），单币 15% 上限触顶率 0.24% 对 `score` 的 0.01%。
 
-> 合并范围说明（2026-09-04，操作者决定采纳后由主线会话合并）：本节描述的实验来自 `refactor/alpha-round7`，**只有 `conviction_mode` 信号改动、其测试与两份证据报告被合并进主线**；同分支上的 D-021 工具链（`research decompose`、账本去重、noise-null DSR、报告可复现字段）与该轮的分析文档仍在分支上，由其作者整体合并。因此本节提到的 `ledger_rows / replayed_rows` 字段要在那份报告里看，主线的 `validate` 暂时还不产出它们。
+实盘裁决：M-010 的 30 天 income 归因不变，另加一条证伪条件——**换手必须下降约四分之一**；若没有，问题是实盘与回测的执行语义又出现偏差（E-042 那类），不是信号。
+
+> 合并范围说明（2026-09-04，操作者决定采纳后由主线会话合并）：本节描述的实验来自 `refactor/alpha-round7`，**只有 `conviction_mode` 信号改动、其测试与两份证据报告被合并进主线**；同分支上的 D-024 工具链（`research decompose`、账本去重、noise-null DSR、报告可复现字段）与该轮的分析文档仍在分支上，由其作者整体合并。因此本节提到的 `ledger_rows / replayed_rows` 字段要在那份报告里看，主线的 `validate` 暂时还不产出它们。

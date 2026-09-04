@@ -85,6 +85,19 @@ def deflated_sharpe_ratio(
     return DeflatedSharpe(sharpe_period, sr0, dsr, 1.0 - dsr, n_trials, n_obs)
 
 
+def sampling_variance(sharpe_period: float, n_obs: int, skewness: float = 0.0, kurtosis: float = 3.0) -> float:
+    """Var[SR-hat] of one per-period Sharpe estimate (Bailey & López de Prado 2012): the null's noise floor.
+
+    The verdict deflates with the *pooled empirical* variance of all trials (the
+    ledger).  When trials are heterogeneous that overstates the null; this
+    sampling variance understates it.  Both are reported (``noise_null`` is
+    informational only; D-024).
+    """
+    if n_obs < 2:
+        return 0.0
+    return max(0.0, (1.0 - skewness * sharpe_period + (kurtosis - 1.0) / 4.0 * sharpe_period**2) / (n_obs - 1))
+
+
 def sharpe_per_period(returns: np.ndarray) -> float | None:
     values = np.asarray(returns, dtype=float)
     values = values[np.isfinite(values)]
@@ -189,11 +202,21 @@ def multiple_testing_report(
     n_trials = pooled_n_trials if pooled_n_trials is not None else (len(finite) or 1) + max(0, int(prior_trials))
     candidate_sharpe = sharpe_per_period(candidate_returns)
     skew, kurt = moments(candidate_returns)
+    n_obs = int(np.isfinite(candidate_returns).sum())
     dsr = deflated_sharpe_ratio(
         candidate_sharpe or 0.0,
         n_trials=max(1, int(n_trials)),
         sharpe_variance=sharpe_variance,
-        n_obs=int(np.isfinite(candidate_returns).sum()),
+        n_obs=n_obs,
+        skewness=skew,
+        kurtosis=kurt,
+    )
+    noise_variance = sampling_variance(candidate_sharpe or 0.0, n_obs, skew, kurt)
+    noise = deflated_sharpe_ratio(
+        candidate_sharpe or 0.0,
+        n_trials=max(1, int(n_trials)),
+        sharpe_variance=noise_variance,
+        n_obs=n_obs,
         skewness=skew,
         kurtosis=kurt,
     )
@@ -211,4 +234,9 @@ def multiple_testing_report(
         "pbo_combinations": None if pbo is None else pbo.n_combinations,
         "degradation_slope": None if pbo is None else pbo.degradation_slope,
         "prob_oos_loss": None if pbo is None else pbo.prob_oos_loss,
+        "noise_null": {
+            "sharpe_variance_period": noise_variance,
+            "expected_max_sharpe_annual": noise.benchmark_sharpe * math.sqrt(bars_per_year),
+            "dsr_p_value": noise.p_value,
+        },
     }

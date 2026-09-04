@@ -27,6 +27,7 @@ from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
+from beidou_alpha.validation.decompose import decompose_book
 from beidou_alpha.validation.labels import forward_returns
 from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, parse_ledger
 from beidou_alpha.validation.metrics import (
@@ -383,7 +384,13 @@ def research_validate(
     period_sharpes = {
         key: (None if value is None else value / math.sqrt(bpy)) for key, value in full_sharpes_raw.items()
     }
-    pooled = dsr_inputs(prior_records, period_sharpes, bpy, manual_prior_trials=prior_trials)
+    pooled = dsr_inputs(
+        prior_records,
+        period_sharpes,
+        bpy,
+        manual_prior_trials=prior_trials,
+        current_range=(str(common_index[0]), str(common_index[-1]), len(panel.symbols)),
+    )
     mt = multiple_testing_report(
         nets[best_key].to_numpy(dtype=float),
         matrix,
@@ -426,6 +433,17 @@ def research_validate(
         "costs": cost.__dict__,
         "execution": execution,
         "grid_size": len(combos),
+        "grid": json.loads(grid) if grid else DEFAULT_GRIDS.get(strategy, {}),
+        "folds": folds,
+        "min_train": min_train,
+        "purge": purge,
+        "cpcv_groups": cpcv_groups,
+        "prior_trials_declared": prior_trials,
+        "trial_sharpes": {key: full_sharpes_raw[key] for key in nets},
+        "ledger": {
+            key: pooled[key]
+            for key in ("ledger_trials", "ledger_rows", "duplicate_rows", "replayed_rows", "pooled_sharpes")
+        },
         "best_params": params_by_key[best_key],
         "full_sample": results[best_key].summary(),
         "walk_forward": wf_summary,
@@ -502,6 +520,7 @@ __all__ = [
     "research_backtest",
     "research_book",
     "research_correlate",
+    "research_decompose",
     "research_diagnose",
     "research_list",
     "research_overlay",
@@ -1374,3 +1393,76 @@ def research_book(
 def _grid_of(grid: Mapping[str, list[Any]]) -> list[dict[str, Any]]:
     keys = sorted(grid)
     return [dict(zip(keys, values, strict=True)) for values in itertools.product(*(grid[key] for key in keys))]
+
+
+@research.command("decompose")
+@_common_options
+@click.option("--folds", default=5, show_default=True)
+@click.option("--min-train", default=4000, show_default=True)
+@click.option("--purge", default=50, show_default=True)
+def research_decompose(
+    strategy: str,
+    params: str,
+    root: str,
+    symbols: str,
+    interval: str,
+    start: str | None,
+    end: str | None,
+    profile: str,
+    registry_path: str,
+    costs_path: str,
+    execution: str,
+    funding: bool,
+    out: str,
+    min_history: int | None,
+    universe_mode: str,
+    min_tenure: int,
+    folds: int,
+    min_train: int,
+    purge: int,
+) -> None:
+    """Signal-vs-construction attribution (D-024): the same pipeline on controlled convictions; not a ledger trial."""
+    del execution  # the decomposition uses the open_to_close convention of the validation reports
+    profile_payload = load_yaml(profile)
+    entry = _entry(strategy, registry_path, params)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    panel = _load(root, chosen, interval, start, end, funding)
+    membership = _membership(root, universe_mode, panel, min_tenure)
+    model = _model(entry, profile_payload, interval, min_history)
+    cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    payload = decompose_book(model, panel, cost, membership=membership, folds=folds, min_train=min_train, purge=purge)
+    report: dict[str, Any] = {
+        "kind": "decompose",
+        "strategy": strategy,
+        "params": entry.params,
+        "portfolio": model.portfolio.__dict__,
+        "interval": interval,
+        "universe_mode": universe_mode,
+        "symbols": panel.symbols,
+        "costs": cost.__dict__,
+        **payload,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    lines = [
+        f"{name}: sharpe={_fmt(row['full_sharpe'])} oos={_fmt(row['oos_sharpe'])} net={row['net_return']:.3f} "
+        f"mdd={row['max_drawdown']:.3f} turnover={row['turnover_units']:.0f} "
+        f"exposure={row['average_absolute_exposure']:.3f} corr_full={_fmt(row['correlation_with_full'])} "
+        f"folds={[round(x, 2) if x is not None else None for x in row['fold_sharpes']]}"
+        for name, row in payload["variants"].items()
+    ]
+    markdown = render_markdown(
+        f"Decomposition: {strategy}",
+        [
+            ("Range", payload["range"]),
+            ("Params", entry.params),
+            ("Variants (same portfolio construction, different convictions)", lines),
+            ("Increments (Sharpe)", payload["increments"]),
+            ("Legs of the full book", payload["legs"]),
+            ("Benchmark (equal-weight long, zero cost)", payload["benchmark"]),
+        ],
+    )
+    path, digest = _write(out, f"decompose-{strategy}-{_stamp()}", report, markdown)
+    for line in lines:
+        click.echo(line)
+    click.echo(f"increments: {json.dumps(payload['increments'])}")
+    click.echo(f"report: {path} sha256={digest}")
