@@ -248,6 +248,49 @@ def probe_correlation(store: StateStore, probes: Sequence[ProbeParams], *, since
     return out
 
 
+def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[str, Any]:
+    """M-007: peak initial-margin usage and the count of venue rejections, by code.
+
+    The plan set two numbers - usage at or below 50% of equity, and zero -2019 (insufficient margin)
+    rejections - and neither was ever computed.  The per-cycle ``margin`` block existed but no series was
+    taken from it, and order rejections collapsed into a single REJECTED status, so a -2019 could not be
+    told apart from a lot-size error.
+    """
+    peak = 0.0
+    peak_bar: int | None = None
+    for row in _cycles(store):
+        bar_ms = int(row.get("bar_open_ms") or 0)
+        if since_ms is not None and bar_ms < since_ms:
+            continue
+        margin = row.get("margin") or {}
+        equity = row.get("equity")
+        try:
+            needed = float(margin.get("needed_margin") or 0.0)
+            usage = needed / float(equity) if equity else 0.0
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        if usage > peak:
+            peak, peak_bar = usage, bar_ms
+    rejections: dict[str, int] = {}
+    for row in store.read_jsonl(store.trades_path):
+        bar = row.get("bar_open_ms")
+        if since_ms is not None and isinstance(bar, int | float) and int(bar) < since_ms:
+            continue
+        error = str(row.get("error") or "")
+        if not error or str(row.get("status")) == "FILLED":
+            continue
+        code = error.split(":", 1)[0].strip() or "unknown"
+        rejections[code] = rejections.get(code, 0) + 1
+    return {
+        "peak_margin_usage": peak,
+        "peak_at_bar_ms": peak_bar,
+        "budget": 0.50,
+        "over_budget": peak > 0.50,
+        "rejections": rejections,
+        "insufficient_margin": sum(count for code, count in rejections.items() if "-2019" in code),
+    }
+
+
 def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
     """M-005 and M-006: the two things that change the book without a signal changing its mind."""
     rows = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
@@ -384,8 +427,83 @@ def daily_payload(
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
+        "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
     }
+
+
+def weekly_payload(store: StateStore, day: str, *, expectations: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The plan's weekly research report, which was listed as a deliverable and never built.
+
+    Its job is not to add numbers but to put the week's decisions next to the week's evidence: how many
+    days the current construction has actually run, what each strategy earned by attributed income, how
+    many configurations were charged to the ledger, and whether the promotion cadence was respected.  A
+    week is the unit because that is the cadence the plan set for promotions.
+    """
+    end = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)
+    since_ms = int((end - timedelta(days=7)).timestamp() * 1000)
+    cycles = [row for row in _cycles(store) if int(row.get("bar_open_ms") or 0) >= since_ms]
+    window = evidence_window(store)
+    equities = [float(row["equity"]) for row in cycles if row.get("equity") is not None]
+    income = income_drift(store, expectations or {}, equity=equities[-1] if equities else None, since_ms=since_ms)
+    constructions = sorted({str(row.get("construction")) for row in cycles if row.get("construction")})
+    return {
+        "week_ending": day,
+        "since_ms": since_ms,
+        "cycles": len(cycles),
+        "skipped_cycles": sum(1 for row in cycles if row.get("skip")),
+        "equity_start": equities[0] if equities else None,
+        "equity_end": equities[-1] if equities else None,
+        "constructions_seen": constructions,
+        "promotions": max(0, len(constructions) - 1),
+        "promotion_budget": 1,
+        "evidence_window": window,
+        "income": income,
+        "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
+        "margin": margin_and_rejections(store, since_ms=since_ms),
+    }
+
+
+def weekly_markdown(payload: dict[str, Any]) -> str:
+    income_rows = (payload.get("income") or {}).get("by_strategy") or {}
+    return render_markdown(
+        f"Weekly report, week ending {payload['week_ending']}",
+        [
+            (
+                "Cycles",
+                {key: payload.get(key) for key in ("cycles", "skipped_cycles", "equity_start", "equity_end")},
+            ),
+            (
+                "Promotions this week (the plan allows one)",
+                {
+                    "constructions_seen": len(payload.get("constructions_seen") or []),
+                    "promotions": payload.get("promotions"),
+                    "within_budget": int(payload.get("promotions") or 0) <= int(payload.get("promotion_budget") or 1),
+                    "current_construction": (payload.get("evidence_window") or {}).get("construction"),
+                    "bars_under_it": (payload.get("evidence_window") or {}).get("bars"),
+                },
+            ),
+            (
+                "Income by strategy (M-002/M-010)",
+                {
+                    strategy: (
+                        f"pnl={_fmt_num(row.get('pnl'))} sharpe={_fmt_num(row.get('realised_sharpe'))} "
+                        f"vs {_fmt_num(row.get('expected_sharpe'))} over {_fmt_num(row.get('days'))}d"
+                    )
+                    for strategy, row in income_rows.items()
+                }
+                or {"none": 0},
+            ),
+            ("Legs (M-008)", (payload.get("legs") or {}).get("pnl") or {"none": 0}),
+            (
+                "Margin (M-007)",
+                {
+                    "peak_usage": _fmt_pct((payload.get("margin") or {}).get("peak_margin_usage")),
+                    "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),
+                },
+            ),
+        ],
+    )
 
 
 def daily_markdown(payload: dict[str, Any]) -> str:
@@ -458,6 +576,16 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     for pair, row in (payload.get("probe_correlation") or {}).items()
                 }
                 or {"none": 0},
+            ),
+            (
+                "Margin and rejections (M-007)",
+                {
+                    "peak_margin_usage": _fmt_pct((payload.get("margin") or {}).get("peak_margin_usage")),
+                    "budget": _fmt_pct((payload.get("margin") or {}).get("budget")),
+                    "over_budget": (payload.get("margin") or {}).get("over_budget"),
+                    "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),
+                    "rejections_by_code": json_dumps((payload.get("margin") or {}).get("rejections") or {}),
+                },
             ),
             (
                 "Exits and pool (M-005 / M-006)",

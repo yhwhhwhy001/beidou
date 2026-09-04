@@ -27,14 +27,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share": 0.
 # immediately at 3,043, which is the ratchet doing its job on its author: the remediation itself - the
 # per-strategy income drift, the leg split, the probe correlation, the exit and pool sections - added
 # about 270 lines to that package.  Raising a ceiling is allowed only in the commit that says why, and
-# this is that sentence.  The gap to the plan's 2,000 is now 1,043 lines and is an open decision.
+# this is that sentence.  It then failed a second time on beidou_alpha, for the sign-bucketed IC that
+# closed KILL-042.  Final measurement after the whole remediation: alpha 3,654, live 3,171, cli 2,276.
+# The gap to the plan's 2,000 for beidou_live is 1,171 lines, and the alpha share is 34% against a 60%
+# target.  Both are open operator decisions, recorded rather than redefined.
 CEILING = {
-    "beidou_alpha": 3_650,
-    "beidou_live": 3_060,
-    "beidou_cli": 2_260,
-    "beidou_data": 1_080,
-    "beidou_exchange": 520,
-    "beidou_shared": 290,
+    "beidou_alpha": 3_654,
+    "beidou_live": 3_171,
+    "beidou_cli": 2_276,
+    "beidou_data": 1_053,
+    "beidou_exchange": 489,
+    "beidou_shared": 267,
 }
 
 

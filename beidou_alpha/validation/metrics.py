@@ -143,6 +143,59 @@ def icir(ic_series: pd.Series) -> dict[str, float | None]:
     return {"ic_mean": mean, "ic_std": std, "icir": mean / std if std > 0 else None, "n": len(values)}
 
 
+def sign_bucketed_ic(
+    scores: pd.DataFrame,
+    forward: pd.DataFrame,
+    horizon: int,
+    *,
+    threshold: float = 0.0,
+    method: CorrMethod = "spearman",
+) -> dict[str, Any]:
+    """KILL-042: is a negative time-series IC an artefact, or does the sign earn while the magnitude does not?
+
+    Round 1 measured time-series IC for tsmom at -0.12 to -0.27 across horizons while the book made money,
+    and no round explained it.  Round 7 supplied the candidate mechanism without testing it directly:
+    ``sign_only`` reproduces the full book (Sharpe 1.68 against 1.72) and the paired per-bar return
+    difference has a t of -0.05, so the magnitude carries no return information.  If that is right, then
+    the rank correlation - which is dominated by magnitude - can be negative while the conditional mean
+    return either side of the threshold has the sign the book trades on.
+
+    Labels are sampled every ``horizon`` bars so overlapping windows cannot inflate anything (D-011).
+    Returns the overall IC, the IC computed inside each sign bucket, and the mean forward return in each
+    bucket, which is the quantity the book actually monetises.
+    """
+    aligned_scores, aligned_forward = scores.align(forward, join="inner")
+    sampled_scores = aligned_scores.iloc[::horizon]
+    sampled_forward = aligned_forward.iloc[::horizon]
+    score_values = sampled_scores.to_numpy(dtype=float).ravel()
+    return_values = sampled_forward.to_numpy(dtype=float).ravel()
+    mask = np.isfinite(score_values) & np.isfinite(return_values)
+    score_values, return_values = score_values[mask], return_values[mask]
+    long_side = score_values >= threshold if threshold > 0 else score_values > 0
+    short_side = score_values <= -threshold if threshold > 0 else score_values < 0
+
+    def bucket(selector: np.ndarray) -> dict[str, Any]:
+        count = int(selector.sum())
+        if count < 3:
+            return {"n": count, "ic": None, "mean_forward_return": None, "hit_rate": None}
+        returns = return_values[selector]
+        return {
+            "n": count,
+            "ic": correlation(score_values[selector], returns, method),
+            "mean_forward_return": float(returns.mean()),
+            "hit_rate": float((returns > 0).mean()),
+        }
+
+    return {
+        "horizon": horizon,
+        "threshold": threshold,
+        "samples": int(score_values.size),
+        "overall_ic": correlation(score_values, return_values, method),
+        "long": bucket(long_side),
+        "short": bucket(short_side),
+    }
+
+
 def newey_west_tstat(series: pd.Series | np.ndarray, max_lags: int | None = None) -> dict[str, float | None]:
     """t-statistic of the mean with Newey-West (Bartlett) HAC variance; the fix for overlapping labels (D-011)."""
     values = np.asarray(series, dtype=float)

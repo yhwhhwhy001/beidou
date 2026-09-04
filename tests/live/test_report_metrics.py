@@ -16,7 +16,10 @@ from beidou_live.reports import (
     exit_and_pool_events,
     income_drift,
     leg_split,
+    margin_and_rejections,
     probe_correlation,
+    weekly_markdown,
+    weekly_payload,
 )
 from beidou_live.state import StateStore
 
@@ -179,3 +182,48 @@ def test_daily_payload_carries_every_new_section(tmp_path: Path) -> None:
     assert payload["legs"]["pnl"]["long"] == pytest.approx(3.0)
     assert json.dumps(payload, default=str)
     assert math.isfinite(payload["legs"]["pnl"]["long"])
+
+
+def test_margin_peak_and_rejections_are_counted(tmp_path: Path) -> None:
+    """M-007: the margin block existed and no series was ever taken from it; -2019 was indistinguishable."""
+    cycles = [
+        _cycle(0, equity=10_000.0, margin={"needed_margin": 500.0}),
+        _cycle(1, equity=10_000.0, margin={"needed_margin": 6_000.0}),
+        _cycle(2, equity=10_000.0, margin={"needed_margin": 100.0}),
+    ]
+    store = _store(tmp_path, cycles)
+    for row in (
+        {"bar_open_ms": BASE + HOUR, "status": "REJECTED", "error": "-2019: Margin is insufficient"},
+        {"bar_open_ms": BASE + HOUR, "status": "REJECTED", "error": "-1111: Precision is over the maximum"},
+        {"bar_open_ms": BASE + HOUR, "status": "FILLED", "error": "already submitted for this bar"},
+    ):
+        store.append_trade(row)
+    result = margin_and_rejections(store, since_ms=None)
+    assert result["peak_margin_usage"] == pytest.approx(0.6) and result["over_budget"] is True
+    assert result["peak_at_bar_ms"] == BASE + HOUR
+    assert result["insufficient_margin"] == 1, "a -2019 is distinguishable from a lot-size error"
+    assert result["rejections"]["-1111"] == 1
+    assert "already submitted for this bar" not in result["rejections"], "a filled order is not a rejection"
+
+
+def test_weekly_report_puts_the_weeks_promotions_next_to_the_weeks_evidence(tmp_path: Path) -> None:
+    """The plan listed a weekly research report as a deliverable and it was never built."""
+    day = _day_of_bar(BASE + 3 * 24 * HOUR)
+    cycles = [_cycle(i, construction="a" if i < 40 else "b") for i in range(80)]
+    attributions = [{"bar_open_ms": BASE + i * HOUR, "by_strategy": {"tsmom": 0.5}} for i in range(80)]
+    payload = weekly_payload(_store(tmp_path, cycles, attributions), day, expectations={"tsmom": {"oos_sharpe": 1.7}})
+    assert payload["cycles"] == 80 and payload["promotions"] == 1
+    assert payload["promotion_budget"] == 1 and len(payload["constructions_seen"]) == 2
+    assert payload["evidence_window"]["construction"] == "b"
+    assert "tsmom" in payload["income"]["by_strategy"]
+    markdown = weekly_markdown(payload)
+    assert "Promotions this week" in markdown and "M-007" in markdown
+
+
+def test_weekly_report_flags_a_week_that_broke_the_promotion_budget(tmp_path: Path) -> None:
+    """Two promotions landed on 2026-09-04 and nothing said so."""
+    day = _day_of_bar(BASE)
+    cycles = [_cycle(0, construction="a"), _cycle(1, construction="b"), _cycle(2, construction="c")]
+    payload = weekly_payload(_store(tmp_path, cycles), day)
+    assert payload["promotions"] == 2 > payload["promotion_budget"]
+    assert "within_budget | no" in weekly_markdown(payload)

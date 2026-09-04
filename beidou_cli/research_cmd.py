@@ -36,6 +36,7 @@ from beidou_alpha.validation.metrics import (
     max_drawdown,
     newey_west_tstat,
     sharpe,
+    sign_bucketed_ic,
     time_series_ic,
     yearly_breakdown,
 )
@@ -287,6 +288,10 @@ def _cost_flag(cost_share: float | None) -> str:
     if cost_share is None or cost_share <= COST_SHARE_LIMIT:
         return ""
     return f"  ** COSTS EAT {cost_share:.0%} OF GROSS (> {COST_SHARE_LIMIT:.0%}, KILL-013) **"
+
+
+def _fmt_pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{100.0 * value:+.3f}%"
 
 
 def _echo_summary(summary: dict[str, Any], benchmark: dict[str, Any] | None = None) -> None:
@@ -639,6 +644,19 @@ def research_diagnose(
         click.echo(
             f"{horizon:>7} | {ts_mean:+.4f} | {float(xs.mean()) if len(xs) else float('nan'):+.4f} | "
             f"{_fmt(nw['t_stat'])} | {_fmt(nw['p_value'])}"
+        )
+    # KILL-042: a negative time-series IC alongside a profitable book.  Non-overlapping labels, split by
+    # the sign of the score, so "the magnitude is uninformative" and "the signal is wrong" are separable.
+    click.echo("horizon | non-overlapping IC | long bucket: n / IC / mean fwd | short bucket: n / IC / mean fwd")
+    for horizon in [int(h) for h in horizons.split(",") if h.strip()]:
+        block = sign_bucketed_ic(
+            scores, forward_returns(panel.close, horizon), horizon, threshold=entry.entry_threshold
+        )
+        long_side, short_side = block["long"], block["short"]
+        click.echo(
+            f"{horizon:>7} | {_fmt(block['overall_ic'])} | "
+            f"{long_side['n']} / {_fmt(long_side['ic'])} / {_fmt_pct(long_side['mean_forward_return'])} | "
+            f"{short_side['n']} / {_fmt(short_side['ic'])} / {_fmt_pct(short_side['mean_forward_return'])}"
         )
     targets = scores_to_targets(scores, entry.entry_threshold, hold=True)
     flips = int((targets.fillna(0.0).apply(np.sign).diff().abs() > 0).sum().sum())

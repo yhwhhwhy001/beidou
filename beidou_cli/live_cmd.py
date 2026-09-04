@@ -34,7 +34,13 @@ from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
-from beidou_live.reports import daily_markdown, daily_payload, expectations_from_evidence
+from beidou_live.reports import (
+    daily_markdown,
+    daily_payload,
+    expectations_from_evidence,
+    weekly_markdown,
+    weekly_payload,
+)
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
 from beidou_live.verify import cycle_clock, last_cycle, last_recorded_as_of_ms, verify_live_targets
@@ -408,4 +414,40 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         raise SystemExit(1)
 
 
-__all__ = ["live_flatten", "live_kill_switch", "live_run", "live_status", "live_verify", "report_daily"]
+@report.command("weekly")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
+@click.option("--date", "day", default=None, help="YYYY-MM-DD, the last day of the week (default: today UTC)")
+@click.option("--out", default=None, help="directory for the report (default: profile paths.reports_dir/weekly)")
+def report_weekly(profile: str, paper: bool, day: str | None, out: str | None) -> None:
+    """The plan's weekly research report: the week's decisions next to the week's evidence."""
+    payload = load_profile(profile)
+    store = _store_for(payload, paper)
+    chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
+    registry = load_registry(payload.get("registry", "config/alpha_registry.yaml"))
+    evidence: dict[str, Any] = {}
+    for entry in registry.enabled:
+        report_path = Path(str((entry.evidence or {}).get("report", "")))
+        if report_path.exists():
+            evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
+    data = weekly_payload(store, chosen, expectations=expectations_from_evidence(evidence))
+    markdown = weekly_markdown(data)
+    directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "weekly")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{chosen}.md").write_text(markdown, encoding="utf-8")
+    (directory / f"{chosen}.json").write_text(
+        json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
+    )
+    click.echo(markdown)
+    click.echo(f"written {directory / f'{chosen}.md'}")
+
+
+__all__ = [
+    "live_flatten",
+    "live_kill_switch",
+    "live_run",
+    "live_status",
+    "live_verify",
+    "report_daily",
+    "report_weekly",
+]

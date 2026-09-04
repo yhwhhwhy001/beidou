@@ -113,6 +113,8 @@ Causal Chain：表层 = 拥挤度修正无效果 / 换手偏高 / 权益跳变�
 
 ## 7. Phase 7 · Adversarial Review
 
+> 编号冲突说明（2026-09-04 审计）：本文档的 KILL-030 / KILL-031 与 `2026-09-03-exits-pool-sizing.md` 的同号条目是**不同命题**。此后本文档的两条记作 **KILL-030b / KILL-031b**。同样地，本文档把 `beidou live verify` 的复现指标从 M-009 改号为 M-011，而 `2026-09-03-exits-pool-sizing.md` 的 M-009 指的是探针书的 30 天归因——两者不同，代码里已统一用 M-011（`beidou_live/verify.py`），2026-09-04 复核时无残留的 M-009 字样。
+
 独立性：同一 Agent；冻结输入 = E-040～E-053 与 §6 的方案表；反方只引用证据 ID。
 
 | Kill | 攻击命题 | 关联 | 严重度 | 状态 / 关闭条件 |

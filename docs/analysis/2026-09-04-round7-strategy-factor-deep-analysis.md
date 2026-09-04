@@ -134,8 +134,8 @@ Impact Radius：R0 研究命令（纯增量）；R2 `registry_evidence_problems`
 | ID | 假设 | 先验 | 规则（先写后跑） | 结果 |
 | --- | --- | --- | --- | --- |
 | H-001 | `sign_only`：目标 = sign(score)（\|score\| ≥ threshold），即去掉幅度 | E-058：Sharpe −0.04（噪声）、MDD −1.8pp、换手 −26%、成本 −3pp；E-057 时序 IC 为负说明幅度反向 | 时点走前对照：OOS ≥ 基线 −0.05 且 MDD 改善 且换手更低 → 采用；计 1 次试验 | **已执行（2026-09-04，见 RESEARCH_LOG 第七轮补充与 E-068）：规则判 ADOPT**；实现为 `conviction_mode: sign`，证据 `020459Z`。是否写入 registry 由操作者决定 |
-| H-002 | horizon 权重向 336h 倾斜（如 0.2/0.5/0.3） | E-057：336h IC 最强、720h 最弱 | 单点对照，计 1 次试验；OOS ≥ 基线 +0.05 才采用 | 未执行 |
-| H-003 | `momentum_mode: vol_scaled`（P11 ii，beidou-88 已实现） | E-043 | 2 点网格；同上 | 未执行 |
+| H-002 | horizon 权重向 336h 倾斜（如 0.2/0.5/0.3） | E-057：336h IC 最强、720h 最弱 | 单点对照，计 1 次试验；OOS ≥ 基线 +0.05 才采用 | **已执行 2026-09-04：否决**（OOS 1.4619 vs 基线 1.7140，5/5 折选对照） |
+| H-003 | `momentum_mode: vol_scaled`（P11 ii，beidou-88 已实现） | E-043 | 2 点网格；同上 | **已执行 2026-09-04：否决**（OOS 1.4753，4/5 折选 fixed） |
 
 ### 6.4 Won't（Scope Firewall）
 
@@ -150,13 +150,13 @@ Impact Radius：R0 研究命令（纯增量）；R2 `registry_evidence_problems`
 | Kill | 攻击命题 | 关联 | 严重度 | 状态 / 关闭条件 |
 | --- | --- | --- | --- | --- |
 | **KILL-037** | 实盘唯一策略的"PASS"是方差退化的产物；诚实重算 FAIL；当前没有可引用的 PASS 报告（Evidence Prosecutor） | C-019、C-020 | **P0** | **CLOSED**：四个关闭条件全部满足——D-020 规则先写入 RESEARCH_LOG 再重跑（`a4ee852`）；新报告 E-067 的 `best_params` 与 registry 参数逐项一致；DSR 仍在报告中（p 0.257）；M-010 实盘裁决保留。残余风险记录在 KILL-045：这是看到 FAIL 之后改的规则，跨轮的家族级选择从此只剩账本计数可见 |
-| **KILL-045** | D-020 的两个 PASS 条件不独立：NW t 与 `Sharpe × √年数` 的比值是 1.001（E-067），所以在 5.14 年的 OOS 窗口上"t ≥ 2.0"等价于"Sharpe ≥ 0.88"，比并列的"Sharpe ≥ 1.0"更松——看起来是两道门，实际只有一道（Evidence Prosecutor） | D-020 | P1 | **OPEN（信息性）**：不改变 tsmom 的判定（1.54 与 3.50 都远超门槛），但规则的保护力弱于表面。建议下一轮把第二个门改成对**选择**敏感的量（例如按 horizon 家族分池的 DSR、或折间 Sharpe 的最小值），并在 RESEARCH_LOG 里记下本条；在此之前不要把"两道独立门"当作 D-020 的辩护理由 |
+| **KILL-045** | D-020 的两个 PASS 条件不独立：NW t 与 `Sharpe × √年数` 的比值是 1.001（E-067），所以在 5.14 年的 OOS 窗口上"t ≥ 2.0"等价于"Sharpe ≥ 0.88"，比并列的"Sharpe ≥ 1.0"更松——看起来是两道门，实际只有一道（Evidence Prosecutor） | D-020 | P1 | **CLOSED（2026-09-04，D-027）**：补门已实现并前置登记；不改变 tsmom 的判定（1.54 与 3.50 都远超门槛），但规则的保护力弱于表面。建议下一轮把第二个门改成对**选择**敏感的量（例如按 horizon 家族分池的 DSR、或折间 Sharpe 的最小值），并在 RESEARCH_LOG 里记下本条；在此之前不要把"两道独立门"当作 D-020 的辩护理由 |
 | KILL-046 | 引用报告的头条 OOS 1.5445 是逐折混合配置（折选择 [72, 0, 72, 72, 0]）的估计，而 registry 运行的是单一 `crowding_window: 0`；两者不是同一条净值序列（Delivery Saboteur） | E-067、C-024 | P2 | ACCEPTED：偏差方向保守（单配置自身 OOS 1.65 > 混合 1.54），且 `best_params` 与 registry 一致因而参数门成立。建议在 registry 注释里写明"头条 OOS 属于走前混合，运行配置的单独 OOS 为 1.65（175236Z）" |
 | KILL-038 | sha 校验保证不了"跑的就是验证的"：registry 参数与报告不一致却能启动（Delivery Saboteur） | C-024 | P1 | MITIGATED（分支 `params_problems` + 测试；合并后 CLOSED） |
 | KILL-039 | 三个会话同时改一棵树：一个会话的提交无意捕获了另一个会话的 registry 改动（E-063），账本被三方追加（Delivery Saboteur） | 全部 | P1 | MITIGATED：本会话只在 worktree 改代码；账本追加行是原子的；beidou-88 声明不再跑 tsmom validate / pool history；剩余风险 = 合并时 `model.py/engine.py` 冲突，由操作者按顺序合并（先 beidou-88，后本分支） |
 | KILL-040 | flow probe 以 FAIL 级信号证据进入实盘，实际是 tsmom 空头侧倾斜（91% 同向），其历史收益来自后来退市的币（KILL-018 残余）；停止规则 −1% 权益 / 30 天在 3% 平均敞口下约等于小书自身 −33% 的回撤（Risk Red Team） | E-063 | P1 | ACCEPTED（操作者决定 D-019）；本分析要求：日报里小书的 income 归因与 tsmom 分开看；若 30 天 Sharpe < 0 即按规则停 |
 | KILL-041 | `sign_only` 是看结果后发现的（Evidence Prosecutor） | H-001 | P2 | CLOSED：不采用，只预登记 |
-| KILL-042 | 时序 IC 显著为负而策略赚钱，可能是 IC 计算受成员窗口截断或 hold 语义影响的伪象（Evidence Prosecutor） | C-021 | P2 | OPEN（信息性）：与 sign_only ≈ full、幅度无增量一致，但机制未单独验证；下一轮用非重叠标签按符号分桶复核 |
+| KILL-042 | 时序 IC 显著为负而策略赚钱，可能是 IC 计算受成员窗口截断或 hold 语义影响的伪象（Evidence Prosecutor） | C-021 | P2 | **CLOSED（2026-09-04）**：`sign_bucketed_ic` 用非重叠标签按符号分桶复核。负 IC 是重叠标签的伪象（非重叠后 −0.01 ～ +0.05）；符号在每个前瞻期都对（多头桶 +0.25% ～ +3.40%，空头桶除 336h 外皆负）；桶内幅度与收益弱负相关（−0.02 ～ −0.09）。独立复现了 H-001 的结论 |
 | KILL-043 | noise-null 的 p 0.05 会被误读为"通过"（Skeptical PM） | E-062 | P2 | MITIGATED：报告字段命名 `noise_null`、文档明确"信息性、不进 verdict" |
 | KILL-044 | 账本去重改变了 n_trials（68→64），有"改规则以求通过"之嫌（Evidence Prosecutor） | E-062 | P2 | CLOSED：去重前后判定相同（FAIL/FAIL），且与 `book` 既有的签名去重一致（D-018 已采用同一规则） |
 
