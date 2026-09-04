@@ -27,6 +27,25 @@ class Snapshot:
             return {}
         return {symbol: position.notional / self.account.equity for symbol, position in self.positions.items()}
 
+    def initial_margin(self, leverage_by_symbol: Mapping[str, int] | None = None, default_leverage: int = 1) -> float:
+        """Initial margin the standing book consumes, at the leverage the loop set (managed + foreign).
+
+        Computed from ``positionRisk`` rather than read from the account payload: the venue's own
+        ``totalInitialMargin`` is the field that came back as an int64 overflow (D-027), and the
+        ``leverage`` field on a position reads 0 on this venue, so ``state.leverage_set`` is the record.
+        """
+        levered = 0.0
+        for symbol, position in (*self.positions.items(), *self.foreign_positions.items()):
+            leverage = (leverage_by_symbol or {}).get(symbol) or position.leverage or default_leverage
+            levered += abs(position.notional) / max(int(leverage), 1)
+        return levered
+
+    def margin_usage(self, leverage_by_symbol: Mapping[str, int] | None = None, default_leverage: int = 1) -> float:
+        """M-007: standing initial margin as a fraction of equity.  0.0 when equity is not positive."""
+        if self.equity <= 0:
+            return 0.0
+        return self.initial_margin(leverage_by_symbol, default_leverage) / self.equity
+
     def available_margin(self, leverage_by_symbol: Mapping[str, int] | None = None, default_leverage: int = 1) -> float:
         """Margin headroom for new risk, from the venue when its arithmetic holds and from us when it does not.
 
@@ -38,14 +57,7 @@ class Snapshot:
         """
         if self.account.margin_fields_reliable:
             return self.account.available_balance
-        levered = 0.0
-        for symbol, position in self.positions.items():
-            leverage = (leverage_by_symbol or {}).get(symbol) or position.leverage or default_leverage
-            levered += abs(position.notional) / max(int(leverage), 1)
-        for symbol, position in self.foreign_positions.items():
-            leverage = (leverage_by_symbol or {}).get(symbol) or position.leverage or default_leverage
-            levered += abs(position.notional) / max(int(leverage), 1)
-        return max(0.0, self.equity - levered)
+        return max(0.0, self.equity - self.initial_margin(leverage_by_symbol, default_leverage))
 
     def gross_notional(self) -> float:
         """Sum of |notional| over the managed positions, from ``positionRisk`` — the loop's only position truth.

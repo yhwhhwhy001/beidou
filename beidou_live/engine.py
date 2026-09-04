@@ -301,6 +301,9 @@ class LiveEngine:
             "as_of_ms": latest_bar_ms,
             "equity": snapshot.equity,
             "gross_before": snapshot.gross_notional(),
+            # M-007 is about the standing book, not about what one cycle's orders ask for: record the
+            # initial margin the positions already consume so the daily report can read a real series.
+            "margin_usage": snapshot.margin_usage(self.state.leverage_set, config.leverage),
             "margin_fields_reliable": snapshot.account.margin_fields_reliable,
             "guard_reasons": list(decision.reasons),
             "skip": decision.skip_cycle,

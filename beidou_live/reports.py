@@ -7,12 +7,14 @@ import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import max_drawdown, sharpe
+from beidou_data.store import KlineStore
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.state import StateStore
 
@@ -249,21 +251,33 @@ def probe_correlation(store: StateStore, probes: Sequence[ProbeParams], *, since
 
 
 def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[str, Any]:
-    """M-007: peak initial-margin usage and the count of venue rejections, by code.
+    """M-007: initial-margin usage and the count of venue rejections, by code.
 
     The plan set two numbers - usage at or below 50% of equity, and zero -2019 (insufficient margin)
     rejections - and neither was ever computed.  The per-cycle ``margin`` block existed but no series was
     taken from it, and order rejections collapsed into a single REJECTED status, so a -2019 could not be
     told apart from a lot-size error.
+
+    Two different quantities are reported, because reading one for the other is what made this metric
+    say 0.00% while the book was in fact carrying margin.  ``order_demand`` is what a cycle's *new*
+    orders asked for, and only exists on cycles that placed one; ``standing`` is the initial margin the
+    *held* positions consume, recorded every cycle from positionRisk (D-027: the venue's own
+    ``totalInitialMargin`` is the field that overflowed).  The plan's 50% is about the standing book.
     """
     peak = 0.0
     peak_bar: int | None = None
+    standing: list[float] = []
+    peak_standing = 0.0
     for row in _cycles(store):
         bar_ms = int(row.get("bar_open_ms") or 0)
         if since_ms is not None and bar_ms < since_ms:
             continue
-        margin = row.get("margin") or {}
         equity = row.get("equity")
+        held = row.get("margin_usage")
+        if isinstance(held, int | float):
+            standing.append(float(held))
+            peak_standing = max(peak_standing, float(held))
+        margin = row.get("margin") or {}
         try:
             needed = float(margin.get("needed_margin") or 0.0)
             usage = needed / float(equity) if equity else 0.0
@@ -282,10 +296,13 @@ def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[st
         code = error.split(":", 1)[0].strip() or "unknown"
         rejections[code] = rejections.get(code, 0) + 1
     return {
-        "peak_margin_usage": peak,
+        "peak_margin_usage": peak,  # what a cycle's new orders asked for (0 on cycles that placed none)
         "peak_at_bar_ms": peak_bar,
+        "peak_standing_usage": peak_standing if standing else None,
+        "last_standing_usage": standing[-1] if standing else None,
+        "standing_cycles": len(standing),
         "budget": 0.50,
-        "over_budget": peak > 0.50,
+        "over_budget": peak_standing > 0.50 if standing else peak > 0.50,
         "rejections": rejections,
         "insufficient_margin": sum(count for code, count in rejections.items() if "-2019" in code),
     }
@@ -313,6 +330,51 @@ def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
         "pool_left": left,
         "pool_changes": len(entered) + len(left),
     }
+
+
+def clock_health(store: StateStore, day: str, *, interval_ms: int = 3_600_000) -> dict[str, Any]:
+    """D-025: how far this day's cycles sat from the venue clock, and whether the report's own labels are wrong.
+
+    The host clock is the trading reference and a whole-interval offset is an accepted state, so this is
+    not an alert.  It is here because every timestamp in this report - including ``day`` itself - is the
+    host's, and on 2026-09-04 the host was a full hour behind the venue while the report said nothing.
+    ``label_skew_hours`` is how much to add to a label in this file to get venue time.
+    """
+    rows = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
+    skews = [
+        float(c["skew_ms"]) for row in rows if isinstance((c := row.get("clock") or {}).get("skew_ms"), int | float)
+    ]
+    if not skews:
+        return {"cycles_probed": 0, "labels_reliable": None}
+    last = skews[-1]
+    alignments = [((s + interval_ms / 2) % interval_ms) - interval_ms / 2 for s in skews]
+    worst = max(alignments, key=abs)
+    return {
+        "cycles_probed": len(skews),
+        "venue_minus_host_seconds": round(last / 1000.0, 1),
+        "label_skew_hours": round(last / interval_ms) * (interval_ms / 3_600_000.0),
+        "worst_distance_from_bar_boundary_seconds": round(worst / 1000.0, 1),
+        "jumped_cycles": sum(1 for row in rows if (row.get("clock") or {}).get("jumped")),
+        # a whole-bar offset does not endanger trading; it does make every timestamp written here wrong
+        "labels_reliable": abs(last) < interval_ms / 2,
+        "trading_reference": "host clock (D-025); the offset is accepted, the remainder is what is guarded",
+    }
+
+
+def data_coverage(store: StateStore, root: str | Path = ".beidou/data", interval: str = "1h") -> dict[str, Any]:
+    """Live symbols whose research klines are missing, so a backtest would silently drop them.
+
+    ``load_panel`` excludes a symbol with no stored klines and logs a warning nobody reads; CYSUSDT was
+    traded live for sixteen hours while every research run quietly ran without it.
+    """
+    state = store.load()
+    symbols = list(dict.fromkeys([*state.universe, *state.leaving]))
+    try:
+        stored = set(KlineStore(str(root)).symbols(interval))
+    except Exception:  # a missing store is a research problem, never a reporting failure
+        return {"live_symbols": len(symbols), "missing_klines": None}
+    missing = [symbol for symbol in symbols if symbol not in stored]
+    return {"live_symbols": len(symbols), "missing_klines": missing, "missing_count": len(missing)}
 
 
 def drift_check(
@@ -427,6 +489,8 @@ def daily_payload(
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
+        "clock": clock_health(store, day),
+        "data_coverage": data_coverage(store),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
     }
@@ -553,7 +617,8 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
             (
                 "Margin (M-007)",
                 {
-                    "peak_usage": _fmt_pct((payload.get("margin") or {}).get("peak_margin_usage")),
+                    "peak_standing_usage": _fmt_pct((payload.get("margin") or {}).get("peak_standing_usage")),
+                    "peak_order_demand": _fmt_pct((payload.get("margin") or {}).get("peak_margin_usage")),
                     "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),
                 },
             ),
@@ -633,9 +698,21 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 or {"none": 0},
             ),
             (
+                # D-025: not an alert, but every timestamp above is the host's, so say how far off it is
+                "Clock (D-025)",
+                payload.get("clock") or {"none": 0},
+            ),
+            (
+                "Research data coverage",
+                payload.get("data_coverage") or {"none": 0},
+            ),
+            (
                 "Margin and rejections (M-007)",
                 {
-                    "peak_margin_usage": _fmt_pct((payload.get("margin") or {}).get("peak_margin_usage")),
+                    # standing = margin the held book consumes; order_demand = what new orders asked for
+                    "peak_standing_usage": _fmt_pct((payload.get("margin") or {}).get("peak_standing_usage")),
+                    "last_standing_usage": _fmt_pct((payload.get("margin") or {}).get("last_standing_usage")),
+                    "peak_order_demand": _fmt_pct((payload.get("margin") or {}).get("peak_margin_usage")),
                     "budget": _fmt_pct((payload.get("margin") or {}).get("budget")),
                     "over_budget": (payload.get("margin") or {}).get("over_budget"),
                     "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),

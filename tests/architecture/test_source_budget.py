@@ -53,9 +53,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # bad options it replaces - the part that stops a later reader from deleting the acknowledgement as
 # ceremony.  Worth noting which package grew: this one is beidou_alpha, so it moves the alpha share the
 # right way, unlike the three raises above it.
+# Fifth raise, 2026-09-04, with the sentence the rule requires: +90 in beidou_live for three measurements
+# a full system check found missing, all in the same shape - a number that read zero while the thing it
+# named was not zero.  M-007's "peak margin usage" measured what a cycle's new *orders* asked for, so it
+# printed 0.00% on a day whose only margin-consuming order predated the evidence window while fifteen
+# positions carried 577 USDT of initial margin; `Snapshot.margin_usage` now records what the *held* book
+# consumes, every cycle.  `clock_health` says how far the report's own timestamps sit from the venue,
+# because the host clock was a full hour behind and nothing in the report mentioned it.  `data_coverage`
+# names live symbols with no research klines, because CYSUSDT traded for sixteen hours while every
+# backtest silently excluded it behind a log line.  This one grows the wrong package and the alpha share
+# with it; the alternative was leaving three instruments reading zero, which is the failure mode this
+# whole file exists to make visible.
 CEILING = {
     "beidou_alpha": 3_683,
-    "beidou_live": 3_423,
+    "beidou_live": 3_515,
     "beidou_cli": 2_419,
     "beidou_data": 1_082,
     "beidou_exchange": 514,

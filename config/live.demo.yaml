@@ -58,17 +58,43 @@ pool:
   candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
   liquidity_window: 24        # bars averaged for the participation cap
 exits:                        # bar-close exit overlay in daily-vol units (D-012); 0 disables a rule.
-  # `beidou research overlay` 2026-09-03 (tsmom+flow): take_profit 6 sigma_1d is the only setting that meets the D-017
-  # rule on BOTH the point-in-time universe (OOS Sharpe 1.55 -> 1.54, OOS MDD -16.7% -> -16.3%) and the static one
-  # (1.77 -> 1.73, -10.7% -> -10.4%).  stop_loss 4 + take_profit 6 also qualifies on both (runner-up, -0.05 Sharpe,
-  # +0.7pp MDD on pit); every trailing-stop setting hurts on the static universe.  All effects are noise-sized; the
-  # overlay is "harmless", not "helpful" - see docs/RESEARCH_LOG.md round 5.
-  stop_loss: 0.0
+  # 2026-09-04 (P11, operator instruction: the live book must carry a price stop).  Re-run of the
+  # pre-registered D-017 grid on the CURRENT construction - the previous overlay evidence (02:34Z) was
+  # computed at no_trade_rel_band 0.25 and P10 cell B has since widened it to 0.40, which changes the
+  # weight path an exit overlay is evaluated on.  Evidence: overlay-20260904T063333Z (pit, 205 symbols),
+  # -20260904T063348Z (static, 15), and the widened stop grid -20260904T063855Z / -20260904T063901Z.
+  #
+  # Nothing in the original grid's stop family qualified: stop_loss 4 + take_profit 6 fails on pit (MDD
+  # -12.21% -> -12.32%, i.e. it does not improve) and on static (Sharpe loss 0.138 > 0.10).  Widening the
+  # stop found the setting that does.  stop_loss 6 + take_profit 6 passes D-017 UNCHANGED on both:
+  #   pit    baseline 1.7601 / -12.21%  ->  1.7509 / -11.63%   (Sharpe loss 0.0092, MDD +0.58pp)
+  #   static baseline 1.5212 / -13.64%  ->  1.4320 / -12.79%   (Sharpe loss 0.0892, MDD +0.85pp)
+  # Against the setting that was actually live (take_profit 6 alone) the stop costs 0.0034 OOS Sharpe on
+  # pit and 0.0012 on static, and gives pit the best OOS drawdown in the whole grid.  It fires 18 times
+  # in 49,735 bars on top of the take-profit's 544.
+  #
+  # State the limit plainly, because it is the reason this is an operator decision and not an inference.
+  # A supplementary tail check written for this question (worst cumulative loss a single symbol inflicts
+  # inside one holding episode - the thing a per-symbol stop is FOR, and the thing portfolio OOS MDD
+  # cannot see) finds NO improvement at any distance: worst name -2.125% (pit) / -3.758% (static) with and
+  # without the stop, identical to three decimals for stop_loss 4, 6 and 8.  This book's losses are slow
+  # accumulations measured from a deliberately stale entry anchor (E-047), not gaps from entry, so a
+  # from-entry stop cannot bound them.  The stop is adopted because the operator asked for one and this
+  # distance is free, NOT because it is shown to protect anything.  Reverting is one line.
+  #
+  # trailing_stop stays 0 and that is not an oversight: every trailing setting loses 0.15-0.22 OOS Sharpe
+  # AND worsens OOS drawdown by 0.9-2.8pp, on both universes, in every round that has tested it.
+  stop_loss: 6.0
   trailing_stop: 0.0
   take_profit: 6.0
   cooldown_bars: 24
   vol_halflife: 48
 drawdown_throttle:            # scale the whole book down between `start` and `stop` drawdown from the equity high-water mark
+  # Re-confirmed 2026-09-04 (P11, same runs as `exits` above): still a split verdict, so still off.  On the
+  # point-in-time universe it QUALIFIES (1.7601 -> 1.6906, OOS MDD -12.21% -> -11.89%: Sharpe loss 0.0695
+  # inside the 0.10 limit for +0.32pp of drawdown); on the static universe it does not (1.5212 -> 1.4043,
+  # loss 0.1168 > 0.10, for +0.67pp).  D-017 needs both, so the answer is unchanged - recorded here because
+  # "still off" after a re-run is a different fact from "never re-checked".
   # Overlay evidence 2026-09-03: on the point-in-time universe OOS Sharpe 1.55 -> 1.45 (exactly the -0.10 limit) for
   # OOS MDD -16.7% -> -14.8%, and fold 2 (2022-11 -> 2023-11, the recovery) turns negative: the classic whipsaw of a
   # drawdown throttle.  Boundary case, left disabled (D-017).
