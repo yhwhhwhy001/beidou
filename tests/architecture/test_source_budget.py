@@ -146,10 +146,31 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # distinction being paid for here is structural, not parametric: a fourth scale on an existing family
 # would raise `declared_trials`, and so the DSR bar anything promoted must clear, without adding a
 # hypothesis.  Alpha-package growth that buys hypothesis space is the one kind this file should welcome.
+# Thirteenth raise, 2026-09-04 - renumbered from twelfth on the merge, because a parallel session took
+# that number the same day; the file has done this before and it is the ratchet working as a merge
+# detector.  With the sentence the rule requires: +118 in beidou_alpha and +31 in
+# beidou_live so the backtest can score the book the loop would actually hold.  Two guards bind the whole
+# book - the per-symbol and gross caps, and the -5% daily-loss pause - and neither was ever in the
+# backtest, which was invisible because neither was reachable: 5.6 years of the shipped construction
+# produced a worst UTC day of -3.5% against the -5% pause and never crossed gross 2.0, so a replay would
+# have changed nothing.  Doubling the vol target makes both reachable (measured: 355 capped bars and 36
+# paused bars on the point-in-time universe), which is KILL-027's shape, so the semantics moved into
+# beidou_alpha and beidou_live/guards.py now calls them - one definition, no drift.  Most of the alpha
+# addition is the replay loop and the two docstrings that keep it correct: it rolls the day on the
+# DECISION bar, not the execution bar, because the loop rolls `day_start_equity` in `_roll_day(bar_open_ms)`
+# and at an hourly interval those straddle UTC midnight once a day; and it cannot be vectorised, because
+# the pause reads the equity path it is itself producing.  Both read like something a later reader would
+# tidy away.  The live side is the D-016 startup check, which refuses `auto` when `max_leverage` cannot
+# satisfy `margin_cap` - unreachable today only because 2.0 = 5 x 0.40 is exact - plus LiveConfig finally
+# carrying the portfolio params so the construction digest can see the vol target that sets the book's
+# size.  This raise moves the alpha share the intended way: 118 of the 170 lines are in beidou_alpha.
+# The +21 in beidou_cli is `research backtest --guards/--no-guards`, on by default: a report that does
+# not say whether the guards were replayed cannot be compared with one that does, and the evidence for
+# the vol-target change has to be a report rather than a scratch script.
 CEILING = {
-    "beidou_alpha": 4_618,
-    "beidou_live": 3_788,
-    "beidou_cli": 2_522,
+    "beidou_alpha": 4_736,
+    "beidou_live": 3_819,
+    "beidou_cli": 2_542,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

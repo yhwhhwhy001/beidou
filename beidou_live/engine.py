@@ -23,6 +23,7 @@ import pandas as pd
 from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
 from beidou_alpha.panel import interval_seconds
+from beidou_alpha.portfolio import PortfolioParams
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
@@ -70,6 +71,10 @@ class LiveConfig:
     quarantine_after: int = 0  # D-031: rejected cycles before a symbol leaves the universe (0 = off)
     probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
     max_bar_alignment_ms: int = 60_000  # how far the wake-up may sit from a real bar boundary (D-025)
+    # D-026 second half: the digest could see the caps and the bands but not the vol target that sets
+    # the book's size, because LiveConfig never carried it.  Changing `vol_target` changed every weight
+    # and left the construction digest identical, which is the same silence the digest was built to end.
+    portfolio: PortfolioParams = field(default_factory=PortfolioParams)
 
     @property
     def interval_ms(self) -> int:
@@ -131,6 +136,22 @@ class LiveEngine:
                 "an enabled signal reads funding history but the market data port cannot supply it; "
                 "refusing to trade an unvalidated configuration (KILL-027)"
             )
+        # D-016's invariant, checked instead of assumed - and only in `auto`, which is the mode that
+        # claims it.  `derive_leverage` picks the smallest leverage keeping initial margin at the gross
+        # cap under `margin_cap`, then clamps to `max_leverage`, and that clamp silently wins: at
+        # max_gross 3.0 / margin_cap 0.40 / max_leverage 5 the loop settles on 5x and runs at 60%
+        # initial margin against a 40% policy without raising a word.  Today it is unreachable only
+        # because 2.0 = 5 x 0.40 happens to be exact; move any one of the three and the policy becomes
+        # decoration.  `fixed` is deliberately exempt: there the operator set the number and margin_cap
+        # is not consulted at all (the profile's own note - "was 100% at a fixed 2x" - is that state).
+        if self.config.leverage_mode == "auto":
+            implied_margin = self.config.guards.max_gross / max(1, self.config.max_leverage)
+            if implied_margin > self.config.margin_cap + 1e-9:
+                raise RuntimeError(
+                    f"max_gross {self.config.guards.max_gross} at the {self.config.max_leverage}x policy cap "
+                    f"needs {implied_margin:.0%} initial margin, above the {self.config.margin_cap:.0%} "
+                    "margin_cap; raise max_leverage, lower max_gross, or raise margin_cap deliberately (D-016)"
+                )
         sync = getattr(self.venue, "sync_clock", None)
         if callable(sync):
             # Establish the venue offset deterministically instead of leaving it to the first -1021 to
@@ -831,6 +852,13 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
     a live record self-describing, which is what a later reader needs.
     """
     payload = {
+        "portfolio": {
+            "vol_target": config.portfolio.vol_target,
+            "vol_halflife": config.portfolio.vol_halflife,
+            "covariance_halflife": config.portfolio.covariance_halflife,
+            "min_asset_vol": config.portfolio.min_asset_vol,
+            "max_scalar": config.portfolio.max_scalar,
+        },
         "guards": {
             "max_gross": config.guards.max_gross,
             "max_weight": config.guards.max_weight,

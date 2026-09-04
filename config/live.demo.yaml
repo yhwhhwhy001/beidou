@@ -22,7 +22,50 @@ portfolio:
   max_leverage: 5
   margin_buffer: 0.10         # keep 10% of the available balance free when scaling risk-adding orders (T-S02)
   max_participation: 0.02     # a risk-adding order <= 2% of the symbol's average hourly quote volume (T-S03)
-  vol_target: 0.15            # annualised portfolio volatility target
+  # 2026-09-04 (operator decision): 0.15 -> 0.30.  Read this as a risk-budget decision, not a research
+  # finding, because that is what it is.  `vol_target` was never chosen against a stated budget - it is
+  # `PortfolioParams`' default and appears in no D-decision, no pre-registration and no trials ledger -
+  # and the operator has now declared a maximum drawdown budget of 50%.  At 0.15 the construction runs at
+  # roughly a 12% budget, so the mismatch was about four-fold and would have been carried into real capital.
+  #
+  # It carries no alpha, and that is measured rather than argued: scaling the shipped weights by any k and
+  # re-pricing them leaves net Sharpe EXACTLY unchanged at every k tested (1.6972 on the point-in-time
+  # universe, 1.5760 on the static one, k in {1, 1.5, 2, 2.5, 3, 4, 5}).  That identity is an arithmetic
+  # property of the backtest - gross P&L, turnover cost and funding are all linear in the weights - so it
+  # proves the dial is pure risk appetite HERE and proves nothing about a world with market impact.  The
+  # cost model charges a flat 7 bps at any order size and `max_participation` is not in the backtest at all.
+  # At demo notionals (40-800 USDT a clip) that is a good approximation; before real capital it is not, and
+  # k must be re-derived under an impact-aware cost model.  That is recorded as out of scope, not as done.
+  #
+  # The value comes from a pre-registered rule, written before the numbers: take the largest k whose
+  # bootstrapped q95 drawdown stays inside the declared budget, on BOTH universes.  Weekly block bootstrap
+  # (168h blocks, 2,000 draws, seed 20260904; `scratchpad/vol_target_drawdown_bootstrap.py`) over
+  # 2021-01-01 -> 2026-09-04:
+  #   0.300  q95 -43.7% (pit) / -49.5% (static),  P(breach -50%) 1.2% / 4.8%   <- adopted
+  #   0.375  q95 -51.8%       / -56.8%,           P(breach)      7.1% / 14.0%  <- fails both
+  # In-sample drawdown is NOT the number to size on: at 0.15 it reads -11.9% while the bootstrap median is
+  # -16.5%, i.e. the historical figure sits near the 25th percentile of its own distribution.  And the
+  # bootstrap is still optimistic - resampling weekly blocks preserves within-week autocorrelation but
+  # destroys the multi-month regime structure real bear markets have - which is the second reason this
+  # stops at 0.30 rather than reaching for the budget, and why the live de-escalation line is -35%.
+  #
+  # What changes besides size.  Turnover rises 74.8% (pit) / 44.9% (static) - less than the 100% a pure
+  # doubling would give, because the caps flatten the weight path - and cost as a share of gross P&L FALLS,
+  # 9.8% -> 8.8% and 13.5% -> 12.0%.  Peak initial margin at 5x goes 33% -> 40%, exactly the `margin_cap`,
+  # so there is now zero headroom there (the new startup check makes a future breach loud).  Two guards that
+  # were unreachable become reachable: `daily_loss_pause` fires about once a year (0 times in 5.6 years at
+  # 0.15; 5 and 4 times at 0.30) and `GROSS_CAPPED` on 0.72% of pit bars.  Both are now replayed in the
+  # backtest - without that this change would have been scored on a book the loop would not hold, which is
+  # KILL-027's shape - and with them the OOS Sharpe moves +0.005 on both universes, i.e. they cost nothing.
+  # Reports (all with the guards replayed): pit 20260904T134831Z (0.15) -> 20260904T134847Z (0.30);
+  # static 20260904T134849Z (0.15) -> 20260904T134851Z (0.30).
+  #
+  # Two consequences to state plainly.  P10 cell B's live falsifier ("turnover must fall by roughly 12%")
+  # can no longer be checked, because this change raises turnover; it is abandoned, not quietly failed.
+  # And every report produced at 0.15 is no longer horizontally comparable - only verdicts carry over.
+  # Reverting is this one line.  Live de-escalation is pre-registered: -35% drawdown -> back to 0.225,
+  # -50% -> back to 0.15, automatic, not a discussion.
+  vol_target: 0.30            # annualised portfolio volatility target
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity

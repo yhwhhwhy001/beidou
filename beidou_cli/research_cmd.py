@@ -20,7 +20,7 @@ from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, 
 from beidou_alpha.mining import enumerate_candidates, to_signal
 from beidou_alpha.model import AlphaModel
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
-from beidou_alpha.overlays.exposure import DrawdownThrottleParams, apply_drawdown_throttle
+from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, combine_books
 from beidou_alpha.registry import StrategyEntry, registry_fingerprint
@@ -207,7 +207,14 @@ def research_list() -> None:
 
 @research.command("backtest")
 @_common_options
+@click.option(
+    "--guards/--no-guards",
+    default=True,
+    show_default=True,
+    help="replay the book-level guards the live loop applies (gross cap + daily-loss pause)",
+)
 def research_backtest(
+    guards: bool,
     strategy: str,
     params: str,
     root: str,
@@ -234,7 +241,19 @@ def research_backtest(
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     weights, _combined, _per = model.evaluate(panel, membership)
-    result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
+    # The guards are part of the construction the loop runs, not an extra: they are provably inert
+    # wherever neither binds (`tests/alpha/test_book_guard_replay.py`), so leaving them on keeps a
+    # report describing the book that would actually be held.  `--no-guards` reproduces older reports.
+    book_guards = (
+        BookGuardParams(
+            max_weight=float((profile_payload.get("portfolio", {}) or {}).get("max_weight", 0.15)),
+            max_gross=float((profile_payload.get("portfolio", {}) or {}).get("max_gross", 2.0)),
+            daily_loss_pause=float((profile_payload.get("guards", {}) or {}).get("daily_loss_pause", -0.05)),
+        )
+        if guards
+        else None
+    )
+    result = run_backtest(panel, weights, cost, execution=execution, guards=book_guards)  # type: ignore[arg-type]
     summary = result.summary()
     bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
     report: dict[str, Any] = {
@@ -242,6 +261,7 @@ def research_backtest(
         "strategy": strategy,
         "params": entry.params,
         "portfolio": model.portfolio.__dict__,
+        "book_guards": None if book_guards is None else book_guards.__dict__,
         "interval": interval,
         "universe_mode": universe_mode,
         "symbols": panel.symbols,

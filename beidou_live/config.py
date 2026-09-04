@@ -12,6 +12,7 @@ from beidou_alpha.model import AlphaModel
 from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams
 from beidou_alpha.panel import interval_seconds
+from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import Registry, evidence_problems
 from beidou_alpha.signals import get_signal
 from beidou_data.live_feed import PublicMarketData
@@ -91,6 +92,8 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         quarantine_after=int(pool.get("quarantine_after", 0)),
         probes=probes_from_registry(registry),
         max_bar_alignment_ms=int(float(guards.get("max_bar_alignment_seconds", 60.0)) * 1000),
+        # the same mapping the model reads, so the digest describes the book that actually ran
+        portfolio=PortfolioParams.from_mapping(portfolio),
     )
 
 
