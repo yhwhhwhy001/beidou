@@ -29,10 +29,13 @@ strategies:
       entry_threshold: 0.20
       vol_window: 400
       crowding_window: 0        # modifier off (the cut/penalty below are inert; kept so the params equal the report's best_params).
-                                # NOTE: the live market-data port supplies no funding history, so a funding-consuming
-                                # setting (crowding_window > 0, or the carry signal) would be silently skipped live -
-                                # exactly how the round-6 evidence/live mismatch happened.  Do not re-enable it until
-                                # the funding-history plumbing lands; see docs/RUNBOOK.md.
+                                # NOTE: this is now an evidence question, not a plumbing one.  Round 6b (D-023) wired
+                                # funding history into the live panel and made a signal declare its need, so a
+                                # funding-consuming setting (crowding_window > 0, or carry) is no longer silently
+                                # skipped - startup refuses it instead.  Re-enabling still needs its own point-in-time
+                                # re-validation under D-020: on this evidence the modifier is a small negative
+                                # (OOS 1.53 with vs 1.65 without).  A running loop only picks up the plumbing after
+                                # a restart; see docs/RUNBOOK.md.
       crowding_cut: 0.7
       crowding_penalty: 0.5
     # 2026-09-03 round 5: re-validated on the point-in-time universe (146 symbols that were ever top-15 by 30-day
