@@ -46,8 +46,15 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # The same rows spell it `unrealizedProfit` where positionRisk spells it `unRealizedProfit`.  Most of the
 # 26 lines are the docstring recording those two disagreements, which is the part that stops the next
 # reader from "simplifying" the parser back into the bug.
+# Fourth raise, 2026-09-04, with the sentence the rule requires: +22 in beidou_alpha for the D-029 gate
+# that lets a probe book cite a REJECT only when the registry acknowledges it in writing.  The alternative
+# was leaving the flow sleeve pointed at an ACCEPT whose universe no longer existed on disk, which is the
+# stale-pointer failure this round kept finding.  Most of the 22 lines are the docstring naming the two
+# bad options it replaces - the part that stops a later reader from deleting the acknowledgement as
+# ceremony.  Worth noting which package grew: this one is beidou_alpha, so it moves the alpha share the
+# right way, unlike the three raises above it.
 CEILING = {
-    "beidou_alpha": 3_661,
+    "beidou_alpha": 3_683,
     "beidou_live": 3_423,
     "beidou_cli": 2_419,
     "beidou_data": 1_082,

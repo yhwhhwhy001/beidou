@@ -11,6 +11,9 @@ from typing import Any
 
 MAIN_BOOK = "main"
 PROBE_VERDICT = "ACCEPT"  # a book-level finding from `research book` (D-018); never a signal-level PASS
+# A probe book may also cite a REJECT, but only when the registry says so out loud (D-029): the alternative
+# observed on 2026-09-04 was a probe running against a report whose universe no longer existed on disk.
+PROBE_VERDICTS: frozenset[str] = frozenset({PROBE_VERDICT, "REJECT"})
 
 
 @dataclass(frozen=True)
@@ -235,8 +238,8 @@ def evidence_problems(
         problems.append(f"{entry.id}: evidence digest mismatch for {path}")
     verdict = str(entry.evidence.get("verdict", "")).upper()
     report_ok = not problems
-    if verdict == PROBE_VERDICT:
-        problems.extend(_probe_problems(entry, path, read_report, book_fraction, report_ok=report_ok))
+    if verdict in PROBE_VERDICTS:
+        problems.extend(_probe_problems(entry, path, read_report, book_fraction, verdict, report_ok=report_ok))
     elif verdict and verdict not in {"PASS", "WEAK_PASS"}:
         problems.append(f"{entry.id}: evidence verdict {verdict} does not allow live use")
     if read_report is not None and report_ok:
@@ -252,13 +255,32 @@ def _probe_problems(
     path: str,
     read_report: Callable[[str], Mapping[str, Any]] | None,
     book_fraction: float | None,
+    verdict: str = PROBE_VERDICT,
     *,
     report_ok: bool,
 ) -> list[str]:
+    """A book-level finding may run as a probe, and a REJECT may too when the registry acknowledges it (D-029).
+
+    The alternative is worse than it looks.  When the flow sleeve's book verdict turned REJECT on
+    2026-09-04, the choices were to point the registry at a report whose universe no longer existed on
+    disk, or to let a REJECT through the gate silently and stop the whole loop from starting.  Requiring
+    ``accepted_despite`` plus a reason and a review date keeps the running configuration attached to
+    current, reproducible evidence and puts the exception in the file rather than in a commit message.
+    """
     problems: list[str] = []
-    if entry.book == MAIN_BOOK:
-        problems.append(f"{entry.id}: a book-level ACCEPT can only run as a non-main probe book (D-019)")
     probe = entry.probe or {}
+    if entry.book == MAIN_BOOK:
+        problems.append(f"{entry.id}: a book-level {verdict} can only run as a non-main probe book (D-019)")
+    if verdict != PROBE_VERDICT:
+        acknowledged = str(probe.get("accepted_despite", "")).upper()
+        if acknowledged != verdict:
+            problems.append(
+                f"{entry.id}: evidence verdict {verdict} needs probe.accepted_despite: {verdict} in the registry (D-029)"
+            )
+        if not str(probe.get("reason", "")).strip():
+            problems.append(f"{entry.id}: a probe running against a {verdict} needs probe.reason to say why")
+        if not probe.get("review_after_days"):
+            problems.append(f"{entry.id}: a probe running against a {verdict} needs probe.review_after_days")
     stop = probe.get("stop") if isinstance(probe.get("stop"), Mapping) else None
     if not probe.get("accepted_by") or not probe.get("accepted_on") or stop is None:
         problems.append(
@@ -274,8 +296,8 @@ def _probe_problems(
             problems.append(f"{entry.id}: probe stop needs window_days > 0 and max_loss >= 0")
     if read_report is not None and report_ok:
         report = read_report(path)
-        if str(report.get("kind", "")) != "book" or str(report.get("book_verdict", "")).upper() != PROBE_VERDICT:
-            problems.append(f"{entry.id}: evidence {path} is not an ACCEPTed book report")
+        if str(report.get("kind", "")) != "book" or str(report.get("book_verdict", "")).upper() != verdict:
+            problems.append(f"{entry.id}: evidence {path} is not a book report with verdict {verdict}")
         sleeve = str((report.get("sleeve") or {}).get("strategy", ""))
         if sleeve != entry.id:
             problems.append(f"{entry.id}: book report {path} is about {sleeve or '<none>'}")

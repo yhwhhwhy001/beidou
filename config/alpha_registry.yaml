@@ -162,16 +162,37 @@ strategies:
       gate_weights: [0.2, 0.3, 0.5]
       gate_return_scale: 0.20
       gate_vol_window: 400
+    # 2026-09-04 05:27Z: re-run on the daily-cadence universe with the robustness leg, and the book verdict is
+    # now REJECT.  Four of five checks still pass - the sleeve lifts the total book OOS 1.6436 -> 1.7715 and wins
+    # 4 of 5 folds - and the sleeve's own verdict improved from FAIL to WEAK_PASS (OOS 0.92).  The robustness leg
+    # is what fails: on the static universe the sleeve is -0.0513 at this fraction.
+    # Why that flipped, checked leg by leg rather than assumed: the static universe is a fixed symbol list and
+    # does not depend on the membership cadence.  The sleeve there went +0.0097 -> -0.0513 because the MAIN book
+    # improved (conviction_mode sign and the wider band lifted static main-only OOS 1.4063 -> 1.5715).  The sleeve
+    # was always ~zero on static; the bar rose.  And it cannot be otherwise: round 5 established this sleeve's
+    # edge comes from names that later dropped out of the pool, and the static universe by construction keeps
+    # only the survivors - the check asks whether a short-side edge shows up in a universe that excludes what it
+    # shorts.
+    # Operator decision (D-029): keep the probe running against the current, reproducible REJECT rather than
+    # against a stale ACCEPT whose universe no longer exists on disk, and say so here.  The probe was never
+    # running on the strength of the book verdict; D-019 made it a bounded experiment whose control is the P&L
+    # stop.  Tightened at the same time: review in 30 days, not 90, because the sleeve's marginal value did
+    # shrink as the main book improved and that is real information.
     evidence:
-      report: reports/research/book-tsmom-flow-20260903T143621Z.json
-      sha256: 80a08f897daa4640bd9f2e4e9197801efad7dc4052ef094ddbbce7ac9f7d642b
-      verdict: ACCEPT           # book-level (D-018); the sleeve's standalone verdict inside the report is FAIL
+      report: reports/research/book-tsmom-flow-20260904T052732Z.json
+      sha256: b02e2ad4310f45a9ad1c3ed679e351b52ae048304de81c5e7888f32226571ef6
+      verdict: REJECT           # book-level on the daily universe; runs only under the acknowledgement below
     probe:
       accepted_by: operator
       accepted_on: "2026-09-03"
-      reason: bounded demo experiment to earn out-of-sample evidence for the short-only flow sleeve (D-019)
+      accepted_despite: REJECT  # D-029: the exception is stated here, not implied by a stale pointer
+      reason: >-
+        bounded demo experiment to earn out-of-sample evidence for the short-only flow sleeve (D-019).  The
+        book rule's robustness leg cannot validate this sleeve - its edge is in names that left the pool and
+        the static universe keeps only survivors - and the leg failed because the main book got better, not
+        because the sleeve got worse.  The control is the P&L stop, not the backtest verdict.
       stop: {window_days: 30, max_loss: 0.01}
-      review_after_days: 90
+      review_after_days: 30
   - id: residual
     enabled: false
     weight: 1.0

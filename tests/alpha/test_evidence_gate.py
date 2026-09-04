@@ -111,3 +111,86 @@ def test_every_signal_can_normalise_its_own_registry_params(signal_id: str) -> N
     assert set(filled) >= set(entry.params)
     for key, value in entry.params.items():
         assert filled[key] == value, key  # normalisation fills gaps, it never rewrites what was written
+
+
+# --- D-029: a probe may cite a REJECT, but only when the registry acknowledges it -------------------
+
+
+def _book_report(verdict: str = "REJECT") -> dict[str, Any]:
+    return {
+        "kind": "book",
+        "book_verdict": verdict,
+        "sleeve": {"strategy": "flow", "params": {"window": 168}},
+        "fraction": 0.333333,
+    }
+
+
+def _probe(**overrides: Any) -> dict[str, Any]:
+    block = {
+        "accepted_by": "operator",
+        "accepted_on": "2026-09-03",
+        "accepted_despite": "REJECT",
+        "reason": "bounded experiment; the robustness leg cannot validate this sleeve",
+        "stop": {"window_days": 30, "max_loss": 0.01},
+        "review_after_days": 30,
+    }
+    block.update(overrides)
+    return block
+
+
+def _flow(probe: dict[str, Any], verdict: str = "REJECT") -> StrategyEntry:
+    return StrategyEntry(
+        "flow",
+        params={"window": 168},
+        evidence={"report": "b.json", "sha256": "c" * 64, "verdict": verdict},
+        book="flow_short",
+        probe=probe,
+    )
+
+
+def _check(entry: StrategyEntry, report: dict[str, Any]) -> list[str]:
+    return evidence_problems(
+        entry,
+        exists=lambda _: True,
+        sha256_of=lambda _: "c" * 64,
+        read_report=lambda _: report,
+        book_fraction=0.333333,
+        canonical_params=canonical,
+    )
+
+
+def test_an_acknowledged_reject_runs() -> None:
+    assert _check(_flow(_probe()), _book_report()) == []
+
+
+def test_an_unacknowledged_reject_is_refused() -> None:
+    problems = _check(_flow(_probe(accepted_despite=None)), _book_report())
+    assert problems and "accepted_despite: REJECT" in problems[0]
+    # acknowledging a different verdict than the one cited does not count
+    wrong = _check(_flow(_probe(accepted_despite="ACCEPT")), _book_report())
+    assert wrong and "accepted_despite: REJECT" in wrong[0]
+
+
+def test_a_reject_needs_a_reason_and_a_review_date() -> None:
+    assert any("probe.reason" in p for p in _check(_flow(_probe(reason="  ")), _book_report()))
+    assert any("review_after_days" in p for p in _check(_flow(_probe(review_after_days=None)), _book_report()))
+
+
+def test_the_cited_report_must_carry_the_verdict_the_registry_claims() -> None:
+    problems = _check(_flow(_probe()), _book_report("ACCEPT"))
+    assert problems and "verdict REJECT" in problems[0]
+
+
+def test_an_accept_still_needs_no_acknowledgement() -> None:
+    plain = {k: v for k, v in _probe().items() if k != "accepted_despite"}
+    assert _check(_flow(plain, verdict="ACCEPT"), _book_report("ACCEPT")) == []
+
+
+def test_a_reject_may_not_run_as_the_main_book() -> None:
+    main = StrategyEntry(
+        "flow",
+        params={"window": 168},
+        evidence={"report": "b.json", "sha256": "c" * 64, "verdict": "REJECT"},
+        probe=_probe(),
+    )
+    assert any("non-main probe book" in p for p in _check(main, _book_report()))
