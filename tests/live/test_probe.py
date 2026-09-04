@@ -123,3 +123,29 @@ async def test_engine_stops_a_probe_book_and_keeps_it_stopped(august_panel: Pane
     market.cursor += 1
     third = await fresh.run_cycle(bar + 2 * 3_600_000)
     assert third["probes"][0]["status"] == "STOPPED" and set(fresh.state.last_contributions) == {"tsmom"}
+
+
+async def test_income_ingestion_survives_a_backwards_clock_jump(august_panel: Panel, tmp_path: Path) -> None:
+    """A watermark ahead of the clock must not abort the cycle (-1023); it skips ingestion and keeps the watermark."""
+    cursor = 400
+    market = FakeMarketData(august_panel, cursor)
+    venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, cursor))
+    clock = FakeClock(market.bar_open_ms(cursor) + 5_000)
+    store = StateStore(tmp_path / "live")
+    engine = LiveEngine(
+        _config(tmp_path), model=_two_book_model(), market=market, venue=venue, clock=clock, store=store
+    )
+    await engine.startup()
+    watermark = clock.now_ms() + 3_612_000  # the host clock jumped an hour backwards after the last cycle
+    engine.state.last_income_ms = watermark
+    venue.income_log.append({"incomeType": "REALIZED_PNL", "symbol": "BTCUSDT", "income": "5.0"})
+    record = await engine.run_cycle(market.bar_open_ms(cursor - 1))
+    assert "income" not in venue.calls, "the cycle must not ask the venue for a backwards time range"
+    assert record["external_flows"]["clock_skew_ms"] == 3_612_000
+    assert engine.state.last_income_ms == watermark, "the watermark must not move backwards"
+    assert not record["skip"] and record["guard_reasons"] == []
+    assert "summary" in record, "the cycle must still reach the trading stage"
+    clock.advance(3_613.0)  # the clock catches up
+    later = await engine.run_cycle(market.bar_open_ms(cursor - 1) + 3_600_000)
+    assert "income" in venue.calls and later["external_flows"]["rows"] == 0
+    assert engine.state.last_income_ms > watermark

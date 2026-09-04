@@ -448,6 +448,14 @@ class LiveEngine:
         """
         now = self.clock.now_ms()
         since = self.state.last_income_ms or now
+        if since > now:
+            # The host clock moved backwards (measured: -3,612 s on 2026-09-04), so the watermark is in the
+            # future.  Querying [since, now] is rejected with -1023 and aborts the whole cycle before it can
+            # trade; moving the watermark back would silently drop the income in between.  Skip ingestion for
+            # this cycle, keep the watermark, and let the cycle trade.
+            skew = since - now
+            logger.warning("income watermark is %d ms ahead of the clock; skipping ingestion this cycle", skew)
+            return {"total": 0.0, "rows": 0, "by_type": {}, "rebaselined": False, "clock_skew_ms": skew}
         rows = await self.venue.income(since, now)
         flows = external_flows(rows)
         flows["rebaselined"] = False
