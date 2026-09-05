@@ -468,3 +468,67 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
     assert "Grid (full-sample Sharpe per configuration)" in markdown
     assert "vol_window=100" in markdown and "vol_window=200" in markdown
     assert "parameter_neighbourhood" in markdown
+
+
+def test_research_overlay_keeps_book_sleeves_under_min_history(tmp_path: Path, august_dir: Path) -> None:
+    """`--min-history` rebuilds the model, and the rebuild has to carry the books over (D-018/D-019).
+
+    It used to restate `AlphaModel`'s fields by hand and omit `books`, so `research overlay
+    --min-history N` raised "strategy ... refers to undeclared book" against any registry that runs a
+    sleeve - which the shipped config/alpha_registry.yaml has done since flow_short.  The rebuild is
+    `replace(model, min_history_bars=...)` now, so the field list cannot go stale again as
+    `AlphaModel` grows; this test is what would catch a return to spelling the fields out.
+
+    `exit_code == 0` is the load-bearing assertion, and it stays load-bearing for a reason worth
+    recording here: `book_names` is derived from `entries`, not from `books`, so a model that loses its
+    books does not quietly shrink to one book - it keeps the sleeve and then cannot price it.  Strip
+    `__post_init__` and this same defect surfaces a few frames later as `KeyError: 'sleeve'` in
+    `book_weights` (measured, not assumed).  So the validation buys an early and legible failure, not
+    the difference between loud and silent.  The `strategies` assertion guards the other direction: it
+    is read off `model.entries`, so it would catch a rebuild that dropped the sleeve itself.
+    `registry["books"]` is read off the registry rather than the model, so it documents that this
+    fixture really is two-book; it does not constrain the run.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "version: 1\n"
+        "ensemble: {method: mean}\n"
+        "books: {sleeve: {fraction: 0.5}}\n"
+        "strategies:\n"
+        "  - {id: tsmom, enabled: true, params: {vol_window: 100, horizons: [5, 20, 50], horizon_weights: [0.2, 0.3, 0.5]}}\n"
+        "  - {id: meanrev, enabled: true, book: sleeve, params: {window: 48}}\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "overlay",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--registry",
+            str(registry),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--min-history",
+            "0",
+            "--folds",
+            "3",
+            "--min-train",
+            "300",
+            "--exits-grid",
+            '{"stop_loss": [2.0], "take_profit": [4.0]}',
+            "--throttle-grid",
+            '{"start": [0.02], "stop": [0.10], "floor": [0.5]}',
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    overlay = json.loads(next(out.glob("overlay-*.json")).read_text())
+    assert overlay["strategies"] == ["tsmom", "meanrev"]  # the sleeve reached the evidence, not just the registry
+    assert overlay["registry"]["books"] == {"sleeve": 0.5}
