@@ -1296,3 +1296,82 @@ compression = risk_spread / vol_spread
 ### 三、留在范围外，明确记为未做
 
 - **档位名义上限**：`leverage_brackets()` 只读首档 `initialLeverage`，不读 `notionalCap`。demo 名义（40–800 USDT）下不可达；真实资金 + `max_weight 0.15` 落到薄币上可能触及。与 KILL-A（真实资金前的冲击成本模型）同一批，不在本轮。
+
+## 2026-09-05 · D-040：清单对资金费归档是瞎的——修的是布局被写了两遍，不是那一行判断
+
+起点是一个答不上来的问题：2026-09-04 那次 `research mine` 到底有没有计入资金费。清单本该回答它，结果发现清单在这一格上是瞎的。「发现」与「推断撤回」那一半由并行会话记在同日的挖矿提案者分析里（E-010），此处不重复；**本条是修复与处置**，其中处置那一半——已经落盘的报告该怎么算——是这次真正需要决定的东西。
+
+### 一、缺陷：布局在两个模块里各写了一遍，然后分了岔
+
+`beidou_data/manifest.py` 的 `_store_fact` 用一套走法伺候两个 store：`for child in ...: if not child.is_dir(): continue`，然后取 `child/<interval>.parquet` 或 `child/funding.parquet`。**这是 klines 的布局**（`klines/<SYMBOL>/1h.parquet`）。资金费的实际布局是 `store.py` 的 `funding/<SYMBOL>.parquet`——平铺，一符号一文件。于是 `is_dir()` 对每一个资金费文件都为假，全部跳过。
+
+盘上 231 个文件 / 20,196,970 字节，修复前 `build_manifest` 读到：
+
+```
+klines : {'symbols': 231, 'bytes': 444306711, 'fingerprint': 'fb9391ce34395763'}
+funding: {'symbols': 0,   'bytes': 0,         'fingerprint': '44136fa355b3678a'}   ← 经核即 _digest({})
+```
+
+后果不是「少记一个字段」，而是**`manifest_problems` 对资金费归档永远不会告警**：记录侧与当前侧恒等于同一个零，两边永远相等。D-034 把 1,010,914 条结算里的 441,678 条从静默填零改成正确对齐，重写了那份归档的含义，而没有任何一份报告的清单能看见这件事。KILL-027 / D-038 的同一个形状——一个声称自己是某个量、实际不是的数字，且没有仪器能看见——低了一层。
+
+### 二、修法：布局只留一份，让清单去问 store
+
+按「分支处理平铺布局」修（`if interval is None`）能让数字对，但**会把导致这次事故的重复原封不动留在原地**。所以改成让 store 自己交出路径：新增 `FundingStore.symbols()` 与两个 store 的 `directory` 属性，`_store_fact(directory, paths)` 只接收已解析好的路径。`manifest.py` 现在一个字的布局知识都没有。测试夹具同样经由真 store 写文件——夹具里手写一遍布局，就是这次事故本身的第三次重演。
+
+复核（真实数据根）：`funding` 231 符号 / 20,196,970 字节 / 指纹 `08ada6f733c09ee1`；**`klines` 三个字段逐位不变**（`231 / 444306711 / fb9391ce34395763`），所以历史报告的 klines 侧仍然可比，这次修复没有顺手作废别的东西。
+
+### 三、处置已落盘的报告：v1 的零读作「没测过」，不是「归档是空的」
+
+先量再决定。全仓 `reports/` 里**带 dataset 清单的报告只有 4 份**，全部是 2026-09-04 的，全部带着瞎掉的资金费事实。修复前跑一遍 `manifest_problems`：其中 3 份**本来就已经在告警**（universe.selected_at_ms 与 klines 229→231），只有 `tsmom-validation-20260904T193707Z.json` 一份是干净的。所以「修完会淹掉一片告警」这个担心量出来是 **1 份报告从干净变成不干净**，不是洪水。
+
+三个选项，取第三个：
+
+1. **照常报成漂移**——会输出 `funding.symbols: 0 -> 231`，即断言「归档从无到有长出来了」。**这是对历史的假陈述**：归档一直在，瞎的是仪器。而且这种行文会训练读者忽略 funding 那一行。
+2. **静默压掉**——把「不知道」塌缩成「一致」。本模块唯一明确拒绝的就是这件事，`test_a_result_with_no_manifest_reports_unknown_provenance_not_agreement` 就是为它写的。
+3. **报成「未记录」**（采纳）——说真话：那份报告的资金费出处从未被记录过，无法核对。
+
+v1 的零本来就是**真歧义**：`{0, 0, _digest({})}` 既可能是 231 个文件也可能是空目录，记录里没有任何东西能分辨——所以「未知」是它的准确读数，不是权宜。（`funding: null` 不在此列，仍然可信：目录确实不存在，那一点 v1 看得见。）
+
+为了不让这个歧义变成永久性的，清单加 `MANIFEST_VERSION = 2` 印戳：**v1 的零不可读，v2 的零是一次测量**。没有印戳的话，为了对旧报告诚实，将来每一个真正空的归档都得被叫作「未知」。印戳落在 `MANIFEST_FIELDS` 之外，**不移动任何既有 digest**。
+
+修复后那 4 份的输出：3 份原有的 klines/universe 漂移行一字不变，各自多一行「funding provenance was never recorded」；第 4 份只多那一行。
+
+### 四、代价与没做的事
+
+`beidou_data` +55 行，ceiling 1258 → 1313，第二十次抬升，理由句写在 `test_source_budget.py` 里。行数不在那个一字修复上，在「布局只存一份」和版本印戳上。
+
+测试：`tests/data/test_manifest.py` 5 → 9 条，两条新的先红后绿（其中一条红在 `assert []`——整份资金费归档被加进去而 `manifest_problems` 一声不吭，这才是缺陷在它真正要害处的样子）。全套 342 passed，ruff / mypy 干净。
+
+没做的事，也是本条留下的开口：**`manifest_problems` 至今没有生产调用方**。`research_cmd.py` 两处只写 `build_manifest(...).to_dict()`，没有任何路径在读报告时核对它。也就是说这次修好的是一件**还没有被接上的仪器**——它现在会说真话了，但仍然没有人问它。接上它是独立的一条，不与本条捆绑。
+
+## 2026-09-05 · D-041：给 `manifest_problems` 接上第一个调用方——严重度分级是这条的全部内容
+
+D-040 修好了清单对资金费的瞎点，同时留下一句话：**`manifest_problems` 至今没有生产调用方**。`validate` 自 D-024 起把 dataset 清单写进每一份报告，而没有任何代码路径把它读回来比对过。也就是说这件仪器修好了却没接线，它要抓的「证据指针失效」依然抓不到。本条接线。
+
+### 一、接在哪：启动闸门 + 日报/周报
+
+`beidou_alpha` 不允许 import 任何 `beidou_*`（`test_import_rules.py`），所以检查不能进 `registry.py`。落点是 `beidou_live/config.py` 的 `registry_dataset_problems`，与既有的 `registry_evidence_problems` 并排；`live run` 启动时调用，`report daily` / `report weekly` 各自把结果写进 payload 与 markdown。顺带删掉一处重复：两个 report 命令持有**逐字节相同**的证据读取循环，现在是一个 `_evidence_reports`。
+
+### 二、严重度分级：不分级的闸门一周内就会被关掉
+
+`manifest_check` 返回 `blocking` / `advisory` 两桶：
+
+- **`membership` 无条件阻断。**验证跑在时点成员表上，换了节奏就等于换了一本书——P12 就是这个形状。
+- **`klines` / `funding` 永不阻断。**数据任务每天 01:xx 追加 bar，阻断它等于每次同步后都拒绝启动，操作者会把 `--allow-unvalidated` 变成常驻参数，那比没有闸门更糟。
+- **`universe` 有条件阻断**，这一格是量出来的而不是想出来的。初版设计把 universe 列为无条件阻断，实测立刻发现 **tsmom 会当场卡住实盘**：其引用的 universe 是 `pool-refresh`/15 币，而盘上是 `live-refresh`/16 币。原因是 **`universe.json` 由实盘循环自己重写**（`write_universe`），所以那不是证据失效，是循环自己的记账。最终规则：**source 不变而符号集变了才阻断**；source 变了归 advisory。
+
+### 三、「从未记录」一律 advisory，沿用 portfolio 块的先例
+
+没有清单的报告、以及 D-040 认定为 v1 未知的资金费，都不阻断。这不是新发明的宽容，是 `construction_problems` 已经立下的规矩：*Reports written before `validate` recorded its construction have no `portfolio` block and are skipped, so nothing in flight today is blocked.* 加一个闸门维度不该停掉已经在跑的东西。
+
+实测确认（真实归档，`registry_dataset_problems` 对 shipped registry）：**blocking 为空**，三条 advisory——tsmom 的 universe 记账差异、tsmom 的 v1 资金费未知、flow 的报告根本没有清单。日报 / 周报端到端跑通，`## Dataset provenance (D-041)` 正常渲染。
+
+### 四、代价与没做的事
+
+`beidou_data` +62、`beidou_live` +64、`beidou_cli` +18（cli 涨得最少是因为删掉了那份重复循环），ceiling 第二十一次抬升，理由句在 `test_source_budget.py`。全套 356 passed / 1 skipped，ruff 与 mypy 干净。
+
+那个 skip 是 `test_the_shipped_registry_is_not_blocked_on_the_machine_that_runs_the_loop`：它需要 `.beidou/data`，worktree 与 CI 里都没有，所以只在持有归档的机器上运行。**这是有意的**——它回答的是「今天这台机器上实盘还能不能起来」，别处的答案没有意义。
+
+没做的事，明确记下来：**`live run` 里那段组装（打印 advisory、blocking 并入拒绝条件）没有自动化测试覆盖**。`live run` 无法离线调用（要建 venue 与行情连接），所以它是被人眼审的六行，两个输入（`registry_evidence_problems`、`registry_dataset_problems`）各自有测试。要真正覆盖它得先把启动闸门从命令函数里拆出来，那是独立的一条。
+
+另外，advisory 现在只是被打印和写进报告，**没有任何东西统计它、也没有告警**。tsmom 的 v1 资金费未知会一直挂在那里，直到它被重新验证——这正是 D-040 第三节选择「说未记录」而不是「说漂移」时接受的状态，不是遗漏。

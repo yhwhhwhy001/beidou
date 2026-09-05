@@ -16,6 +16,7 @@ from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import Registry, evidence_problems
 from beidou_alpha.signals import get_signal
 from beidou_data.live_feed import PublicMarketData
+from beidou_data.manifest import ManifestCheck, build_manifest, manifest_check
 from beidou_data.pool import LivePool
 from beidou_data.universe import UniverseConfig
 from beidou_exchange.binance_usdm.rest_client import BinanceRestClient
@@ -165,6 +166,36 @@ def registry_evidence_problems(registry: Registry, profile: dict[str, Any] | Non
             )
         )
     return problems
+
+
+def registry_dataset_problems(
+    registry: Registry, data_root: str | Path = ".beidou/data", interval: str = "1h"
+) -> ManifestCheck:
+    """D-041: check each enabled strategy's cited dataset manifest against the data on disk.
+
+    ``validate`` has written a manifest into every report since D-024 and nothing ever read one back,
+    so the stale-evidence pointer it exists to catch could not be caught.  This is the reader; the
+    severity split it relies on is documented in :data:`beidou_data.manifest.BLOCKING_FIELDS`.
+
+    A missing or unreadable report is left alone - ``registry_evidence_problems`` already reports it,
+    and one fault should be named once.
+    """
+    current = build_manifest(data_root, interval)
+    blocking: list[str] = []
+    advisory: list[str] = []
+    for entry in registry.enabled:
+        path = Path(str((entry.evidence or {}).get("report", "")))
+        if not str(path) or not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        recorded = payload.get("dataset") if isinstance(payload, dict) else None
+        check = manifest_check(recorded if isinstance(recorded, dict) else None, current)
+        blocking.extend(f"{entry.id}: {message}" for message in check.blocking)
+        advisory.extend(f"{entry.id}: {message}" for message in check.advisory)
+    return ManifestCheck(blocking, advisory)
 
 
 def build_model_from_profile(profile: dict[str, Any]) -> tuple[AlphaModel, Registry]:

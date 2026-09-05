@@ -270,11 +270,37 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
+# Twentieth raise, 2026-09-05, with the sentence the rule requires: +55 in beidou_data for D-040, the
+# manifest's blind spot on the funding archive.  `_store_fact` spelled the store layout out a second
+# time and got it wrong - it walked `funding/<SYMBOL>/funding.parquet` and skipped every file in the
+# flat `funding/<SYMBOL>.parquet` store - so the fact read {0, 0, _digest({})} on a 231-file / 20 MB
+# archive, both sides of `manifest_problems` were zero, and no report's manifest could ever flag the
+# funding data.  D-034 rewrote what that archive means underneath four reports and none of them could
+# see it.  The lines are not the one-character fix: they are `FundingStore.symbols()` and a `directory`
+# property on both stores, so the layout exists in exactly one module and cannot drift again, plus the
+# version stamp and `_unrecorded_fields`, which keep a pre-fix zero readable as "never measured"
+# instead of silently becoming "the archive grew from nothing" on every historical report.  The cheaper
+# option was to branch on `interval is None` in place; it would have left the duplicated layout that
+# caused this sitting there for the next reader.  KILL-027 / D-038 shape, one layer down.
+# Twenty-first raise, 2026-09-05, with the sentence the rule requires: +62 beidou_data, +64 beidou_live,
+# +18 beidou_cli for D-041, which gave `manifest_problems` its first caller.  D-040 repaired the funding
+# manifest and left it an instrument nobody read: `validate` wrote a dataset manifest into every report
+# and no code path ever compared one back against the data, so the stale-evidence pointer the manifest
+# exists to catch still could not be caught.  The lines are almost entirely the severity split, and that
+# split is the difference between a gate and an annoyance: a membership rebuild blocks (validation runs
+# on that table; P12 is what a rebuilt one does), while klines/funding growth does not, because the
+# daily sync causes it every day.  Universe is the case that had to be measured rather than assumed -
+# the loop rewrites `universe.json` itself, and tsmom's cited universe read `pool-refresh`/15 against
+# `live-refresh`/16 on disk, so blocking on any universe move would have made the loop refuse to start
+# because of its own refresh; it now blocks only when the symbol set moves under an unchanged source.
+# beidou_cli grew least because the wiring deleted something: `report daily` and `report weekly` held
+# byte-identical evidence-loading loops, now one helper.  Verified against the live archive: nothing in
+# flight is blocked today, and both enabled strategies report advisory lines only.
 CEILING = {
     "beidou_alpha": 4_876,
-    "beidou_live": 4_198,
-    "beidou_cli": 2_582,
-    "beidou_data": 1_258,
+    "beidou_live": 4_262,
+    "beidou_cli": 2_600,
+    "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,
 }

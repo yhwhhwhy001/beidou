@@ -24,8 +24,12 @@ class KlineStore:
     def __init__(self, root: str | Path = ".beidou/data") -> None:
         self.root = Path(root)
 
+    @property
+    def directory(self) -> Path:
+        return self.root / "klines"
+
     def path(self, symbol: str, interval: str) -> Path:
-        return self.root / "klines" / symbol / f"{interval}.parquet"
+        return self.directory / symbol / f"{interval}.parquet"
 
     def exists(self, symbol: str, interval: str) -> bool:
         return self.path(symbol, interval).exists()
@@ -91,18 +95,30 @@ class KlineStore:
         return len(pd.read_parquet(path, columns=["open_time"])) if path.exists() else 0
 
     def symbols(self, interval: str) -> list[str]:
-        base = self.root / "klines"
-        if not base.exists():
+        if not self.directory.exists():
             return []
-        return sorted(p.parent.name for p in base.glob(f"*/{interval}.parquet"))
+        return sorted(p.parent.name for p in self.directory.glob(f"*/{interval}.parquet"))
 
 
 class FundingStore:
     def __init__(self, root: str | Path = ".beidou/data") -> None:
         self.root = Path(root)
 
+    @property
+    def directory(self) -> Path:
+        return self.root / "funding"
+
     def path(self, symbol: str) -> Path:
-        return self.root / "funding" / f"{symbol}.parquet"
+        return self.directory / f"{symbol}.parquet"
+
+    def symbols(self) -> list[str]:
+        """Every symbol with funding stored.  Flat here - one file per symbol - unlike klines, which nest.
+
+        Exists so nothing has to re-derive that layout; re-deriving it is what caused D-040.
+        """
+        if not self.directory.exists():
+            return []
+        return sorted(p.stem for p in self.directory.glob("*.parquet"))
 
     def append(self, symbol: str, frame: pd.DataFrame) -> int:
         path = self.path(symbol)

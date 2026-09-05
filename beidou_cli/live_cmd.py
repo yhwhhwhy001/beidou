@@ -7,6 +7,7 @@ import json
 import logging
 import subprocess
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 import click
 
 from beidou_alpha.panel import interval_seconds
+from beidou_alpha.registry import Registry
 from beidou_cli import live, report
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_live.alerts import WebhookAlerts
@@ -26,6 +28,7 @@ from beidou_live.config import (
     build_venue,
     live_config,
     load_profile,
+    registry_dataset_problems,
     registry_evidence_problems,
     resolve_universe,
     universe_sink,
@@ -113,12 +116,18 @@ def live_run(
     payload = load_profile(profile)
     model, registry = build_model_from_profile(payload)
     problems = registry_evidence_problems(registry, payload)
-    if problems:
+    # D-041: the dataset manifest, read rather than only written.  Advisory lines are printed and do not
+    # stop anything - the daily sync moves klines/funding, and the loop rewrites universe.json itself.
+    dataset = registry_dataset_problems(registry, data_root, _interval(payload))
+    for message in (*dataset.blocking, *dataset.advisory):
+        click.echo(f"dataset: {message}")
+    if problems or dataset.blocking:
         for problem in problems:
             click.echo(f"evidence: {problem}")
         if not allow_unvalidated and not dry_run and not paper:
             raise click.ClickException(
-                "enabled strategies lack validation evidence; run `beidou research validate` or pass --allow-unvalidated"
+                "enabled strategies lack validation evidence, or cite data that has since changed; "
+                "run `beidou research validate` or pass --allow-unvalidated"
             )
     universe = resolve_universe(payload, [s for s in symbols.split(",") if s.strip()] or None, data_root)
     config = live_config(payload, universe, registry, dry_run=dry_run)
@@ -361,6 +370,21 @@ def live_kill_switch(profile: str, engage: bool) -> None:
         click.echo(f"kill switch released: {path}")
 
 
+def _interval(profile: dict[str, Any]) -> str:
+    return str((profile.get("market_data", {}) or {}).get("interval", "1h"))
+
+
+def _evidence_reports(registry: Registry) -> dict[str, Any]:
+    """The reports the enabled strategies cite.  `report daily` and `report weekly` had byte-identical
+    copies of this loop; one copy is what let the dataset check be added to both at once."""
+    evidence: dict[str, Any] = {}
+    for entry in registry.enabled:
+        report_path = Path(str((entry.evidence or {}).get("report", "")))
+        if report_path.exists():
+            evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
+    return evidence
+
+
 @report.command("daily")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
@@ -369,23 +393,20 @@ def live_kill_switch(profile: str, engage: bool) -> None:
     "--out", default=None, help="directory for the markdown/json report (default: profile paths.reports_dir/daily)"
 )
 @click.option("--check", is_flag=True, help="exit non-zero when the report is in ALERT (for the hourly monitor)")
-def report_daily(profile: str, paper: bool, day: str | None, out: str | None, check: bool) -> None:
+@click.option("--data-root", default=".beidou/data", show_default=True)
+def report_daily(profile: str, paper: bool, day: str | None, out: str | None, check: bool, data_root: str) -> None:
     """Render the daily attribution report (with drift vs validation expectations) from the live state files."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
     registry = load_registry(payload.get("registry", "config/alpha_registry.yaml"))
-    evidence: dict[str, Any] = {}
-    for entry in registry.enabled:
-        report_path = Path(str((entry.evidence or {}).get("report", "")))
-        if report_path.exists():
-            evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
     data = daily_payload(
         store,
         chosen,
-        expectations_from_evidence(evidence),
+        expectations_from_evidence(_evidence_reports(registry)),
         probes_from_registry(registry),
         RiskBudgetParams.from_mapping(payload.get("risk_budget", {}) or {}),
+        dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
@@ -463,22 +484,19 @@ def _changed_lines(commits: int) -> dict[str, int] | None:
 @click.option("--date", "day", default=None, help="YYYY-MM-DD, the last day of the week (default: today UTC)")
 @click.option("--out", default=None, help="directory for the report (default: profile paths.reports_dir/weekly)")
 @click.option("--commits", default=40, show_default=True, help="commits to measure the alpha effort share over")
-def report_weekly(profile: str, paper: bool, day: str | None, out: str | None, commits: int) -> None:
+@click.option("--data-root", default=".beidou/data", show_default=True)
+def report_weekly(profile: str, paper: bool, day: str | None, out: str | None, commits: int, data_root: str) -> None:
     """The plan's weekly research report: the week's decisions next to the week's evidence."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
     registry = load_registry(payload.get("registry", "config/alpha_registry.yaml"))
-    evidence: dict[str, Any] = {}
-    for entry in registry.enabled:
-        report_path = Path(str((entry.evidence or {}).get("report", "")))
-        if report_path.exists():
-            evidence[entry.id] = json.loads(report_path.read_text(encoding="utf-8"))
     data = weekly_payload(
         store,
         chosen,
-        expectations=expectations_from_evidence(evidence),
+        expectations=expectations_from_evidence(_evidence_reports(registry)),
         changed_lines=_changed_lines(commits),
+        dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
     )
     markdown = weekly_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "weekly")

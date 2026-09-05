@@ -18,18 +18,42 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from beidou_data.store import FundingStore, KlineStore
+
 MANIFEST_FIELDS = ("membership", "universe", "klines", "funding")
+
+BLOCKING_FIELDS = ("membership", "universe")
+"""The fields whose movement can change what the data *means* rather than how much of it there is.
+
+``membership`` blocks unconditionally: it is the point-in-time table validation actually runs on, and a
+rebuild at another cadence (P12) makes a cited result a statement about a different book.  ``universe``
+blocks conditionally - see :func:`_universe_drift_blocks`.  ``klines`` and ``funding`` never block,
+because the daily sync appends bars to both; refusing on that would refuse every start after a sync and
+teach the operator to pass ``--allow-unvalidated`` permanently, which costs more than it buys.
+"""
+
+MANIFEST_VERSION = 2
+"""1 -> 2 (D-040): under v1 the funding fact read ``{0, 0, _digest({})}`` whether the archive held 231
+files or none, so a v1 zero is unreadable and a v2 zero is a measurement.  Stamped rather than inferred,
+because without it every future empty archive would have to be called unknown to stay honest about the
+old ones.  Outside :data:`MANIFEST_FIELDS` on purpose: adding it moves no existing digest.
+"""
 
 
 def _digest(payload: object) -> str:
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+_BLIND_FUNDING: dict[str, Any] = {"symbols": 0, "bytes": 0, "fingerprint": _digest({})}
+"""What a v1 manifest recorded for funding no matter what was on disk."""
 
 
 def _file_fact(path: Path) -> dict[str, Any] | None:
@@ -60,22 +84,20 @@ def _membership_fact(root: Path) -> dict[str, Any] | None:
     }
 
 
-def _store_fact(root: Path, folder: str, interval: str | None) -> dict[str, Any] | None:
-    directory = root / folder
+def _store_fact(directory: Path, paths: dict[str, Path]) -> dict[str, Any] | None:
+    """Size per symbol for one parquet store, given the paths the store itself resolved.
+
+    Takes resolved paths rather than a folder plus a naming rule because that version knew the layout a
+    second time and was wrong about it for funding's whole life (D-040): klines nest as
+    ``<SYMBOL>/<interval>.parquet``, funding is flat as ``<SYMBOL>.parquet``, and the shared walk skipped
+    every non-directory.  A 231-file / 20 MB archive read ``{0, 0, ...}``, so both sides of
+    ``manifest_problems`` were zero and funding could never raise a flag - including across D-034, which
+    rewrote what that archive means.  The layout now lives only in ``beidou_data.store``.
+    """
     if not directory.exists():
         return None
-    symbols: dict[str, int] = {}
-    total = 0
-    for child in sorted(directory.iterdir()):
-        if not child.is_dir():
-            continue
-        target = child / f"{interval}.parquet" if interval else child / "funding.parquet"
-        if not target.exists():
-            continue
-        size = target.stat().st_size
-        symbols[child.name] = size
-        total += size
-    return {"symbols": len(symbols), "bytes": total, "fingerprint": _digest(symbols)}
+    symbols = {symbol: path.stat().st_size for symbol, path in paths.items() if path.exists()}
+    return {"symbols": len(symbols), "bytes": sum(symbols.values()), "fingerprint": _digest(symbols)}
 
 
 @dataclass(frozen=True)
@@ -96,16 +118,23 @@ class DatasetManifest:
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": "dataset-manifest",
+            "version": MANIFEST_VERSION,
             "root": self.root,
             "interval": self.interval,
             "digest": self.digest,
             **{field: getattr(self, field) for field in MANIFEST_FIELDS},
         }
 
-    def differences(self, other: DatasetManifest) -> list[str]:
-        """Human-readable disagreements, so a stale pointer says *what* moved rather than only that it did."""
+    def differences(self, other: DatasetManifest, skip: Collection[str] = ()) -> list[str]:
+        """Human-readable disagreements, so a stale pointer says *what* moved rather than only that it did.
+
+        ``skip`` drops fields the recorded side never actually measured; reporting those as movement
+        would assert a change that never happened.
+        """
         out: list[str] = []
         for field in MANIFEST_FIELDS:
+            if field in skip:
+                continue
             mine, theirs = getattr(self, field), getattr(other, field)
             if mine == theirs:
                 continue
@@ -134,26 +163,74 @@ def build_manifest(root: str | Path, interval: str = "1h") -> DatasetManifest:
             "source": payload.get("source"),
             "selected_at_ms": payload.get("selected_at_ms"),
         }
+    klines, funding = KlineStore(base), FundingStore(base)
     return DatasetManifest(
         root=str(base),
         interval=interval,
         membership=_membership_fact(base),
         universe=universe,
-        klines=_store_fact(base, "klines", interval),
-        funding=_store_fact(base, "funding", None),
+        klines=_store_fact(klines.directory, {s: klines.path(s, interval) for s in klines.symbols(interval)}),
+        funding=_store_fact(funding.directory, {s: funding.path(s) for s in funding.symbols()}),
     )
 
 
-def manifest_problems(recorded: dict[str, Any] | None, current: DatasetManifest) -> list[str]:
-    """Empty when a report's recorded manifest still describes the data on disk.
+def _universe_drift_blocks(previous: dict[str, Any] | None, current: dict[str, Any] | None) -> bool:
+    """A changed symbol set blocks; a changed *selection mechanism* does not.
+
+    ``.beidou/data/universe.json`` is rewritten by the live loop's own universe refresh, so a
+    ``pool-refresh -> live-refresh`` transition is the loop's bookkeeping and not evidence going stale.
+    Measured 2026-09-04: tsmom's cited universe read ``pool-refresh``/15 against ``live-refresh``/16 on
+    disk, so treating every universe move as drift would have the loop refuse to start because of
+    something it did itself.  A symbol set that moves while the source holds still is the real thing -
+    the book being traded is no longer the book the evidence describes.
+    """
+    if previous is None or current is None:
+        return True  # only reached when the two disagree, i.e. the block appeared or vanished
+    if previous.get("source") != current.get("source"):
+        return False
+    return previous.get("fingerprint") != current.get("fingerprint")
+
+
+@dataclass(frozen=True)
+class ManifestCheck:
+    """A manifest comparison split by what the caller should do about it.
+
+    ``blocking`` is drift in :data:`BLOCKING_FIELDS`.  ``advisory`` is everything else: store growth,
+    and provenance that was never recorded at all.  Provenance is advisory on purpose and by
+    precedent - ``construction_problems`` skips reports written before ``validate`` recorded a
+    ``portfolio`` block, so that adding a gate dimension never stops what is already in flight.
+    """
+
+    blocking: list[str]
+    advisory: list[str]
+
+    @property
+    def problems(self) -> list[str]:
+        return [*self.blocking, *self.advisory]
+
+
+def _unrecorded_fields(recorded: dict[str, Any]) -> tuple[str, ...]:
+    """Fields the recorded manifest claims a value for but never actually measured (D-040).
+
+    Only funding, only v1, only the exact zero the layout bug produced.  ``funding: null`` stays
+    trustworthy - v1 could see an absent directory - and no v1 record holds any other funding value.
+    """
+    if int(recorded.get("version", 1)) >= MANIFEST_VERSION:
+        return ()
+    return ("funding",) if recorded.get("funding") == _BLIND_FUNDING else ()
+
+
+def manifest_check(recorded: dict[str, Any] | None, current: DatasetManifest) -> ManifestCheck:
+    """Compare a report's recorded manifest against the data on disk, split by severity.
 
     A report written before manifests existed has none; that is reported as unknown provenance rather
     than as agreement, because "no manifest" and "manifest matches" are different facts.
     """
     if not recorded:
-        return ["no dataset manifest recorded: this result's data provenance cannot be checked"]
-    if recorded.get("digest") == current.digest:
-        return []
+        return ManifestCheck([], ["no dataset manifest recorded: this result's data provenance cannot be checked"])
+    unrecorded = _unrecorded_fields(recorded)
+    if not unrecorded and recorded.get("digest") == current.digest:
+        return ManifestCheck([], [])
     previous = DatasetManifest(
         root=str(recorded.get("root", "")),
         interval=str(recorded.get("interval", current.interval)),
@@ -162,5 +239,29 @@ def manifest_problems(recorded: dict[str, Any] | None, current: DatasetManifest)
         klines=recorded.get("klines"),
         funding=recorded.get("funding"),
     )
-    changes = previous.differences(current)
-    return [f"dataset changed since this result was produced: {', '.join(changes)}"] if changes else []
+    blocks: tuple[str, ...] = ("membership",)
+    if previous.universe != current.universe and _universe_drift_blocks(previous.universe, current.universe):
+        blocks = (*blocks, "universe")
+    advises = tuple(field for field in MANIFEST_FIELDS if field not in blocks)
+
+    meaning_moved = previous.differences(current, skip=(*advises, *unrecorded))
+    extent_moved = previous.differences(current, skip=(*blocks, *unrecorded))
+
+    blocking = [f"dataset changed since this result was produced: {', '.join(meaning_moved)}"] if meaning_moved else []
+    advisory = (
+        [f"dataset store contents changed since this result was produced: {', '.join(extent_moved)}"]
+        if extent_moved
+        else []
+    )
+    version = recorded.get("version", 1)
+    advisory.extend(
+        f"{field} provenance was never recorded: manifest v{version} could not read the {field} store, "
+        f"so this result's {field} data cannot be checked"
+        for field in unrecorded
+    )
+    return ManifestCheck(blocking, advisory)
+
+
+def manifest_problems(recorded: dict[str, Any] | None, current: DatasetManifest) -> list[str]:
+    """Every problem, blocking first.  Callers that act on severity want :func:`manifest_check`."""
+    return manifest_check(recorded, current).problems
