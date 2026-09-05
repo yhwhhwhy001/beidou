@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 from click.testing import CliRunner
 
+from beidou_alpha.mining import Ratio, Ret, Squash, Vol
+from beidou_alpha.mining.search import Candidate
 from beidou_cli import main
 from beidou_data.store import KlineStore
 
@@ -468,3 +470,98 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
     assert "Grid (full-sample Sharpe per configuration)" in markdown
     assert "vol_window=100" in markdown and "vol_window=200" in markdown
     assert "parameter_neighbourhood" in markdown
+
+
+def _mine(root: Path, out: Path, *extra: str) -> tuple[int, str, dict]:
+    """Run `research mine` on the August fixtures, which carry no funding, and read the report back."""
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "mine",
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--no-include-funding",
+            "--max-lookback",
+            "200",
+            "--min-history",
+            "24",
+            "--top",
+            "3",
+            *extra,
+        ],
+    )
+    reports = sorted(out.glob("mine-shortlist-*.json"))
+    payload = json.loads(reports[-1].read_text()) if reports else {}
+    return result.exit_code, result.output, payload
+
+
+def test_mine_records_the_parameters_of_its_own_run(tmp_path: Path, august_dir: Path) -> None:
+    """DL-P17-04: the report rebuilds its own command line, which P14's could not (D-024 applied to mine)."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    code, output, payload = _mine(root, out)
+    assert code == 0, output
+
+    run = payload["run"]
+    assert run["funding"] is False
+    assert run["include_funding"] is False
+    assert run["execution"] == "open_to_close"
+    assert run["max_complexity"] == 10
+    assert run["max_lookback"] == 200
+    assert run["min_history_bars"] == 24  # the resolved value, not the raw option
+    assert run["baseline"] is None
+    assert run["root"] == str(root)
+    # The two dataclasses that decide every number in the table.
+    assert run["costs"]["use_funding"] is False
+    assert "vol_target" in run["portfolio"]
+
+    # Every enumerated candidate is accounted for exactly once, which is what makes declared_trials honest.
+    outcomes = payload["outcomes"]
+    assert outcomes["scored"] + outcomes["errored"] + outcomes["never_traded"] == len(payload["candidates"])
+    assert outcomes["scored"] > 0  # or the identity above holds vacuously
+    assert payload["declared_trials"] == payload["evaluated"]
+    assert payload["baseline"] is None
+    # Stamped: two runs differing only in their flags must not overwrite each other's evidence.
+    assert sorted(out.glob("mine-shortlist-*.json"))[-1].name != "mine-shortlist.json"
+
+
+def test_mine_compares_every_candidate_against_a_named_baseline(tmp_path: Path, august_dir: Path) -> None:
+    """DL-P17-05: the question is a second uncorrelated book, so the marginal is the quantity to rank on.
+
+    The baseline here is a mined id rather than ``tsmom``, for two reasons: this fixture is 720 bars and
+    tsmom's registry horizons reach 720, so it produces no decisions at all on it; and a mined baseline
+    also exercises the ``_resolve_mined`` call, without which ``_entry`` raises a bare ``KeyError``.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    # A price-only tree on purpose: this fixture carries OHLCV alone, so quote_volume and
+    # taker_buy_quote arrive as all-NaN frames and any flow candidate scores nothing.
+    baseline_id = f"mined_{Candidate.of(Squash(Ratio(Ret(24), Vol(48)), 1.0)).hash}"
+    code, output, payload = _mine(root, out, "--baseline", baseline_id)
+    assert code == 0, output
+
+    assert payload["run"]["baseline"] == baseline_id
+    assert payload["baseline"]["strategy"] == baseline_id
+    assert "NOT the risk-budgeted" in payload["baseline"]["marginal"]
+
+    scored = [row for row in payload["candidates"] if row.get("sharpe") is not None]
+    assert scored
+    for row in scored:
+        assert "baseline_correlation" in row
+        assert "baseline_marginal_sharpe" in row
+        assert row["baseline_bars"] > 0
+    # The error rows must stay clean: `scored` filters on sharpe, so a baseline key there would be a lie.
+    for row in payload["candidates"]:
+        if "error" in row:
+            assert "baseline_correlation" not in row
+    assert "| marginal | corr |" in sorted(out.glob("mine-shortlist-*.md"))[-1].read_text()

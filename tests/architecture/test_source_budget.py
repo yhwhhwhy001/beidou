@@ -270,10 +270,40 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
+# Twentieth raise, 2026-09-05, with the sentence the rule requires: +136 in beidou_alpha and +103 in
+# beidou_cli, for P17's carry search.  The alpha lines are the kind this file says it should welcome,
+# because they buy hypothesis space rather than plumbing: a `Funding` leaf, `Expr.reads_funding`, and a
+# `_funding_family` of 42 expressions.  Funding was the one panel input no node could read - the archive
+# has been on disk since 2026-09-03 and tsmom's crowding modifier already consumes it by hand, but the
+# expression language could not, so every one of P14's 225 candidates was a price-or-volume shape and the
+# clean negative it produced ("no money left in this expression space") was measured over a space that
+# excluded carry entirely.  Roughly half of the 136 is docstring, deliberately: the family emits both
+# signs, so the mirror of its worst candidate is its best and a carry expression is ALWAYS near the top of
+# the shortlist by construction; the momentum-times-carry shape is not a searchable version of tsmom's
+# crowding modifier and must not be read as one; and shape three carries a POSITIVE carry weight, the
+# opposite of carry.py's prior.  Three things the next reader would otherwise get wrong, in the only
+# place they will be read.
+#
+# The cli lines are the cheaper alternative's bill coming due.  `research mine` recorded a dataset
+# manifest but not its own `--funding`, cost model, execution mode or portfolio params, so establishing
+# what the 2026-09-04 shortlist actually ran - vol_target 0.15, funding charged - took a four-arm
+# reproduction rather than a read.  D-024 requires a validate report to be reproducible from itself;
+# `mine` was not, and now is (a `run` block, a stamped filename, and an `outcomes` count that makes the
+# candidates which enumerate but never trade visible instead of merely absent).  The rest is `--baseline`,
+# which answers the question the search exists to ask - is there a SECOND, uncorrelated book - rather than
+# the one a bare ranking answers.  Eight of those lines are a refusal the ratchet itself extracted: this
+# file failed on them, which is how the guard got written down rather than assumed.  `AlphaModel.targets`
+# refuses a funding-consuming model without funding history (D-023) but `evaluate` - the research path -
+# does not, so `--baseline tsmom --no-funding` would have run the crowding modifier inert and measured
+# every candidate's marginal against a book nobody validated.  The general hole in the research path is
+# older than P17 and is not closed here.
+#
+# The three plan thresholds below all move the safe way: non-alpha grew, but beidou_live did not move at
+# all, and the alpha share rose (5,012 of 13,964 against 4,876 of 13,732).
 CEILING = {
-    "beidou_alpha": 4_876,
+    "beidou_alpha": 5_012,
     "beidou_live": 4_198,
-    "beidou_cli": 2_582,
+    "beidou_cli": 2_685,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

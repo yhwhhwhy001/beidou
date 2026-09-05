@@ -1638,8 +1638,15 @@ def research_decompose(
 @research.command("mine")
 @_common_options
 @click.option("--top", default=12, show_default=True, help="candidates to print, ranked by full-sample Sharpe")
-@click.option("--max-complexity", default=8, show_default=True)
+@click.option("--max-complexity", default=10, show_default=True)
 @click.option("--max-lookback", default=1400, show_default=True, help="more than the loop can fetch is a bug (E-042)")
+@click.option(
+    "--include-funding/--no-include-funding",
+    default=True,
+    show_default=True,
+    help="search the carry family (needs the funding panel)",
+)
+@click.option("--baseline", default="", help="strategy id to compare each candidate against (registry params)")
 def research_mine(
     strategy: str,
     params: str,
@@ -1660,6 +1667,8 @@ def research_mine(
     top: int,
     max_complexity: int,
     max_lookback: int,
+    include_funding: bool,
+    baseline: str,
 ) -> None:
     """Enumerate candidate expressions and rank them full-sample.  This produces a SHORTLIST, not evidence.
 
@@ -1670,6 +1679,11 @@ def research_mine(
     denominator will never learn the search happened.  ``--strategy`` is inherited from the shared
     options and ignored here; the candidates are the strategies.
     """
+    # Otherwise silent by degradation: with no funding panel every carry candidate raises into the loop's
+    # broad `except` below, lands as an `{"error": ...}` row that `scored` filters out, and is still
+    # charged to `declared_trials` - the whole family paid for and none of it searched.
+    if include_funding and not funding:
+        raise click.ClickException("--include-funding needs the funding panel; pass --funding or --no-include-funding")
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
@@ -1681,7 +1695,26 @@ def research_mine(
         if min_history is not None
         else int((profile_payload.get("portfolio", {}) or {}).get("min_history_bars", 720))
     )
-    search = enumerate_candidates(max_complexity=max_complexity, max_lookback=max_lookback)
+    baseline_net: pd.Series | None = None
+    if baseline:
+        _resolve_mined(baseline)  # a mined candidate is addressable by its hash, like any other id
+        baseline_entry = _entry(baseline, registry_path, "")
+        # `AlphaModel.targets` refuses a funding-consuming model without funding history (D-023), but
+        # `evaluate` - the research path - does not, so tsmom's crowding modifier would run inert here and
+        # every candidate's marginal would be measured against a book nobody validated (E-040 / KILL-027).
+        if get_signal(baseline).needs_funding(baseline_entry.params) and panel.funding is None:
+            raise click.ClickException(
+                f"--baseline {baseline} consumes funding under its registry params; pass --funding"
+            )
+        baseline_model = _model(baseline_entry, profile_payload, interval, history)
+        baseline_weights, _bc, _bp = baseline_model.evaluate(panel, membership)
+        # Guard-free on purpose, byte-identical to the candidates' call below: the shortlist buys internal
+        # consistency, not realism.  The daily-loss pause reads the equity path it is producing, so
+        # replaying it on one leg only would leak that replay into every candidate's correlation.
+        baseline_net = run_backtest(panel, baseline_weights, cost, execution=execution).portfolio_net  # type: ignore[arg-type]
+    search = enumerate_candidates(
+        max_complexity=max_complexity, max_lookback=max_lookback, include_funding=include_funding
+    )
     click.echo(
         f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
         f"({json.dumps(search.rejected)}) on {len(panel.symbols)} symbols x {len(panel.index)} bars"
@@ -1702,20 +1735,59 @@ def research_mine(
             rows.append({**candidate.to_dict(), "error": f"{type(exc).__name__}: {exc}"})
             continue
         net = result.portfolio_net
-        rows.append(
-            {
-                **candidate.to_dict(),
-                "sharpe": sharpe(net, panel.bars_per_year),
-                "net_return": compound(net),
-                "max_drawdown": max_drawdown(net),
-                "turnover": float(result.turnover.sum()),
-            }
-        )
+        row = {
+            **candidate.to_dict(),
+            "sharpe": sharpe(net, panel.bars_per_year),
+            "net_return": compound(net),
+            "max_drawdown": max_drawdown(net),
+            "turnover": float(result.turnover.sum()),
+        }
+        if baseline_net is not None:
+            # Aligned per candidate, not once: lookbacks run from 25 to ~1,400 bars, so a baseline Sharpe
+            # precomputed over its own index would subtract two numbers measured over different regimes.
+            frame = pd.DataFrame({"baseline": baseline_net, "candidate": net}).dropna(how="all").fillna(0.0)
+            correlation = float(frame["baseline"].corr(frame["candidate"]))
+            combined = sharpe(frame.mean(axis=1), panel.bars_per_year)
+            alone = sharpe(frame["baseline"], panel.bars_per_year)
+            row["baseline_correlation"] = None if pd.isna(correlation) else correlation
+            row["baseline_marginal_sharpe"] = None if combined is None or alone is None else combined - alone
+            row["baseline_bars"] = len(frame)
+        rows.append(row)
     scored = [row for row in rows if row.get("sharpe") is not None]
     scored.sort(key=lambda row: -float(row["sharpe"]))
-    payload = {
+    # A candidate whose net never varies gets `sharpe` None and no "error" key, so it leaves the table
+    # without leaving a trace while still being charged to `declared_trials`.  Counted rather than
+    # inferred: a family that enumerated but never traded should be visible in the artefact.
+    never_traded = [row for row in rows if "error" not in row and row.get("sharpe") is None]
+    failed = [row for row in rows if "error" in row]
+    payload: dict[str, Any] = {
         "kind": "mine-shortlist",
         "generated_at": datetime.now(UTC).isoformat(),
+        # Everything that moves a number in this report, so the JSON alone rebuilds the command line.
+        # P14's shortlist recorded none of it, and recovering what it actually ran - vol_target 0.15 with
+        # funding charged - took a four-arm reproduction rather than a read (D-024 applied to `mine`).
+        "run": {
+            "funding": funding,
+            "include_funding": include_funding,
+            "execution": execution,
+            "universe_mode": universe_mode,
+            "min_tenure": min_tenure,
+            "interval": interval,
+            "start": start,
+            "end": end,
+            "min_history_bars": history,  # resolved, not the raw option, which is None by default
+            "portfolio": portfolio.__dict__,
+            "costs": cost.__dict__,
+            "max_complexity": max_complexity,
+            "max_lookback": max_lookback,
+            "top": top,
+            "baseline": baseline or None,
+            "profile": profile,
+            "costs_path": costs_path,
+            "registry_path": registry_path,
+            "root": root,
+            "symbols_arg": symbols,
+        },
         "universe_mode": universe_mode,
         "declared_trials": search.declared_trials,
         "evaluated": search.evaluated,
@@ -1723,25 +1795,56 @@ def research_mine(
         "symbols": panel.symbols,
         "range": [str(panel.index[0]), str(panel.index[-1])],
         "dataset": build_manifest(root, interval).to_dict(),
+        "outcomes": {
+            "scored": len(scored),
+            "errored": len(failed),
+            "never_traded": len(never_traded),  # enumerated, charged, but no Sharpe to rank
+        },
         "candidates": rows,
+        "baseline": (
+            None
+            if not baseline
+            else {
+                "strategy": baseline,
+                "sharpe": sharpe(baseline_net, panel.bars_per_year) if baseline_net is not None else None,
+                "marginal": (
+                    "equal-weight two-stream: sharpe(mean(baseline, candidate)) - sharpe(baseline); NOT the "
+                    "risk-budgeted, fold-aware D-018 marginal that `research book` computes"
+                ),
+            }
+        ),
         "not_evidence": (
             "full-sample ranking over a search; promote a candidate only through `research validate "
             f"--prior-trials {search.declared_trials}` on the point-in-time universe (D-013/D-020)"
         ),
     }
     lines = [
-        f"| {row['hash']} | {row['sharpe']:.3f} | {row['max_drawdown']:.3f} | {row['expression']} |"
+        f"| {row['hash']} | {row['sharpe']:.3f} | {row['max_drawdown']:.3f} | "
+        f"{_fmt(row.get('baseline_marginal_sharpe'))} | {_fmt(row.get('baseline_correlation'))} | "
+        f"{row['expression']} |"
         for row in scored[:top]
     ]
-    markdown = "\n".join(["| hash | sharpe | mdd | expression |", "| --- | --- | --- | --- |", *lines])
-    path, digest = _write(out, "mine-shortlist", payload, markdown)
+    markdown = "\n".join(
+        [
+            "| hash | sharpe | mdd | marginal | corr | expression |",
+            "| --- | --- | --- | --- | --- | --- |",
+            *lines,
+        ]
+    )
+    # Stamped, because `mine` was the only unstamped name here: once the payload records the flags, two
+    # runs differing only in them would overwrite each other's evidence at one path.
+    path, digest = _write(out, f"mine-shortlist-{_stamp()}", payload, markdown)
     for row in scored[:top]:
         click.echo(
             f"  {row['hash']}  sharpe={row['sharpe']:6.3f}  mdd={row['max_drawdown']:7.3f}  "
             f"turnover={row['turnover']:8.1f}  lookback={row['lookback']:>4}  {row['expression']}"
         )
-    failed = [row for row in rows if "error" in row]
     if failed:
         click.echo(f"{len(failed)} candidate(s) could not be evaluated; see the report")
+    if never_traded:
+        click.echo(
+            f"{len(never_traded)} candidate(s) enumerated but never traded (zero-variance net, so no Sharpe): "
+            "charged to --prior-trials, absent from the table"
+        )
     click.echo(f"declare --prior-trials {search.declared_trials} when validating any of these")
     click.echo(f"report: {path} sha256={digest}")
