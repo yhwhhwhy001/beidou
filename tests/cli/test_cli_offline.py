@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from click.testing import CliRunner
 
 from beidou_cli import main
-from beidou_data.store import KlineStore
+from beidou_data.store import FundingStore, KlineStore
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
 
@@ -27,6 +28,9 @@ def test_help_has_all_groups() -> None:
         assert group in result.output
 
 
+# `crowding_window: 0` in the `--params` below is not decoration.  These runs pass `--no-funding`, and
+# tsmom's registry params turn the funding-reading crowding modifier on, so before E-040 was closed they
+# were quietly exercising an inert modifier.  Pinning it off says what they have always actually tested.
 def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path) -> None:
     root = tmp_path / "data"
     _store_from_fixtures(august_dir, root)
@@ -47,7 +51,7 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
             str(out),
             "--no-funding",
             "--params",
-            '{"vol_window": 100, "horizons": [5, 20, 50]}',
+            '{"vol_window": 100, "horizons": [5, 20, 50], "crowding_window": 0}',
             "--min-history",
             "0",
         ],
@@ -72,7 +76,7 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
             str(out),
             "--no-funding",
             "--params",
-            '{"horizons": [5, 20, 50]}',
+            '{"horizons": [5, 20, 50], "crowding_window": 0}',
             "--grid",
             '{"vol_window": [100, 200], "entry_threshold": [0.2, 0.3]}',
             "--folds",
@@ -117,7 +121,7 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
             str(out),
             "--no-funding",
             "--params",
-            '{"horizons": [5, 20, 50]}',
+            '{"horizons": [5, 20, 50], "crowding_window": 0}',
             "--grid",
             '{"vol_window": [100, 200], "entry_threshold": [0.2, 0.3]}',
             "--folds",
@@ -151,7 +155,7 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
             str(out),
             "--no-funding",
             "--params",
-            '{"vol_window": 100, "horizons": [5, 20, 50]}',
+            '{"vol_window": 100, "horizons": [5, 20, 50], "crowding_window": 0}',
             "--min-history",
             "0",
             "--folds",
@@ -212,7 +216,7 @@ def test_research_pit_universe_and_overlay_offline(tmp_path: Path, august_dir: P
             str(out),
             "--no-funding",
             "--params",
-            '{"vol_window": 100, "horizons": [5, 20, 50]}',
+            '{"vol_window": 100, "horizons": [5, 20, 50], "crowding_window": 0}',
             "--min-history",
             "0",
         ],
@@ -382,7 +386,7 @@ def test_validate_reserves_a_holdout_tail(tmp_path: Path) -> None:
         str(out),
         "--no-funding",
         "--params",
-        '{"horizons": [5, 20, 50], "vol_window": 100}',
+        '{"horizons": [5, 20, 50], "vol_window": 100, "crowding_window": 0}',
         "--grid",
         "{}",
         "--folds",
@@ -448,7 +452,7 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
             str(out),
             "--no-funding",
             "--params",
-            '{"horizons": [5, 20, 50]}',
+            '{"horizons": [5, 20, 50], "crowding_window": 0}',
             "--grid",
             '{"vol_window": [100, 200]}',
             "--folds",
@@ -468,3 +472,224 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
     assert "Grid (full-sample Sharpe per configuration)" in markdown
     assert "vol_window=100" in markdown and "vol_window=200" in markdown
     assert "parameter_neighbourhood" in markdown
+
+
+# --- E-040 / KILL-027 on the research path ---------------------------------------------------------
+# `AlphaModel.targets` refuses a funding-consuming model without funding history (D-023); the research
+# path did not, so under `--no-funding` tsmom's crowding modifier ran inert and the report cited
+# `crowding_window: 72` for a configuration that never ran.  The registry is passed explicitly because
+# that is the premise of these tests: tsmom's *registry* params are what set `crowding_window`.
+REPO = Path(__file__).resolve().parents[2]
+REGISTRY = str(REPO / "config" / "alpha_registry.yaml")
+# What the offline fixture (720 bars) can actually score; the registry's weekly horizons cannot.
+SHORT_HORIZONS = '{"vol_window": 100, "horizons": [5, 20, 50]}'
+
+# One invocation per research command that offers `--funding/--no-funding`, minus the exemptions below.
+# `--min-history 0` is per-command: `correlate` does not take it, and `overlay --min-history` rebuilds the
+# model without `books=`, so on the shipped registry it dies before it can reach any guard (reported separately).
+_SHORT = ["--strategy", "tsmom", "--params", SHORT_HORIZONS, "--min-history", "0"]
+FUNDING_COMMANDS: dict[str, list[str]] = {
+    "backtest": _SHORT,
+    "validate": _SHORT,
+    "diagnose": _SHORT,
+    "decompose": _SHORT,
+    "correlate": ["--strategies", "tsmom"],
+    "overlay": [],
+    "book": ["--main", "tsmom", "--sleeve", "breakout", "--universe", "static", "--min-history", "0"],
+}
+# `mine` takes `--funding` but ignores `--strategy`: its candidates are the strategies, and no enumerated
+# candidate reads funding on this branch.  Its baseline arm is guarded where the baseline is introduced.
+EXEMPT_FROM_FUNDING_GUARD = {"list", "mine"}
+
+
+def _research_args(command: str, extra: list[str], root: Path, out: Path) -> list[str]:
+    common = ["--root", str(root), "--symbols", ",".join(SYMBOLS), "--registry", REGISTRY, "--out", str(out)]
+    return ["research", command, *extra, *common, "--no-funding"]
+
+
+def test_the_funding_command_table_covers_every_command_that_takes_the_flag() -> None:
+    """A new research command with `--funding` must join the table above, not arrive silently unguarded."""
+    from beidou_cli import research
+
+    with_flag = {
+        name
+        for name, command in research.commands.items()
+        if any("--funding" in (param.opts + param.secondary_opts) for param in command.params)
+    }
+    assert with_flag - EXEMPT_FROM_FUNDING_GUARD == set(FUNDING_COMMANDS)
+
+
+def test_backtest_does_not_exit_zero_while_the_registry_makes_tsmom_consume_funding(
+    tmp_path: Path, august_dir: Path
+) -> None:
+    """The sharp case: this exact invocation exited 0 and reported a Sharpe of 4.34 for an inert modifier."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    result = CliRunner().invoke(main, _research_args("backtest", FUNDING_COMMANDS["backtest"], root, out))
+    assert result.exit_code != 0, result.output
+    assert "--funding" in result.output and "tsmom" in result.output, result.output
+    assert not list(out.glob("*.json")), "a refused run must not leave evidence behind"
+
+
+@pytest.mark.parametrize(("command", "extra"), sorted(FUNDING_COMMANDS.items()))
+def test_every_research_command_refuses_a_funding_consuming_strategy_without_funding(
+    command: str, extra: list[str], tmp_path: Path, august_dir: Path
+) -> None:
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    result = CliRunner().invoke(main, _research_args(command, extra, root, out))
+    # The message, not the exit code, is what proves the guard: several of these commands already fail on
+    # this short fixture for unrelated reasons, and a refusal that names `--funding` cannot be one of those.
+    assert "--funding" in result.output, f"{command} did not refuse:\n{result.output}"
+    assert result.exit_code != 0
+    assert not list(out.glob("*.json")), f"{command} wrote evidence it should have refused"
+
+
+def test_the_control_arm_still_runs_without_funding(tmp_path: Path, august_dir: Path) -> None:
+    """`crowding_window: 0` reads no funding, so `--no-funding` *is* the configuration it was judged on."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    control = '{"vol_window": 100, "horizons": [5, 20, 50], "crowding_window": 0}'
+    args = _research_args("backtest", ["--strategy", "tsmom", "--params", control, "--min-history", "0"], root, out)
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert len(list(out.glob("tsmom-backtest-*.json"))) == 1
+
+
+def _funding_for(august_dir: Path, root: Path, symbols: tuple[str, ...]) -> None:
+    """Settlements every 8 bars for `symbols` only; the rest of the universe gets no archive at all."""
+    stamps = pd.read_parquet(august_dir / "BTCUSDT" / "1h.parquet")["open_time"].to_numpy()[::8]
+    store = FundingStore(root)
+    for symbol in symbols:
+        store.append(
+            symbol,
+            pd.DataFrame(
+                {"funding_time": stamps, "funding_rate": [0.0001] * len(stamps), "mark_price": [1.0] * len(stamps)}
+            ),
+        )
+
+
+def test_a_report_records_what_the_signals_required_of_funding_and_what_the_panel_carried(
+    tmp_path: Path, august_dir: Path
+) -> None:
+    """The residual hole the guard cannot see: `--funding` against a partial archive is inert again.
+
+    The panel carries a funding frame, so the guard is satisfied, but two of the four symbols have no
+    settlement in it - and tsmom's crowding rank reads an unobserved symbol as uncrowded rather than
+    failing.  Reports record the cost model's `use_funding` and nothing about the signals' own
+    requirement, so nothing on disk distinguished that from a modifier that was never configured.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    _funding_for(august_dir, root, ("BTCUSDT", "ETHUSDT"))
+    out = tmp_path / "reports"
+    args = [
+        "research",
+        "backtest",
+        "--strategy",
+        "tsmom",
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--registry",
+        REGISTRY,
+        "--out",
+        str(out),
+        "--funding",
+        "--min-history",
+        "0",
+        "--params",
+        SHORT_HORIZONS,
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    payload = json.loads(next(out.glob("tsmom-backtest-*.json")).read_text())
+    assert payload["funding"] == {
+        "required_by": ["tsmom"],
+        "panel": True,
+        "symbols_settled": 2,
+        "symbols": 4,
+    }
+    assert payload["costs"]["use_funding"] is True  # the cost model's flag stays what it was
+
+
+def test_a_control_arm_report_says_no_signal_required_funding(tmp_path: Path, august_dir: Path) -> None:
+    """`required_by: []` beside `panel: false` is the reading that used to be unavailable: absent, not inert."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    control = '{"vol_window": 100, "horizons": [5, 20, 50], "crowding_window": 0}'
+    args = _research_args("backtest", ["--strategy", "tsmom", "--params", control, "--min-history", "0"], root, out)
+    assert CliRunner().invoke(main, args).exit_code == 0
+    payload = json.loads(next(out.glob("tsmom-backtest-*.json")).read_text())
+    assert payload["funding"] == {"required_by": [], "panel": False, "symbols_settled": 0, "symbols": 4}
+
+
+def test_research_refuses_when_the_funding_archive_holds_no_settlement_at_all(tmp_path: Path, august_dir: Path) -> None:
+    """`--funding` is the DEFAULT, and against an unsynced archive it is as inert as `--no-funding`.
+
+    `FundingStore.load` returns an empty frame per symbol, so `load_panel` builds a funding frame of all
+    zeros - not `None` - and neither `panel.funding is None` guard can tell that from real data.  tsmom's
+    crowding rank then reads every symbol as uncrowded and the run writes the exact report E-040 is about:
+    exit 0, `params.crowding_window: 72`, and a Sharpe for a modifier that consumed nothing.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)  # klines synced, funding never pulled
+    out = tmp_path / "reports"
+    args = [
+        "research",
+        "backtest",
+        "--strategy",
+        "tsmom",
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--registry",
+        REGISTRY,
+        "--out",
+        str(out),
+        "--funding",
+        "--min-history",
+        "0",
+        "--params",
+        SHORT_HORIZONS,
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code != 0, result.output
+    assert "no settlement" in result.output and "tsmom" in result.output, result.output
+    assert not list(out.glob("*.json")), "a refused run must not leave evidence behind"
+
+
+def test_partial_funding_coverage_is_announced_rather_than_left_in_the_json(tmp_path: Path, august_dir: Path) -> None:
+    """Some settlement is not zero settlement, so it runs - but the operator is told, not just the file."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    _funding_for(august_dir, root, ("BTCUSDT", "ETHUSDT"))
+    out = tmp_path / "reports"
+    args = [
+        "research",
+        "backtest",
+        "--strategy",
+        "tsmom",
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--registry",
+        REGISTRY,
+        "--out",
+        str(out),
+        "--funding",
+        "--min-history",
+        "0",
+        "--params",
+        SHORT_HORIZONS,
+    ]
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert "2/4" in result.output and "tsmom" in result.output, result.output

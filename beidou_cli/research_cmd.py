@@ -200,6 +200,69 @@ def _load(root: str, symbols: list[str], interval: str, start: str | None, end: 
     )
 
 
+def _funding_consumers(entries: Sequence[StrategyEntry]) -> list[str]:
+    return sorted({entry.id for entry in entries if get_signal(entry.id).needs_funding(entry.params)})
+
+
+def _settled_symbols(panel: Panel) -> int:
+    """Symbols with at least one settlement stored.  A zero column and no column are the same input."""
+    return 0 if panel.funding is None else int((panel.funding.abs().sum(axis=0) > 0).sum())
+
+
+def _require_funding(entries: Sequence[StrategyEntry], panel: Panel) -> None:
+    """Refuse a run whose signals consume funding against a panel that carries none (E-040 / KILL-027).
+
+    ``AlphaModel.strategy_targets`` refuses the same thing and is the guard that cannot be forgotten;
+    this one exists for three reasons it cannot cover.  ``research diagnose`` computes the signal directly
+    and never builds a model, so nothing else would stop it.  The operator asked for ``--no-funding``, so
+    the answer belongs at the flag - which strategy, which flag - rather than in a library traceback.
+
+    And ``--funding`` is the DEFAULT, which is the case the library guard is blind to by construction.
+    ``FundingStore.load`` returns an empty frame for a symbol with no archive, so an unsynced root yields
+    a funding frame of all zeros rather than ``None``; tsmom's crowding rank then reads every symbol as
+    uncrowded and the run writes the exact report E-040 is about, at exit 0, with nothing said anywhere.
+    A signal that reads no settlement at all is as inert as one handed no frame, so it is refused alike.
+    """
+    hungry = _funding_consumers(entries)
+    if not hungry:
+        return
+    settled, total = _settled_symbols(panel), len(panel.symbols)
+    if panel.funding is None:
+        raise click.ClickException(
+            f"{', '.join(hungry)} consumes funding history under these params, so --no-funding would run the "
+            "signal on inputs it was never judged on (E-040 / KILL-027). Pass --funding, or choose params "
+            "that read none (tsmom: crowding_window 0) to run the control arm deliberately."
+        )
+    if settled == 0:
+        raise click.ClickException(
+            f"{', '.join(hungry)} consumes funding history, but the archive under this root holds no "
+            f"settlement for any of the {total} symbols in the panel, so the signal would read zeros and be "
+            "as inert as it is under --no-funding (E-040 / KILL-027). Run `beidou data sync` first."
+        )
+    if settled < total:
+        click.echo(
+            f"warning: {', '.join(hungry)} reads funding and only {settled}/{total} symbols have any "
+            "settlement stored; the rest read as zero, which the signal cannot tell from calm funding."
+        )
+
+
+def _funding_facts(entries: Sequence[StrategyEntry], panel: Panel) -> dict[str, Any]:
+    """What the signals required of funding, beside what the panel actually carried.
+
+    Reports recorded the *cost model's* ``use_funding`` and nothing about the signals' own requirement, so
+    a reader could not tell a modifier that was absent from one that ran on nothing.  ``_require_funding``
+    now refuses both of the wholly-inert cases, which leaves this to record the partial one it lets run:
+    a symbol with no archive contributes a zero column that tsmom's crowding rank reads as uncrowded, so
+    ``symbols_settled`` is what keeps a thinner modifier legible on disk rather than merely quieter.
+    """
+    return {
+        "required_by": _funding_consumers(entries),
+        "panel": panel.funding is not None,
+        "symbols_settled": _settled_symbols(panel),
+        "symbols": len(panel.symbols),
+    }
+
+
 def _write(out: str, name: str, payload: dict[str, Any], markdown: str) -> tuple[Path, str]:
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
@@ -255,6 +318,7 @@ def research_backtest(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([entry], panel)
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
@@ -285,6 +349,7 @@ def research_backtest(
         "symbols": panel.symbols,
         "range": {"start": str(result.weights.index[0]), "end": str(result.weights.index[-1]), "bars": summary["bars"]},
         "costs": cost.__dict__,
+        "funding": _funding_facts([entry], panel),
         "execution": execution,
         "summary": summary,
         "benchmark": {"gross_return": compound(bench), "sharpe": sharpe(bench, panel.bars_per_year)},
@@ -431,6 +496,8 @@ def research_validate(
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     combos = _grid(strategy, grid, entry.params)
+    # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
+    _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
     bpy = panel.bars_per_year
     nets: dict[str, pd.Series] = {}
     params_by_key: dict[str, dict[str, Any]] = {}
@@ -517,6 +584,7 @@ def research_validate(
         "symbols": panel.symbols,
         "range": {"start": str(common_index[0]), "end": str(common_index[-1]), "bars": n_bars},
         "costs": cost.__dict__,
+        "funding": _funding_facts([StrategyEntry(id=strategy, params=c) for c in combos], panel),
         "execution": execution,
         "grid_size": len(combos),
         "grid": json.loads(grid) if grid else DEFAULT_GRIDS.get(strategy, {}),
@@ -670,6 +738,7 @@ def research_diagnose(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([entry], panel)
     if min_history is None:
         min_history = int((load_yaml(profile).get("portfolio", {}) or {}).get("min_history_bars", 720))
     eligible = panel.close.notna().cumsum() >= min_history
@@ -752,11 +821,13 @@ def research_correlate(
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    entries = {strategy: _entry(strategy, registry_path, "") for strategy in ids}
+    _require_funding(list(entries.values()), panel)
     membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     nets: dict[str, pd.Series] = {}
     for strategy in ids:
-        entry = _entry(strategy, registry_path, "")
+        entry = entries[strategy]
         weights, _c, _p = _model(entry, profile_payload, interval).evaluate(panel, membership)
         nets[strategy] = run_backtest(panel, weights, cost).portfolio_net
     frame = pd.DataFrame(nets).dropna(how="all").fillna(0.0)
@@ -774,6 +845,7 @@ def research_correlate(
         "strategies": ids,
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
+        "funding": _funding_facts(list(entries.values()), panel),
         "range": {"start": str(frame.index[0]), "end": str(frame.index[-1]), "bars": len(frame)},
         "correlation": corr.round(4).to_dict(),
         "individual_sharpe": individual,
@@ -869,6 +941,7 @@ def research_overlay(
         )
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding(model.entries, panel)
     membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     bpy = panel.bars_per_year
@@ -925,6 +998,7 @@ def research_overlay(
         "symbols": panel.symbols,
         "range": {"start": str(base.weights.index[0]), "end": str(base.weights.index[-1]), "bars": len(base.weights)},
         "costs": cost.__dict__,
+        "funding": _funding_facts(model.entries, panel),
         "folds": folds,
         "min_train": min_train,
         "baseline": baseline,
@@ -1340,6 +1414,7 @@ def research_book(
     ledger_path = Path(out) / "trials.jsonl"
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([main_entry, sleeve_entry], panel)
     universes: list[tuple[str, Panel, pd.DataFrame | None]] = [
         (universe_mode, panel, _membership(root, universe_mode, panel))
     ]
@@ -1429,6 +1504,7 @@ def research_book(
         "universe_mode": universe_mode,
         "robustness_universe": None if robustness is None else robustness_mode,
         "costs": cost.__dict__,
+        "funding": _funding_facts([main_entry, sleeve_entry], panel),
         "folds": folds,
         "min_train": min_train,
         "purge": purge,
@@ -1594,6 +1670,7 @@ def research_decompose(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([entry], panel)
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
@@ -1607,6 +1684,7 @@ def research_decompose(
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
         "costs": cost.__dict__,
+        "funding": _funding_facts([entry], panel),
         **payload,
         "generated_at": datetime.now(UTC).isoformat(),
     }

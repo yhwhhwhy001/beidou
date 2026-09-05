@@ -296,10 +296,38 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # beidou_cli grew least because the wiring deleted something: `report daily` and `report weekly` held
 # byte-identical evidence-loading loops, now one helper.  Verified against the live archive: nothing in
 # flight is blocked today, and both enabled strategies report advisory lines only.
+# Twenty-second raise, 2026-09-05, with the sentence the rule requires: +13 in beidou_alpha and +51 in
+# beidou_cli for E-040 / KILL-027 on the research path.  `AlphaModel.targets` has refused a funding-consuming
+# model without funding history since D-023; `strategy_targets` never did, so `beidou research backtest
+# --strategy tsmom --no-funding` exited 0 and reported a Sharpe for a run in which the crowding modifier its
+# own report cites had consumed nothing.  Research is where evidence is produced, so that is the worse half.
+# The alpha lines are the guard plus the paragraph saying why it sits on `strategy_targets` rather than on
+# `evaluate`: `decompose_book` reaches the signals without ever calling `evaluate`, so the obvious placement
+# would have left `research decompose` producing exactly the report this exists to prevent.  The cli lines are
+# two helpers.  `_require_funding` is not redundant with the library guard - `research diagnose` computes the
+# signal directly and builds no model at all, so nothing else would stop it, and an operator who typed
+# `--no-funding` should be told which strategy and which flag rather than handed a traceback.  `_funding_facts`
+# is the part no guard can cover: `FundingStore.load` returns an empty frame for a symbol with no archive, so
+# `--funding` against a partial archive yields a zero column, and tsmom's crowding rank reads an unobserved
+# symbol as uncrowded rather than failing.  `symbols_settled` is what makes that legible on disk instead of
+# arriving as a quietly weaker modifier.  Historical reports are deliberately NOT retrofitted: what earlier
+# `--no-funding` evidence is worth is the operator's call and docs/RESEARCH_LOG.md's to record.
+# The cli figure above then grew again before this landed, and the extra lines are the more important half.
+# A review of the first draft found that the flag it guarded was the wrong thing to guard: BOTH checks keyed
+# off `panel.funding is None`, which asks "did the operator type --no-funding", not "does the signal have the
+# inputs it was judged on".  `--funding` is the DEFAULT, and against a root whose klines are synced but whose
+# funding never was, `FundingStore.load` returns an empty frame per symbol, so `load_panel` builds a funding
+# frame of all ZEROS - not None - and neither guard could tell that from real data.  Reproduced: exit 0, a
+# report citing `crowding_window: 72`, an annualised Sharpe of 4.34, `symbols_settled: 0`, and no mention of
+# funding in the terminal or the markdown.  That is byte-for-byte the report this whole change exists to
+# prevent, reached by typing nothing at all.  So `_require_funding` now refuses zero settlements the same way
+# it refuses a missing frame, and warns on the partial case instead of leaving it in the JSON where the
+# operator will not look.  `_funding_consumers` and `_settled_symbols` are extracted because the guard and
+# the report block would otherwise compute the same two things three times between them.
 CEILING = {
-    "beidou_alpha": 4_876,
+    "beidou_alpha": 4_889,
     "beidou_live": 4_262,
-    "beidou_cli": 2_600,
+    "beidou_cli": 2_678,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

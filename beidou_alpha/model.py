@@ -117,7 +117,20 @@ class AlphaModel:
     def strategy_targets(
         self, panel: Panel, membership: pd.DataFrame | None = None, previous: PreviousTargets | None = None
     ) -> dict[str, pd.DataFrame]:
-        """Per-strategy held targets; ``previous`` seeds NO_ACTION with what the live loop held last cycle."""
+        """Per-strategy held targets; ``previous`` seeds NO_ACTION with what the live loop held last cycle.
+
+        The panel must carry funding whenever an enabled signal reads it - the same refusal ``targets``
+        makes for the live path (KILL-027), made here because research is where evidence is produced.
+        Without it ``beidou research backtest --strategy tsmom --no-funding`` exited 0 and wrote a report
+        whose ``params`` cited ``crowding_window: 72`` for a modifier that had consumed nothing (E-040).
+        The guard sits on this method rather than on ``evaluate`` because it is the one seam every caller
+        crosses: ``decompose_book`` reaches the signals through here without ever calling ``evaluate``.
+        """
+        if self.needs_funding and panel.funding is None:
+            raise ValueError(
+                "an enabled signal reads funding history but the panel carries none; the signal would run "
+                "on inputs it did not have when it was judged (E-040 / KILL-027)"
+            )
         eligible = self.eligible(panel, membership)
         targets: dict[str, pd.DataFrame] = {}
         for entry, scores in zip(self.entries, self.strategy_scores(panel).values(), strict=True):
