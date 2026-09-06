@@ -18,6 +18,7 @@
 | 第二重要的发现 | `expr.py` 里 `funding` 出现 **0 次**。表达式语言读五个字段（`close` / `high` / `low` / `quote_volume` / `taker_buy_quote`），读不到 `panel.funding`、`open`、`volume`(base)、`trades` |
 | 被推翻的 Claim | C-001「北斗的瓶颈是候选供给」——P14 的 225 个候选就是反例，且它当时就在仓库里 |
 | 最大限定 | **P14 的 225 个候选是在 `vol_target 0.15` 上排序的，而实盘现在跑 0.30**（E-012/E-013）。0.30 处上限会 binding，排序不是尺度不变的——同一候选 1.0780 → 1.1207。「表达式空间已搜尽」这个结论测量于一个**本书不再持有的规模**上 |
+| 交付状态 | O-1 已实现并交付，分支 `feat/mining-funding-node` 六个提交（§12）。交付**之后**做了一次独立对抗核验，查出一个真缺陷（防 KILL-027 的守卫自己就是 KILL-027）、四个变异下空过的测试、两条没被兑现的预登记规则——全部已修，记录见 §11。实验本身（AC-P17-02/03）仍未跑 |
 | 一处自查纠正 | 本文件初稿把 `funding.symbols = 0` 读成运行事实，据此断言搜索跑在无资金费面板上。**错的**：那是 `_store_fact` 的布局假设缺陷（E-010），与该次运行无关。真实口径由 E-012 的四臂复算定出。撤回不删除，因为下一个人会犯同一个错 |
 
 ---
@@ -119,7 +120,7 @@ P14 更直接：枚举提案者已经产出 225 个候选，最好的一个比�
 
 - **没跑 `research validate`，没写 `trials.jsonl`。** 本轮零试验额度消耗，与 P14 同一条规矩。
 - **没有验 C-003。** 「加了资金费节点之后是否出现越过同口径 tsmom 基线的候选」是下一步的实验，本文件只把它定义为 Falsifier，不预测结果。**重跑必须在 `vol_target 0.30` 上重建两边**（E-013）：候选与 tsmom 基线都要，P14 的 1.0745 与 1.6972 都是 0.15 口径，不能当作「之前」那一臂直接用。
-- **`research mine` 的报告不能自我复现。** 它记 dataset / universe_mode / range / symbols / declared_trials / evaluated / rejected / candidates，但**不记 `--funding`、不记成本模型、不记 execution、不记 profile 的组合参数**。定 U-3 因此要靠四臂暴力复算去反推两个本该被写下来的参数。这与 D-024 对 validate 报告的要求（「折向量可从报告自身复现」）是同一条标准，`mine` 没有达到——**已单列为一条待办，不在本轮范围**。
+- **`research mine` 的报告不能自我复现。** 它记 dataset / universe_mode / range / symbols / declared_trials / evaluated / rejected / candidates，但**不记 `--funding`、不记成本模型、不记 execution、不记 profile 的组合参数**。定 U-3 因此要靠四臂暴力复算去反推两个本该被写下来的参数。这与 D-024 对 validate 报告的要求（「折向量可从报告自身复现」）是同一条标准，`mine` 没有达到。**已在 O-1 里补上**（DL-P17-04，见 §12.3）。
 - **`_store_fact` 的缺陷本轮只诊断不修**，理由是修它会让所有历史报告的 funding 事实开始不匹配，需要一个刻意的决定而不是一次顺手修改。**该决定已由同日 D-040（`bd7cd6e`）作出**：全仓带清单的报告只有 4 份，修复前 3 份本来就在告警，所以「淹掉一片告警」量出来是 1 份；v1 的零判为**「未记录」**而不是漂移，因为 `{0, 0, _digest({})}` 与空目录在记录里无法分辨，「未知」是它的准确读数。D-041 顺带给 `manifest_problems` 接上了第一个调用方——此前它没有生产调用者。
 - **第 8–12 条的五个节点没有排期。** 它们各自是独立提案，不与资金费节点捆绑——捆绑会让一次搜索的 `declared_trials` 无谓膨胀，而那正是 `search.py` 文档字符串里那条规则要防的。
 - **自适应提案的试验计数问题没有解决，只是绕开了。** 结论是不接 LLM 提案者，所以这个开放统计问题本轮不需要答案。若将来重开，A-004 仍然 OPEN：DSR 的零假设假定可交换抽样，而条件于前轮结果的提案不是。
@@ -381,3 +382,142 @@ D-P17-06 的三个形状（**族的定义是这三条，网格只是参数**）�
 | 上线可验证性 | 4 | M-P17-01 由 validate 裁决，不由全样本 |
 | 对抗生存 | 4 | 10 Kill，0 OPEN P0/P1；1 UNKNOWN 由实验裁决 |
 | **合计** | **42** | 映射到 GO 档；取 **Weak GO** 因为授权的是一次实验而非一个功能 |
+
+---
+
+## 11. 交付后的对抗核验：契约修正与偏离
+
+§8 的契约冻结之后交付了一次，然后对**已交付的东西**做了一次独立核验（五路并行，含变异测试：改坏生产代码看套件红不红）。结果是首轮交付有一个真缺陷、四个空过的测试、两条没被兑现的预登记规则。本节是修正记录——一条冻结后发现不可满足的规则要在记录上被替换，不能默默绕过。
+
+### 11.1 一个真缺陷：防 KILL-027 的守卫自己就是 KILL-027
+
+首版 F-1 守卫写的是 `if include_funding and not funding`——判 **CLI 旗标**。`--funding` 打开而数据根没有资金费归档时，`_load` 返回全零框而不是 `None`：旗标说「要了」，`panel.funding is not None` 说「到了」，两个都不是要问的那个问题。
+
+August fixture 上实测（`--funding`，归档不存在）：**evaluated 267、42 个 carry 候选全部保留、其中 36 个从不交易、全部计入 `declared_trials`，而报告记录 `run.include_funding: true`**——一份断言 carry 家族被搜过、而它跑在常数上的证据。踩到它的是默认路径：`--funding` 与 `--include-funding` 都默认打开。
+
+后果具体：AC-P17-02 若在资金费覆盖不全的数据根上跑，会得到**假的 C-003 SUPPORTED**，把工作送进 Firewall 错误的那一支。
+
+**首版还把契约语义换掉了。**§8.2 与 D-P17-02 要的是「面板无 funding → 搜索空间自动收窄到 225，**不报错**」，首版实现成了 `raise`。收窄已恢复，谓词改为数真有结算的币数，`run` 块同时记录搜了什么 / 要了什么 / 依据是什么。修复见 `692e499`。
+
+### 11.2 两条预登记规则的修正
+
+| 规则 | 冻结原文 | 判定 | 处置 |
+| --- | --- | --- | --- |
+| 2 | 报告 `scored == evaluated`；`errored` 单列且必须为 0 | **不可满足** | **修正**（见下） |
+| 6 | top-k = 3 按边际 Sharpe，预先声明 | 未实现（仍按全样本 Sharpe 排序） | **实现**，`caaa923` |
+
+**规则 2 为什么不可满足**：`enumerate_candidates` 里 `evaluated += 1` 在 complexity 与 lookback 两道 cap **之前**自增，所以被 cap 丢掉的候选必然计入 `evaluated` 而永远不进 `scored`。任何设了 cap 的运行都违反它——这是冻结时没想到的，不是实现的偷懒。
+
+**修正后的形式**（保住原意「没有候选无声消失」，且可达）：
+
+```
+evaluated == too_complex + too_long + scored + errored + never_traded
+```
+
+现在算出来、记进 `outcomes`、并在不成立时**拒绝写报告**——一份自己的算术都不闭合的证据不该落盘，而 `--prior-trials` 正是整个提升门用来定标的那个数。这给了 M-P17-02 一个此前只有陈述没有机制的强制点。
+
+**规则 6 为什么重要**：KILL-P17-01 说的正是按全样本 Sharpe 挑会产出假的 C-003 REFUTED——几百个候选里的最大值既是噪声极大值，又通常来自与在跑的书最相关的那个。现在 `--baseline` 在场时排序键换成 `baseline_marginal_sharpe`，`run.ranked_by` 记录用了哪个键。
+
+### 11.3 四个空过的测试
+
+变异测试证明：改坏生产代码，351 项套件照样全绿。四处，按危害排序。
+
+| 变异 | 首轮 | 现在 | 修法 |
+| --- | --- | --- | --- |
+| 删掉 `yield Squash(interaction, …)`——42 个里的 6 个，**一个宣称形状的整条长臂** | 全绿 | 红 | 走树的完整人口普查，计数由网格推导 |
+| `never_traded` 硬编码成 0 | 全绿 | 红 | 合成 store 让 `takerbuy` 恒为 0，把第三个桶跑成非零 |
+| 删掉 `--baseline` 资金费守卫 | 全绿 | 红 | 用 tsmom（registry 带 `crowding_window`）的拒绝测试 |
+| 库 `max_complexity` 改回 8 而 CLI 仍是 10 | 全绿 | 红 | 断言两个常量相等 |
+
+第一条为什么漏得最深：断言用 `"-1 *" not in t` 区分正负臂，而 `Mul.canonical` 按 hash 排序操作数，六棵负号树里有一棵把 `-1` 排到了右边，于是它满足「正臂」谓词。**字符串前缀从来就不是树的性质。**修复见 `af5027d`。
+
+### 11.4 记录在案的其余偏离（不改，只登记）
+
+| 偏离 | 说明 |
+| --- | --- |
+| 测试 ID 被静默重编号 | 交付文件里 11 个标签中 9 个与 §8.4 含义不同；对照表见 §12.4。不重编号，因为 grep 契约 ID 找到错测试的危害已由 §11.3 补齐覆盖消除 |
+| 逐候选字段改名 | 契约写 `corr_to_baseline` / `marginal_sharpe`，实现是 `baseline_correlation` / `baseline_marginal_sharpe`，另加未承诺的 `baseline_bars`。实质已交付；改名让它们与 `baseline_*` 前缀成组 |
+| `max_complexity` 8 → 10 | 契约全文未提这个 cap。必要（负号 momentum×carry 是十节点树）且证明惰性，但读契约的人会意外 |
+| 编辑边界超出 | §8.3 的「改」清单外还动了 4 个文件：`mining/__init__.py`、`test_source_budget.py`、`test_cli_offline.py`、`tests/fixtures/mining_baseline_hashes.json`。各自都站得住（固定文件是 T-P17-01 的前提，行数守卫是强制的），但都不在冻结清单里 |
+| 七项未请求的新增 | `outcomes` 块与其 stdout 提示、带 stamp 的文件名、两条拒绝路径、两个额外枚举参数（`funding_horizons` / `funding_scale`）、markdown 表新增两列、逐行 `baseline_bars` |
+| 交互 horizon 半数低于声明尺度 | D-P17-06 写「h ∈ 周级」，实现取 (72, 168)；168h 是一周，72h 是三天 |
+
+---
+
+## 12. 实际交付
+
+分支 `feat/mining-funding-node`，从 `db9efd9` 分出，六个提交：
+
+| 提交 | 内容 |
+| --- | --- |
+| `be963ad` | `Funding` 叶节点、`Expr.reads_funding`、`_funding_family`、`run` 块、`--baseline` |
+| `692e499` | F-1 守卫：判面板不判旗标；恢复契约要的收窄语义 |
+| `af5027d` | 四个变异证明为空过的测试洞 |
+| `caaa923` | 预登记规则 2（修正后）与规则 6 |
+| `af104bc` | cap 抬升的理由写反了——结论对，原因是实测的反面 |
+| `04e4c02` | baseline 块补上 KILL-P17-06 要的 `params` / `net_return` / `max_drawdown` |
+
+`pytest -m "not network"` 357 项通过，`ruff format --check`、`ruff check`、`mypy`（81 文件）全绿。
+
+### 12.1 搜索空间：225 → 267
+
+D-P17-06 写的是「精确网格在实现时定」，定成：
+
+| 参数 | 取值 |
+| --- | --- |
+| `funding_windows` | (24, 72, 168) —— 全是 8 的倍数，无窗口跨半个结算 |
+| `funding_horizons` | (72, 168) |
+| `funding_scale` | 1.0（交互与求和两形状共用的标量） |
+| 复用 | `vol_windows[0] = 48`（两条腿同一个）、`scales = (0.5, 1.0, 2.0)`（仅 squash carry 用） |
+
+**42 个表达式，42 个不同 hash，与既有 225 零重叠**，预算 ≤ 60 达标。完整人口普查（由测试逐格断言，不是描述）：
+
+| 形状 | 长臂 | 短臂 | 小计 |
+| --- | ---: | ---: | ---: |
+| squash 风险调整 carry | 9 | 9 | 18 |
+| cs_rank 风险调整 carry | 3 | 3 | 6 |
+| 动量 × carry | 6 | 6 | 12 |
+| 动量 + carry | 6 | 0 | 6 |
+| **合计** | **24** | **18** | **42** |
+
+动量 + carry **没有短臂**——那条腿的负版通过形状一的短臂可达。复杂度分布 `{4: 12, 6: 12, 8: 12, 10: 6}`，最大回溯期 169 根 bar。
+
+### 12.2 `max_complexity` 8 → 10
+
+十节点的那 6 棵是负号 momentum×carry——负号本身要两个节点。抬升是惰性的，理由是**单调性**：放宽上界只会放进树，不会丢掉树，而既有的没有一个超过 8。
+
+**余量恰恰是没有的**：pre-carry 那 225 个的复杂度分布是 `{2: 30, 3: 30, 4: 45, 5: 45, 8: 75}`——三分之一恰好坐在旧 cap 上，8 是最大的一档。首版 docstring 写「nothing existing sits near the cap」是实测的反面，已改（`af104bc`）。
+
+留在 8 的代价实测：`evaluated 267 / kept 261 / too_complex 6`——**六棵被计入 `declared_trials` 然后丢弃**，最差的两头都占。
+
+恒等性由 T-P17-01 在**两个 cap 下各枚举一次**守着，要求同样 225 个 hash、同样顺序。
+
+### 12.3 报告现在能自我复现
+
+P14 那份 shortlist 记了数据集清单却没记自己的 `--funding`、成本模型、execution、组合参数，所以「那次到底什么口径」要靠四臂暴力复算才反推得出（E-012）。现在 `run` 块记 20 个键，`outcomes` 记五个计数并强制闭合，`baseline` 记策略 / 参数 / sharpe / 净收益 / 回撤，文件名带 stamp。
+
+### 12.4 测试 ID 对照表
+
+交付文件的标签与 §8.4 的契约 ID 不是同一套，对照如下（避免 grep 契约 ID 找到错的测试）：
+
+| 契约 §8.4 | 交付文件里的名字 |
+| --- | --- |
+| T-01 恒等性 | `test_the_existing_search_space_is_bit_for_bit_what_p14_recorded` |
+| T-02 量纲 | `test_funding_is_a_return_so_every_shape_must_divide_it_by_volatility` |
+| T-03 `uses_funding` 派生 | `test_the_compiled_spec_declares_the_funding_it_actually_reads` |
+| T-04 lookback | 并入 T-02 的断言，无独立测试 |
+| T-05 缺字段 | `test_a_candidate_refuses_a_panel_that_carries_no_funding` |
+| T-06 语义等于共享 feature | `test_the_leaf_is_exactly_the_shared_feature` |
+| T-07 族预算 | `test_the_funding_family_is_on_by_default_and_costs_what_was_pre_registered` |
+| T-08 F-1 守卫 | `test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_answer` |
+| T-09 解析 mined 资金费 hash | `test_a_mined_carry_id_still_resolves_to_a_signal` |
+| T-10 报告自足 | `test_mine_records_the_parameters_of_its_own_run` |
+| T-11 逐候选边际 | `test_mine_compares_every_candidate_against_a_named_baseline` |
+| （契约外新增） | 人口普查、8 的倍数窗口、枚举确定性、两个 cap 常量相等、`never_traded` 非零、baseline 资金费拒绝、记账不闭合即拒写 |
+
+### 12.5 仍然没做
+
+- **AC-P17-02 与 AC-P17-03**：时点 universe 上的那次真正的 `mine`，以及 top-3 去 `validate --prior-trials <evaluated>`。按 §8.3，跑 validate 与写账本由操作者执行。
+- **M-P17-01 / §9.3**：C-003 的裁决与 Post-Launch Review 表仍空。
+- **研究路径的 `needs_funding` 未强制**：`AlphaModel.targets` 有检查，`evaluate` 没有，所以 `research backtest --strategy tsmom --no-funding` 仍会静默跑一个 crowding 修正器失效的 tsmom。本轮只关掉了 `--baseline` 这一条路径，另七个 research 命令仍敞着，已另立任务。
+- **提交正文里三个不可从提交本身核验的数**：「5 of 267 never traded」是窗口相关的（四个窗口读到 5/5/6/9，5 恰是交集即下界）；「vanished with no trace」过了（改动前那行在 `candidates` 里带 `sharpe: null`，缺的是计数与 stdout）；P14 那份 committed 报告里 never-traded 是 0，所以正文对照的那个现象在仓库证据里不存在。**这三条不应被当作已确立的事实引用。**
