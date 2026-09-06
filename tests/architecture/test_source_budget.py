@@ -270,7 +270,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
-# Twentieth raise, 2026-09-05, with the sentence the rule requires: +139 in beidou_alpha and +139 in
+# Twentieth raise, 2026-09-05, with the sentence the rule requires: +139 in beidou_alpha and +146 in
 # beidou_cli, for P17's carry search.  The alpha lines are the kind this file says it should welcome,
 # because they buy hypothesis space rather than plumbing: a `Funding` leaf, `Expr.reads_funding`, and a
 # `_funding_family` of 42 expressions.  Funding was the one panel input no node could read - the archive
@@ -319,14 +319,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # lookback caps drop anything; the achievable form of the same intent is that every counted expression
 # lands in exactly one bucket, and it is now computed, recorded and refused rather than described.  The
 # amendment itself is written down in docs/analysis/2026-09-05-mining-proposer-pivot.md - a frozen rule
-# that turns out to be unsatisfiable is replaced on the record, not silently.
+# that turns out to be unsatisfiable is replaced on the record, not silently.  Ten more carry the
+# baseline block's params, net return and drawdown, which the contract asked for and the first pass
+# omitted: naming the strategy is not enough when the registry moves under it, since a marginal measured
+# against tsmom-with-crowding is a different number from one measured against tsmom-without and nothing
+# in the artefact separated them.
 #
 # The three plan thresholds below all move the safe way: non-alpha grew, but beidou_live did not move at
-# all, and the alpha share rose (5,015 of 14,003 against 4,876 of 13,732).
+# all, and the alpha share rose (5,015 of 14,018 against 4,876 of 13,732).
 CEILING = {
     "beidou_alpha": 5_015,
     "beidou_live": 4_198,
-    "beidou_cli": 2_721,
+    "beidou_cli": 2_728,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

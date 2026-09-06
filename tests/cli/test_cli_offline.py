@@ -557,12 +557,19 @@ def test_mine_compares_every_candidate_against_a_named_baseline(tmp_path: Path, 
     out = tmp_path / "reports"
     # A price-only tree on purpose: this fixture carries OHLCV alone, so quote_volume and
     # taker_buy_quote arrive as all-NaN frames and any flow candidate scores nothing.
-    baseline_id = f"mined_{Candidate.of(Squash(Ratio(Ret(24), Vol(48)), 1.0)).hash}"
+    mock_candidate = Candidate.of(Squash(Ratio(Ret(24), Vol(48)), 1.0))
+    baseline_id, mock_hash, mock_expr = f"mined_{mock_candidate.hash}", mock_candidate.hash, str(mock_candidate.expr)
     code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding", "--baseline", baseline_id)
     assert code == 0, output
 
     assert payload["run"]["baseline"] == baseline_id
     assert payload["baseline"]["strategy"] == baseline_id
+    # KILL-P17-06's mitigation: naming the strategy is not enough, because the registry moves and a
+    # marginal measured against one configuration is a different number from the same strategy under
+    # another, with nothing in the artefact to separate them.
+    assert payload["baseline"]["params"] == {"entry_threshold": 0.2, "expression": mock_expr, "hash": mock_hash}
+    assert payload["baseline"]["sharpe"] is not None
+    assert payload["baseline"]["max_drawdown"] is not None
     assert "NOT the risk-budgeted" in payload["baseline"]["marginal"]
 
     scored = [row for row in payload["candidates"] if row.get("sharpe") is not None]

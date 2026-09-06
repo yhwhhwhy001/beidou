@@ -1842,7 +1842,14 @@ def research_mine(
             if not baseline
             else {
                 "strategy": baseline,
+                # Which configuration the baseline actually ran under.  Naming the strategy is not enough:
+                # the registry moves, and a marginal measured against tsmom-with-crowding is a different
+                # number from one measured against tsmom-without, with nothing in the artefact to tell
+                # them apart.
+                "params": dict(baseline_entry.params),
                 "sharpe": sharpe(baseline_net, panel.bars_per_year) if baseline_net is not None else None,
+                "net_return": compound(baseline_net) if baseline_net is not None else None,
+                "max_drawdown": max_drawdown(baseline_net) if baseline_net is not None else None,
                 "marginal": (
                     "equal-weight two-stream: sharpe(mean(baseline, candidate)) - sharpe(baseline); NOT the "
                     "risk-budgeted, fold-aware D-018 marginal that `research book` computes"
