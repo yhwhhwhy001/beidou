@@ -78,7 +78,10 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
             max_gross=float(portfolio.get("max_gross", 2.0)),
             max_weight=float(portfolio.get("max_weight", 0.15)),
         ),
-        kill_switch_path=Path(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH")),
+        # L1-07: absolute, always.  A relative default resolves against the working directory, so a
+        # CLI run from a worktree engaged a switch the loop could not see - the same two-processes,
+        # two-directories, one-account shape as DL-L1.
+        kill_switch_path=Path(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH")).resolve(),
         # a book's fraction enters attribution here; contributions stay unscaled targets (D-019)
         strategy_weights={entry.id: entry.weight * registry.fraction(entry.book) for entry in registry.enabled},
         dry_run=dry_run,

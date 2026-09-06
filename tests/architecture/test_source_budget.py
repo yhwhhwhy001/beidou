@@ -565,13 +565,48 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # taken when a channel actually accepted the alert; if none did, the original exception propagates and
 # the loop fails loudly, because a book that vanishes silently is worse than one that hot-loops
 # (KILL-P1).  Most of the lines are that decision and its reasons.
+#
+# 2026-09-06 B1 (DL-L1/L4/L5/L6/X1), the unattended-minimum batch.  The operator ruled on the
+# governance question this raise exists to ask (plan Q2, 2026-09-06): raise and write the reason,
+# rather than cut the batch, because no same-size deletion exists that does not remove a capability.
+# What the lines buy, in the order the risk actually sits:
+#
+# DL-L1 is the one that matters today.  Seven worktrees on this machine, credentials sourced globally
+# from ~/.zshrc, state_dir and kill switch on relative paths, and `live run` defaulting to non-dry-run:
+# `beidou live run --allow-unvalidated` in any worktree was a second process trading the same account
+# (KILL-R20).  An flock keyed to the API key FINGERPRINT - not the state directory, because every
+# worktree has a different one and they all trade the same account - plus `--armed`, which makes real
+# orders a sentence you write rather than one you must remember not to omit.  A refused instance exits
+# 0: non-zero would have launchd relaunch it every ThrottleInterval and alert every time.
+#
+# DL-L4 splits what `--immediate` had fused.  Reconciliation always runs; only the REBALANCE is gated,
+# on a window derived (grace + ThrottleInterval + measured startup) rather than picked - the 09-05
+# draft's 120s would have turned a 143-second catch-up into a 57-minute stale book (KILL-R6).  A skip
+# is recorded as its own cycle row, because L1-01's error was counting the fills that happened instead
+# of the ones that should not have.
+#
+# DL-L5 stops the loop reaching for what is not its own: startup cancelled EVERY open order on the
+# account (L1-09), the kill switch resolved against the working directory so a worktree CLI engaged a
+# file the loop never read (L1-07), and `flatten` closed the book without taking the trading rights
+# away, so the next cycle rebuilt it - the 2026-09-04 incident path (L1-06).
+#
+# DL-L6 is two small things that only matter while everything else is going wrong: fsync on the
+# append-only ledgers, and a SIGTERM handler that finishes the cycle in flight (installed by the CLI,
+# never by the library - signal handlers are process-global).
+#
+# DL-X1 came back from the A-P2 probe with the fact that shaped it: liquidationPrice is 0 for 14 of
+# 14 longs and non-zero for 4 of 4 shorts, because a cross-margin long's liquidation price computes
+# below zero.  0 means UNREACHABLE, not NOW; a distance metric that read it as a price would alarm on
+# every long forever.  `min_liquidation_distance` therefore reports the closest measurable position
+# AND how many have no reachable price - two facts that must never look like one missing number.  The
+# margin-mode check asserts and refuses; it never sets.
 CEILING = {
     "beidou_alpha": 5_373,
-    "beidou_live": 4_485,
-    "beidou_cli": 2_941,
+    "beidou_live": 4_774,
+    "beidou_cli": 3_021,
     "beidou_data": 1_375,
-    "beidou_exchange": 539,
-    "beidou_shared": 280,
+    "beidou_exchange": 544,
+    "beidou_shared": 284,
 }
 
 

@@ -65,6 +65,11 @@ def parse_position(payload: dict[str, Any]) -> Position | None:
         unrealized_pnl=_float(unrealized),
         leverage=int(_float(payload.get("leverage"), 0.0)),
         venue_notional=None if raw_notional is None else _float(raw_notional),
+        # DL-X1: the venue writes 0 when there is no reachable liquidation price, which under cross
+        # margin is every long with enough equity behind it (measured on demo 2026-09-06: 14/14 longs
+        # zero, 4/4 shorts non-zero).  0 is not a price; carrying it as one would put every long at
+        # distance zero.  Account rows do not carry the field at all, hence the None default.
+        liquidation_price=(lambda v: v if v and v > 0 else None)(_float(payload.get("liquidationPrice"), 0.0)),
     )
 
 

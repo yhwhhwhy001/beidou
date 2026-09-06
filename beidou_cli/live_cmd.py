@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import signal
 import subprocess
 import time
 from dataclasses import asdict
@@ -33,9 +34,10 @@ from beidou_live.config import (
     resolve_universe,
     universe_sink,
 )
-from beidou_live.engine import BreakerTripped, LiveEngine, registry_digest
+from beidou_live.engine import BreakerTripped, LiveEngine, StopRequested, registry_digest
 from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
+from beidou_live.lock import LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
 from beidou_live.reports import (
@@ -55,6 +57,7 @@ from beidou_live.verify import (
     last_recorded_registry_digest,
     verify_live_targets,
 )
+from beidou_shared.config import env_secret
 
 
 def clock_skew_seconds(rest_url: str) -> float | None:
@@ -90,6 +93,34 @@ def _logging(verbose: bool) -> None:
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+def kill_switch_path(payload: dict[str, Any]) -> Path:
+    """The kill switch, resolved (L1-07).
+
+    Both this module and ``live_config`` used to build it from the raw profile string, which is
+    relative by default - so a CLI invocation from a worktree engaged a file the loop, running with
+    a different working directory, never looked at.  One helper, resolved once.
+    """
+    guards = payload.get("guards", {}) or {}
+    return Path(str(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH"))).resolve()
+
+
+def engage_kill_switch(payload: dict[str, Any], reason: str) -> Path:
+    path = kill_switch_path(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(reason, encoding="utf-8")
+    return path
+
+
+def refuse_second_instance(busy: LockBusy) -> tuple[int, str]:
+    """Exit code and message for an instance that lost the lock.
+
+    Zero, deliberately: launchd is configured with ``KeepAlive.SuccessfulExit=false``, so a
+    non-zero exit here would relaunch the loser every ThrottleInterval and alert every time -
+    an alert storm about the guard working correctly (KILL-R20(d)).
+    """
+    return 0, f"another beidou instance already holds this account: {busy}"
+
+
 @live.command("run")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--dry-run", is_flag=True, help="compute targets and planned orders; never write to the venue")
@@ -103,6 +134,11 @@ def _logging(verbose: bool) -> None:
 )
 @click.option("--symbols", default="", help="comma-separated universe override")
 @click.option("--allow-unvalidated", is_flag=True, help="start even if enabled strategies lack validation evidence")
+@click.option(
+    "--armed",
+    is_flag=True,
+    help="required for a non-dry-run, non-paper loop: this sends real orders to the configured account",
+)
 @click.option("--data-root", default=".beidou/data", show_default=True)
 @click.option("--verbose", is_flag=True)
 def live_run(
@@ -114,11 +150,18 @@ def live_run(
     immediate: bool,
     symbols: str,
     allow_unvalidated: bool,
+    armed: bool,
     data_root: str,
     verbose: bool,
 ) -> None:
     """Run the bar-driven live loop against the configured (demo) venue."""
     _logging(verbose)
+    # DL-L1: sending real orders is opt-in.  Before this, the only thing between a worktree
+    # experiment and the live account was remembering to type --dry-run (KILL-R20).
+    if not dry_run and not paper and not armed:
+        raise click.ClickException(
+            "this would send real orders to the configured account; pass --armed to confirm, or --dry-run / --paper"
+        )
     payload = load_profile(profile)
     model, registry = build_model_from_profile(payload)
     problems = registry_evidence_problems(registry, payload)
@@ -172,14 +215,41 @@ def live_run(
         f"kill_switch={config.kill_switch_path} state={store.directory}"
     )
 
+    # DL-L6: `launchctl unload` sends SIGTERM and SIGKILLs after ExitTimeOut (30s in the plist).
+    # Without this the loop dies wherever it is, which during a cycle means orders sent and not yet
+    # recorded.  Installed here rather than in the engine: signal handlers are process-global.
+    stop = StopRequested()
+
+    def _stop(signum: int, _frame: object) -> None:
+        stop.request(signal.Signals(signum).name)
+        click.echo(f"{signal.Signals(signum).name} received; finishing this cycle then stopping")
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+
     async def main() -> int:
         try:
-            return await engine.run(cycles, immediate=immediate)
+            return await engine.run(cycles, immediate=immediate, stop=stop)
         finally:
             close = getattr(venue, "aclose", None)
             if callable(close):
                 await close()
             await market.aclose()
+
+    # DL-L1: hold the account's lock for the life of the loop.  Keyed to the API key rather than to
+    # the state directory, because every worktree has a different directory and they all trade the
+    # same account.  dry-run and paper touch nothing, so they do not contend.
+    lock_holder: SingleInstanceLock | None = None
+    if not dry_run and not paper:
+        venue_cfg = payload.get("venue", {}) or {}
+        api_key = env_secret(str(venue_cfg.get("api_key_env", "BEIDOU_DEMO_API_KEY")))
+        try:
+            lock_holder = SingleInstanceLock(account_lock_path(api_key)).__enter__()
+        except LockBusy as busy:
+            code, message = refuse_second_instance(busy)
+            click.echo(message)
+            asyncio.run(alerts.send(f"beidou: {message}", key="second-instance"))
+            raise SystemExit(code) from None
 
     try:
         done = asyncio.run(main())
@@ -190,6 +260,9 @@ def live_run(
         click.echo(f"breaker tripped: {tripped}")
         click.echo("exiting 0 so launchd does not relaunch; run `beidou live run` to resume")
         return
+    finally:
+        if lock_holder is not None:
+            lock_holder.__exit__(None, None, None)
     click.echo(f"completed {done} cycle(s) without error")
     if cycles is not None and done < cycles:
         raise click.ClickException(f"{cycles - done} of {cycles} cycle(s) failed; see {store.heartbeat_path}")
@@ -373,6 +446,14 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
     universe = resolve_universe(payload, None, data_root)
     config = live_config(payload, universe, registry, dry_run=False)
     venue = build_venue(payload, config.kill_switch_path)
+    # L1-06: take the trading rights away BEFORE closing anything.  `flatten` used to leave the loop
+    # running, so the next cycle rebuilt every position it had just closed - the 2026-09-04 incident
+    # path, and the root KILL-R2 identified under the watchdog problem.  The switch is durable, so
+    # this also survives a restart: resuming is an explicit `beidou live kill-switch --release`.
+    engaged = engage_kill_switch(
+        payload, f"engaged by `beidou live flatten` {datetime.now(UTC).isoformat()}; release to resume\n"
+    )
+    click.echo(f"kill switch engaged: {engaged}")
     engine = LiveEngine(
         config,
         model=model,
@@ -398,10 +479,9 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
 def live_kill_switch(profile: str, engage: bool) -> None:
     """Engage/release the kill-switch file: while engaged, only risk-reducing orders are sent."""
     payload = load_profile(profile)
-    path = Path((payload.get("guards", {}) or {}).get("kill_switch_path", ".beidou/live/KILL_SWITCH"))
+    path = kill_switch_path(payload)
     if engage:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"engaged {datetime.now(UTC).isoformat()}\n", encoding="utf-8")
+        engage_kill_switch(payload, f"engaged {datetime.now(UTC).isoformat()}\n")
         click.echo(f"kill switch engaged: {path}")
     else:
         if path.exists():

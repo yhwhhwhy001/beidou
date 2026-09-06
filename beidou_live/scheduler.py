@@ -38,3 +38,28 @@ async def wait_for_bar_close(clock: object, interval_ms: int, grace_seconds: flo
             break
         await clock.sleep(min(remaining, 60.0))  # type: ignore[attr-defined]
     return target - int(grace_seconds * 1000) - interval_ms
+
+
+# --- DL-L4: a restart always reconciles, and only rebalances if it is still on time -------------
+
+
+def rebalance_window_seconds(*, grace_seconds: float, throttle_interval: float, startup_seconds: float) -> float:
+    """How late a restart may be and still act on the bar it missed.
+
+    Derived, not chosen.  The 09-05 draft picked 120s and KILL-R6 showed what a picked number does:
+    a 143-second catch-up would have become a 57-minute stale book.  The parts are the grace period
+    the scheduler already waits after the close, launchd's ThrottleInterval (how long a relaunch can
+    sit in the queue), and how long this process actually took to start - measured, not assumed.
+    """
+    return max(0.0, float(grace_seconds)) + max(0.0, float(throttle_interval)) + max(0.0, float(startup_seconds))
+
+
+def within_rebalance_window(*, seconds_since_close: float, window_seconds: float) -> bool:
+    """Inclusive at the boundary.  A negative age is host/venue clock skew (D-030), not earliness."""
+    return float(seconds_since_close) <= float(window_seconds)
+
+
+def late_seconds(bar_open_ms: int, interval_ms: int, *, at_ms: int) -> float:
+    """How long after its bar closed something happened.  Never negative: earliness is not lateness."""
+    close_ms = int(bar_open_ms) + int(interval_ms)
+    return round(max(0.0, (int(at_ms) - close_ms) / 1000.0), 3)

@@ -62,6 +62,10 @@ class Position:
     unrealized_pnl: float = 0.0
     leverage: int = 0
     venue_notional: float | None = None  # the venue's own figure, when it supplies one
+    # None means "no reachable liquidation at this equity", which is what the venue reports as 0 for
+    # a cross-margin long (measured 2026-09-06: 14/14 longs zero, 4/4 shorts non-zero).  Reading that
+    # zero as a price would put every long at distance zero forever (DL-X1).
+    liquidation_price: float | None = None
 
     @property
     def notional(self) -> float:

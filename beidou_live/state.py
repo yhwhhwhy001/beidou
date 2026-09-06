@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -110,8 +111,16 @@ class StateStore:
         return rows
 
     def _append(self, path: Path, record: dict[str, Any]) -> None:
+        """One complete line, on the disk before we return (L1-14).
+
+        These are the append-only ledgers every post-mortem reads, and the row that matters most is
+        always the last one written before whatever went wrong.  At one row an hour the fsync costs
+        nothing; leaving it in a buffer costs the only copy of what the loop was doing.
+        """
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"at": utc_now_iso(), **record}, sort_keys=True, default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
     @staticmethod
     def _atomic_write(path: Path, text: str) -> None:

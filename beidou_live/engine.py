@@ -36,7 +36,13 @@ from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, 
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, startup_reconcile, take_snapshot
-from beidou_live.scheduler import last_closed_bar_open_ms, wait_for_bar_close
+from beidou_live.scheduler import (
+    last_closed_bar_open_ms,
+    late_seconds,
+    rebalance_window_seconds,
+    wait_for_bar_close,
+    within_rebalance_window,
+)
 from beidou_live.state import LiveState, StateStore, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -44,6 +50,24 @@ logger = logging.getLogger(__name__)
 # The public kline endpoint serves at most this many bars per request.  A model that needs more must fail loudly at
 # startup instead of trading on a silently truncated window (E-042: 817 bars for a 720-bar horizon).
 MAX_HISTORY_BARS = 1500
+
+
+class StopRequested:
+    """A cooperative stop flag (DL-L6).
+
+    ``launchctl unload`` sends SIGTERM and SIGKILLs after ExitTimeOut (30s).  Dying wherever the
+    process happens to be means dying between sending orders and recording them; this lets the loop
+    finish the cycle it is in and decline to start another.  The handler that sets it is installed by
+    the CLI, not here - signal handlers are process-global and a library has no business owning one.
+    """
+
+    def __init__(self) -> None:
+        self.requested = False
+        self.reason = ""
+
+    def request(self, reason: str) -> None:
+        self.requested = True
+        self.reason = reason
 
 
 class BreakerTripped(Exception):
@@ -94,6 +118,9 @@ class LiveConfig:
     poll_interval_seconds: float = 1.0
     grace_seconds: float = 5.0
     max_consecutive_errors: int = 12
+    # DL-L4: launchd's ThrottleInterval, mirrored here because the rebalance window is derived from
+    # it (deploy/com.beidou.live.plist).  A relaunch can sit in that queue before this process starts.
+    throttle_interval_seconds: float = 60.0
     dry_run: bool = False
     exits: ExitParams = field(default_factory=ExitParams)
     throttle: DrawdownThrottleParams = field(default_factory=DrawdownThrottleParams)
@@ -151,6 +178,8 @@ class LiveEngine:
         # DL-L2: the error streak is a property of this process, not of the book.  Persisting it is what
         # made a tripped breaker trip again on the next start (L1-03 / KILL-R29).
         self.consecutive_errors = 0
+        self.missed_rebalances = 0
+        self.startup_seconds = 0.0
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
@@ -161,6 +190,7 @@ class LiveEngine:
         return list(dict.fromkeys([*self.universe, *self.state.leaving]))
 
     async def startup(self) -> Snapshot:
+        started_ms = self.clock.now_ms()
         if self.history_bars > MAX_HISTORY_BARS:
             raise RuntimeError(
                 f"the model needs {self.history_bars} closed bars per cycle (min_history "
@@ -241,25 +271,69 @@ class LiveEngine:
             logger.warning(
                 "positions outside the managed universe are left untouched: %s", sorted(snapshot.foreign_positions)
             )
+        # DL-L4: what the rebalance window is built from - measured, not assumed.
+        self.startup_seconds = max(0.0, (self.clock.now_ms() - started_ms) / 1000.0)
         return snapshot
 
-    async def run(self, cycles: int | None = None, *, immediate: bool = False) -> int:
+    async def run(
+        self, cycles: int | None = None, *, immediate: bool = False, stop: StopRequested | None = None
+    ) -> int:
         """Run ``cycles`` bar cycles (forever when None).  Returns the number of cycles that completed without error."""
         await self.startup()
         attempted = succeeded = 0
         if immediate:
-            attempted += 1
-            if (
-                await self.guarded_cycle(last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms))
-                is not None
-            ):
-                succeeded += 1
+            bar = last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms)
+            window = rebalance_window_seconds(
+                grace_seconds=self.config.grace_seconds,
+                throttle_interval=self.config.throttle_interval_seconds,
+                startup_seconds=self.startup_seconds,
+            )
+            age = late_seconds(bar, self.config.interval_ms, at_ms=self.clock.now_ms())
+            if within_rebalance_window(seconds_since_close=age, window_seconds=window):
+                attempted += 1
+                if await self.guarded_cycle(bar) is not None:
+                    succeeded += 1
+            else:
+                # Reconciliation already ran in startup(); what is skipped is only the rebalance, and
+                # the skip is recorded rather than inferred - L1-01's error was counting the fills that
+                # happened instead of the ones that should not have (KILL-R6).
+                self._record_missed_rebalance(bar, age, window)
+        stop = stop or StopRequested()
         while cycles is None or attempted < cycles:
+            if stop.requested:
+                logger.info("stopping cleanly: %s", stop.reason)
+                break
             bar = await wait_for_bar_close(self.clock, self.config.interval_ms, self.config.grace_seconds)
+            if stop.requested:  # the signal arrived while we slept through the bar
+                logger.info("stopping cleanly before the cycle: %s", stop.reason)
+                break
             attempted += 1
             if await self.guarded_cycle(bar) is not None:
                 succeeded += 1
         return succeeded
+
+    def _record_missed_rebalance(self, bar_open_ms: int, age_seconds: float, window_seconds: float) -> None:
+        self.missed_rebalances += 1
+        self.store.append_cycle(
+            {
+                "bar_open_ms": bar_open_ms,
+                "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
+                "phase": "SKIPPED",
+                "reason": "restart outside the rebalance window",
+                "late_seconds": age_seconds,
+                "window_seconds": window_seconds,
+                "missed_rebalances": self.missed_rebalances,
+                "targets": dict(self.state.last_targets),
+                "orders": [],
+                "dry_run": self.config.dry_run,
+            }
+        )
+        self.store.heartbeat({"phase": "SKIPPED", "bar_open_ms": bar_open_ms, "late_seconds": age_seconds})
+        logger.warning(
+            "restart was %.1fs after the bar close (window %.1fs); reconciled but did not rebalance",
+            age_seconds,
+            window_seconds,
+        )
 
     async def guarded_cycle(self, bar_open_ms: int) -> dict[str, Any] | None:
         try:
@@ -470,7 +544,15 @@ class LiveEngine:
                 poll_interval_seconds=config.poll_interval_seconds,
             )
             reports.append(report)
-            self.store.append_trade({"bar_open_ms": bar_open_ms, **report.to_dict()})
+            self.store.append_trade(
+                {
+                    "bar_open_ms": bar_open_ms,
+                    # M-Q03 reads this: how late an entry was, per fill, so the metric can be "bar-hours
+                    # held by a late entry" rather than "share of fills that were late" (KILL-R6).
+                    "late_seconds": late_seconds(bar_open_ms, self.config.interval_ms, at_ms=self.clock.now_ms()),
+                    **report.to_dict(),
+                }
+            )
             self._remember_order(report)
             record["orders"].append(report.to_dict())
         record["quarantined"] = self._quarantine(reports)

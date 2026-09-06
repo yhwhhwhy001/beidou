@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from beidou_shared.types import Position
+
 
 @dataclass(frozen=True)
 class CycleHealth:
@@ -116,3 +118,69 @@ def _clean_days(now: datetime, failure_days: set[str], restarted_at: str | None)
 
 
 __all__ = ["CycleHealth", "cycle_health"]
+
+
+# --- DL-X1: liquidation distance and the margin-mode assertion (L1-05 / KILL-R19) ---------------
+
+
+def liquidation_distance(position: Position, *, daily_vol: float) -> float | None:
+    """How far the mark is from the liquidation price, in daily volatility units.
+
+    ``None`` whenever the question does not apply: a flat symbol, no volatility estimate, or - the
+    common case - a position the venue reports no reachable liquidation price for.  ``None`` is not
+    a small number, and the caller must not be able to treat it as one.
+    """
+    if position.qty == 0.0 or daily_vol <= 0.0:
+        return None
+    liquidation = position.liquidation_price
+    if liquidation is None or liquidation <= 0.0 or position.mark_price <= 0.0:
+        return None
+    move = abs(position.mark_price - liquidation) / position.mark_price
+    return move / daily_vol
+
+
+def min_liquidation_distance(positions: Sequence[Position], daily_vol: Mapping[str, float]) -> dict[str, Any]:
+    """M-Q06: the closest position that *has* a liquidation price, and how many do not.
+
+    Both halves are reported.  "Every position is out of reach" is a fact about the book; a missing
+    number would be a gap in the instrument, and the two must never look the same in the log.
+    """
+    measured: list[tuple[float, str]] = []
+    unreachable = 0
+    for position in positions:
+        if position.qty == 0.0:
+            continue
+        distance = liquidation_distance(position, daily_vol=float(daily_vol.get(position.symbol, 0.0)))
+        if distance is None:
+            unreachable += 1
+        else:
+            measured.append((distance, position.symbol))
+    closest = min(measured) if measured else None
+    return {
+        "min_distance": None if closest is None else closest[0],
+        "symbol": None if closest is None else closest[1],
+        "measured": len(measured),
+        "unreachable": unreachable,
+    }
+
+
+def margin_mode_problems(
+    *, multi_assets: bool, isolated_symbols: Sequence[str], expect_multi_assets: bool
+) -> list[str]:
+    """KILL-R19: refuse to trade an account whose risk model is not the validated one.
+
+    Asserts only.  Changing an account's margin mode under an open book is an operator action with
+    consequences the loop cannot evaluate, so this reports and stops; it never sets.
+    """
+    problems: list[str] = []
+    for symbol in isolated_symbols:
+        problems.append(
+            f"{symbol} is on ISOLATED margin; the book is sized and validated for CROSSED, and isolated "
+            "margin manufactures liquidations the strategy never asked for (report 7.3(a))"
+        )
+    if bool(multi_assets) != bool(expect_multi_assets):
+        problems.append(
+            f"multiAssetsMargin is {multi_assets} but the profile expects {expect_multi_assets}; equity that "
+            "floats with collateral prices is a different book from the one the evidence describes"
+        )
+    return problems

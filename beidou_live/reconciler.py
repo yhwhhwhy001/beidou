@@ -94,14 +94,31 @@ async def take_snapshot(venue: Venue, managed_symbols: Sequence[str]) -> Snapsho
     return Snapshot(account=account, positions=inside, prices=prices, foreign_positions=foreign)
 
 
+# The client-id prefixes this loop issues: `bd-` for rebalances (RebalanceParams.tag) and `bdflat-`
+# for flattens.  Anything else on the account belongs to someone else.
+OWN_ORDER_PREFIXES = ("bd-", "bdflat-")
+
+
+def is_own_order(client_order_id: str) -> bool:
+    """Did this system place that order?  The separator is part of the prefix (`bdx-` is not ours)."""
+    return any(str(client_order_id).startswith(prefix) for prefix in OWN_ORDER_PREFIXES)
+
+
 async def startup_reconcile(
     venue: Venue, managed_symbols: Sequence[str], *, cancel_stale_orders: bool = True
 ) -> Snapshot:
-    """Exchange positions are the only truth; stale open orders (we only use market orders) are cancelled."""
+    """Exchange positions are the only truth; this loop's own stale orders are cancelled.
+
+    L1-09 / E-31: this used to cancel *every* open order on the account.  Harmless on demo, where
+    nothing else trades and the loop only sends market orders - and exactly wrong on an account with
+    a hand-placed order, or once anything protective is resting on the book, because a restart would
+    remove it without a word.  Orders are filtered by ``is_own_order`` instead of by existence.
+    """
     snapshot = await take_snapshot(venue, managed_symbols)
     open_orders = await venue.open_orders()
     snapshot.open_orders = list(open_orders)
     if cancel_stale_orders:
         for order in open_orders:
-            await venue.cancel_order(order.symbol, order.client_order_id)
+            if is_own_order(order.client_order_id):
+                await venue.cancel_order(order.symbol, order.client_order_id)
     return snapshot

@@ -22,4 +22,6 @@ if [ -z "${BEIDOU_BINANCE_API_KEY:-}" ] || [ -z "${BEIDOU_BINANCE_API_SECRET:-}"
 fi
 cd "$REPO"
 # Exit code 0 (clean stop, e.g. --cycles reached) is not relaunched; any failure is, after ThrottleInterval.
-exec "$REPO/.venv/bin/beidou" live run --profile config/live.demo.yaml --immediate "$@"
+# --armed is what makes a real-order run explicit (DL-L1).  This launcher is the only caller that
+# should carry it; a loop started by hand in a worktree has to type it, which is the point.
+exec "$REPO/.venv/bin/beidou" live run --profile config/live.demo.yaml --immediate --armed "$@"
