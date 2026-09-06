@@ -270,7 +270,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
-# Twentieth raise, 2026-09-05, with the sentence the rule requires: +136 in beidou_alpha and +116 in
+# Twentieth raise, 2026-09-05, with the sentence the rule requires: +136 in beidou_alpha and +139 in
 # beidou_cli, for P17's carry search.  The alpha lines are the kind this file says it should welcome,
 # because they buy hypothesis space rather than plumbing: a `Funding` leaf, `Expr.reads_funding`, and a
 # `_funding_family` of 42 expressions.  Funding was the one panel input no node could read - the archive
@@ -310,12 +310,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # and what the first version had silently replaced with a refusal - and the run block records the
 # searched value, the requested value and the count, so the three can never disagree unnoticed.
 #
+# The last twenty-three cli lines close two pre-registered rules the delivery had quietly not honoured.
+# Rule 6 asked the shortlist to rank on the marginal against a named baseline; it was ranking on the
+# full-sample Sharpe, which is the exact quantity the adversarial pass says produces a false "the space
+# is empty" verdict - the best absolute candidate is usually the one most correlated with the book
+# already running, and it is also the maximum of a few hundred noisy draws.  Rule 2 asked for
+# `scored == evaluated`, which no run can satisfy, because `evaluated` fires before the complexity and
+# lookback caps drop anything; the achievable form of the same intent is that every counted expression
+# lands in exactly one bucket, and it is now computed, recorded and refused rather than described.  The
+# amendment itself is written down in docs/analysis/2026-09-05-mining-proposer-pivot.md - a frozen rule
+# that turns out to be unsatisfiable is replaced on the record, not silently.
+#
 # The three plan thresholds below all move the safe way: non-alpha grew, but beidou_live did not move at
-# all, and the alpha share rose (5,012 of 13,977 against 4,876 of 13,732).
+# all, and the alpha share rose (5,012 of 14,000 against 4,876 of 13,732).
 CEILING = {
     "beidou_alpha": 5_012,
     "beidou_live": 4_198,
-    "beidou_cli": 2_698,
+    "beidou_cli": 2_721,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

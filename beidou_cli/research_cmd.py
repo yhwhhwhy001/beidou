@@ -1765,12 +1765,31 @@ def research_mine(
             row["baseline_bars"] = len(frame)
         rows.append(row)
     scored = [row for row in rows if row.get("sharpe") is not None]
-    scored.sort(key=lambda row: -float(row["sharpe"]))
+    # With a baseline the question is a SECOND, uncorrelated book, so the shortlist ranks on the marginal.
+    # Ranking on the full-sample Sharpe is the exact quantity that produces a false "the space is empty"
+    # verdict: the best absolute candidate is usually the one most correlated with the book already
+    # running, and it is also the maximum of a few hundred noisy draws.  Rows whose marginal could not be
+    # computed sort last rather than falling back to a number on a different scale.
+    ranked_by = "baseline_marginal_sharpe" if baseline else "sharpe"
+    scored.sort(
+        key=lambda row: float(row[ranked_by]) if row.get(ranked_by) is not None else float("-inf"), reverse=True
+    )
     # A candidate whose net never varies gets `sharpe` None and no "error" key, so it leaves the table
     # without leaving a trace while still being charged to `declared_trials`.  Counted rather than
     # inferred: a family that enumerated but never traded should be visible in the artefact.
     never_traded = [row for row in rows if "error" not in row and row.get("sharpe") is None]
     failed = [row for row in rows if "error" in row]
+    # Every counted expression lands in exactly one bucket, checked rather than described.  The
+    # pre-registered rule asked for `scored == evaluated`, which no run can satisfy: `evaluated` fires
+    # before the complexity and lookback caps, so anything they drop is charged and never scored.  This
+    # is the achievable form of the same intent - nothing disappears without a bucket - and it is
+    # enforced here because an artefact whose own arithmetic does not close should not be written.
+    dropped_by_caps = search.rejected["too_complex"] + search.rejected["too_long"]
+    accounted = dropped_by_caps + len(scored) + len(failed) + len(never_traded)
+    if accounted != search.evaluated:
+        raise click.ClickException(
+            f"the run does not account for itself: {accounted} bucketed against {search.evaluated} evaluated"
+        )
     payload: dict[str, Any] = {
         "kind": "mine-shortlist",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -1794,6 +1813,7 @@ def research_mine(
             "max_complexity": max_complexity,
             "max_lookback": max_lookback,
             "top": top,
+            "ranked_by": ranked_by,
             "baseline": baseline or None,
             "profile": profile,
             "costs_path": costs_path,
@@ -1809,9 +1829,12 @@ def research_mine(
         "range": [str(panel.index[0]), str(panel.index[-1])],
         "dataset": build_manifest(root, interval).to_dict(),
         "outcomes": {
+            "evaluated": search.evaluated,
+            "dropped_by_caps": dropped_by_caps,  # counted before the complexity/lookback checks fire
             "scored": len(scored),
             "errored": len(failed),
             "never_traded": len(never_traded),  # enumerated, charged, but no Sharpe to rank
+            "accounted": accounted,  # == evaluated, enforced above
         },
         "candidates": rows,
         "baseline": (

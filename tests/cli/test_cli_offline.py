@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from click.testing import CliRunner
 
 from beidou_alpha.mining import Funding, Ratio, Ret, Squash, Vol
@@ -532,6 +534,11 @@ def test_mine_records_the_parameters_of_its_own_run(tmp_path: Path, august_dir: 
     outcomes = payload["outcomes"]
     assert outcomes["scored"] + outcomes["errored"] + outcomes["never_traded"] == len(payload["candidates"])
     assert outcomes["scored"] > 0  # or the identity above holds vacuously
+    # The achievable form of pre-registered rule 2: every counted expression lands in exactly one bucket.
+    # `scored == evaluated` as frozen cannot hold, because `evaluated` fires before the caps drop anything.
+    assert outcomes["accounted"] == outcomes["evaluated"] == payload["evaluated"]
+    assert outcomes["dropped_by_caps"] > 0  # --max-lookback 200 drops most of them, so this is not vacuous
+    assert run["ranked_by"] == "sharpe"  # no baseline given
     assert payload["declared_trials"] == payload["evaluated"]
     assert payload["baseline"] is None
     # Stamped: two runs differing only in their flags must not overwrite each other's evidence.
@@ -569,6 +576,22 @@ def test_mine_compares_every_candidate_against_a_named_baseline(tmp_path: Path, 
         if "error" in row:
             assert "baseline_correlation" not in row
     assert "| marginal | corr |" in sorted(out.glob("mine-shortlist-*.md"))[-1].read_text()
+
+    # Pre-registered rule 6: with a baseline the shortlist ranks on the MARGINAL, not the full-sample
+    # Sharpe.  Ranking on the absolute number is what produces a false "the space is empty" verdict - the
+    # best absolute candidate is usually the one most correlated with the book already running.
+    assert payload["run"]["ranked_by"] == "baseline_marginal_sharpe"
+    by_marginal = [row["hash"] for row in sorted(scored, key=lambda row: -row["baseline_marginal_sharpe"])]
+    by_sharpe = [row["hash"] for row in sorted(scored, key=lambda row: -row["sharpe"])]
+    printed = [
+        line.split("|")[1].strip()
+        for line in sorted(out.glob("mine-shortlist-*.md"))[-1].read_text().splitlines()[2:]
+        if line.startswith("|")
+    ]
+    assert printed and printed == by_marginal[: len(printed)]
+    assert printed != by_sharpe[: len(printed)], (
+        "this fixture no longer separates the two rankings, so the assertion above proves nothing"
+    )
 
 
 def test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_answer(
@@ -684,3 +707,29 @@ def test_a_mined_carry_id_still_resolves_to_a_signal(tmp_path: Path, august_dir:
     mined_id = f"mined_{Candidate.of(Squash(Ratio(Funding(24), Vol(48)), 1.0)).hash}"
     _resolve_mined(mined_id)  # raises ClickException if the hash no longer enumerates
     assert get_signal(mined_id).needs_funding({}) is True
+
+
+def test_mine_refuses_to_write_a_report_whose_arithmetic_does_not_close(
+    tmp_path: Path, august_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The accounting identity is enforced, not merely reported.
+
+    A defensive check can only be exercised by breaking what it checks, so the enumerator is patched to
+    over-report `evaluated` by one.  Without this the `raise` could be deleted and nothing would notice
+    until a real run silently produced an artefact that bills more trials than it accounts for - and
+    `--prior-trials` is the number the whole promotion gate is scaled by.
+    """
+    from beidou_cli import research_cmd
+
+    real = research_cmd.enumerate_candidates
+
+    def inflated(**kwargs: object) -> object:
+        result = real(**kwargs)  # type: ignore[arg-type]
+        return dataclasses.replace(result, evaluated=result.evaluated + 1)
+
+    monkeypatch.setattr(research_cmd, "enumerate_candidates", inflated)
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    code, output, _ = _mine(root, tmp_path / "reports", "--no-funding", "--no-include-funding")
+    assert code == 1
+    assert "does not account for itself" in output
