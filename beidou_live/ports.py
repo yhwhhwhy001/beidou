@@ -116,6 +116,9 @@ class SignalModel(Protocol):
 
     ``previous`` carries the last cycle's per-strategy targets so NO_ACTION can
     hold a position across cycles (D-005) independently of the request window.
+    ``reference_symbols`` declares the cross-sectional population the signals rank
+    and demean over (P1-01 / DL-Q1) - the universe the caller manages, rather than
+    whichever frames happen to be in ``bars``.
     """
 
     @property
@@ -133,4 +136,5 @@ class SignalModel(Protocol):
         funding: Mapping[str, float],
         previous: Mapping[str, Mapping[str, float]] | None = None,
         funding_history: Mapping[str, pd.Series] | pd.DataFrame | None = None,
+        reference_symbols: Sequence[str] | None = None,
     ) -> TargetSet: ...

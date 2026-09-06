@@ -26,7 +26,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import apply_numpy, taker_buy_ratio, volume_ratio
+from beidou_alpha.features import apply_numpy, taker_buy_ratio, volume_ratio, within_reference
 from beidou_alpha.panel import Panel
 from beidou_alpha.signals.tsmom import TsmomParams, tsmom_scores
 
@@ -85,7 +85,11 @@ def flow_scores(panel: Panel, params: FlowParams | None = None) -> pd.DataFrame:
         return pd.DataFrame(np.nan, index=panel.close.index, columns=panel.close.columns)
     imbalance = taker_buy_ratio(panel.taker_buy_quote, panel.quote_volume, p.window) - 0.5
     if p.cross_sectional:
-        imbalance = imbalance.sub(imbalance.mean(axis=1), axis=0)
+        # P1-01: the mean is taken over the reference population, not over whichever columns
+        # the caller loaded.  This half of the defect is the one that is live today - the flow
+        # probe demeans against ~123 research names and against the 15-18 the loop manages.
+        centre = within_reference(imbalance, panel.reference).mean(axis=1)
+        imbalance = imbalance.sub(centre, axis=0)
     expansion = volume_ratio(panel.volume, p.volume_window).clip(upper=1.0).fillna(1.0)
     score = apply_numpy(imbalance / p.scale, np.tanh) * expansion
     score = apply_short_gate(score.clip(-1.0, 1.0).where(imbalance.notna()), panel.close, p)

@@ -26,7 +26,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import apply_numpy, cross_sectional_rank
+from beidou_alpha.features import apply_numpy, cross_sectional_rank, within_reference
 from beidou_alpha.panel import Panel
 
 SETTLEMENT_BARS_1H = 8
@@ -66,8 +66,13 @@ class CarryParams:
 
 
 def carry_scores(
-    funding: pd.DataFrame | None, index: pd.Index, columns: pd.Index, params: CarryParams | None = None
+    funding: pd.DataFrame | None,
+    index: pd.Index,
+    columns: pd.Index,
+    params: CarryParams | None = None,
+    reference: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    """``reference``: the cross-sectional population (P1-01 / DL-Q1); ``None`` = every column."""
     p = params or CarryParams()
     if funding is None:
         return pd.DataFrame(np.nan, index=index, columns=columns)
@@ -75,20 +80,24 @@ def carry_scores(
     trailing = aligned.rolling(p.window_bars, min_periods=p.window_bars).sum()
     observed = aligned.abs().rolling(p.window_bars, min_periods=p.window_bars).sum() > 0
     trailing = trailing.where(observed)
-    enough = trailing.notna().sum(axis=1) >= p.min_symbols
+    population = within_reference(trailing, reference)
+    enough = population.notna().sum(axis=1) >= p.min_symbols
     if p.mode == "rank":
-        score = -cross_sectional_rank(trailing)
+        score = -cross_sectional_rank(trailing, reference)
         return score.where(observed).where(enough, other=np.nan)
     if p.cross_sectional:
         # robust centring: an outlier must not drag the cross-sectional mean and flip everyone else's sign
-        trailing = trailing.sub(trailing.median(axis=1), axis=0)
+        trailing = trailing.sub(population.median(axis=1), axis=0)
+        population = within_reference(trailing, reference)
     if p.winsor_pct > 0:
-        lower = trailing.quantile(p.winsor_pct, axis=1)
-        upper = trailing.quantile(1.0 - p.winsor_pct, axis=1)
+        lower = population.quantile(p.winsor_pct, axis=1)
+        upper = population.quantile(1.0 - p.winsor_pct, axis=1)
         trailing = trailing.clip(lower=lower, upper=upper, axis=0)
     score = -apply_numpy(trailing / (p.scale * p.settlements), np.tanh)
     return score.where(observed).where(enough, other=np.nan)
 
 
 def compute(panel: Panel, params: Mapping[str, Any]) -> pd.DataFrame:
-    return carry_scores(panel.funding, panel.close.index, panel.close.columns, CarryParams.from_mapping(params))
+    return carry_scores(
+        panel.funding, panel.close.index, panel.close.columns, CarryParams.from_mapping(params), panel.reference
+    )

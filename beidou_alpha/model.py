@@ -111,16 +111,36 @@ class AlphaModel:
         """True when any enabled signal reads funding history under its registry params (KILL-027)."""
         return any(get_signal(entry.id).needs_funding(entry.params) for entry in self.entries)
 
-    def strategy_scores(self, panel: Panel) -> dict[str, pd.DataFrame]:
-        return {entry.id: get_signal(entry.id).compute(panel, entry.params) for entry in self.entries}
+    def reference_for(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
+        """The cross-sectional population for these bars (P1-01 / DL-Q1).
+
+        It is ``eligible`` - the point-in-time members that have cleared the listing-age
+        filter - because ranking a symbol the loop could not hold, or one the membership
+        table says was not in the universe, is exactly the mismatch this contract closes.
+        Live, the same set arrives as ``reference_symbols`` from the engine's managed
+        universe, which the pool builds under the identical hysteresis rule (D-013/D-014).
+        """
+        return self.eligible(panel, membership)
+
+    def strategy_scores(self, panel: Panel, reference: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+        """Raw scores.  ``reference`` names the population every cross-sectional operator uses."""
+        scored = panel if reference is None else panel.with_reference(reference)
+        return {entry.id: get_signal(entry.id).compute(scored, entry.params) for entry in self.entries}
 
     def strategy_targets(
         self, panel: Panel, membership: pd.DataFrame | None = None, previous: PreviousTargets | None = None
     ) -> dict[str, pd.DataFrame]:
-        """Per-strategy held targets; ``previous`` seeds NO_ACTION with what the live loop held last cycle."""
+        """Per-strategy held targets; ``previous`` seeds NO_ACTION with what the live loop held last cycle.
+
+        The eligible set does two jobs and they are deliberately distinct: it is the
+        cross-sectional population the signals rank over (P1-01, applied *before* they
+        compute), and it is the mask that turns leaving the universe into an explicit
+        exit (applied after).  Before the first job existed, the population was whatever
+        symbols the caller had loaded.
+        """
         eligible = self.eligible(panel, membership)
         targets: dict[str, pd.DataFrame] = {}
-        for entry, scores in zip(self.entries, self.strategy_scores(panel).values(), strict=True):
+        for entry, scores in zip(self.entries, self.strategy_scores(panel, eligible).values(), strict=True):
             seed = self._seed(previous, entry)
             held = scores_to_targets(
                 scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action, initial=seed
@@ -214,6 +234,7 @@ class AlphaModel:
         funding: Mapping[str, float],
         previous: PreviousTargets | None = None,
         funding_history: Mapping[str, pd.Series] | pd.DataFrame | None = None,
+        reference_symbols: Iterable[str] | None = None,
     ) -> TargetWeights:
         """Live entry point: closed bars per symbol -> latest target weights.
 
@@ -226,6 +247,12 @@ class AlphaModel:
         indexed by settlement time) becomes ``panel.funding`` exactly as ``load_panel`` builds
         it for research, and is mandatory whenever an enabled signal reads it (KILL-027).
 
+        ``reference_symbols`` is the cross-sectional population (P1-01 / DL-Q1): the universe the
+        loop manages this cycle.  Research derives the same set from the point-in-time membership,
+        so the two paths rank a symbol against the same names.  Passing ``None`` keeps the old
+        behaviour - the population is every symbol in ``bars`` - which is what the offline
+        reproduction does when it has no universe of its own to declare.
+
         The weights are *unbanded* (D-033): live, the no-trade band is the rebalancer's, applied
         against the venue's real position, which is the reference a backtest's band already has.
         """
@@ -237,7 +264,12 @@ class AlphaModel:
         panel = Panel.from_frames(bars, interval=self.interval, funding=funding_history)
         if len(panel.index) < self.warmup_bars:
             raise ValueError(f"need at least {self.warmup_bars} closed bars, got {len(panel.index)}")
-        weights, combined, per_strategy = self.evaluate(panel, previous=previous, band=False)
+        membership = None
+        if reference_symbols is not None:
+            named = [symbol for symbol in reference_symbols if symbol in panel.close.columns]
+            membership = pd.DataFrame(False, index=panel.index, columns=panel.close.columns)
+            membership[named] = True
+        weights, combined, per_strategy = self.evaluate(panel, membership, previous=previous, band=False)
         # The same panel and the same params the weights were just built from, so the recorded
         # divisor cannot describe a different bar than the weight it explains.
         return snapshot(

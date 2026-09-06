@@ -270,10 +270,36 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
+#
+# 2026-09-06, +96 in beidou_alpha: P1-01 / DL-Q1, the cross-sectional reference population.  The
+# operators ranked, demeaned and took breadth over "whatever columns the caller loaded", so research
+# (a point-in-time panel of every symbol that was ever a member, ~123 names on an average bar) and the
+# live loop (the 15-18 it manages that day) computed different signals from identical registry
+# parameters - KILL-027's shape, on the one modifier that is enabled and on the flow probe.  The lines
+# buy an explicit contract instead of a convention: ``Panel.reference`` plus a ``within_reference``
+# primitive, threaded through the five signals and the miner's ``cs`` node.  What it deliberately does
+# NOT do is filter the panel, which would be shorter: masking the frames themselves would restart a
+# re-entering symbol's rolling windows from NaN while the live path, which always requests full
+# history, would not - a second divergence in place of the first.  The docstrings carry that reasoning
+# because the cheap wrong version is the one a later reader would otherwise write.  A further +32 wires
+# the two callers to it: ``reference_for`` (the population IS ``eligible`` - point-in-time membership
+# intersected with the listing-age filter, so research never ranks a name the loop could not hold) and
+# ``targets(reference_symbols=...)``, which the engine fills from the universe it manages that cycle.
+#
+# 2026-09-06, +90 in beidou_live and +26 in beidou_cli: DL-Q0 / KILL-Q15, the registry digest.  The
+# engine builds its model once at startup and never reloads it, so editing the registry changes what
+# the FILE says without changing what the LOOP trades - and on 2026-09-04 that ran for 93 cycles
+# (loop up 17:21Z, `crowding_window` 0 -> 72 on disk at 20:03Z, process still on 0) with no instrument
+# able to say so: the construction fingerprint covers the portfolio layer, the evidence gate runs
+# before the edit, and `live verify` rebuilds from the same file it is checking.  So: every cycle and
+# heartbeat records the digest of the configuration the PROCESS holds, and `live status --check`
+# compares it against the file.  The rest is the live half of P1-01 - the cycle declares its
+# cross-sectional population instead of letting it fall out of which frames came back, and `verify`
+# reproduces against that same population so the monitor cannot report a mismatch it caused itself.
 CEILING = {
-    "beidou_alpha": 4_876,
-    "beidou_live": 4_198,
-    "beidou_cli": 2_582,
+    "beidou_alpha": 5_004,
+    "beidou_live": 4_288,
+    "beidou_cli": 2_608,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

@@ -355,12 +355,14 @@ class CrossSectional(Expr):
         return (self.inner,)
 
     def evaluate(self, panel: Panel) -> pd.DataFrame:
+        # P1-01 / DL-Q1: the statistic is taken over the panel's reference population, so a
+        # promoted candidate cannot re-open the defect the hand-written signals just closed.
         inner = self.inner.evaluate(panel)
         if self.method == "rank":
-            return features.cross_sectional_rank(inner)
+            return features.cross_sectional_rank(inner, panel.reference)
         if self.method == "zscore":
-            return features.cross_sectional_zscore(inner)
-        return features.demean_cross_section(inner)
+            return features.cross_sectional_zscore(inner, panel.reference)
+        return features.demean_cross_section(inner, panel.reference)
 
     def canonical(self) -> Expr:
         return CrossSectional(self.inner.canonical(), self.method)

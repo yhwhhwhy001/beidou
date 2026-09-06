@@ -55,13 +55,21 @@ def annualize_vol(vol: pd.DataFrame, bars_per_year: float) -> pd.DataFrame:
 
 
 def true_range(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame) -> pd.DataFrame:
+    """Max of (high-low, |high-prev close|, |low-prev close|) per symbol, in the input's column order.
+
+    The ``groupby`` returns its groups sorted, so without the reindex the output columns come
+    back alphabetically - which is a different order from the panel whenever a name like
+    ``S10USDT`` sorts before ``S1USDT``.  Arithmetic realigns by label and hides it, but any
+    caller that rebuilds a frame positionally (``np.where`` + ``columns=panel.close.columns``,
+    as ``breakout`` did) then attaches each value to the wrong symbol.
+    """
     previous_close = close.shift(1)
     ranges = pd.concat(
         [high - low, (high - previous_close).abs(), (low - previous_close).abs()],
         axis=1,
         keys=["hl", "hc", "lc"],
     )
-    return ranges.T.groupby(level=1).max().T
+    return ranges.T.groupby(level=1).max().T.reindex(columns=high.columns)
 
 
 def atr(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame, window: int = 14) -> pd.DataFrame:
@@ -94,22 +102,42 @@ def robust_zscore_warmup(window: int) -> int:
     return 2 * window - 1
 
 
-def cross_sectional_rank(frame: pd.DataFrame) -> pd.DataFrame:
-    """Rank across symbols per bar, mapped to [-1, 1]; NaN stays NaN."""
-    ranks = frame.rank(axis=1, method="average")
-    count = frame.notna().sum(axis=1)
+def within_reference(frame: pd.DataFrame, reference: pd.DataFrame | None) -> pd.DataFrame:
+    """``frame`` with everything outside the cross-sectional population blanked (P1-01 / DL-Q1).
+
+    Only the *statistic* is restricted: callers pass the whole frame, compute the rank,
+    mean or share over this masked view, and keep their own rows.  Masking the panel
+    instead would truncate the time series a rolling window reads.
+    """
+    if reference is None:
+        return frame
+    mask = reference.reindex(index=frame.index, columns=frame.columns).fillna(False).astype(bool)
+    return frame.where(mask)
+
+
+def cross_sectional_rank(frame: pd.DataFrame, reference: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Rank across the reference population per bar, mapped to [-1, 1]; NaN stays NaN.
+
+    Ranking over "whatever columns the caller loaded" is P1-01: with n=15 a
+    ``rank >= 0.7`` cut always marks three names (20%), with n>=100 it marks 15%.
+    """
+    population = within_reference(frame, reference)
+    ranks = population.rank(axis=1, method="average")
+    count = population.notna().sum(axis=1)
     scaled = (ranks.sub(1.0, axis=0)).div((count - 1.0).where(count > 1), axis=0)
     return scaled * 2.0 - 1.0
 
 
-def cross_sectional_zscore(frame: pd.DataFrame) -> pd.DataFrame:
-    mean = frame.mean(axis=1)
-    std = frame.std(axis=1, ddof=0)
-    return frame.sub(mean, axis=0).div(std.where(std > 0), axis=0)
+def cross_sectional_zscore(frame: pd.DataFrame, reference: pd.DataFrame | None = None) -> pd.DataFrame:
+    population = within_reference(frame, reference)
+    mean = population.mean(axis=1)
+    std = population.std(axis=1, ddof=0)
+    return population.sub(mean, axis=0).div(std.where(std > 0), axis=0)
 
 
-def demean_cross_section(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.sub(frame.mean(axis=1), axis=0)
+def demean_cross_section(frame: pd.DataFrame, reference: pd.DataFrame | None = None) -> pd.DataFrame:
+    population = within_reference(frame, reference)
+    return population.sub(population.mean(axis=1), axis=0)
 
 
 def rolling_beta(asset_returns: pd.DataFrame, benchmark_returns: pd.Series, window: int) -> pd.DataFrame:

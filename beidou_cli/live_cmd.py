@@ -17,7 +17,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_cli import live, report
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_live.alerts import WebhookAlerts
-from beidou_live.composition import load_registry
+from beidou_live.composition import build_model, load_registry
 from beidou_live.config import (
     build_market_data,
     build_model_from_profile,
@@ -30,7 +30,7 @@ from beidou_live.config import (
     resolve_universe,
     universe_sink,
 )
-from beidou_live.engine import LiveEngine
+from beidou_live.engine import LiveEngine, registry_digest
 from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.paper import PaperVenue
@@ -45,7 +45,13 @@ from beidou_live.reports import (
 from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
-from beidou_live.verify import cycle_clock, last_cycle, last_recorded_as_of_ms, verify_live_targets
+from beidou_live.verify import (
+    cycle_clock,
+    last_cycle,
+    last_recorded_as_of_ms,
+    last_recorded_registry_digest,
+    verify_live_targets,
+)
 
 
 def clock_skew_seconds(rest_url: str) -> float | None:
@@ -223,6 +229,23 @@ def live_status(
                 f"the wake-up sits {alignment:+.1f}s from a bar boundary (> {max_skew_seconds:.0f}s): the loop "
                 "may act on a bar that has not closed at the venue"
             )
+    # DL-Q0 / KILL-Q15: the loop loads the registry once at startup and never reloads it, so an edit
+    # to the file changes what it SAYS without changing what the loop TRADES.  Comparing the digest the
+    # last cycle recorded against the file's own digest is the only thing that can see that gap - the
+    # construction fingerprint covers the portfolio layer, the evidence gate runs before the edit, and
+    # `live verify` rebuilds its model from the same file it would be checking.
+    recorded = last_recorded_registry_digest(store)
+    if recorded is None:
+        click.echo("registry: no cycle has recorded one yet")
+    else:
+        on_disk = registry_digest(build_model(load_registry(payload["registry"]), payload))
+        if recorded == on_disk:
+            click.echo(f"registry: matches the running loop ({recorded})")
+        else:
+            problems.append(
+                f"registry on disk ({on_disk}) is not the one the loop is running ({recorded}); the next "
+                "restart would silently change what is traded - restart deliberately or revert the file"
+            )
     if heartbeat is None:
         problems.append("no heartbeat")
     else:
@@ -300,6 +323,9 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
                 state,
                 tolerance,
                 recorded_as_of_ms=last_recorded_as_of_ms(store),
+                # P1-01: rank against the names the cycle itself declared (state.universe), not
+                # against `universe`, which adds the `leaving` symbols this reproduction fetches.
+                reference_symbols=list(state.universe) or universe,
             )
         finally:
             await market.aclose()

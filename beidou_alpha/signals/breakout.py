@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import atr, donchian, volume_ratio
+from beidou_alpha.features import atr, donchian, volume_ratio, within_reference
 from beidou_alpha.panel import Panel
 
 
@@ -57,12 +57,15 @@ def breakout_scores(panel: Panel, params: BreakoutParams | None = None) -> pd.Da
     vol_ratio = volume_ratio(panel.volume, p.volume_window).fillna(1.0)
     above = (panel.close > upper).astype(float).where(upper.notna())
     below = (panel.close < lower).astype(float).where(lower.notna())
-    breadth_up = above.mean(axis=1)
-    breadth_down = below.mean(axis=1)
+    # P1-01: breadth is a share of the reference population, not of whichever columns were loaded.
+    breadth_up = within_reference(above, panel.reference).mean(axis=1)
+    breadth_down = within_reference(below, panel.reference).mean(axis=1)
+    # Built against ``distance``'s own labels: this frame is assembled positionally, so it must not
+    # assume the intermediate carries the panel's column order (it did not - see ``true_range``).
     breadth = pd.DataFrame(
         np.where(distance >= 0, breadth_up.to_numpy()[:, None], breadth_down.to_numpy()[:, None]),
-        index=panel.close.index,
-        columns=panel.close.columns,
+        index=distance.index,
+        columns=distance.columns,
     )
     volume_confirmation = (vol_ratio - 1.0).clip(-1.0, 1.0)
     breadth_confirmation = 2.0 * breadth - 1.0

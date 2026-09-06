@@ -108,6 +108,21 @@ def last_recorded_as_of_ms(store: StateStore) -> int | None:
     return None
 
 
+def last_recorded_registry_digest(store: StateStore) -> str | None:
+    """Registry digest of the newest non-dry-run cycle: what the running PROCESS holds (DL-Q0).
+
+    ``None`` when no cycle has recorded one - cycles written before the field existed are not
+    a divergence, and must not be reported as one.
+    """
+    for record in reversed(store.read_jsonl(store.cycles_path)):
+        if record.get("dry_run"):
+            continue
+        value = record.get("registry")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def cycle_clock(record: Mapping[str, Any] | None) -> dict[str, Any]:
     """What the last cycle knew about the host clock: its measured skew, and whether income ingestion was skipped."""
     if record is None:
@@ -131,12 +146,31 @@ async def verify_live_targets(
     state: LiveState,
     tolerance: float = 1e-9,
     recorded_as_of_ms: int | None = None,
+    reference_symbols: Sequence[str] | None = None,
 ) -> dict[str, Any]:
+    """``reference_symbols``: the cross-sectional population the cycle declared (P1-01 / DL-Q1).
+
+    The reproduction has to rank against the same names the cycle did, or it reports a
+    mismatch that only exists because the two runs disagreed about the population - which
+    would make this monitor's own output the noisiest thing about it.  ``state.universe``
+    is that set; ``leaving`` names are held for exit and are not members.
+    """
     inputs = await model_inputs(market, model, symbols, interval, history_bars)
     targets = model.targets(
-        inputs.bars, inputs.funding, previous=state.last_contributions, funding_history=inputs.funding_history
+        inputs.bars,
+        inputs.funding,
+        previous=state.last_contributions,
+        funding_history=inputs.funding_history,
+        reference_symbols=reference_symbols,
     )
     return {"inputs": inputs.to_dict(), **compare_targets(targets, state, tolerance, recorded_as_of_ms)}
 
 
-__all__ = ["compare_targets", "cycle_clock", "last_cycle", "last_recorded_as_of_ms", "verify_live_targets"]
+__all__ = [
+    "compare_targets",
+    "cycle_clock",
+    "last_cycle",
+    "last_recorded_as_of_ms",
+    "last_recorded_registry_digest",
+    "verify_live_targets",
+]

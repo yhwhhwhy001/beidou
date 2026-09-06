@@ -178,14 +178,27 @@ def tsmom_scores(close: pd.DataFrame, params: TsmomParams | None = None) -> pd.D
     return score.clip(-1.0, 1.0).where(valid)
 
 
-def apply_crowding_modifier(score: pd.DataFrame, funding: pd.DataFrame | None, p: TsmomParams) -> pd.DataFrame:
-    """Shrink same-direction scores where trailing funding is in the extreme cross-sectional rank."""
+def apply_crowding_modifier(
+    score: pd.DataFrame,
+    funding: pd.DataFrame | None,
+    p: TsmomParams,
+    reference: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Shrink same-direction scores where trailing funding is in the extreme cross-sectional rank.
+
+    ``reference`` is the population the rank is taken over (P1-01 / DL-Q1).  Ranking over
+    every column the caller loaded made this modifier a different signal on each path:
+    research ranked a symbol against ~123 names, the live loop against 15-18, and a
+    ``crowding_cut`` of 0.7 marks a fixed 20% of a 15-name panel against 15% of a wide one.
+    The trailing sum still reads the symbol's own full history, so a name that re-enters
+    the universe is rankable on its first bar of membership.
+    """
     if p.crowding_window <= 0 or funding is None or p.crowding_penalty <= 0:
         return score
     aligned = funding.reindex(index=score.index, columns=score.columns)
     trailing = aligned.rolling(p.crowding_window, min_periods=p.crowding_window).sum()
     observed = aligned.abs().rolling(p.crowding_window, min_periods=p.crowding_window).sum() > 0
-    rank = cross_sectional_rank(trailing.where(observed)).fillna(0.0)
+    rank = cross_sectional_rank(trailing.where(observed), reference).fillna(0.0)
     crowded_long = (score > 0) & (rank >= p.crowding_cut)
     crowded_short = (score < 0) & (rank <= -p.crowding_cut)
     return score.mask(crowded_long | crowded_short, score * (1.0 - p.crowding_penalty))
@@ -208,5 +221,6 @@ def apply_conviction_mode(score: pd.DataFrame, p: TsmomParams) -> pd.DataFrame:
 
 def compute(panel: Panel, params: Mapping[str, Any]) -> pd.DataFrame:
     p = TsmomParams.from_mapping(params)
-    crowded = apply_crowding_modifier(tsmom_scores(panel.close, p), panel.funding, p)
+    reference = panel.reference
+    crowded = apply_crowding_modifier(tsmom_scores(panel.close, p), panel.funding, p, reference)
     return apply_conviction_mode(crowded, p)

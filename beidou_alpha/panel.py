@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pandas as pd
 
@@ -93,7 +93,22 @@ def to_utc_index(frame: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass(frozen=True)
 class Panel:
-    """Aligned wide frames.  Missing fields are ``None``; ``funding`` is the per-bar funding rate (0 off-settlement)."""
+    """Aligned wide frames.  Missing fields are ``None``; ``funding`` is the per-bar funding rate (0 off-settlement).
+
+    ``reference`` (P1-01 / DL-Q1) names the population a *cross-sectional* operator ranks,
+    demeans or takes a breadth share over.  It is deliberately not a filter on the panel:
+    every time series stays whole, so a symbol that re-enters the universe brings its own
+    history with it and its rolling windows are defined on the first bar of membership -
+    which is what the live loop, requesting full history for the symbols it manages, does.
+    ``None`` means "every column", the behaviour before the contract existed.
+
+    Why it has to be explicit.  ``apply_crowding_modifier`` ranked over ``score.columns``
+    and ``flow`` demeaned over all of them, so the population was whatever the caller
+    happened to load: research builds the panel from every symbol that was ever a member
+    (205 on the point-in-time universe, ~123 with data on an average bar) and applies the
+    membership mask only after the scores exist, while the live loop passes the 15-18 it
+    manages that day.  Same registry parameters, two different signals - KILL-027's shape.
+    """
 
     interval: str
     open: pd.DataFrame
@@ -106,6 +121,7 @@ class Panel:
     taker_buy_base: pd.DataFrame | None = None
     taker_buy_quote: pd.DataFrame | None = None
     funding: pd.DataFrame | None = None
+    reference: pd.DataFrame | None = None
 
     @classmethod
     def from_frames(
@@ -163,6 +179,16 @@ class Panel:
     def bars_per_year(self) -> float:
         return bars_per_year(self.interval)
 
+    def reference_mask(self) -> pd.DataFrame:
+        """The cross-sectional population as a bars x symbols boolean frame; all-true when unset."""
+        if self.reference is None:
+            return pd.DataFrame(True, index=self.close.index, columns=self.close.columns)
+        return self.reference.reindex(index=self.close.index, columns=self.close.columns).fillna(False).astype(bool)
+
+    def with_reference(self, reference: pd.DataFrame | None) -> Panel:
+        """The same panel with its cross-sectional population set (DL-Q1)."""
+        return replace(self, reference=reference)
+
     def _map(self, function: Callable[[pd.DataFrame], pd.DataFrame]) -> Panel:
         def maybe(frame: pd.DataFrame | None) -> pd.DataFrame | None:
             return None if frame is None else function(frame)
@@ -179,6 +205,7 @@ class Panel:
             taker_buy_base=maybe(self.taker_buy_base),
             taker_buy_quote=maybe(self.taker_buy_quote),
             funding=maybe(self.funding),
+            reference=maybe(self.reference),
         )
 
     def slice(self, start: pd.Timestamp | str | None = None, end: pd.Timestamp | str | None = None) -> Panel:

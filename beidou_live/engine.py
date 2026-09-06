@@ -24,6 +24,7 @@ from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
+from beidou_alpha.signals import get_signal
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
@@ -194,6 +195,7 @@ class LiveEngine:
                 "leverage": dict(self.state.leverage_set),
                 "history_bars": self.history_bars,
                 "construction": construction_fingerprint(self.config),
+                "registry": registry_digest(self.model),
                 "dry_run": self.config.dry_run,
                 "foreign_positions": sorted(snapshot.foreign_positions),
             }
@@ -292,7 +294,14 @@ class LiveEngine:
         )
         probes = await self._check_probes(bar_open_ms)
         targets = self.model.targets(
-            usable, inputs.funding, previous=self.state.last_contributions, funding_history=inputs.funding_history
+            usable,
+            inputs.funding,
+            previous=self.state.last_contributions,
+            funding_history=inputs.funding_history,
+            # P1-01 / DL-Q1: the cross-sectional population is the universe this cycle manages, declared
+            # rather than inferred from whichever frames came back.  `leaving` names are excluded: they
+            # are held only to be reduced out (D-014), and research ranks against members, not exits.
+            reference_symbols=list(self.universe),
         )
         latest_bar_ms = int(targets.as_of.timestamp() * 1000)
         # exposure throttle (D-015): one scalar on the whole book, driven by venue equity vs its high-water mark
@@ -352,6 +361,8 @@ class LiveEngine:
             "universe_update": universe_update,
             "inputs": inputs.to_dict(),
             "construction": construction_fingerprint(config)["digest"],
+            # DL-Q0: which registry this PROCESS is running, not which one is on disk (KILL-Q15).
+            "registry": registry_digest(self.model),
             "clock": clock,
             "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
@@ -833,6 +844,7 @@ class LiveEngine:
                 "universe_size": len(self.universe),
                 "history_bars": self.history_bars,
                 "construction": construction_fingerprint(self.config)["digest"][:12],
+                "registry": registry_digest(self.model),
                 "probes": {str(p["book"]): str(p["status"]) for p in (record.get("probes") or [])},
                 "next_bar_close_ms": int(record["bar_open_ms"]) + 2 * self.config.interval_ms,
                 "dry_run": self.config.dry_run,
@@ -844,6 +856,47 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def registry_digest(model: Any) -> str:
+    """Digest of the strategy configuration the *running process* holds (DL-Q0 / KILL-Q15).
+
+    The engine builds its model once, at startup, and never reloads it.  So editing
+    ``config/alpha_registry.yaml`` changes what the file says without changing what the loop
+    trades, and nothing in the live record could tell the two apart: the construction
+    fingerprint (D-026) covers the portfolio layer only, the startup evidence gate runs before
+    the divergence exists, and ``live verify`` rebuilds its model from the same file it is
+    supposed to be checking.  On 2026-09-04 that gap opened for 93 cycles - the loop started at
+    17:21Z, ``crowding_window`` went 0 -> 72 on disk at 20:03Z, and the process kept running 0.
+
+    Twelve hex characters per cycle, next to the construction digest, so "what ran" is answerable
+    from the record instead of from a commit timestamp.
+    """
+
+    def canonical(entry: Any) -> Mapping[str, Any]:
+        """Params with the signal's defaults filled in, so an omitted default and an explicit one agree.
+
+        A generated ``mined_*`` id may not be registered in this process; its raw params are
+        then the honest answer, and still change when the configuration changes.
+        """
+        try:
+            return get_signal(str(entry.id)).canonical_params(entry.params)
+        except KeyError:
+            return dict(entry.params)
+
+    payload = {
+        "strategies": {
+            str(entry.id): {
+                "book": str(getattr(entry, "book", "main")),
+                "weight": float(getattr(entry, "weight", 1.0)),
+                "params": canonical(entry),
+            }
+            for entry in getattr(model, "entries", ())
+        },
+        "books": dict(sorted(getattr(model, "books", {}).items())),
+        "ensemble_method": str(getattr(model, "ensemble_method", "mean")),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
 
 
 def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:

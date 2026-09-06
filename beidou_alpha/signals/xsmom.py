@@ -27,7 +27,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import apply_numpy, cross_sectional_rank, realized_vol, realized_vol_warmup
+from beidou_alpha.features import (
+    apply_numpy,
+    cross_sectional_rank,
+    realized_vol,
+    realized_vol_warmup,
+    within_reference,
+)
 from beidou_alpha.panel import Panel
 
 
@@ -82,7 +88,10 @@ def skipped_returns(close: pd.DataFrame, horizon: int, skip: int) -> pd.DataFram
     return close.shift(skip) / close.shift(skip + horizon) - 1.0
 
 
-def xsmom_scores(close: pd.DataFrame, params: XsmomParams | None = None) -> pd.DataFrame:
+def xsmom_scores(
+    close: pd.DataFrame, params: XsmomParams | None = None, reference: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """``reference``: the cross-sectional population the excess return and rank are taken over (DL-Q1)."""
     p = params or XsmomParams()
     weight_total = float(sum(p.horizon_weights))
     relative = pd.DataFrame(0.0, index=close.index, columns=close.columns)
@@ -91,7 +100,7 @@ def xsmom_scores(close: pd.DataFrame, params: XsmomParams | None = None) -> pd.D
     signal_primary: pd.DataFrame | None = None
     for horizon, weight in zip(p.horizons, p.horizon_weights, strict=True):
         ret = skipped_returns(close, horizon, p.skip_bars)
-        excess = ret.sub(ret.mean(axis=1), axis=0)
+        excess = ret.sub(within_reference(ret, reference).mean(axis=1), axis=0)
         if vol is not None:
             denominator = (vol * math.sqrt(horizon)).where(vol > 0)
             x = excess / denominator
@@ -104,11 +113,11 @@ def xsmom_scores(close: pd.DataFrame, params: XsmomParams | None = None) -> pd.D
         signal_primary = x
     assert signal_primary is not None
     relative = relative / weight_total
-    rank = cross_sectional_rank(signal_primary)
-    enough = close.notna().sum(axis=1) >= p.min_symbols
+    rank = cross_sectional_rank(signal_primary, reference)
+    enough = within_reference(close, reference).notna().sum(axis=1) >= p.min_symbols
     score = (p.relative_weight * relative + p.rank_weight * rank.fillna(0.0)) / (p.relative_weight + p.rank_weight)
     return score.clip(-1.0, 1.0).where(valid).where(enough, other=np.nan)
 
 
 def compute(panel: Panel, params: Mapping[str, Any]) -> pd.DataFrame:
-    return xsmom_scores(panel.close, XsmomParams.from_mapping(params))
+    return xsmom_scores(panel.close, XsmomParams.from_mapping(params), panel.reference)
