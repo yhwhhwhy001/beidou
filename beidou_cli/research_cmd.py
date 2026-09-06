@@ -1798,6 +1798,14 @@ def research_mine(
     unknown = sorted(set(grid_overrides) - allowed)
     if unknown:
         raise click.ClickException(f"--grids has no such parameter(s): {', '.join(unknown)}; known: {sorted(allowed)}")
+    # A key that is also a flag would be passed twice, and the interface should say which one to use
+    # rather than let the call fail on a duplicate keyword - the run block records `grids` verbatim, so
+    # an instruction the tool cannot obey must be refused where it is written.
+    collide = sorted(set(grid_overrides) & {"max_complexity", "max_lookback", "include_funding"})
+    if collide:
+        raise click.ClickException(
+            f"--grids must not set {', '.join(collide)}; each has its own flag (--{collide[0].replace('_', '-')})"
+        )
     if include_funding and not searched_funding:
         click.echo(
             "no settlement in this panel: narrowing the search space, the carry family is neither searched "

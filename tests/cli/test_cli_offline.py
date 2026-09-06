@@ -1309,3 +1309,16 @@ def test_the_baseline_params_are_overridable(tmp_path: Path, august_dir: Path) -
     # The recorded params are what the baseline RAN under, not what the registry says.
     assert payload["baseline"]["params"]["horizons"] == [5, 20, 50]
     assert payload["baseline"]["params"]["vol_window"] == 30
+
+
+def test_mine_refuses_a_grid_key_that_is_also_a_flag(tmp_path: Path, august_dir: Path) -> None:
+    """`max_lookback` is a valid enumerator parameter AND a CLI flag, so `--grids` setting it would pass
+    the same keyword twice.  Caught by the pre-registered P19 run itself: the first attempt died on a
+    `TypeError` traceback, which is loud but says nothing about which of the two to use."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    code, output, _ = _mine(
+        root, tmp_path / "reports", "--no-funding", "--no-include-funding", "--grids", '{"max_lookback": 58}'
+    )
+    assert code == 1
+    assert "must not set max_lookback" in output and "--max-lookback" in output

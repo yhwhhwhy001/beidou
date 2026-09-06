@@ -500,10 +500,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # command line, which `search.py`'s docstring warns about - a fourth scale raises `declared_trials`
 # without adding a hypothesis.  The ledger still charges it and the artefact now states it, so the cost
 # is visible rather than prevented.
+#
+# Eight of the lines are a second guard the pre-registered run itself extracted: ``max_lookback`` is
+# both a valid enumerator parameter and a CLI flag, so ``--grids`` setting it passed the same keyword
+# twice and the first P19 attempt died on a ``TypeError`` - loud, but silent about which of the two to
+# use.  An instruction the tool cannot obey is refused where it is written, not where it fails.
+#
+# Eight of the lines are a second guard the pre-registered run itself extracted:  is both a
+# valid enumerator parameter and a CLI flag, so  setting it passed the same keyword twice and the
+# first P19 attempt died on a  - loud, but silent about which of the two to use.  An
+# instruction the tool cannot obey is refused where it is written.
 CEILING = {
     "beidou_alpha": 5_243,
     "beidou_live": 4_378,
-    "beidou_cli": 2_879,
+    "beidou_cli": 2_887,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,
