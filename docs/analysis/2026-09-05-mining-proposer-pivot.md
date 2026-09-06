@@ -521,5 +521,6 @@ P14 那份 shortlist 记了数据集清单却没记自己的 `--funding`、成�
 - **AC-P17-02 与 AC-P17-03 均已跑完**（2026-09-06）。裁决取到：**C-003 SUPPORTED**，账本 135 → 138。详见 `RESEARCH_LOG` P17 §七、§八。
 - **§7.2 Firewall：「频率 / universe」已打开，「数据源」仍关。** 这是两条互斥重开条件里的后一条被选中。
 - **KILL-09（单因子市场）仍 UNKNOWN**：carry 阴性加这三个 FAIL 把它往主要解释推了一步，但重开条件只授权换频率 / universe 去测它，没有确立它。
+  - 后记（2026-09-06）：频率那一臂已跑，**P19 / C-004 REFUTED**（日线 238 个候选，top-3 全 FAIL），账本 142 → 145。KILL-09 仍 UNKNOWN——只是又往主要解释推了一步，universe 宽度与数据源两条仍未测。详见 `RESEARCH_LOG` P19 判定节。本节其余部分是 P17 当时的记录，不回改。
 - **研究路径的 `needs_funding` 未强制**：`AlphaModel.targets` 有检查，`evaluate` 没有，所以 `research backtest --strategy tsmom --no-funding` 仍会静默跑一个 crowding 修正器失效的 tsmom。本轮只关掉了 `--baseline` 这一条路径，另七个 research 命令仍敞着，已另立任务。
 - **提交正文里三个不可从提交本身核验的数**：「5 of 267 never traded」是窗口相关的（四个窗口读到 5/5/6/9，5 恰是交集即下界）；「vanished with no trace」过了（改动前那行在 `candidates` 里带 `sharpe: null`，缺的是计数与 stdout）；P14 那份 committed 报告里 never-traded 是 0，所以正文对照的那个现象在仓库证据里不存在。**这三条不应被当作已确立的事实引用。**
