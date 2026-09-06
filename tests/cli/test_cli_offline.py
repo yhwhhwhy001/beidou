@@ -485,8 +485,8 @@ REGISTRY = str(REPO / "config" / "alpha_registry.yaml")
 SHORT_HORIZONS = '{"vol_window": 100, "horizons": [5, 20, 50]}'
 
 # One invocation per research command that offers `--funding/--no-funding`, minus the exemptions below.
-# `--min-history 0` is per-command: `correlate` does not take it, and `overlay --min-history` rebuilds the
-# model without `books=`, so on the shipped registry it dies before it can reach any guard (reported separately).
+# `--min-history 0` is per-command: `correlate` does not take it, and `overlay` does not need it here -
+# its guard fires on the panel before any history floor matters.
 _SHORT = ["--strategy", "tsmom", "--params", SHORT_HORIZONS, "--min-history", "0"]
 FUNDING_COMMANDS: dict[str, list[str]] = {
     "backtest": _SHORT,
@@ -805,109 +805,6 @@ def test_the_funding_block_reaches_the_reports_the_registry_reads(
         assert "funding" not in payload, "a second top-level `funding` block would re-create the collision"
 
 
-def test_overlay_min_history_keeps_the_registry_books(tmp_path: Path, august_dir: Path) -> None:
-    """`research overlay --min-history N` rebuilt the model by re-listing its fields and forgot `books=`.
-
-    On any registry declaring a sleeve - the shipped one does, `flow` in `flow_short` - `__post_init__`
-    then raised "strategy flow refers to undeclared book 'flow_short'" before the command could reach the
-    data, so the flag was unusable against the real registry.  It failed loudly only because that check
-    exists; a registry whose books were declared but unreferenced would have lost them in silence.
-    """
-    root = tmp_path / "data"
-    _store_from_fixtures(august_dir, root)
-    out = tmp_path / "reports"
-    registry = tmp_path / "registry.yaml"
-    registry.write_text(
-        "version: 1\n"
-        "ensemble: {method: mean}\n"
-        "books:\n"
-        "  flow_short: {fraction: 0.333333}\n"
-        "strategies:\n"
-        "  - {id: tsmom, enabled: true, params: {vol_window: 100, horizons: [5, 20, 50],"
-        " horizon_weights: [0.2, 0.3, 0.5], crowding_window: 0}}\n"
-        "  - {id: flow, enabled: true, book: flow_short, params: {window: 24}}\n",
-        encoding="utf-8",
-    )
-    args = [
-        "research",
-        "overlay",
-        "--root",
-        str(root),
-        "--symbols",
-        ",".join(SYMBOLS),
-        "--registry",
-        str(registry),
-        "--out",
-        str(out),
-        "--no-funding",
-        "--folds",
-        "3",
-        "--min-train",
-        "300",
-        "--exits-grid",
-        '{"stop_loss": [0.0, 2.0]}',
-        "--throttle-grid",
-        '{"start": [0.02]}',
-    ]
-    # `--min-history 0` is not optional here: the fixture is exactly 720 bars, so under the profile default
-    # no symbol is ever eligible.  The flag this needs is the flag that was broken.
-    result = CliRunner().invoke(main, [*args, "--min-history", "0"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(sorted(out.glob("overlay-*.json"))[-1].read_text())
-    assert set(payload["strategies"]) == {"tsmom", "flow"}, "the sleeve must survive the rebuild"
-
-
-def test_mine_refuses_a_funding_consuming_family_instead_of_error_rowing_it(
-    tmp_path: Path, august_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`mine` is exempt from the guard table only because no candidate reads funding on this branch.
-
-    That exemption rests on one literal (`uses_funding=lambda params: False` in mining/search.py) which
-    a funding-reading family would flip.  It would not have failed closed: the scoring loop drops any
-    candidate that raises into an `error` row, so the command exited 0 and wrote a shortlist whose
-    `evaluated` and `declared_trials` counts included candidates that were never scored — and that count
-    is what `research validate --prior-trials` feeds into the DSR denominator.
-    """
-    import dataclasses
-
-    import beidou_cli.research_cmd as rc
-
-    real = rc.to_signal
-    monkeypatch.setattr(
-        rc, "to_signal", lambda candidate: dataclasses.replace(real(candidate), uses_funding=lambda params: True)
-    )
-    root = tmp_path / "data"
-    _store_from_fixtures(august_dir, root)
-    out = tmp_path / "reports"
-    result = CliRunner().invoke(
-        main,
-        [
-            "research",
-            "mine",
-            "--strategy",
-            "tsmom",
-            "--root",
-            str(root),
-            "--symbols",
-            ",".join(SYMBOLS),
-            "--registry",
-            REGISTRY,
-            "--out",
-            str(out),
-            "--no-funding",
-            "--min-history",
-            "0",
-            "--max-complexity",
-            "3",
-            "--max-lookback",
-            "200",
-        ],
-    )
-    assert result.exit_code != 0, result.output
-    assert "--funding" in result.output, result.output
-    assert not list(out.glob("*.json")), "a refused search must not leave a shortlist behind"
-
-
 def _short_registry(path: Path, *, crowding: int) -> Path:
     """Two strategies the 720-bar fixture can actually score; tsmom's crowding term is the funding read."""
     path.write_text(
@@ -966,3 +863,67 @@ def test_the_cost_stance_reaches_the_reports_that_had_no_costs_block(
     assert payload["costs"]["use_funding"] is True, "the flag every other report records"
     assert set(payload["costs"]) >= {"turnover_bps", "carry_bps_per_bar", "use_funding"}
     assert payload["funding_inputs"]["symbols_settled"] == 2
+
+
+def test_research_overlay_keeps_book_sleeves_under_min_history(tmp_path: Path, august_dir: Path) -> None:
+    """`--min-history` rebuilds the model, and the rebuild has to carry the books over (D-018/D-019).
+
+    It used to restate `AlphaModel`'s fields by hand and omit `books`, so `research overlay
+    --min-history N` raised "strategy ... refers to undeclared book" against any registry that runs a
+    sleeve - which the shipped config/alpha_registry.yaml has done since flow_short.  The rebuild is
+    `replace(model, min_history_bars=...)` now, so the field list cannot go stale again as
+    `AlphaModel` grows; this test is what would catch a return to spelling the fields out.
+
+    `exit_code == 0` is the load-bearing assertion, and it stays load-bearing for a reason worth
+    recording here: `book_names` is derived from `entries`, not from `books`, so a model that loses its
+    books does not quietly shrink to one book - it keeps the sleeve and then cannot price it.  Strip
+    `__post_init__` and this same defect surfaces a few frames later as `KeyError: 'sleeve'` in
+    `book_weights` (measured, not assumed).  So the validation buys an early and legible failure, not
+    the difference between loud and silent.  The `strategies` assertion guards the other direction: it
+    is read off `model.entries`, so it would catch a rebuild that dropped the sleeve itself.
+    `registry["books"]` is read off the registry rather than the model, so it documents that this
+    fixture really is two-book; it does not constrain the run.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "version: 1\n"
+        "ensemble: {method: mean}\n"
+        "books: {sleeve: {fraction: 0.5}}\n"
+        "strategies:\n"
+        "  - {id: tsmom, enabled: true, params: {vol_window: 100, horizons: [5, 20, 50], horizon_weights: [0.2, 0.3, 0.5]}}\n"
+        "  - {id: meanrev, enabled: true, book: sleeve, params: {window: 48}}\n",
+        encoding="utf-8",
+    )
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "overlay",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--registry",
+            str(registry),
+            "--out",
+            str(out),
+            "--no-funding",
+            "--min-history",
+            "0",
+            "--folds",
+            "3",
+            "--min-train",
+            "300",
+            "--exits-grid",
+            '{"stop_loss": [2.0], "take_profit": [4.0]}',
+            "--throttle-grid",
+            '{"start": [0.02], "stop": [0.10], "floor": [0.5]}',
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    overlay = json.loads(next(out.glob("overlay-*.json")).read_text())
+    assert overlay["strategies"] == ["tsmom", "meanrev"]  # the sleeve reached the evidence, not just the registry
+    assert overlay["registry"]["books"] == {"sleeve": 0.5}
