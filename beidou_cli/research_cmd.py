@@ -927,13 +927,10 @@ def research_overlay(
     registry = load_registry(registry_path)
     model = build_model(registry, profile_payload)
     if min_history is not None:
-        model = AlphaModel(
-            entries=model.entries,
-            portfolio=model.portfolio,
-            interval=model.interval,
-            ensemble_method=model.ensemble_method,
-            min_history_bars=min_history,
-        )
+        # `replace`, not a hand-listed constructor: the hand-listed one omitted `books=`, so
+        # `--min-history` died on any registry declaring a sleeve - the shipped one does (D-018) - before
+        # it could reach the data.  Re-listing fields is the bug; carrying them all is the fix.
+        model = replace(model, min_history_bars=min_history)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding(model.entries, panel)

@@ -341,10 +341,14 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # suite proved the precondition (funding was present) and never the conclusion (the signal read it and it
 # mattered) - which is E-040's own shape, reproduced inside the tests written to prevent it.  Measured:
 # 671 target cells move with the modifier wired, 0 with it unwired.
+# Lowered 2026-09-06, which needs no justification but is worth a sentence anyway: beidou_cli 2,673 -> 2,670
+# because `research overlay` stopped rebuilding its model by re-listing seven constructor fields and started
+# using `dataclasses.replace`.  The re-listing had dropped `books=`, so `--min-history` raised on any
+# registry declaring a sleeve.  Re-listing fields IS the bug class; the shorter form cannot rot.
 CEILING = {
     "beidou_alpha": 4_907,
     "beidou_live": 4_262,
-    "beidou_cli": 2_673,
+    "beidou_cli": 2_670,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

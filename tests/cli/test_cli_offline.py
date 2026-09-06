@@ -787,3 +787,55 @@ def test_the_funding_block_reaches_the_reports_the_registry_reads(
     assert result.exit_code == 0, result.output
     payload = json.loads(next(out.glob("*.json")).read_text())
     assert payload["funding"] == {"required_by": ["tsmom"], "panel": True, "symbols_settled": 2, "symbols": 4}
+
+
+def test_overlay_min_history_keeps_the_registry_books(tmp_path: Path, august_dir: Path) -> None:
+    """`research overlay --min-history N` rebuilt the model by re-listing its fields and forgot `books=`.
+
+    On any registry declaring a sleeve - the shipped one does, `flow` in `flow_short` - `__post_init__`
+    then raised "strategy flow refers to undeclared book 'flow_short'" before the command could reach the
+    data, so the flag was unusable against the real registry.  It failed loudly only because that check
+    exists; a registry whose books were declared but unreferenced would have lost them in silence.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        "version: 1\n"
+        "ensemble: {method: mean}\n"
+        "books:\n"
+        "  flow_short: {fraction: 0.333333}\n"
+        "strategies:\n"
+        "  - {id: tsmom, enabled: true, params: {vol_window: 100, horizons: [5, 20, 50],"
+        " horizon_weights: [0.2, 0.3, 0.5], crowding_window: 0}}\n"
+        "  - {id: flow, enabled: true, book: flow_short, params: {window: 24}}\n",
+        encoding="utf-8",
+    )
+    args = [
+        "research",
+        "overlay",
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--registry",
+        str(registry),
+        "--out",
+        str(out),
+        "--no-funding",
+        "--folds",
+        "3",
+        "--min-train",
+        "300",
+        "--exits-grid",
+        '{"stop_loss": [0.0, 2.0]}',
+        "--throttle-grid",
+        '{"start": [0.02]}',
+    ]
+    # `--min-history 0` is not optional here: the fixture is exactly 720 bars, so under the profile default
+    # no symbol is ever eligible.  The flag this needs is the flag that was broken.
+    result = CliRunner().invoke(main, [*args, "--min-history", "0"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(sorted(out.glob("overlay-*.json"))[-1].read_text())
+    assert set(payload["strategies"]) == {"tsmom", "flow"}, "the sleeve must survive the rebuild"
