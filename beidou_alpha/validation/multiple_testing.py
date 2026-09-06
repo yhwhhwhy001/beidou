@@ -193,6 +193,40 @@ def max_sharpe_quantile(n_trials: int, sharpe_variance: float, alpha: float = 0.
     return math.sqrt(sharpe_variance) * normal_ppf((1.0 - alpha) ** (1.0 / n_trials))
 
 
+def effective_trials(returns_matrix: np.ndarray) -> float:
+    """How many *independent* trials a correlated family of trials is worth (Li & Ji 2005).
+
+    Reported, never substituted into the gate.  The ledger's trials are near-duplicates - 24 exact
+    copies and a long tail of one-parameter variations - so an N_eff estimated here would be smaller
+    than the ledger count and would therefore *lower* the bar.  Lowering a bar on an estimator that
+    has never been validated against this ledger is the failure this round exists to prevent, so the
+    number is published beside the gate and read by a person, not by ``oos_selection_threshold``.
+
+    Li & Ji sum ``f(|lambda|) = I(|lambda| >= 1) + frac(|lambda|)`` over the correlation matrix's
+    eigenvalues: 40 independent columns give ~40, 40 copies of one column give ~1.  Columns with no
+    variance carry no information about correlation and are counted as themselves.
+    """
+    values = np.asarray(returns_matrix, dtype=float)
+    if values.ndim != 2 or values.shape[1] == 0:
+        return 0.0
+    n_trials = values.shape[1]
+    if n_trials == 1 or values.shape[0] < 2:
+        return float(n_trials)
+    std = values.std(axis=0, ddof=1)
+    live = std > 0
+    if not live.any():
+        return float(n_trials)  # nothing varies: no shared structure to collapse
+    correlation = np.corrcoef(values[:, live], rowvar=False)
+    correlation = np.atleast_2d(correlation)
+    if not np.all(np.isfinite(correlation)):
+        return float(n_trials)
+    eigenvalues = np.abs(np.linalg.eigvalsh(correlation))
+    counted = float(np.sum((eigenvalues >= 1.0).astype(float) + (eigenvalues - np.floor(eigenvalues))))
+    n_live = int(live.sum())
+    dead = n_trials - n_live
+    return min(max(counted, 1.0), float(n_live)) + float(dead)
+
+
 def family_p_value(sharpe_period: float, n_trials: int, sharpe_variance: float) -> float | None:
     """P(the best of ``n_trials`` nulls reaches ``sharpe_period``) - the gate's own p-value."""
     if sharpe_variance <= 0:
@@ -304,6 +338,10 @@ def multiple_testing_report(
     return {
         "n_trials": max(1, int(n_trials)),
         "grid_trials": len(finite),
+        # Reported, never used as a denominator (DL-R3).  Scoped to this run's grid because the
+        # ledger stores Sharpes, not return series - a ledger-wide N_eff is not computable from
+        # anything this function is handed, which is the concrete reason KILL-R25 stays owed.
+        "grid_effective_trials": effective_trials(trial_returns_matrix),
         "prior_trials": max(0, int(prior_trials)),
         "sharpe_variance_period": sharpe_variance,
         "candidate_sharpe_annual": None if candidate_sharpe is None else candidate_sharpe * math.sqrt(bars_per_year),

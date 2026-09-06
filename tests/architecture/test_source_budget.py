@@ -533,10 +533,29 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # choice to make, which is the shape every tsmom report has had since 2026-09-04, and
 # `best_key_oos_sharpe` gives the shipped configuration its own walk-forward number instead of letting
 # the fold-selected mixture stand in for it.  The lines are mostly the sentences that say why.
+#
+# 2026-09-06 B0, +52 in beidou_alpha and +4 in beidou_cli: the three debts the FWER commit shipped
+# without and did not disclose (deep-analysis report 12.5, remediation plan DL-R1..R4).  Two of the
+# three are subtractions dressed as additions.  DL-R1 DELETES a gate: the Newey-West t stops deciding
+# anything and `VerdictThresholds` loses two fields, because on hourly returns the t is the Sharpe
+# times the square root of years to within 0.1% - enforcing it counted the same evidence twice, and a
+# "short-sample guard" that fails candidates is a second gate whatever the docstring calls it.  What
+# survives is a completeness check (a report that never measured the t cannot pass), which is what
+# keeps the 25 pre-D-020 archived reports out.  Pre-registered before the change and measured on all
+# 47 archived reports: zero verdicts move.  The lines are the docstring saying why, and the test file
+# holding the measurement.  DL-R2 puts `p_family` in the failure reason so a verdict can say how
+# surprising a number is rather than only that it was below a line.  DL-R3 is the acceptance KILL-R25
+# asked for and the FWER commit skipped: its own condition was "125 independent nulls clear the gate
+# at most 5% of the time", which the threshold satisfies BY CONSTRUCTION - it solves Phi(x)^N = 1-alpha
+# for exactly that null.  The test that means something uses correlated nulls, and establishes the
+# property the docstring claims: with the ledger's duplication the gate is conservative, not merely
+# correct.  `effective_trials` (Li & Ji) is reported and never substituted - an N_eff would LOWER the
+# bar, and it is scoped to the run's own grid because the ledger stores Sharpes, not return series,
+# which is the concrete reason a ledger-wide N_eff stays owed rather than guessed.
 CEILING = {
-    "beidou_alpha": 5_321,
+    "beidou_alpha": 5_373,
     "beidou_live": 4_378,
-    "beidou_cli": 2_924,
+    "beidou_cli": 2_928,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

@@ -163,6 +163,21 @@ strategies:
     # The D-028 threshold moves 1.0981 @ 93 trials -> 1.1446 @ 125, because --prior-trials went 30 -> 60:
     # 30 as before, +14 for D-039's hand-declared band cells, +16 for the 2026-09-06 grid run recorded in
     # docs/analysis/2026-09-05-system-quality-deep-analysis.md.  Declared rather than left to be noticed.
+    #
+    # 2026-09-06 DL-R4: what this report is NOT.  Its walk-forward OOS of 1.7662 comes from a two-arm
+    # grid whose five folds all chose the same arm, so no fold ever had a choice to make and that
+    # number is the tail of one full-sample series, not a walk-forward result.  The honest walk-forward
+    # number for this construction is the 16-point default grid run the same day:
+    #   reports/research/scratch/tsmom-validation-20260906T030942Z.json - OOS 1.4852, folds
+    #   [1.19, 0.06, 2.30, 1.25, 2.57], three distinct per-fold choices, null annual SD 0.4428.
+    # That report is scratch: it was written to a scratch ledger (`ledger_trials` 0) and is not evidence.
+    # Its 16 cells ARE charged here - they are the +16 in the 30 -> 60 above, so nothing is owed.
+    # Against the quantile gate at this report's own N=125 the honest number clears by 0.003 (null SD
+    # 0.4430, threshold 1.4822) to 0.017 (null SD 0.4389, threshold 1.4685).  A margin thinner than the
+    # gap between two equally defensible null SDs is not a margin; the crossing to WEAK_PASS sits at
+    # N=128 or N=144 depending on which SD is used, and the ledger is at 125.  The operator ruled on
+    # 2026-09-06 that this is enough to keep running under controlled execution (deep-analysis report
+    # 12.6 / appendix B); real money is unaffected and stays HOLD.
     evidence:
       report: reports/research/tsmom-validation-20260906T093705Z.json
       sha256: 91800a0ce164afee1cfac993644a89a146d67f6b51089ae5c35f89cc67c3c303

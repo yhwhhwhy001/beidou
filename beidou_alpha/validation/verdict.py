@@ -10,7 +10,17 @@ inside the training folds.
 D-028 (2026-09-04) closes what that left open.  The Newey-West t was never a second condition:
 on hourly net returns it equals the Sharpe times the square root of years to within 0.1%, so over
 a five-year window "t >= 2" is looser than the "Sharpe >= 1" beside it, and it only bites below
-four years - it is a short-sample guard, and is documented as one.  The condition that is actually
+four years - it is a short-sample guard, and is documented as one.
+
+D-P2 (2026-09-06, operator ruling; docs/analysis/2026-09-06-remediation-execution-plan.md) finishes
+that sentence: a short-sample guard that is *enforced* is a second gate no matter what the docstring
+calls it, so the t no longer decides anything.  It is reported by the artefact and printed by the
+CLI; ``decide`` reads it only to check that it is there at all.  That completeness check is what
+keeps the 25 archived reports written before the field existed from passing - "reported" means it
+has to be reported.  Pre-registered before the change and measured on all 47 archived reports:
+zero verdicts move (T-R1-3; tests/alpha/test_t_stat_reported_not_enforced.py).
+
+The condition that is actually
 sensitive to selection deflates the *out-of-sample* Sharpe against the number of distinct
 configurations in the strategy's ledger, using the sampling distribution of an OOS Sharpe estimate
 as the null rather than the ledger's pooled dispersion.  Reports written before this field exists
@@ -29,8 +39,8 @@ from typing import Any
 class VerdictThresholds:
     pass_oos_sharpe: float = 1.0
     weak_oos_sharpe: float = 0.5
-    pass_oos_t: float = 2.0  # Newey-West t of the walk-forward OOS net returns
-    weak_oos_t: float = 1.5
+    # No t bar: the Newey-West t is reported, never enforced (D-P2).  A threshold nothing reads
+    # would still look like a rule to the next person to open this file.
     min_fold_consistency: float = 0.6
     max_cpcv_negative: float = 0.10  # share of CPCV paths with a negative OOS Sharpe
     max_pbo: float = 0.30
@@ -56,13 +66,18 @@ def decide(report: dict[str, Any], thresholds: VerdictThresholds | None = None) 
         return "FAIL", ["no out-of-sample Sharpe"]
     if oos < t.weak_oos_sharpe:
         reasons.append(f"oos_sharpe {oos:.2f} < {t.weak_oos_sharpe}")
-    if oos_t is None or oos_t < t.weak_oos_t:
-        reasons.append(f"oos_t_stat {oos_t} < {t.weak_oos_t}")
+    if oos_t is None:
+        # Completeness, not significance: the value no longer gates, but a report that never
+        # measured it predates D-020 and is not judged by these rules at all.
+        reasons.append("oos_t_stat not reported: a report that predates D-020 cannot pass")
     selection = report.get("oos_selection") or {}
     threshold = selection.get("threshold_annual")
     if t.enforce_oos_selection and threshold is not None and oos < threshold:
+        p_family = selection.get("p_family")
+        surprise = f", p_family={p_family:.4f}" if isinstance(p_family, (int, float)) else ""
         reasons.append(
-            f"oos_sharpe {oos:.2f} < the deflated threshold {threshold:.2f} at {selection.get('n_trials')} trials"
+            f"oos_sharpe {oos:.2f} < the deflated threshold {threshold:.2f} "
+            f"at {selection.get('n_trials')} trials{surprise}"
         )
     if consistency is not None and consistency < t.min_fold_consistency:
         reasons.append(f"fold_consistency {consistency:.2f} < {t.min_fold_consistency}")
@@ -80,5 +95,4 @@ def decide(report: dict[str, Any], thresholds: VerdictThresholds | None = None) 
         reasons.append(f"cost stress x2 sharpe {stress_x2:.2f} < {t.min_cost_stress_sharpe}")
     if reasons:
         return "FAIL", reasons
-    strong = oos >= t.pass_oos_sharpe and oos_t is not None and oos_t >= t.pass_oos_t
-    return ("PASS" if strong else "WEAK_PASS"), []
+    return ("PASS" if oos >= t.pass_oos_sharpe else "WEAK_PASS"), []

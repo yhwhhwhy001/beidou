@@ -734,6 +734,10 @@ def research_validate(
         f"at {report['oos_selection']['n_trials']} trials, alpha={report['oos_selection']['alpha']}, "
         f"p_family={_fmt(report['oos_selection']['p_family'])} (D-028)"
     )
+    click.echo(
+        f"grid of {mt['grid_trials']} is worth {_fmt(mt.get('grid_effective_trials'))} independent trials "
+        "(reported; the gate's denominator is the raw ledger count)"
+    )
     click.echo(f"VERDICT: {verdict} {reasons if reasons else ''}")
     click.echo(f"report: {path} sha256={digest}")
     click.echo("registry evidence block:")

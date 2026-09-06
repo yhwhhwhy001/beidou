@@ -180,14 +180,13 @@ def test_verdict_is_oos_first_and_dsr_is_informational() -> None:
     }
     assert decide(base) == ("PASS", [])  # DSR p 0.9 does not veto
     weak = {**base, "walk_forward": {**base["walk_forward"], "oos_sharpe": 0.8, "oos_t_stat": 1.7}}
-    assert decide(weak)[0] == "WEAK_PASS"
-    weak_t = {**base, "walk_forward": {**base["walk_forward"], "oos_t_stat": 1.8}}
-    assert decide(weak_t)[0] == "WEAK_PASS"  # a high Sharpe over a short OOS window is not a strong pass
-    insignificant = {**base, "walk_forward": {**base["walk_forward"], "oos_t_stat": 1.2}}
-    verdict, reasons = decide(insignificant)
-    assert verdict == "FAIL" and any("oos_t_stat" in r for r in reasons)
+    assert decide(weak)[0] == "WEAK_PASS"  # the Sharpe decides the tier, and only the Sharpe
+    # D-P2 (2026-09-06): the t is reported, not enforced - on hourly returns it is the Sharpe
+    # restated, so a low t next to a passing Sharpe was counting the same evidence twice.
+    low_t = {**base, "walk_forward": {**base["walk_forward"], "oos_t_stat": 1.2}}
+    assert decide(low_t) == ("PASS", [])
     legacy = {**base, "walk_forward": {"oos_sharpe": 1.5, "fold_consistency": 0.8}}
-    assert decide(legacy)[0] == "FAIL"  # a report without the t-statistic cannot pass
+    assert decide(legacy)[0] == "FAIL"  # but a report that never measured it still cannot pass
     negative_paths = {**base, "cpcv": {"fraction_negative": 0.25}}
     verdict, reasons = decide(negative_paths)
     assert verdict == "FAIL" and any("fraction_negative" in r for r in reasons)

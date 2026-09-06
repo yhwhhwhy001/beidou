@@ -77,10 +77,14 @@ def test_the_gate_can_be_turned_off_but_is_on_by_default() -> None:
 
 
 def test_the_t_statistic_is_documented_as_a_short_sample_guard_not_a_second_gate() -> None:
-    """It is Sharpe x sqrt(years) to within 0.1% on hourly returns, so it cannot be independent."""
+    """It is Sharpe x sqrt(years) to within 0.1% on hourly returns, so it cannot be independent.
+
+    D-P2 (2026-09-06) stopped enforcing it: a guard that fails a candidate is a gate whatever the
+    docstring calls it.  The selection threshold is what carries the deflation now.  Full contract
+    in tests/alpha/test_t_stat_reported_not_enforced.py.
+    """
     import beidou_alpha.validation.verdict as module
 
     assert "short-sample guard" in (module.__doc__ or "")
-    # and it still refuses a high Sharpe measured over a window too short to mean anything
     verdict, reasons = decide(_report(1.60, 1.10, walk_forward={"oos_sharpe": 1.60, "oos_t_stat": 1.2}))
-    assert verdict == "FAIL" and any("oos_t_stat" in r for r in reasons)
+    assert verdict == "PASS" and not reasons
