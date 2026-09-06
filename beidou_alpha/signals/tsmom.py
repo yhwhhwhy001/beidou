@@ -193,15 +193,70 @@ def apply_crowding_modifier(
     The trailing sum still reads the symbol's own full history, so a name that re-enters
     the universe is rankable on its first bar of membership.
     """
-    if p.crowding_window <= 0 or funding is None or p.crowding_penalty <= 0:
+    crowded = crowding_mask(score, funding, p, reference)
+    if crowded is None:
         return score
+    return score.mask(crowded, score * (1.0 - p.crowding_penalty))
+
+
+def crowding_mask(
+    score: pd.DataFrame,
+    funding: pd.DataFrame | None,
+    p: TsmomParams,
+    reference: pd.DataFrame | None = None,
+) -> pd.DataFrame | None:
+    """Which cells the modifier shrinks, or ``None`` when it is switched off.
+
+    Extracted so the instrument below can count what the modifier did without recomputing a
+    counterfactual book.  ``apply_crowding_modifier`` is the only consumer that shrinks.
+    """
+    if p.crowding_window <= 0 or funding is None or p.crowding_penalty <= 0:
+        return None
     aligned = funding.reindex(index=score.index, columns=score.columns)
     trailing = aligned.rolling(p.crowding_window, min_periods=p.crowding_window).sum()
     observed = aligned.abs().rolling(p.crowding_window, min_periods=p.crowding_window).sum() > 0
     rank = cross_sectional_rank(trailing.where(observed), reference).fillna(0.0)
     crowded_long = (score > 0) & (rank >= p.crowding_cut)
     crowded_short = (score < 0) & (rank <= -p.crowding_cut)
-    return score.mask(crowded_long | crowded_short, score * (1.0 - p.crowding_penalty))
+    return crowded_long | crowded_short
+
+
+def crowding_effect(panel: Panel, params: Mapping[str, Any]) -> dict[str, Any]:
+    """M-018: what the crowding modifier did on the decision bar, separating shrunk from decisive.
+
+    "The modifier is running" has been readable only as ``inputs.funding_history: true``, which says the
+    INPUT arrived, not that the modifier bit - the D-038 shape, and the reason it went 37 live cycles
+    inert while the registry cited it (D-042's correction).  Two counts, because under
+    ``conviction_mode: sign`` they differ by a factor of about two:
+
+    * ``shrunk`` - cells the modifier multiplied by ``1 - crowding_penalty``.
+    * ``decisive`` - cells where that multiplication changed what the book HOLDS.  Under ``sign`` a
+      position is +-1 either way, so a shrink only matters when it drops the score under
+      ``entry_threshold``: measured over 2021-2026 that is 9.87% of cells against 17.78% of shrinks,
+      i.e. sign mode absorbs 44.5% of the modifier.  Under ``score`` every shrink is decisive.
+
+    Derived from the mask and the pre-shrink score, never from a second ``compute`` call: a
+    counterfactual book would be a second answer to a question the mask already answers exactly.
+    """
+    p = TsmomParams.from_mapping(params)
+    raw = tsmom_scores(panel.close, p)
+    crowded = crowding_mask(raw, panel.funding, p, panel.reference)
+    if crowded is None or raw.empty:
+        return {"enabled": False, "shrunk": 0, "decisive": 0, "eligible": 0}
+    bar, shrunk = raw.index[-1], crowded.loc[raw.index[-1]]
+    row = raw.loc[bar]
+    if p.conviction_mode == "sign":
+        decisive = (
+            shrunk & (row.abs() >= p.entry_threshold) & (row.abs() * (1.0 - p.crowding_penalty) < p.entry_threshold)
+        )
+    else:
+        decisive = shrunk
+    return {
+        "enabled": True,
+        "shrunk": int(shrunk.sum()),
+        "decisive": int(decisive.sum()),
+        "eligible": int(row.notna().sum()),
+    }
 
 
 def apply_conviction_mode(score: pd.DataFrame, p: TsmomParams) -> pd.DataFrame:

@@ -463,9 +463,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # compares it against the file.  The rest is the live half of P1-01 - the cycle declares its
 # cross-sectional population instead of letting it fall out of which frames came back, and `verify`
 # reproduces against that same population so the monitor cannot report a mismatch it caused itself.
+# Twenty-eighth raise, 2026-09-06, with the sentence the rule requires: +55 in beidou_alpha and +25 in
+# beidou_live for M-018, the instrument the crowding modifier never had.  D-042's correction is the
+# argument for it: `inputs.funding_history` was true for the whole window it measured, and the modifier
+# was inert for 37 of those cycles because the process held `crowding_window: 0` - the field says the
+# INPUT arrived, never that the modifier bit.  This is the D-038 shape again, so the answer is the same
+# one: an instrument, not a paragraph.
+#
+# It records two counts rather than one, and the second is the reason the raise is not just plumbing.
+# Under `conviction_mode: sign` a position is +-1 either way, so shrinking a score by half changes
+# nothing unless it drops under `entry_threshold`; measured over 2021-2026 on the live 18, that is
+# 9.87% of cells against 17.78% of shrinks, i.e. the adopted conviction mode absorbs 44.5% of the
+# modifier.  `shrunk` alone would therefore have reported roughly twice the effect the book gets, which
+# is the proxy this measurement exists to replace.  Derived from the mask the shrink itself applies -
+# `crowding_mask` was extracted for that reason - and never from a counterfactual book, which would be
+# a second answer to a question the mask already answers exactly.
+#
+# The live half is `_crowding_effect`, wrapped in a bare `except` on purpose and following `asset_vol`'s
+# precedent above it: observability may not stop a trading cycle, and a run that cannot supply it
+# records why rather than a zero (D-035's rule).
 CEILING = {
-    "beidou_alpha": 5_188,
-    "beidou_live": 4_353,
+    "beidou_alpha": 5_243,
+    "beidou_live": 4_378,
     "beidou_cli": 2_856,
     "beidou_data": 1_375,
     "beidou_exchange": 539,

@@ -52,6 +52,7 @@ from beidou_alpha.mining import (
 )
 from beidou_alpha.mining.search import Candidate
 from beidou_alpha.panel import Panel
+from beidou_alpha.signals import tsmom
 from beidou_cli.research_cmd import research_mine
 
 BARS = 900
@@ -330,3 +331,74 @@ def test_a_carry_candidate_compiles_to_the_ordinary_signal_contract(funding_pane
     assert list(targets.columns) == list(funding_panel.close.columns)
     assert targets.abs().max().max() <= 1.0
     assert targets.notna().any().any()
+
+
+# --- M-018: what the crowding modifier did, not merely that its input arrived ------------------------
+
+
+def _tsmom_panel() -> Panel:
+    """A panel whose trailing funding is monotone across symbols, so the rank is decisive not noise."""
+    index = pd.date_range("2024-01-01", periods=1200, freq="h", tz="UTC")
+    rng = np.random.default_rng(11)
+    frames, funding = {}, {}
+    stamps = index[::8]
+    for offset, symbol in enumerate(("A", "B", "C", "D", "E")):
+        close = pd.Series(100.0 * np.exp(rng.normal(0.0003, 0.004, len(index)).cumsum()), index=index)
+        volume = pd.Series(rng.lognormal(10.0, 0.3, len(index)), index=index)
+        frames[symbol] = pd.DataFrame(
+            {
+                "open": close.shift(1).fillna(close.iloc[0]),
+                "high": close * 1.002,
+                "low": close * 0.998,
+                "close": close,
+                "volume": volume,
+                "quote_volume": volume * close,
+            },
+            index=index,
+        )
+        funding[symbol] = pd.Series((offset - 2) * 1e-4, index=stamps)
+    return Panel.from_frames(frames, "1h", funding=pd.DataFrame(funding))
+
+
+_CROWD = {"horizons": [168, 336, 720], "crowding_window": 72, "crowding_cut": 0.5, "crowding_penalty": 0.5}
+
+
+def test_the_crowding_instrument_separates_a_shrink_from_a_decision() -> None:
+    """M-018: under `sign` a shrink counts only when it drops the score under `entry_threshold`.
+
+    The two numbers must be able to differ, or the instrument measures the proxy it was built to
+    replace.  `shrunk` is what the modifier touched; `decisive` is what it changed.  Conflating them is
+    how "the modifier is running" came to mean "its input arrived", which held for 37 live cycles while
+    the modifier was inert (D-042's correction).
+    """
+    panel = _tsmom_panel()
+    off = tsmom.crowding_effect(panel, {**_CROWD, "crowding_window": 0})
+    assert off["enabled"] is False and off["shrunk"] == 0 and off["decisive"] == 0
+
+    signed = tsmom.crowding_effect(panel, {**_CROWD, "conviction_mode": "sign"})
+    scored = tsmom.crowding_effect(panel, {**_CROWD, "conviction_mode": "score"})
+    assert signed["enabled"] is True
+    assert signed["shrunk"] > 0, "the fixture no longer makes the modifier bite, so nothing below is tested"
+    assert scored["decisive"] == scored["shrunk"]  # every shrink changes a score-mode book
+    assert signed["eligible"] >= signed["shrunk"]
+    # The whole point of two counts: on this fixture sign mode absorbs the shrink entirely.  Asserted as
+    # a STRICT inequality - `decisive <= shrunk` is satisfied by an instrument that simply reports the
+    # shrink twice, which is the degenerate form this measurement exists to replace.
+    assert signed["decisive"] < signed["shrunk"], (
+        "the fixture no longer separates a shrink from a decision, so this test proves nothing"
+    )
+
+
+def test_the_crowding_mask_is_the_one_the_modifier_applies() -> None:
+    """The instrument reads the same mask the shrink does, not a re-derivation that could drift."""
+    panel = _tsmom_panel()
+    p = tsmom.TsmomParams.from_mapping(_CROWD)
+    raw = tsmom.tsmom_scores(panel.close, p)
+    mask = tsmom.crowding_mask(raw, panel.funding, p, panel.reference)
+    assert mask is not None and bool(mask.to_numpy().any())
+    pd.testing.assert_frame_equal(
+        tsmom.apply_crowding_modifier(raw, panel.funding, p, panel.reference),
+        raw.mask(mask, raw * (1.0 - p.crowding_penalty)),
+    )
+    disabled = tsmom.TsmomParams.from_mapping({**_CROWD, "crowding_window": 0})
+    assert tsmom.crowding_mask(raw, panel.funding, disabled, None) is None

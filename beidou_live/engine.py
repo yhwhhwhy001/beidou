@@ -374,6 +374,12 @@ class LiveEngine:
             # which is uniform by construction and adapts to nothing (D-037).  `getattr` because
             # this is observability: a model that cannot supply it must still be able to trade.
             "asset_vol": dict(getattr(targets, "asset_vol", {}) or {}),
+            # M-018: what the crowding modifier DID this bar, not merely that its input arrived.
+            # `inputs.funding_history` says a frame was fetched; it stayed true for 37 cycles while the
+            # modifier was inert because the process held crowding_window 0 (D-042's correction).  Two
+            # counts, because under `conviction_mode: sign` a shrink only matters when it drops the
+            # score under `entry_threshold` - the rest are absorbed by the +-1 rewrite.
+            "crowding": _crowding_effect(self.model, inputs),
             "orders": [],
             "skipped": [],
         }
@@ -856,6 +862,25 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def _crowding_effect(model: Any, inputs: Any) -> dict[str, Any]:
+    """M-018, best-effort: observability must never be able to stop a cycle.
+
+    Mirrors `asset_vol` above - a model or a signal that cannot supply it still trades, and the daily
+    report renders the absence rather than reading a missing key as a zero (D-035's rule).
+    """
+    try:
+        from beidou_alpha.panel import Panel
+        from beidou_alpha.signals.tsmom import crowding_effect
+
+        entry = next((e for e in model.entries if e.id == "tsmom"), None)
+        if entry is None or inputs.funding_history is None:
+            return {"enabled": False, "reason": "tsmom not enabled" if entry is None else "no funding history"}
+        panel = Panel.from_frames(inputs.bars, model.interval, funding=inputs.funding_history)
+        return crowding_effect(panel, entry.params)
+    except Exception as exc:  # pragma: no cover - an instrument may not stop a trading cycle
+        return {"enabled": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
 def registry_digest(model: Any) -> str:
