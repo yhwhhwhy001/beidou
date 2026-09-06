@@ -6,9 +6,11 @@ from pathlib import Path
 import pandas as pd
 from click.testing import CliRunner
 
-from beidou_alpha.mining import Ratio, Ret, Squash, Vol
+from beidou_alpha.mining import Funding, Ratio, Ret, Squash, Vol
 from beidou_alpha.mining.search import Candidate
+from beidou_alpha.signals import get_signal
 from beidou_cli import main
+from beidou_cli.research_cmd import _resolve_mined
 from beidou_data.store import KlineStore
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
@@ -605,3 +607,80 @@ def test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_a
     assert payload["evaluated"] == baseline["evaluated"]
     assert payload["declared_trials"] == baseline["evaluated"]
     assert not any("funding(" in row["expression"] for row in payload["candidates"])
+
+
+def _store_with_balanced_flow(august_dir: Path, root: Path) -> None:
+    """The August bars plus a quote volume whose taker flow is exactly balanced.
+
+    ``takerbuy(w)`` is the taker-buy SHARE minus 0.5, so a store where buys are exactly half of volume
+    makes every flow candidate score a constant zero: below ``entry_threshold``, so the weights are all
+    zero, the net is all zero, and ``sharpe`` returns None.  That is the "enumerated but never traded"
+    state - a candidate charged to ``declared_trials`` that leaves no row in the table and raises no
+    error - and it is the only way to exercise it deterministically.
+    """
+    store = KlineStore(root)
+    for symbol in SYMBOLS:
+        frame = pd.read_parquet(august_dir / symbol / "1h.parquet")
+        frame["close_time"] = frame["open_time"] + 3_600_000 - 1
+        frame["quote_volume"] = frame["volume"] * frame["close"]
+        frame["taker_buy_quote"] = frame["quote_volume"] * 0.5
+        store.append(symbol, "1h", frame)
+
+
+def test_mine_counts_the_candidates_that_enumerate_but_never_trade(tmp_path: Path, august_dir: Path) -> None:
+    """The third bucket, exercised non-zero - the accounting identity is vacuous while it stays at 0.
+
+    Before the `outcomes` block these rows were in `candidates` with a null Sharpe and in no count at
+    all: `scored` filtered them out of the table and the only stdout line counted evaluation errors, so
+    a family that enumerated and never traded was discoverable only by re-deriving it from the array,
+    while every one of its members was billed to `--prior-trials`.
+    """
+    root = tmp_path / "data"
+    _store_with_balanced_flow(august_dir, root)
+    out = tmp_path / "reports"
+    code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding")
+    assert code == 0, output
+
+    outcomes = payload["outcomes"]
+    assert outcomes["never_traded"] > 0
+    assert outcomes["scored"] + outcomes["errored"] + outcomes["never_traded"] == len(payload["candidates"])
+    assert outcomes["scored"] > 0
+    assert "enumerated but never traded" in output
+
+    # They are exactly the rows with neither a Sharpe nor an error, and they are billed all the same.
+    silent = [row for row in payload["candidates"] if "error" not in row and row.get("sharpe") is None]
+    assert len(silent) == outcomes["never_traded"]
+    assert all("takerbuy(" in row["expression"] for row in silent)
+    assert payload["declared_trials"] == payload["evaluated"]
+
+
+def test_mine_refuses_a_baseline_that_consumes_funding_the_panel_does_not_have(
+    tmp_path: Path, august_dir: Path
+) -> None:
+    """D-023 holds for `targets` but not for `evaluate`, so the research path needs its own refusal.
+
+    tsmom's registry params carry `crowding_window: 72`, so `needs_funding` is True.  Without this the
+    baseline book would be computed with the modifier silently inert - E-040 / KILL-027 - and every
+    candidate's marginal Sharpe would be measured against a book nobody validated.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    code, output, _ = _mine(root, out, "--funding", "--baseline", "tsmom")
+    assert code == 1
+    assert "consumes funding under its registry params" in output
+
+
+def test_a_mined_carry_id_still_resolves_to_a_signal(tmp_path: Path, august_dir: Path) -> None:
+    """`_resolve_mined` re-derives an id from a bare `enumerate_candidates()`, carry hashes included.
+
+    It resolves only because `include_funding` defaults True in the library.  Flip that default and every
+    carry hash becomes one that `research correlate` reports as gone - silently, because the docstring's
+    promise ("a hash that no longer enumerates is reported as gone") reads identically either way.
+
+    Using such an id as a `--baseline` is a separate matter and is refused on a settlement-free panel by
+    the test above: a mined carry tree consumes funding exactly as tsmom's modifier does.
+    """
+    mined_id = f"mined_{Candidate.of(Squash(Ratio(Funding(24), Vol(48)), 1.0)).hash}"
+    _resolve_mined(mined_id)  # raises ClickException if the hash no longer enumerates
+    assert get_signal(mined_id).needs_funding({}) is True

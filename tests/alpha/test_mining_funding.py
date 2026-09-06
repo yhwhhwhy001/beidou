@@ -23,7 +23,6 @@ from __future__ import annotations
 import inspect
 import json
 import re
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +34,7 @@ from beidou_alpha.mining import (
     Const,
     CrossSectional,
     Dim,
+    Expr,
     ExprError,
     Funding,
     Mul,
@@ -52,6 +52,7 @@ from beidou_alpha.mining import (
 )
 from beidou_alpha.mining.search import Candidate
 from beidou_alpha.panel import Panel
+from beidou_cli.research_cmd import research_mine
 
 BARS = 900
 SYMBOLS = ("A", "B", "C")
@@ -145,26 +146,86 @@ def test_the_funding_family_is_on_by_default_and_costs_what_was_pre_registered()
     assert full.declared_trials == full.evaluated
 
 
-def test_all_three_shapes_are_reachable_in_both_signs() -> None:
-    """T-P17-09: this is where the max_complexity decision becomes visible instead of implicit."""
-    carry = {str(c.expr) for c in enumerate_candidates().candidates if "funding(" in str(c.expr)}
-    assert carry
+def _nodes(expr: Expr) -> list[Expr]:
+    return [expr, *(node for child in expr.children() for node in _nodes(child))]
 
-    def present(predicate: Callable[[str], bool]) -> bool:
-        return any(predicate(text) for text in carry)
 
-    assert present(lambda t: t.startswith("squash((funding(") and "-1 *" not in t)
-    assert present(lambda t: t.startswith("squash((-1 * (funding("))
-    assert present(lambda t: t.startswith("cs_rank((funding("))
-    assert present(lambda t: t.startswith("cs_rank((-1 * (funding("))
-    # The negated product is a ten-node tree: at max_complexity=8 it vanishes into rejected["too_complex"]
-    # after being charged as a trial, which is exactly what this assertion refuses to allow silently.
-    assert present(lambda t: "*" in t and "funding(" in t and "ret(" in t and "-1 *" in t)
-    assert present(lambda t: "*" in t and "funding(" in t and "ret(" in t and "-1 *" not in t)
-    assert present(lambda t: "+" in t and "funding(" in t and "ret(" in t)
+def _shape_and_sign(expr: Expr) -> tuple[str, str]:
+    """Classify from the TREE, never from ``str(expr)``.
 
-    # Funding never reaches the top of a tree un-normalised: Dim.RETURN is what forbids it.
-    assert not any(t.startswith(("cs_rank(funding(", "squash(funding(")) for t in carry)
+    ``Mul.canonical`` sorts operands by hash, so ``-1 * x`` and ``x * -1`` are the same tree rendered two
+    ways: one of the six negated interactions prints with the constant on the RIGHT.  A string predicate
+    keyed on a leading ``-1 *`` therefore reads that tree as the positive arm - which is how the first
+    version of this test kept passing with one whole advertised shape deleted from the family.
+    """
+    nodes = _nodes(expr)
+    sign = "short" if any(isinstance(n, Const) and n.value < 0 for n in nodes) else "long"
+    if not any(isinstance(n, Funding) for n in nodes):
+        return "not_carry", sign
+    if isinstance(expr, CrossSectional):
+        return "cs_ranked_carry", sign
+    if any(isinstance(n, Sum) for n in nodes):
+        return "momentum_plus_carry", sign
+    if any(isinstance(n, Ret) for n in nodes):
+        return "momentum_times_carry", sign
+    return "squashed_carry", sign
+
+
+def test_the_carry_family_emits_exactly_the_census_its_grids_declare() -> None:
+    """T-P17-09: a full census, because 'at least one of each' is what let a deleted shape through.
+
+    The counts are derived from the declared grids rather than hardcoded, so widening a grid flows
+    through - but deleting or adding a ``yield`` does not.  That distinction matters because the family's
+    size IS its charge against ``declared_trials``.
+    """
+    parameters = inspect.signature(enumerate_candidates).parameters
+    windows = len(parameters["funding_windows"].default)
+    horizons = len(parameters["funding_horizons"].default)
+    scales = len(parameters["scales"].default)
+
+    census: dict[tuple[str, str], int] = {}
+    carry = []
+    for candidate in enumerate_candidates().candidates:
+        shape, sign = _shape_and_sign(candidate.expr)
+        if shape == "not_carry":
+            continue
+        carry.append(candidate)
+        census[shape, sign] = census.get((shape, sign), 0) + 1
+
+    assert census == {
+        ("squashed_carry", "long"): windows * scales,
+        ("squashed_carry", "short"): windows * scales,
+        ("cs_ranked_carry", "long"): windows,
+        ("cs_ranked_carry", "short"): windows,
+        # Both signs of the product, and the SHORT one is the ten-node tree: at max_complexity=8 it
+        # vanishes into rejected["too_complex"] after being charged, which this census refuses silently.
+        ("momentum_times_carry", "long"): windows * horizons,
+        ("momentum_times_carry", "short"): windows * horizons,
+        # The mix carries a positive carry weight only; its negation is reachable through shape one.
+        ("momentum_plus_carry", "long"): windows * horizons,
+    }
+
+    # Every carry candidate declares the input it reads - the property `to_signal` derives `uses_funding`
+    # from, asserted here on the ENUMERATED delta rather than only on hand-built trees.
+    assert all(candidate.expr.reads_funding() for candidate in carry)
+
+    # Funding never reaches the top of a tree un-normalised.  Only the cross-sectional half of this is a
+    # live guard: `Squash(Funding(w))` cannot be constructed at all, since Dim.RETURN is not a ratio.
+    assert not any(
+        isinstance(candidate.expr, CrossSectional) and isinstance(candidate.expr.inner, Funding) for candidate in carry
+    )
+
+
+def test_the_two_max_complexity_defaults_agree() -> None:
+    """The cap lives in two places, and nothing made them agree until this test.
+
+    `enumerate_candidates(max_complexity=...)` and `research mine --max-complexity` are independent
+    constants.  Mutating the library default alone left the CLI's recorded value at 10, so a report could
+    claim a cap the search did not run under.
+    """
+    library = inspect.signature(enumerate_candidates).parameters["max_complexity"].default
+    option = next(p for p in research_mine.params if p.name == "max_complexity")
+    assert option.default == library
 
 
 def test_every_funding_window_is_a_whole_number_of_settlements() -> None:
