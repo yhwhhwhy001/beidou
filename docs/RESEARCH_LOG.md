@@ -2107,3 +2107,28 @@ P19 的判定不变（本来就是 FAIL），但它的措辞要更正——那�
 **这次升级依据的是一次裁定，不是一个更好的数字。**报告 §0、§11、附录 B 三处都这么写，防止后来的人把 GO 读成"证据变强了"。
 
 **作废条件**（写死）：基础 tsmom（`crowding_window: 0`）在分位数门下 FAIL——§9 第 2 步原本就写着的触发条件，**至今没被测**；或任何一次新的诚实网格 OOS 低于当时阈值达 0.05 以上。任一成立即作废，退回 Weak GO。
+
+## 2026-09-06 · 一条「有意保留」的分支被并行会话删掉了，而仓库里没有任何东西能替它说话
+
+分支 `fix/launcher-reject-venueless-modes` 在 2026-09-06 13:2xZ 与 13:4xZ 之间从本地和远端同时消失。它唯一的提交是：
+
+```
+0b5807ea521828e7ebd4baf69a92bb8e37d130df   2026-09-03 10:45 +0800
+BD-LAUNCHER-OFFLINE-GATE: reject venueless runtime modes at the launcher
+```
+
+`0b5807e` 现在**不被任何分支到达**，也不是 `main` 的祖先——所以 `git branch -d` 会拒绝它，删除必须走 `-D`：那道安全检查触发过，然后被越过了。对象仍在，`git branch fix/launcher-reject-venueless-modes 0b5807e` 可恢复，直到某次 gc 之前。
+
+**但不建议恢复。**它改的五个文件，现在的 `main` 里一个都不剩：`beidou_launcher/cli.py`、`config/write-capability-registry.json`、`tests/cli/test_safe_root_cli.py`、`tests/unit/test_coverage_gap_alpha_first_adapter.py`、`tests/unit/test_launcher_cli_contracts.py`。提交正文援引的是 `00_EXECUTION_MASTER.md §3`，V4 的执行文档。这条分支的整个表面都属于 V5 重建之前——这正是它当初"不在 `v2-governance-final` 里"的原因。**删掉是对的。**
+
+### 值得记的不是这次删除，是它为什么删得掉
+
+这条分支在之前几轮分支清理里被明确保留过，理由是"不在 tag 里，别丢"。那个理由**只存在于对话里**。查过了——以下都是写这一节之前的状态，因为本节自身就会改变后两项——仓库那边什么都没有：`.git/logs/refs/heads/` 中已无它的 reflog，`.git/logs/HEAD` 一次都没提过它，`docs/` 下搜不到分支名，也搜不到 `0b5807e`。
+
+也就是说，**在写下这一节之前，仓库对"这条分支存在过"这件事完全无法自证**。我知道它存在，只因为同一个会话二十分钟前列过一次分支——那是会话记忆，不是仓库证据，下一个人没有。
+
+这次结果是对的，但对得侥幸：删的人并不需要知道它是 V4 遗留才敢删，而如果它是**不该删的**那一条，过程会一模一样地安静。D-038 的同一个形状，换了一层：**一个没有仪器陈述的正确事实，与未经证明无法区分**——这里连"事实"都不是代码里的量，而是一个人做过的决定。
+
+**规矩**：保留一条不合并的分支，如果有理由，理由必须落在仓库里——写进本日志、做成 tag，或者干脆合进 `main`。三样都不做，那条分支就一直只差一个 `-D`，而按上面的记录，它连"曾被有意保留过"都留不下痕迹。
+
+（并行会话的边界也顺带确认了一次：本会话这一轮只执行过 `git push origin --delete claude/overlay-books-v5`（仅动该远端分支）与 `git remote prune origin`（仅清 `refs/remotes/*`，不触碰本地分支）。删除来自另一个会话。`main` 的 reflog 里 `b218f1c main@{0}: push` 同样是它推进来的，不是本会话提交或合并的。）
