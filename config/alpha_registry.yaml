@@ -138,9 +138,29 @@ strategies:
     # cost x2 1.55.  DSR p 0.28 at 91 trials, reported not a veto (D-020); OOS clears the D-028 threshold 1.10.
     # The ledger was charged one trial for this run.  What DID move is what the report now records: its
     # `portfolio` block reads vol_target 0.30, so from here the gate compares a construction that is real.
+    # 2026-09-06 P1-01/DL-Q1: re-validated under the corrected CROSS-SECTIONAL REFERENCE POPULATION.
+    # The crowding modifier ranks trailing funding across symbols, and until now "across symbols" meant
+    # whichever columns the caller had loaded: research ranked a name against the whole point-in-time
+    # panel (118.8 names on an average bar), the loop against the 15-18 it manages.  Measured on the
+    # shipped configuration, that is not a rounding difference - on member symbol-bars the long-crowding
+    # flag fires on 10.60% of them under the panel-wide population and 17.28% under the members-only one,
+    # and only 52% of the new flags are bars the old population also flagged.  So 193707Z described a
+    # signal the loop was not running; this report describes the one it is.
+    # Same protocol as 193707Z, so the two are like for like: pit universe, two-arm grid
+    # {crowding_window: [0, 72]}, 5 folds, min_train 4000, purge 50, cpcv 6.  Verdict unchanged - PASS,
+    # no failing gate - and all five folds still select the modifier:
+    #   walk-forward OOS 1.7647 -> 1.7662, NW t 4.03 -> 4.06, consistency 1.00, folds
+    #   [1.63, 0.90, 2.59, 1.10, 2.56] -> [1.74, 0.60, 2.56, 1.32, 2.56]
+    #   full sample 1.8261 -> 1.8177, MDD -22.19% -> -23.68%, turnover 384 -> 375
+    #   CPCV 1.795 -> 1.794, q05 1.338 -> 1.418, 0% negative;  cost x2 1.676 -> 1.672
+    #   arms: cw 0 1.7035 -> 1.7097, cw 72 1.8261 -> 1.8177 (the modifier's edge survives the correction)
+    #   PBO 0.136 -> 0.219 (informational at N=2 by our own convention)
+    # The D-028 threshold moves 1.0981 @ 93 trials -> 1.1446 @ 125, because --prior-trials went 30 -> 60:
+    # 30 as before, +14 for D-039's hand-declared band cells, +16 for the 2026-09-06 grid run recorded in
+    # docs/analysis/2026-09-05-system-quality-deep-analysis.md.  Declared rather than left to be noticed.
     evidence:
-      report: reports/research/tsmom-validation-20260904T193707Z.json
-      sha256: b239abeb865a78b5cc58ce4710071e778ecb6c551def6351a8415c17df56b544
+      report: reports/research/tsmom-validation-20260906T093705Z.json
+      sha256: 91800a0ce164afee1cfac993644a89a146d67f6b51089ae5c35f89cc67c3c303
       verdict: PASS
   - id: xsmom
     enabled: false
@@ -224,9 +244,27 @@ strategies:
     # running on the strength of the book verdict; D-019 made it a bounded experiment whose control is the P&L
     # stop.  Tightened at the same time: review in 30 days, not 90, because the sleeve's marginal value did
     # shrink as the main book improved and that is real information.
+    # 2026-09-06 P1-01/DL-Q1: re-run under the corrected reference population, and this sleeve is where
+    # the correction actually bit.  `cross_sectional: true` demeans taker-buy imbalance across symbols;
+    # research demeaned against ~119 names, the loop against its 15-18.  Four arms separate the causes,
+    # because 052732Z differed from today on three axes at once (code, data vintage, main-book crowding):
+    #   arm                          main pit OOS   sleeve delta   sleeve standalone
+    #   old code, cw0, 09-04 data        1.6436        +0.1264       WEAK_PASS   <- 052732Z
+    #   old code, cw0, today             1.6588        +0.0897       WEAK_PASS   (two more days of data)
+    #   NEW code, cw0, today             1.6588        +0.0420       FAIL        <- P1-01 alone
+    #   NEW code, cw72, today            1.7662        +0.0046       FAIL        <- and the bar rose
+    # So roughly 0.048 of the sleeve's apparent +0.126 marginal OOS Sharpe was an artefact of demeaning
+    # against a population the loop does not have, and the sleeve's OWN verdict was WEAK_PASS only
+    # because of it.  Note the main book's number is identical (1.6588) with and without the fix at
+    # crowding 0 - a signal with no cross-sectional operator cannot move, which is the internal check
+    # that this really is the population and not something else.
+    # The book verdict is REJECT before and after, so D-029 stands unchanged: the probe was never running
+    # on the strength of the book verdict, its control is the P&L stop, and this is now a reproducible
+    # REJECT against evidence that describes the sleeve the loop runs.  What the operator should weigh at
+    # the 2026-12-02 review is that the sleeve's case is weaker than the file used to say.
     evidence:
-      report: reports/research/book-tsmom-flow-20260904T052732Z.json
-      sha256: b02e2ad4310f45a9ad1c3ed679e351b52ae048304de81c5e7888f32226571ef6
+      report: reports/research/book-tsmom-flow-20260906T094008Z.json
+      sha256: f2bda66aeec189d6e57085eba6207de7ce0edd0735849c117b02fabe69310dbc
       verdict: REJECT           # book-level on the daily universe; runs only under the acknowledgement below
     probe:
       accepted_by: operator

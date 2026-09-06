@@ -298,7 +298,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # reproduces against that same population so the monitor cannot report a mismatch it caused itself.
 CEILING = {
     "beidou_alpha": 5_004,
-    "beidou_live": 4_288,
+    "beidou_live": 4_289,
     "beidou_cli": 2_608,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
