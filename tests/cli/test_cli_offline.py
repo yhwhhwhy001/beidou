@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 from beidou_alpha.mining import Funding, Ratio, Ret, Squash, Vol
 from beidou_alpha.mining.search import Candidate
-from beidou_alpha.signals import get_signal
+from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_cli import main
 from beidou_cli.research_cmd import _resolve_mined
 from beidou_data.store import KlineStore
@@ -740,3 +740,42 @@ def test_mine_refuses_to_write_a_report_whose_arithmetic_does_not_close(
     code, output, _ = _mine(root, tmp_path / "reports", "--no-funding", "--no-include-funding")
     assert code == 1
     assert "does not account for itself" in output
+
+
+def test_every_command_can_address_a_mined_candidate(
+    tmp_path: Path, august_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_entry` is the one chokepoint every strategy id passes through, so resolution belongs there.
+
+    It used to be wired into `correlate` alone, so `research validate --strategy mined_<hash>` raised a
+    bare KeyError - the wall an operator hits the moment the shortlist hands them something worth
+    validating, which is exactly what a shortlist is for.
+
+    The registry entry is removed first, and that is not ceremony: `register` mutates a process-global
+    dict, every `research mine` in this file registers all 267 candidates into it, and without this the
+    test passes on another test's side effect.  Measured - it did, until the deletion was added.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    mined_id = f"mined_{Candidate.of(Squash(Ratio(Ret(24), Vol(48)), 1.0)).hash}"
+    monkeypatch.delitem(SIGNALS, mined_id, raising=False)
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "backtest",
+            "--strategy",
+            mined_id,
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--out",
+            str(tmp_path / "reports"),
+            "--no-funding",
+            "--min-history",
+            "24",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert sorted((tmp_path / "reports").glob(f"{mined_id}-backtest-*.json"))

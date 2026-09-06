@@ -173,6 +173,11 @@ def _resolve_mined(strategy: str) -> None:
 
 
 def _entry(strategy: str, registry_path: str, params: str) -> StrategyEntry:
+    # Every command resolves its strategy id through here, so a mined candidate is addressable wherever
+    # a hand-written one is.  It used to be wired into `correlate` alone: `research validate --strategy
+    # mined_<hash>` raised a bare KeyError, which is precisely the wall an operator hits the moment the
+    # shortlist hands them something worth validating.  A no-op for every id that is not `mined_`.
+    _resolve_mined(strategy)
     get_signal(strategy)
     base: dict[str, Any] = dict(SIGNALS[strategy].default_params)
     registry_file = Path(registry_path)
@@ -747,8 +752,6 @@ def research_correlate(
 ) -> None:
     """Correlation of strategy net-return streams and the marginal Sharpe of each strategy in an equal-weight mix."""
     ids = [s.strip() for s in strategies.split(",") if s.strip()]
-    for name in ids:
-        _resolve_mined(name)  # a mined candidate is addressable by its hash, like any other id
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
