@@ -506,10 +506,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # twice and the first P19 attempt died on a ``TypeError`` - loud, but silent about which of the two to
 # use.  An instruction the tool cannot obey is refused where it is written, not where it fails.
 #
-# Eight of the lines are a second guard the pre-registered run itself extracted:  is both a
-# valid enumerator parameter and a CLI flag, so  setting it passed the same keyword twice and the
-# first P19 attempt died on a  - loud, but silent about which of the two to use.  An
-# instruction the tool cannot obey is refused where it is written.
+# Thirtieth raise, 2026-09-06: +13 in beidou_cli for a fourth layer of the same fault, surfaced the
+# same way - by running the pre-registered experiment rather than by reading the code.  `_resolve_mined`
+# re-derives a `mined_<hash>` id from a bare `enumerate_candidates()`, so a candidate mined at another
+# interval's grids does not enumerate under the defaults and every command reports it gone: correct by
+# that function's own contract, and useless to an operator holding the shortlist that had just produced
+# it.  `--grids` therefore moves out of `mine` into `_common_options` and threads through `_entry`,
+# because a mined id is addressable wherever a hand-written one is.  The root cause under all four
+# layers is one thing: bar counts are scale-relative, and the tool treated the search space as a global
+# constant.  The regression test picks a candidate proven to be outside the default space rather than
+# the first one - `flow_windows` was not rescaled, so its family enumerates identically either way and
+# `candidates[0]` would have made the gone-half pass for the wrong reason.
 #
 # 2026-09-06, +78 in beidou_alpha and +24 in beidou_cli: KILL-Q2/Q3, the two halves of "the ruler
 # cannot tell a candidate from noise".  Q3 is one line of mathematics and its explanation: the D-028
@@ -529,7 +536,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 CEILING = {
     "beidou_alpha": 5_321,
     "beidou_live": 4_378,
-    "beidou_cli": 2_911,
+    "beidou_cli": 2_924,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

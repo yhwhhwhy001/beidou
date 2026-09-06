@@ -1322,3 +1322,46 @@ def test_mine_refuses_a_grid_key_that_is_also_a_flag(tmp_path: Path, august_dir:
     )
     assert code == 1
     assert "must not set max_lookback" in output and "--max-lookback" in output
+
+
+def test_a_mined_id_resolves_under_the_grids_it_was_mined_at(tmp_path: Path, august_dir: Path) -> None:
+    """`_resolve_mined` re-derives an id by enumerating, so the space has to be the one it came from.
+
+    Found by running P19: a candidate mined at daily-rescaled grids does not enumerate under the
+    defaults, so every command reported it gone - correct by that function's contract, and useless to an
+    operator holding the shortlist that had just produced it.  `--grids` is shared for this reason.
+    """
+    grids = '{"horizons": [1, 3, 7], "vol_windows": [2, 7], "z_windows": [3, 7], "range_windows": [1, 3]}'
+    rescaled = enumerate_candidates(horizons=(1, 3, 7), vol_windows=(2, 7), z_windows=(3, 7), range_windows=(1, 3))
+    default = {c.hash for c in enumerate_candidates().candidates}
+    # Not simply the first candidate: families whose grid was not overridden (`flow_windows` here) emit
+    # the same trees either way, so picking blindly can land on one the default space also contains -
+    # which would make the "gone" half of this test pass for the wrong reason.
+    outside = [c for c in rescaled.candidates if c.hash not in default]
+    assert outside, "the fixture grids no longer produce an id outside the default space"
+    mined_id = f"mined_{outside[0].hash}"
+
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    runner = CliRunner()
+    args = [
+        "research",
+        "backtest",
+        "--strategy",
+        mined_id,
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--out",
+        str(tmp_path / "reports"),
+        "--no-funding",
+        "--min-history",
+        "24",
+    ]
+    # The control half names its cause: `exit_code == 1` alone would also be satisfied by a bad
+    # argument, which would make the `--grids` half's success attributable to nothing in particular.
+    gone = runner.invoke(main, args)
+    assert gone.exit_code == 1 and f"no candidate hashes to {outside[0].hash}" in gone.output, gone.output
+    result = runner.invoke(main, [*args, "--grids", grids])
+    assert result.exit_code == 0, result.output

@@ -84,6 +84,14 @@ def _common_options(function: Any) -> Any:
         [
             click.option("--strategy", required=True, help="signal id (see `beidou research list`)"),
             click.option("--params", default="", help="JSON overriding the registry/default params"),
+            # The search space a `mined_<hash>` id was drawn from.  Every grid is a bar COUNT, so an
+            # id mined at another interval does not enumerate under the defaults and `_resolve_mined`
+            # reports it gone - correct by its own contract, useless to an operator holding the
+            # shortlist that just produced it.  Shared rather than per-command, because a mined id is
+            # addressable wherever a hand-written one is; that is what `_entry` is for.
+            click.option(
+                "--grids", default="", help="JSON of enumerate_candidates grids, e.g. '{\"horizons\": [1, 3, 7]}'"
+            ),
             click.option("--root", default=".beidou/data", show_default=True),
             click.option("--symbols", default="", help="comma-separated; default = selected universe or all stored"),
             click.option("--interval", default="1h", show_default=True),
@@ -155,7 +163,7 @@ def _membership(root: str, universe_mode: str, panel: Panel, min_tenure: int = 0
     return membership_at_bars(tenure_mask(_membership_table(root), min_tenure), panel.index)
 
 
-def _resolve_mined(strategy: str) -> None:
+def _resolve_mined(strategy: str, grids: str = "") -> None:
     """Make a ``mined_<hash>`` id addressable in this process by re-deriving it from the search.
 
     This is what the canonical hash is for.  Enumeration is deterministic and touches no data, so a
@@ -166,19 +174,19 @@ def _resolve_mined(strategy: str) -> None:
     if not strategy.startswith("mined_"):
         return
     wanted = strategy.removeprefix("mined_")
-    for candidate in enumerate_candidates().candidates:
+    for candidate in enumerate_candidates(**(json.loads(grids) if grids else {})).candidates:
         if candidate.hash == wanted:
             register_signal(to_signal(candidate))
             return
     raise click.ClickException(f"no candidate hashes to {wanted} in the current search space")
 
 
-def _entry(strategy: str, registry_path: str, params: str) -> StrategyEntry:
+def _entry(strategy: str, registry_path: str, params: str, grids: str = "") -> StrategyEntry:
     # Every command resolves its strategy id through here, so a mined candidate is addressable wherever
     # a hand-written one is.  It used to be wired into `correlate` alone: `research validate --strategy
     # mined_<hash>` raised a bare KeyError, which is precisely the wall an operator hits the moment the
     # shortlist hands them something worth validating.  A no-op for every id that is not `mined_`.
-    _resolve_mined(strategy)
+    _resolve_mined(strategy, grids)
     get_signal(strategy)
     base: dict[str, Any] = dict(SIGNALS[strategy].default_params)
     registry_file = Path(registry_path)
@@ -319,10 +327,11 @@ def research_backtest(
     min_history: int | None,
     universe_mode: str,
     min_tenure: int,
+    grids: str,
 ) -> None:
     """Backtest one strategy through the full portfolio pipeline and write a research report."""
     profile_payload = load_yaml(profile)
-    entry = _entry(strategy, registry_path, params)
+    entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([entry], panel)
@@ -472,10 +481,11 @@ def research_validate(
     cpcv_groups: int,
     prior_trials: int,
     holdout_months: int,
+    grids: str,
 ) -> None:
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
-    entry = _entry(strategy, registry_path, params)
+    entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     # KILL-006: the reserved tail is cut here, before folds, membership or costs touch it, so nothing in this
@@ -763,10 +773,11 @@ def research_diagnose(
     universe_mode: str,
     min_tenure: int,
     horizons: str,
+    grids: str,
 ) -> None:
     """Signal-level diagnostics before any portfolio construction: IC by horizon, signal-only backtest, flips."""
     del out  # diagnostics write nothing
-    entry = _entry(strategy, registry_path, params)
+    entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([entry], panel)
@@ -820,6 +831,7 @@ def research_diagnose(
 
 @research.command("correlate")
 @click.option("--strategies", required=True, help="comma-separated signal ids (registry params are used)")
+@click.option("--grids", default="", help="JSON of enumerate_candidates grids for mined ids")
 @click.option("--root", default=".beidou/data", show_default=True)
 @click.option("--symbols", default="")
 @click.option("--interval", default="1h", show_default=True)
@@ -844,13 +856,14 @@ def research_correlate(
     funding: bool,
     out: str,
     universe_mode: str,
+    grids: str,
 ) -> None:
     """Correlation of strategy net-return streams and the marginal Sharpe of each strategy in an equal-weight mix."""
     ids = [s.strip() for s in strategies.split(",") if s.strip()]
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
-    entries = {strategy: _entry(strategy, registry_path, "") for strategy in ids}
+    entries = {strategy: _entry(strategy, registry_path, "", grids) for strategy in ids}
     _require_funding(list(entries.values()), panel)
     membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
@@ -1692,11 +1705,12 @@ def research_decompose(
     folds: int,
     min_train: int,
     purge: int,
+    grids: str,
 ) -> None:
     """Signal-vs-construction attribution (D-024): the same pipeline on controlled convictions; not a ledger trial."""
     del execution  # the decomposition uses the open_to_close convention of the validation reports
     profile_payload = load_yaml(profile)
-    entry = _entry(strategy, registry_path, params)
+    entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([entry], panel)
@@ -1755,7 +1769,6 @@ def research_decompose(
 )
 @click.option("--baseline", default="", help="strategy id to compare each candidate against (registry params)")
 @click.option("--baseline-params", default="", help="JSON overriding the baseline's registry params")
-@click.option("--grids", default="", help="JSON of enumerate_candidates grids, e.g. '{\"horizons\": [1, 3, 7]}'")
 def research_mine(
     strategy: str,
     params: str,
@@ -1841,7 +1854,7 @@ def research_mine(
         # The baseline every marginal is measured against must be expressible at this interval too:
         # `--baseline tsmom --interval 1d` on registry params would compare each candidate to a
         # two-year-horizon book, because tsmom's horizons are bar counts.
-        baseline_entry = _entry(baseline, registry_path, baseline_params)
+        baseline_entry = _entry(baseline, registry_path, baseline_params, grids)
         # Every candidate's marginal is measured against this book, so a baseline running its modifier
         # inert would corrupt the whole column (E-040 / KILL-027).  Same refusal every other command uses.
         _require_funding([baseline_entry], panel)
