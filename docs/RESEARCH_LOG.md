@@ -1375,3 +1375,63 @@ D-040 修好了清单对资金费的瞎点，同时留下一句话：**`manifest
 没做的事，明确记下来：**`live run` 里那段组装（打印 advisory、blocking 并入拒绝条件）没有自动化测试覆盖**。`live run` 无法离线调用（要建 venue 与行情连接），所以它是被人眼审的六行，两个输入（`registry_evidence_problems`、`registry_dataset_problems`）各自有测试。要真正覆盖它得先把启动闸门从命令函数里拆出来，那是独立的一条。
 
 另外，advisory 现在只是被打印和写进报告，**没有任何东西统计它、也没有告警**。tsmom 的 v1 资金费未知会一直挂在那里，直到它被重新验证——这正是 D-040 第三节选择「说未记录」而不是「说漂移」时接受的状态，不是遗漏。
+
+## 2026-09-06 · E-040 的另一半：研究路径也在跑没有输入的信号——连着五轮，后四轮修的都是前一轮的修复
+
+`AlphaModel.targets` 自 D-023 起就拒绝「信号读资金费而没有资金费」的实盘运行。`strategy_targets` 从来不拒绝，而那是**每一条 research 命令都要穿过的缝**。于是：
+
+```
+beidou research backtest --strategy tsmom --no-funding     # exit 0
+```
+
+tsmom 的 registry 参数带 `crowding_window: 72`，`needs_funding` 为真，回测照常跑完并写出一份 `params` 里印着 `crowding_window: 72` 的报告——而那个 modifier 一点输入都没消费。固定盘上复现为 Sharpe 4.34。这是 E-040 / KILL-027 的原形，只是换了一边：**实盘那半在 D-023 关掉了，产生证据的这半没有**，而 registry 的 `evidence` 指针绑的正是这些报告。
+
+### 一、守卫放在 `strategy_targets`，不是 `evaluate`
+
+`evaluate` 看上去是对称的落点，diff 也更小。但 `decompose_book` 是**直接调 `strategy_targets`** 的（`decompose.py:70`），从不经过 `evaluate`——守卫放 `evaluate` 会正好放过 `research decompose`，让它继续产出这条要防的报告。`strategy_targets` 是 `evaluate` / `weights` / `combined_targets` / `decompose_book` / 实盘 `targets` 共同穿过的唯一一条缝。
+
+`tests/` 里没有任何一条测试在裸 panel 上评估会消费资金费的模型，所以库层收紧不需要任何既有测试让路。CLI 侧另有一个 `_require_funding`，因为 `research diagnose` **根本不建模型**（直接 `get_signal(...).compute`），库守卫看不见它。
+
+### 二、后四轮：每一轮都是前一轮的修复本身出的问题
+
+| 轮次 | 缺陷 | 怎么暴露的 |
+| --- | --- | --- |
+| 2a | 守卫只修了一半：`_require_funding` 学会了「全零 frame 不算资金费」，`strategy_targets` 还停在 `is None`，于是**库守卫成了两者中较弱的那个** | 直接调用：0 结算的 panel 上返回 targets、不抛异常 |
+| 2b | 新测试**看不见 modifier**：固定盘给两个币写了同一个常数费率，横截面 rank 全部并列 0.0，`rank >= crowding_cut` 永不成立 | crowding ON / OFF 的 summary 逐字节相同（差异 0 个 cell） |
+| 3 | `research overlay --min-history` 手写重列构造器时漏了 `books=` | 接守卫时撞上：`strategy flow refers to undeclared book 'flow_short'` |
+| 4 | 报告新块叫 `funding`，而报告里**早就有一个** `dataset.funding`（D-040），两个块各带一个含义不同的 `symbols` | 半同步 root 上两个数字还会巧合相等（都读 2，来自不同测量） |
+| 5 | 守卫会被 blanket handler 吞掉：`mine` 把它变成逐候选 `error` 行，`parameter_neighborhood` 把它记成 `None` | 造一个声明读资金费的 family：exit 0、34 条 error 行、`--prior-trials 225` |
+
+2b 值得单独说：那两条 funded 测试断言的报告，写着 `crowding_window: 72` 而 modifier 什么也没改——**E-040 的形状，出现在为防止它而写的测试里**。删掉 `tsmom.compute` 里的 `apply_crowding_modifier` 调用，当时全部新测试依旧全绿。现在钉住的是差异本身：接上 671 个 target cell 变化，拔掉 0 个。
+
+第 5 轮的要害不是 exit 0，是那个 **225**：shortlist 印的 `declared_trials` 把从未被评分的候选也算了进去，而这个数正是 `research validate --prior-trials` 喂进 DSR 分母的量。两个循环把失败当作**被评分对象**的属性都是对的；缺失的归档是**这次运行**的属性。所以修法是让拒绝可识别（`FundingUnavailable(ValueError)`），不是把 handler 改宽。
+
+### 三、实测（真实归档，不是推理）
+
+- **实盘不会被误伤。**守卫从 `is None` 改成 `settled_symbols == 0`，实盘也跟着变严了。全部 48,327 个完整 1443-bar 请求窗口里，结算币数最少 **10/18**，**零个**窗口为 0——安静的资金费率期不可能让 loop 停摆。单个币确实会在某个窗口读到 0（`TRUMPUSDT`、`AKEUSDT`，新上币尚无资金费），那正是**告警**而不是拒绝该覆盖的情形。
+- 时点 universe：**205/205** 结算，既不拒绝也不告警。
+- registry 证据链完好：两份被引用的报告都在、digest 都对、`evidence_problems` 对每个启用策略均为空 → `live run` 照常启动。`param_problems` 只读 `best_params` / `sleeve.params`，新顶层 key 够不到它。
+- 无自动化受影响：`ci.yml` 不跑 research，`run_data.sh` 只在注释里提到，三个 launchd 是 data / live / check；docs 与 README 里所有 `beidou research` 调用都没有 `--no-funding`。
+
+### 四、历史证据：这个问题的答案是空的
+
+原始范围把「早先用 `--no-funding` 跑出来的证据算不算数」留给操作者，并指定记在本文件而不是由代码悄悄解决。现在可以量化了：`costs.use_funding` 逐字镜像 `--funding`（`cost_model(..., use_funding=funding)`），所以它是可靠的代理。
+
+扫描 `reports/research/` 全部 **80** 份报告：
+
+- 以 `--no-funding` 产出的：**0 份**（69 份 `use_funding=True`，11 份没有 costs 块）。
+- 参数里带 `crowding_window: 72` 的 **8** 份，**全部** `use_funding=True`。
+
+**没有一份在册证据受影响，这条决定不需要做。**
+
+留一个诚实的开口，形状与 D-040 的「未记录」一致：那 11 份没有 costs 块的是 6 份 correlation、1 份 mine-shortlist 与 4 份分析产物——`research correlate` 的报告**从不记录 funding 口径**，所以那 6 份的资金费出处是不可知的，不是「已知为真」。它们都不是 registry 证据，本条不追溯。
+
+### 五、代价与没做的事
+
+`beidou_alpha` 4,876 → 4,922，`beidou_cli` 2,600 → 2,680；ceiling 第二十二至二十五次抬升（其中一次是**下调**——`overlay` 改用 `dataclasses.replace` 后 cli 反而少了 3 行），理由句都在 `test_source_budget.py`。测试 356 → **388 passed / 1 skipped**，ruff 与 mypy 干净。
+
+方法上值得记一笔：**五轮里有四轮是评审在自己的改动里挖出来的**，而最初那版守卫看起来是对的——测试全绿、端到端也验过。四个洞（真实归档上的默认 flag、blanket handler、报告可读性、测试自身的盲区）没有一个是读代码能看出来的，全部要靠实际去跑。
+
+评审本身两次因 session limit 全灭：第一次 26 个 agent 里 13 个报错，第二次 4 个 sweep agent 全部失败、`agents_done: 0`。**返回的空结果是「什么都没跑」，不是「什么都没查到」**——blast-radius 那一路最终是手工走完的，所以本条的覆盖不均匀：证据链、报告消费方、文档与自动化、误伤四项是逐项实测的，其余部分只有单轮评审。
+
+没做的事：**`research correlate` 仍然不记录 funding 口径**（它的 payload 没有 costs 块，现在有 `funding_inputs` 但那是本次新加的，历史 6 份没有）。补齐它要动 correlate 的 payload 形状，与本条不捆绑。

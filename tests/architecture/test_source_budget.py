@@ -366,7 +366,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # caller changes.  `mine` now also refuses up front, after enumeration, since its candidates ARE its
 # strategies and `--strategy` is ignored there.  A guard any blanket handler can absorb is not a guard.
 CEILING = {
-    "beidou_alpha": 4_923,
+    "beidou_alpha": 4_922,
     "beidou_live": 4_262,
     "beidou_cli": 2_680,
     "beidou_data": 1_375,
