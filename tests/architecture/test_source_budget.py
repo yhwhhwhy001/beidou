@@ -354,10 +354,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # of collision to leave in the artifact an operator reads to decide whether to trust a strategy.  No code
 # confused them - the paths differ - so the whole cost of this is the comment that stops the next reader,
 # or the next author looking for a shorter name, from re-creating it.
+# Twenty-fifth raise, 2026-09-06, with the sentence the rule requires: +16 in beidou_alpha, +4 in
+# beidou_cli, for `FundingUnavailable`.  The guard was raising a bare ValueError into two loops that treat
+# a failure as a property of the ITEM being scored: `research mine` drops a candidate that raises into an
+# `error` row, and `parameter_neighborhood` records a perturbation that raises as `None`.  A missing
+# funding archive is a property of the RUN, so under those handlers the refusal degraded into a quietly
+# thinner shortlist or a missing neighbour.  Reproduced on `mine` with a family declaring `uses_funding`:
+# exit 0, 34 candidates error-rowed, and a shortlist printing `--prior-trials 225` - a count including
+# candidates never scored, which is the number that goes on to size the DSR denominator.  Most of the 16
+# alpha lines are the docstring saying why the type exists at all; it subclasses ValueError so no existing
+# caller changes.  `mine` now also refuses up front, after enumeration, since its candidates ARE its
+# strategies and `--strategy` is ignored there.  A guard any blanket handler can absorb is not a guard.
 CEILING = {
-    "beidou_alpha": 4_907,
+    "beidou_alpha": 4_923,
     "beidou_live": 4_262,
-    "beidou_cli": 2_676,
+    "beidou_cli": 2_680,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

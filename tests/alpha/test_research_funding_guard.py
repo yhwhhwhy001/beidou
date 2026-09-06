@@ -14,17 +14,21 @@ the signals through ``strategy_targets`` directly; a guard on ``evaluate`` would
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from beidou_alpha.backtest import CostModel
-from beidou_alpha.model import AlphaModel
+from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.panel import Panel
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.signals.tsmom import TsmomParams
 from beidou_alpha.validation.decompose import decompose_book
+from beidou_alpha.validation.stability import parameter_neighborhood
 
 HOURLY = {"horizons": [5, 20, 50], "horizon_weights": [0.2, 0.3, 0.5], "vol_window": 100}
 CROWDING = {"crowding_window": 72, "crowding_cut": 0.7, "crowding_penalty": 0.5}
@@ -127,3 +131,38 @@ def test_the_crowding_modifier_actually_reads_the_funding_it_demanded(august_pan
     off = _model(crowding_window=0).strategy_targets(funded)["tsmom"]
     changed = int((on.fillna(-9.0) != off.fillna(-9.0)).to_numpy().sum())
     assert changed > 0, "the modifier consumed funding and changed nothing; this fixture cannot detect it"
+
+
+def test_the_refusal_has_its_own_type_so_a_blanket_handler_can_let_it_through(august_panel: Panel) -> None:
+    """It stays a ``ValueError`` for every existing caller, but is identifiable for the ones that catch.
+
+    Two places score many things in a loop and treat a failure as a property of the ITEM: `research
+    mine` drops a candidate that cannot be evaluated into an `error` row, and `parameter_neighborhood`
+    records a perturbation that raises as `None`.  A missing funding archive is a property of the RUN,
+    so under those handlers the guard degraded into a silently thinner shortlist or a missing neighbour.
+    """
+    with pytest.raises(FundingUnavailable):
+        _model(**CROWDING).strategy_targets(august_panel)
+    assert issubclass(FundingUnavailable, ValueError)  # nothing that catches ValueError today changes
+
+
+def test_parameter_neighborhood_still_swallows_a_bad_perturbation_but_not_a_missing_archive() -> None:
+    """D-020's neighbourhood exists to survive params that cannot be scored, not inputs that are absent."""
+    base = {"window": 100}
+    assert parameter_neighborhood(lambda p: None if p["window"] != 100 else 1.0, base)["base"] == 1.0
+
+    def degenerate(params: Mapping[str, Any]) -> float | None:
+        if params["window"] != 100:
+            raise ValueError("this perturbation cannot be scored")
+        return 1.0
+
+    neighbours = parameter_neighborhood(degenerate, base)["neighbours"]["window"]
+    assert neighbours == {"down": None, "up": None}  # unchanged: a bad perturbation is still recorded as None
+
+    def unfunded(params: Mapping[str, Any]) -> float | None:
+        if params["window"] != 100:
+            raise FundingUnavailable("no settlement for any symbol")
+        return 1.0
+
+    with pytest.raises(FundingUnavailable):
+        parameter_neighborhood(unfunded, base)

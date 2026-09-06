@@ -18,7 +18,7 @@ import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
 from beidou_alpha.mining import enumerate_candidates, to_signal
-from beidou_alpha.model import AlphaModel
+from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
@@ -1762,18 +1762,22 @@ def research_mine(
         f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
         f"({json.dumps(search.rejected)}) on {len(panel.symbols)} symbols x {len(panel.index)} bars"
     )
+    # The candidates ARE the strategies here, so the funding check belongs after enumeration rather than
+    # on `--strategy` (which this command ignores).  It has to happen before the loop: a family that reads
+    # funding would otherwise land in the `error` rows below and the command would still exit 0, writing a
+    # shortlist whose `declared_trials` counts candidates that were never scored - and that count is what
+    # `research validate --prior-trials` feeds into the DSR denominator.
+    specs = [register_signal(to_signal(candidate)) for candidate in search.candidates]
+    entries = [StrategyEntry(id=spec.id, params=dict(spec.default_params)) for spec in specs]
+    _require_funding(entries, panel)
     rows: list[dict[str, Any]] = []
-    for candidate in search.candidates:
-        spec = register_signal(to_signal(candidate))
-        model = AlphaModel(
-            entries=(StrategyEntry(id=spec.id, params=dict(spec.default_params)),),
-            portfolio=portfolio,
-            interval=interval,
-            min_history_bars=history,
-        )
+    for candidate, entry in zip(search.candidates, entries, strict=True):
+        model = AlphaModel(entries=(entry,), portfolio=portfolio, interval=interval, min_history_bars=history)
         try:
             weights, _combined, _per = model.evaluate(panel, membership)
             result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
+        except FundingUnavailable:
+            raise  # belt and braces: the run has no funding, which is not this candidate being unscoreable
         except Exception as exc:  # a candidate that cannot be evaluated is dropped, never silently scored
             rows.append({**candidate.to_dict(), "error": f"{type(exc).__name__}: {exc}"})
             continue

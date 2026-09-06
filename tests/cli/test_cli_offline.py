@@ -855,3 +855,54 @@ def test_overlay_min_history_keeps_the_registry_books(tmp_path: Path, august_dir
     assert result.exit_code == 0, result.output
     payload = json.loads(sorted(out.glob("overlay-*.json"))[-1].read_text())
     assert set(payload["strategies"]) == {"tsmom", "flow"}, "the sleeve must survive the rebuild"
+
+
+def test_mine_refuses_a_funding_consuming_family_instead_of_error_rowing_it(
+    tmp_path: Path, august_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`mine` is exempt from the guard table only because no candidate reads funding on this branch.
+
+    That exemption rests on one literal (`uses_funding=lambda params: False` in mining/search.py) which
+    a funding-reading family would flip.  It would not have failed closed: the scoring loop drops any
+    candidate that raises into an `error` row, so the command exited 0 and wrote a shortlist whose
+    `evaluated` and `declared_trials` counts included candidates that were never scored — and that count
+    is what `research validate --prior-trials` feeds into the DSR denominator.
+    """
+    import dataclasses
+
+    import beidou_cli.research_cmd as rc
+
+    real = rc.to_signal
+    monkeypatch.setattr(
+        rc, "to_signal", lambda candidate: dataclasses.replace(real(candidate), uses_funding=lambda params: True)
+    )
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "mine",
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--registry",
+            REGISTRY,
+            "--out",
+            str(out),
+            "--no-funding",
+            "--min-history",
+            "0",
+            "--max-complexity",
+            "3",
+            "--max-lookback",
+            "200",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    assert "--funding" in result.output, result.output
+    assert not list(out.glob("*.json")), "a refused search must not leave a shortlist behind"
