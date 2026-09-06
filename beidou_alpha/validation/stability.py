@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from beidou_alpha.model import FundingUnavailable
 from beidou_alpha.validation.metrics import sharpe
 
 
@@ -45,6 +46,8 @@ def parameter_neighborhood(
                 perturbed[key] = value + (1 if label == "up" else -1) if isinstance(value, int) else candidate
             try:
                 neighbours[label] = evaluate(perturbed)
+            except FundingUnavailable:
+                raise  # the run has no funding; that is not this perturbation being unscoreable
             except ValueError:
                 neighbours[label] = None
         results[key] = neighbours

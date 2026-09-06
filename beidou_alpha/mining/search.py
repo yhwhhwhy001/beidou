@@ -28,6 +28,7 @@ from beidou_alpha.mining.expr import (
     CrossSectional,
     Expr,
     ExprError,
+    Funding,
     Mul,
     RangePosition,
     Ratio,
@@ -156,6 +157,65 @@ def _multi_horizon_family(horizons: Sequence[int], vol_window: int, scales: Sequ
         yield Squash(Sum(legs), scale)
 
 
+def _funding_family(
+    windows: Sequence[int],
+    vol_window: int,
+    scales: Sequence[float],
+    horizons: Sequence[int],
+    interaction_scale: float,
+) -> Iterator[Expr]:
+    """Carry, and carry crossed with momentum: the only family that reads ``panel.funding``.
+
+    Every shape divides the funding leg by ``Vol`` first, which the dimension system enforces rather than
+    suggests - ``Funding`` is RETURN, so ``Squash``, ``Mul`` and a mixed ``Sum`` all refuse it raw.  The
+    interaction reuses one ``vol_window`` on both legs, which is safe here and was not in
+    ``_regime_family``: this is ``ret * funding / vol**2``, where nothing appears in both a numerator and a
+    denominator, so there is no algebraic cancellation for the canonicaliser to miss.
+
+    Three things a reader of the shortlist has to know.
+
+    **Both signs are emitted, so a funding candidate is always near the top.**  ``cross_sectional_rank``
+    and ``tanh`` are both odd, so each short shape is the exact mirror of its long one and the mirror of
+    the worst candidate is the best.  "A carry expression ranked first" is therefore not information; only
+    its margin over the baseline is.
+
+    **The interaction is not a test of tsmom's crowding modifier.**  That modifier is a thresholded,
+    one-sided, shrink-only multiplier in {1.0, 0.5} on a cross-sectional *rank* of funding, with
+    ``min_periods=window`` and an observed mask.  This is a continuous, symmetric, sign-flipping,
+    amplifying product of raw vol-scaled quantities.  No setting of (h, v, w, s, sign) recovers it - the
+    positive sign amplifies exactly where the modifier shrinks.  A hit here is an analogy to that
+    evidence, never a replication of it.
+
+    **Shape three carries a positive carry weight**, i.e. "go long what pays the most funding", which is
+    the opposite of ``carry.py``'s prior.  That is the contract's choice, not an oversight; the negative
+    version is reachable through the short arm of shape one.
+
+    Two combinations are excluded by construction.  ``CrossSectional(Funding(w), "rank")`` type-checks -
+    ``CrossSectional`` bans only PRICE - but ranks un-normalised carry, which is ``carry.py``'s already
+    killed rank mode.  And ``Mul(Ratio(Funding(w), Vol(a)), Ratio(Vol(a), Vol(b)))`` is ``_regime_family``'s
+    cancellation verbatim: it collapses to ``funding(w) / vol(b)``, which is shape one with a different
+    denominator.
+    """
+    for window in windows:
+        carry = Ratio(Funding(window), Vol(vol_window))
+        # The minus sign goes inside the Ratio because Mul refuses a non-RATIO operand and a ranked
+        # expression is a SCORE: negating the CrossSectional would raise, and an ExprError leaves this
+        # generator closed, silently truncating the rest of the family for one malformed count.
+        short_carry = Mul(Const(-1.0), carry)
+        yield CrossSectional(carry, "rank")  # scale-free: ranking discards the magnitude
+        yield CrossSectional(short_carry, "rank")
+        for scale in scales:
+            yield Squash(carry, scale)
+            yield Squash(short_carry, scale)
+        for horizon in horizons:
+            momentum = Ratio(Ret(horizon), Vol(vol_window))
+            # One operand order only: Mul.canonical sorts by hash, so the reverse is the same tree.
+            interaction = Mul(momentum, carry)
+            yield Squash(interaction, interaction_scale)
+            yield Squash(Mul(Const(-1.0), interaction), interaction_scale)
+            yield Squash(Sum(((0.5, momentum), (0.5, carry))), interaction_scale)
+
+
 def enumerate_candidates(
     *,
     horizons: Sequence[int] = (24, 72, 168, 336, 720),
@@ -165,7 +225,11 @@ def enumerate_candidates(
     flow_windows: Sequence[int] = (4, 12, 24),
     range_windows: Sequence[int] = (24, 72, 168),
     regime_long_windows: Sequence[int] = (400, 720),
-    max_complexity: int = 8,
+    include_funding: bool = True,
+    funding_windows: Sequence[int] = (24, 72, 168),
+    funding_horizons: Sequence[int] = (72, 168),
+    funding_scale: float = 1.0,
+    max_complexity: int = 10,
     max_lookback: int = 1400,
 ) -> SearchResult:
     """Enumerate the declared families, drop malformed and duplicate trees, and count everything looked at.
@@ -177,12 +241,28 @@ def enumerate_candidates(
     a fourth scale to an existing family would raise ``declared_trials`` - and so the DSR bar anything
     promoted has to clear - without adding a hypothesis.  Each family here says something the others
     cannot: reversal needs a minus sign, the range family is the only reader of high and low, the regime
-    family is the only interaction, and the multi-horizon family is the only sum.
+    family is the only interaction, the multi-horizon family is the only sum, and the funding family
+    expresses carry - the one panel input no node could read until ``Funding`` existed.
+
+    ``include_funding`` is a search-space parameter and not a panel probe, deliberately: this function
+    stays deterministic and touches no data, which is the property ``research_cmd._resolve_mined`` relies
+    on to re-derive a ``mined_<hash>`` id without persisting anything.  The caller narrows the space when
+    its panel carries no funding.
+
+    ``max_complexity`` is 10 rather than 8 because the contract's signed momentum-times-carry product is a
+    ten-node tree - the minus sign costs two nodes.  The raise is inert on what came before, and the
+    reason is monotonicity, not headroom: relaxing an upper bound can only admit trees, never drop them,
+    and the recorded baseline has ``rejected["too_complex"] == 0``, so nothing that existed exceeded 8.
+    Headroom is precisely what there is none of - 75 of the 225, the single largest bucket, sit *at*
+    complexity 8 - so the next momentum-shaped family will land on the cap again.  Asserted rather than
+    argued: the identity test enumerates the pre-``Funding`` space at both 8 and 10 and requires the same
+    225 hashes in the same order.  At 8 the six negated interaction trees are charged to
+    ``declared_trials`` and then dropped unscored, which is the worst of both.
     """
     seen: dict[str, Candidate] = {}
     rejected = {"malformed": 0, "duplicate": 0, "too_complex": 0, "too_long": 0}
     evaluated = 0
-    families = (
+    families: tuple[Iterator[Expr], ...] = (
         _momentum_family(horizons, vol_windows, scales),
         _normalised_family(horizons, z_windows, (False, True)),
         _flow_family(flow_windows, scales),
@@ -191,6 +271,11 @@ def enumerate_candidates(
         _regime_family(horizons, vol_windows, regime_long_windows, scales, vol_windows[0]),
         _multi_horizon_family(horizons, vol_windows[0], scales),
     )
+    if include_funding:
+        families = (
+            *families,
+            _funding_family(funding_windows, vol_windows[0], scales, funding_horizons, funding_scale),
+        )
     for family in families:
         while True:
             try:
@@ -232,6 +317,12 @@ def to_signal(candidate: Candidate) -> SignalSpec:
         """Derived from the tree, not declared by hand, which is the point of tracking lookback at all."""
         return candidate.lookback
 
+    # Derived from the candidate, never from a flag threaded in from the caller: ``research mine`` and
+    # ``_resolve_mined`` build the same id by different routes, and ``register`` overwrites by id without
+    # comparing.  A hardcoded ``False`` here is the KILL-027 shape - a signal telling the live loop it
+    # needs no funding history and then reading ``panel.funding`` anyway (D-023).
+    reads_funding = candidate.expr.reads_funding()
+
     return SignalSpec(
         id=f"mined_{candidate.hash}",
         compute=compute,
@@ -239,6 +330,6 @@ def to_signal(candidate: Candidate) -> SignalSpec:
         description=f"mined candidate {candidate.expr}",
         warmup_bars=candidate.lookback,
         warmup=warmup,
-        uses_funding=lambda params: False,
+        uses_funding=lambda params: reads_funding,
         canonical=dict,
     )

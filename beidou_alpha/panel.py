@@ -179,6 +179,17 @@ class Panel:
     def bars_per_year(self) -> float:
         return bars_per_year(self.interval)
 
+    @property
+    def settled_symbols(self) -> int:
+        """Symbols carrying at least one settlement.  A zero column and no column are the same input.
+
+        ``FundingStore.load`` returns an empty frame for a symbol with no archive and ``funding_per_bar``
+        turns that into a column of zeros, so a root whose klines are synced but whose funding never was
+        yields ``funding`` that is present and says nothing.  Anything asking "does this panel actually
+        carry funding" must ask this, not ``funding is None`` - that only answers "was funding requested".
+        """
+        return 0 if self.funding is None else int((self.funding.abs().sum(axis=0) > 0).sum())
+
     def reference_mask(self) -> pd.DataFrame:
         """The cross-sectional population as a bars x symbols boolean frame; all-true when unset."""
         if self.reference is None:

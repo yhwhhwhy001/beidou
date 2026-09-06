@@ -85,6 +85,15 @@ class Expr:
     def children(self) -> tuple[Expr, ...]:
         return ()
 
+    def reads_funding(self) -> bool:
+        """Does this tree read ``panel.funding``?  The live loop fetches that history only when told to.
+
+        A method, deliberately, and never a dataclass field: ``signature()`` builds its payload from
+        ``vars(self)``, so a field would rehash every existing candidate while a method cannot enter a
+        signature at all.
+        """
+        return any(child.reads_funding() for child in self.children())
+
     def lookback(self) -> int:
         """Bars of history this node needs before it produces a number."""
         return max((child.lookback() for child in self.children()), default=0)
@@ -250,6 +259,43 @@ class TakerBuy(Expr):
 
     def describe(self) -> str:
         return f"takerbuy({self.window})"
+
+
+@dataclass(frozen=True)
+class Funding(Expr):
+    """Settled funding summed over a trailing window: the carry a position pays or is paid.
+
+    ``lookback`` is ``window`` although ``features.funding_per_bar_to_8h`` uses ``min_periods=1`` and is
+    non-NaN from the first bar.  That is a deliberate over-statement rather than a mirror of the feature:
+    it is the number of bars the value at t reads, it sizes the live request window, and E-042 punishes
+    understating a warmup only.  What it declares away is a real number rather than a NaN, because
+    ``Panel.from_frames`` zero-fills funding - so the prefix is short, not missing, and the protection
+    that actually holds is ``AlphaModel.eligible``'s ``min_history_bars`` (720 by default, larger than
+    every window this family searches).
+    """
+
+    KIND: ClassVar[str] = "funding"
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.window < 1:
+            raise ExprError("funding window must be at least one bar")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RETURN
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        return features.funding_per_bar_to_8h(_required(panel, "funding", "funding"), self.window)
+
+    def lookback(self) -> int:
+        return self.window
+
+    def reads_funding(self) -> bool:
+        return True
+
+    def describe(self) -> str:
+        return f"funding({self.window})"
 
 
 # --- operators -------------------------------------------------------------------------------------

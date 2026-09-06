@@ -270,6 +270,173 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
+# Twentieth raise, 2026-09-05, with the sentence the rule requires: +55 in beidou_data for D-040, the
+# manifest's blind spot on the funding archive.  `_store_fact` spelled the store layout out a second
+# time and got it wrong - it walked `funding/<SYMBOL>/funding.parquet` and skipped every file in the
+# flat `funding/<SYMBOL>.parquet` store - so the fact read {0, 0, _digest({})} on a 231-file / 20 MB
+# archive, both sides of `manifest_problems` were zero, and no report's manifest could ever flag the
+# funding data.  D-034 rewrote what that archive means underneath four reports and none of them could
+# see it.  The lines are not the one-character fix: they are `FundingStore.symbols()` and a `directory`
+# property on both stores, so the layout exists in exactly one module and cannot drift again, plus the
+# version stamp and `_unrecorded_fields`, which keep a pre-fix zero readable as "never measured"
+# instead of silently becoming "the archive grew from nothing" on every historical report.  The cheaper
+# option was to branch on `interval is None` in place; it would have left the duplicated layout that
+# caused this sitting there for the next reader.  KILL-027 / D-038 shape, one layer down.
+# Twenty-first raise, 2026-09-05, with the sentence the rule requires: +62 beidou_data, +64 beidou_live,
+# +18 beidou_cli for D-041, which gave `manifest_problems` its first caller.  D-040 repaired the funding
+# manifest and left it an instrument nobody read: `validate` wrote a dataset manifest into every report
+# and no code path ever compared one back against the data, so the stale-evidence pointer the manifest
+# exists to catch still could not be caught.  The lines are almost entirely the severity split, and that
+# split is the difference between a gate and an annoyance: a membership rebuild blocks (validation runs
+# on that table; P12 is what a rebuilt one does), while klines/funding growth does not, because the
+# daily sync causes it every day.  Universe is the case that had to be measured rather than assumed -
+# the loop rewrites `universe.json` itself, and tsmom's cited universe read `pool-refresh`/15 against
+# `live-refresh`/16 on disk, so blocking on any universe move would have made the loop refuse to start
+# because of its own refresh; it now blocks only when the symbol set moves under an unchanged source.
+# beidou_cli grew least because the wiring deleted something: `report daily` and `report weekly` held
+# byte-identical evidence-loading loops, now one helper.  Verified against the live archive: nothing in
+# flight is blocked today, and both enabled strategies report advisory lines only.
+# Twenty-second raise, 2026-09-05, with the sentence the rule requires: +13 in beidou_alpha and +51 in
+# beidou_cli for E-040 / KILL-027 on the research path.  `AlphaModel.targets` has refused a funding-consuming
+# model without funding history since D-023; `strategy_targets` never did, so `beidou research backtest
+# --strategy tsmom --no-funding` exited 0 and reported a Sharpe for a run in which the crowding modifier its
+# own report cites had consumed nothing.  Research is where evidence is produced, so that is the worse half.
+# The alpha lines are the guard plus the paragraph saying why it sits on `strategy_targets` rather than on
+# `evaluate`: `decompose_book` reaches the signals without ever calling `evaluate`, so the obvious placement
+# would have left `research decompose` producing exactly the report this exists to prevent.  The cli lines are
+# two helpers.  `_require_funding` is not redundant with the library guard - `research diagnose` computes the
+# signal directly and builds no model at all, so nothing else would stop it, and an operator who typed
+# `--no-funding` should be told which strategy and which flag rather than handed a traceback.  `_funding_facts`
+# is the part no guard can cover: `FundingStore.load` returns an empty frame for a symbol with no archive, so
+# `--funding` against a partial archive yields a zero column, and tsmom's crowding rank reads an unobserved
+# symbol as uncrowded rather than failing.  `symbols_settled` is what makes that legible on disk instead of
+# arriving as a quietly weaker modifier.  Historical reports are deliberately NOT retrofitted: what earlier
+# `--no-funding` evidence is worth is the operator's call and docs/RESEARCH_LOG.md's to record.
+# The cli figure above then grew again before this landed, and the extra lines are the more important half.
+# A review of the first draft found that the flag it guarded was the wrong thing to guard: BOTH checks keyed
+# off `panel.funding is None`, which asks "did the operator type --no-funding", not "does the signal have the
+# inputs it was judged on".  `--funding` is the DEFAULT, and against a root whose klines are synced but whose
+# funding never was, `FundingStore.load` returns an empty frame per symbol, so `load_panel` builds a funding
+# frame of all ZEROS - not None - and neither guard could tell that from real data.  Reproduced: exit 0, a
+# report citing `crowding_window: 72`, an annualised Sharpe of 4.34, `symbols_settled: 0`, and no mention of
+# funding in the terminal or the markdown.  That is byte-for-byte the report this whole change exists to
+# prevent, reached by typing nothing at all.  So `_require_funding` now refuses zero settlements the same way
+# it refuses a missing frame, and warns on the partial case instead of leaving it in the JSON where the
+# operator will not look.  `_funding_consumers` and `_settled_symbols` are extracted because the guard and
+# the report block would otherwise compute the same two things three times between them.
+# Twenty-third raise, 2026-09-06, with the sentence the rule requires: +18 in beidou_alpha, and beidou_cli
+# comes DOWN 5 to 2,673.  A second review round found that the twenty-second raise had fixed its own bug in
+# one place only: `_require_funding` learned that an all-zero funding frame is not funding, and
+# `AlphaModel.strategy_targets` was left on `panel.funding is None`, so the library guard - the one the
+# docstring calls "the guard that cannot be forgotten" - had become the WEAKER of the two.  Verified by
+# direct call: `strategy_targets` on a 0-settlement panel returned targets and raised nothing, which left
+# `research book`'s robustness universes and every direct library caller (including
+# scratchpad/verify_crowding_arms.py, the script the registry cites as corroboration for the crowding
+# modifier) on the weak test.  The lines are `Panel.settled_symbols` and its docstring: the predicate now
+# exists once, in the layer that owns the frame, and both guards ask it - which is why the cli figure falls
+# rather than rises.  The alpha count also carries the test that the modifier CHANGES SOMETHING, and that
+# one is the uncomfortable half: the same review showed a mutation deleting `apply_crowding_modifier` from
+# `tsmom.compute` left every new test green, because the funded fixture wrote one constant rate to two
+# symbols, so the trailing cross-sectional rank tied at 0.0 and `rank >= crowding_cut` never held.  The
+# suite proved the precondition (funding was present) and never the conclusion (the signal read it and it
+# mattered) - which is E-040's own shape, reproduced inside the tests written to prevent it.  Measured:
+# 671 target cells move with the modifier wired, 0 with it unwired.
+# Lowered 2026-09-06, which needs no justification but is worth a sentence anyway: beidou_cli 2,673 -> 2,670
+# because `research overlay` stopped rebuilding its model by re-listing seven constructor fields and started
+# using `dataclasses.replace`.  The re-listing had dropped `books=`, so `--min-history` raised on any
+# registry declaring a sleeve.  Re-listing fields IS the bug class; the shorter form cannot rot.
+# Twenty-fourth raise, 2026-09-06, with the sentence the rule requires: +6 in beidou_cli, all of it the
+# paragraph explaining why the report block is called `funding_inputs` and not `funding`.  The blast-radius
+# review found the collision the shorter name creates: a validation report already carries `dataset.funding`
+# from D-040, which counts FILES IN THE ARCHIVE, so the report held two blocks named `funding`, each with a
+# `symbols` key meaning a different thing - 2 files on disk against a 4-symbol panel.  On a partially-synced
+# root the two even coincide by accident (both read 2, from different measurements), which is the worst kind
+# of collision to leave in the artifact an operator reads to decide whether to trust a strategy.  No code
+# confused them - the paths differ - so the whole cost of this is the comment that stops the next reader,
+# or the next author looking for a shorter name, from re-creating it.
+# Twenty-fifth raise, 2026-09-06, with the sentence the rule requires: +16 in beidou_alpha, +4 in
+# beidou_cli, for `FundingUnavailable`.  The guard was raising a bare ValueError into two loops that treat
+# a failure as a property of the ITEM being scored: `research mine` drops a candidate that raises into an
+# `error` row, and `parameter_neighborhood` records a perturbation that raises as `None`.  A missing
+# funding archive is a property of the RUN, so under those handlers the refusal degraded into a quietly
+# thinner shortlist or a missing neighbour.  Reproduced on `mine` with a family declaring `uses_funding`:
+# exit 0, 34 candidates error-rowed, and a shortlist printing `--prior-trials 225` - a count including
+# candidates never scored, which is the number that goes on to size the DSR denominator.  Most of the 16
+# alpha lines are the docstring saying why the type exists at all; it subclasses ValueError so no existing
+# caller changes.  `mine` now also refuses up front, after enumeration, since its candidates ARE its
+# strategies and `--strategy` is ignored there.  A guard any blanket handler can absorb is not a guard.
+# Twenty-sixth raise, 2026-09-06, with the sentence the rule requires: +6 in beidou_cli, giving the
+# `correlation` and `mine-shortlist` payloads the `costs` block every other research report already had.
+# Both rank on cost-NET Sharpe and recorded neither the costs nor the funding stance that produced them,
+# which is what left six historical correlate reports unknowable when the 2026-09-06 log entry tried to
+# settle which evidence had been produced under `--no-funding`: `costs.use_funding` mirrors that flag
+# verbatim everywhere else, and these two simply did not carry it.  Four of the six lines are the comment
+# saying the numbers are net, because that is the part that makes the block look necessary rather than
+# decorative to whoever next tidies a payload.
+# Twenty-seventh raise, 2026-09-06, with the sentence the rule requires: merging P17's carry search
+# (branch feat/mining-funding-node) into main.  Measured against main: +139 in beidou_alpha and +145
+# in beidou_cli.  The cli figure is four lines under what the branch carried alone, because the merge
+# removed four duplicates - both branches had independently taught `research mine` to record its cost
+# model and to count settled symbols, and the merge keeps one of each: the top-level `costs` and
+# `funding_inputs` that every other report in the file already used, and `panel.settled_symbols`
+# instead of a count inlined in `research_mine`.  What the carry search adds:  The alpha lines are the kind this file says it should welcome,
+# because they buy hypothesis space rather than plumbing: a `Funding` leaf, `Expr.reads_funding`, and a
+# `_funding_family` of 42 expressions.  Funding was the one panel input no node could read - the archive
+# has been on disk since 2026-09-03 and tsmom's crowding modifier already consumes it by hand, but the
+# expression language could not, so every one of P14's 225 candidates was a price-or-volume shape and the
+# clean negative it produced ("no money left in this expression space") was measured over a space that
+# excluded carry entirely.  Roughly half of the 136 is docstring, deliberately: the family emits both
+# signs, so the mirror of its worst candidate is its best and a carry expression is ALWAYS near the top of
+# the shortlist by construction; the momentum-times-carry shape is not a searchable version of tsmom's
+# crowding modifier and must not be read as one; and shape three carries a POSITIVE carry weight, the
+# opposite of carry.py's prior.  Three things the next reader would otherwise get wrong, in the only
+# place they will be read.
+#
+# The cli lines are the cheaper alternative's bill coming due.  `research mine` recorded a dataset
+# manifest but not its own `--funding`, cost model, execution mode or portfolio params, so establishing
+# what the 2026-09-04 shortlist actually ran - vol_target 0.15, funding charged - took a four-arm
+# reproduction rather than a read.  D-024 requires a validate report to be reproducible from itself;
+# `mine` was not, and now is (a `run` block, a stamped filename, and an `outcomes` count that makes the
+# candidates which enumerate but never trade visible instead of merely absent).  The rest is `--baseline`,
+# which answers the question the search exists to ask - is there a SECOND, uncorrelated book - rather than
+# the one a bare ranking answers.  Eight of those lines are a refusal the ratchet itself extracted: this
+# file failed on them, which is how the guard got written down rather than assumed.  `AlphaModel.targets`
+# refuses a funding-consuming model without funding history (D-023) but `evaluate` - the research path -
+# does not, so `--baseline tsmom --no-funding` would have run the crowding modifier inert and measured
+# every candidate's marginal against a book nobody validated.  The general hole in the research path is
+# older than P17 and is not closed here.
+#
+# Thirteen of the cli lines are the second time this file extracted a guard, and the first version of
+# that guard was wrong.  It read `if include_funding and not funding` - the CLI FLAG, not the panel.
+# `--funding` against a store with no funding archive yields an all-zero frame rather than None, so the
+# flag says funding was requested, a None-check would say it arrived, and neither is the question.  Under
+# that guard the whole carry family was kept, charged to `--prior-trials`, scored on constants, and the
+# report recorded `include_funding: true`: an artefact asserting a family was searched when it was not,
+# which is KILL-027 standing inside the guard written to stop it.  Measured before the fix on the August
+# fixture with `--funding`: 267 evaluated, 42 carry candidates kept, 36 of them never traded.  The guard
+# now counts symbols carrying a settlement and NARROWS - which is what the delivery contract asked for
+# and what the first version had silently replaced with a refusal - and the run block records the
+# searched value, the requested value and the count, so the three can never disagree unnoticed.
+#
+# The last twenty-three cli lines close two pre-registered rules the delivery had quietly not honoured.
+# Rule 6 asked the shortlist to rank on the marginal against a named baseline; it was ranking on the
+# full-sample Sharpe, which is the exact quantity the adversarial pass says produces a false "the space
+# is empty" verdict - the best absolute candidate is usually the one most correlated with the book
+# already running, and it is also the maximum of a few hundred noisy draws.  Rule 2 asked for
+# `scored == evaluated`, which no run can satisfy, because `evaluated` fires before the complexity and
+# lookback caps drop anything; the achievable form of the same intent is that every counted expression
+# lands in exactly one bucket, and it is now computed, recorded and refused rather than described.  The
+# amendment itself is written down in docs/analysis/2026-09-05-mining-proposer-pivot.md - a frozen rule
+# that turns out to be unsatisfiable is replaced on the record, not silently.  Ten more carry the
+# baseline block's params, net return and drawdown, and three more move `_resolve_mined` into `_entry`,
+# the one chokepoint every strategy id passes through - it had been wired into `correlate` alone, so
+# `research validate --strategy mined_<hash>` raised a bare KeyError, which is the wall an operator hits
+# the moment the shortlist hands them something worth validating.  On the baseline block: naming the strategy is not enough when the registry moves under it, since a marginal measured
+# against tsmom-with-crowding is a different number from one measured against tsmom-without and nothing
+# in the artefact separated them.
+#
+# The three plan thresholds below all move the safe way: non-alpha grew, but beidou_live did not move at
+# all, and the alpha share rose (5,061 of 14,347 against 4,922 of 14,063).
 #
 # 2026-09-06, +96 in beidou_alpha: P1-01 / DL-Q1, the cross-sectional reference population.  The
 # operators ranked, demeaned and took breadth over "whatever columns the caller loaded", so research
@@ -297,10 +464,10 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # cross-sectional population instead of letting it fall out of which frames came back, and `verify`
 # reproduces against that same population so the monitor cannot report a mismatch it caused itself.
 CEILING = {
-    "beidou_alpha": 5_004,
-    "beidou_live": 4_289,
-    "beidou_cli": 2_608,
-    "beidou_data": 1_258,
+    "beidou_alpha": 5_188,
+    "beidou_live": 4_353,
+    "beidou_cli": 2_856,
+    "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,
 }

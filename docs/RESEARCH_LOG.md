@@ -1297,6 +1297,162 @@ compression = risk_spread / vol_spread
 
 - **档位名义上限**：`leverage_brackets()` 只读首档 `initialLeverage`，不读 `notionalCap`。demo 名义（40–800 USDT）下不可达；真实资金 + `max_weight 0.15` 落到薄币上可能触及。与 KILL-A（真实资金前的冲击成本模型）同一批，不在本轮。
 
+## 2026-09-05 · D-039：无交易带的 0.40 在换过四个零件之后重测——P10 cell B 复现，「继续放宽」被排除
+
+起因是一次实盘检查，而检查本身没查出故障：操作者报告约 2.5 小时无成交、无止盈止损触发。**两者都是当前配置的必然结果**——19:00Z 周期 15 个币全部落在 `NO_TRADE_BAND`（待调整 0.5–11 USDT，门槛 73–299 USDT），退出层阈值是 6×σ_1d 而不是 6%（换算成价格幅度：BNB ±12.3%、BTC ±14.3%、AKE ±153.9%），当轮离触发最远 0.21σ；57 个周期里 41 个（72%）本就无单，历史最长静默 9.5 小时。顺带确认 `exit_states` 是活的（15 个币都有 entry/unit，`extreme` 在逐周期推进），17:21 那次全仓成交是操作者重置账户后的重建（`external_flows` TRANSFER +5000.01，进程同时重启）。真正的问题在后面：**能不能收窄带让它多交易**。本条是那个问题的答案。
+
+### 一、为什么值得重测：0.40 的依据一直是 P10 索引，而构造此后改了四次
+
+P10 cell B 采纳 0.40 时，本文件当场记下一条仍然开着的分层：**`no_trade_rel_band 0.40` 的依据是 P10 索引，tsmom 的 `181803Z` 仍是 0.25 下的验证**。此后四次改动，每一次都动了这条曲线所依赖的东西：
+
+- **D-033** 带不再算两层，模型层那份「每周期滑动一根从头重建」的递推消失（此前模型层换手比连续路径高 20%）
+- **D-034** 资金费 43.7% 的结算此前被静默填 0
+- **D-035** `vol_target` 0.15 → 0.30
+- **D-036** `daily_loss_pause` / `GROSS_CAPPED` 进入回测重放（0.30 下时点 355 个 capped bar、36 个 paused bar）
+
+P10 的每一个数字都产生于这四项之前。所以这不是"再问一次"，是**问同一个问题在换过四个零件之后是否还得到同一个答案**。D-033 同时是这次能问的前提：它证明了「未加带的目标逐根喂给 `plan_rebalance`，仓位路径与 `apply_no_trade_band` 逐位相同」，因此**回测里加带的权重帧就是实盘的仓位路径**，下面数出来的订单就是循环会下的订单。
+
+### 二、结果：复现，量级几乎不动
+
+时点 universe（205 币、49,745 bar、5.68 年），`scratchpad/no_trade_band_sweep.py`，绝对带固定在 profile 的 0.005，只动相对臂：
+
+| rel_band | 换手/年 | 成本/年 | 占毛利 | 毛 Sharpe | 净 Sharpe | 走前 OOS | MDD | 订单/天 | 中位持仓 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.00 | 100.5 | 6.46% | 10.9% | 1.9116 | 1.7025 | 1.635 | −23.6% | 16.1 | 13h |
+| 0.10 | 95.7 | 6.12% | 10.4% | 1.9018 | 1.7036 | 1.636 | −23.7% | 13.2 | 17h |
+| 0.15 | 90.5 | 5.76% | 9.6% | 1.9415 | 1.7557 | 1.694 | −23.6% | 10.9 | 21h |
+| 0.20 | 85.5 | 5.42% | 8.9% | 1.9514 | 1.7780 | 1.718 | −23.5% | 8.8 | 27h |
+| 0.25 | 81.2 | 5.12% | 8.4% | 1.9379 | 1.7759 | 1.712 | −23.7% | 7.3 | 34h |
+| 0.30 | 77.9 | 4.96% | 7.8% | 1.9738 | 1.8191 | 1.750 | −23.0% | 6.2 | 41h |
+| **0.40（现行）** | **72.0** | **4.59%** | **6.7%** | **2.0556** | **1.9181** | **1.863** | **−21.9%** | **4.6** | **57h** |
+| 0.50 | 66.4 | 4.21% | 6.2% | 1.9259 | 1.8060 | 1.739 | −23.4% | 3.6 | 72h |
+
+与 P10 cell B 的同一对（0.40 对 0.25）逐项比：
+
+| | P10（旧构造） | 本次（当前构造） |
+| --- | --- | --- |
+| 时点 OOS Δ | +0.1418 | **+0.151** |
+| 静态 OOS Δ | +0.1023 | **+0.112** |
+| 配对 NW t | 4.18 | **4.49** |
+| 换手变化 | −11.8% | **−11.3%**（81.2 → 72.0） |
+| 收益差里成本解释的比例 | 9% | **6.7%**（7.88%/yr 里 0.53pp） |
+
+**绝对水平动了，差异没动。** 这正是应当发生的事：四次改动改的是这本书的收益水平（资金费补回、目标翻倍、护栏可达），不是带的机制。配对检验（同一信号两条净值路径直接相减，Newey-West 24 阶）在两个 universe 上都远离噪声：
+
+```
+              时点                     静态
+vs 0.10   +11.46%/yr  t=5.42      +8.55%/yr  t=3.84
+vs 0.20    +8.45%/yr  t=4.46      +7.50%/yr  t=3.71
+vs 0.25    +7.88%/yr  t=4.49      +6.53%/yr  t=3.49
+vs 0.30    +5.62%/yr  t=3.44      +5.77%/yr  t=3.47
+```
+
+静态 universe（15 币）形状同向，0.40 同为峰值（净 1.5673 / OOS 1.422），这是 D-018 要求的第二个 universe。
+
+### 三、新信息：0.40 是驼峰的顶，不是「越宽越好」
+
+P10 与更早的 R3 都只测过 0.25 与 0.40 两点，因此**无法分辨「更宽总是更好」与「0.40 附近有极值」**——而这两件事对"下一步该往哪走"给出相反建议。本次的 0.50 在两个 universe 上都变差（时点净 1.9181 → 1.8060、OOS 1.863 → 1.739；静态 MDD 还从 −22.9% 恶化到 −25.4%），**"继续放宽"这个方向被排除**。
+
+我一度怀疑 0.40 是孤立尖峰——那是过拟合的典型形状，而且毛 Sharpe（与成本无关）也在那里跳起来，本不该有机制。0.02 步长加密后不是尖峰，是平滑驼峰：毛 Sharpe 从 0.32 的 1.9556 单调升到 0.40 的 2.0556，再单调降到 0.46 的 2.0042（净与 OOS 同形）。**但要说清楚这不构成独立验证**：0.40 本来就是在这份数据上选出来的（P10 cell B），一次找到现行值最优的重跑是确认性的。驼峰平滑 + 两个 universe 同向让它更可信，替代不了新数据。
+
+### 四、收窄属于策略变更，不是效率调整
+
+想要的"更频繁"确实买得到：0.40 → 0.20 让订单从 4.6/天 翻到 8.8/天，中位持仓从 57h 砍到 27h。代价是每年 8.45%（时点）/ 7.50%（静态），**其中只有 6.7%–9.8% 是省下的手续费**（对 0.25 是 0.53pp / 7.88pp，对 0.20 是 0.83pp / 8.45pp），其余来自毛收益路径——毛 Sharpe 本身在 0.40 见顶（2.0556 对 0.25 的 1.9379），而毛 Sharpe 不含成本。
+
+这与 P10 当时的判定同源，也与 D-024 的分解自洽：edge 在方向不在幅度（`magnitude_over_direction` 恰为 0.0，`conviction_mode: sign` 据此采纳），更宽的相对带是在**组合层**做同一件事——不追随波动率目标带来的幅度微调。因此**收窄带不是"多下几单"，是把已被否决过的幅度追随重新放回来**，按 D-020 与本文件"任何针对实盘表现的调整必须先预登记规则再跑"处理，不走顺手调参这条路。
+
+### 五、账本：手工申报 30 → 44
+
+试验记录的去重签名是 `(param_key, range_start, range_end, symbol_count)`，而 `no_trade_rel_band` 是**构造参数，一个字都不进 `param_key`**——这正是本文件"账本记账：一个必须手工补的坑"那一节所说的形状，本次 16 个格子会被去重成一条。按 P10 的先例（四个格子各计一次 tsmom 试验，静态确认算确认不算搜索），时点上除去 0.25 与 0.40 两个 P10 重放，**新格子 14 个**：0.00 / 0.05 / 0.10 / 0.15 / 0.20 / 0.30 / 0.32 / 0.34 / 0.36 / 0.38 / 0.42 / 0.44 / 0.46 / 0.50。
+
+下一次 `research validate` 的 `--prior-trials` 因此从 **30 提到 44**（最近一次 `tsmom-validation-20260904T193707Z`：`ledger_trials 61` + `prior_trials 30` = `n_trials 93`）。**数字写在这里而不是等到申报时再想**。
+
+### 六、明确记为未做
+
+- **证据指针仍然是分层的。** 本条重测的是带的*效应*，不是 tsmom 的验证：`181803Z` 依旧是 0.25 下跑的。要真正结掉 P10 那条开口，得在 0.40 下重跑 `research validate` 并更新 registry 指针（会新增账本行）——**本条没做**，分层照旧，只是现在这层有了当前构造下的读数。
+- **成本模型仍是平的 7 bps。** 不含冲击、不含 `max_participation`，因此这张表只按换手排序。收窄同时抬高总换手（成本↑）与缩小单笔尺寸（单位冲击↓），两个方向相反，**平模型下修正的符号不可预判**——不是"低估"也不是"高估"。与 KILL-A（真实资金前的冲击成本模型）、`participation_capacity_sweep.py` 同一笔债。
+- **P10 cell B 的实盘证伪线仍然空缺。** 它要求换手下降约 12%，已在 P13 因 `vol_target` 改动被明确作废（换手反升 74.8% / 44.9%）。本次是事后扫描、无预登记规则，**因此不在这里补一条**——事后拟合的证伪线不是证伪线。要补需要独立预登记。
+- 未动实盘配置，未写 `reports/`，未写试验账本；脚本 `scratchpad/no_trade_band_sweep.py` 沿 `vol_target_drawdown_bootstrap.py` 的先例（诊断脚本，ruff check/format 通过，可复现）。
+
+## 2026-09-05 · D-040：清单对资金费归档是瞎的——修的是布局被写了两遍，不是那一行判断
+
+起点是一个答不上来的问题：2026-09-04 那次 `research mine` 到底有没有计入资金费。清单本该回答它，结果发现清单在这一格上是瞎的。「发现」与「推断撤回」那一半由并行会话记在同日的挖矿提案者分析里（E-010），此处不重复；**本条是修复与处置**，其中处置那一半——已经落盘的报告该怎么算——是这次真正需要决定的东西。
+
+### 一、缺陷：布局在两个模块里各写了一遍，然后分了岔
+
+`beidou_data/manifest.py` 的 `_store_fact` 用一套走法伺候两个 store：`for child in ...: if not child.is_dir(): continue`，然后取 `child/<interval>.parquet` 或 `child/funding.parquet`。**这是 klines 的布局**（`klines/<SYMBOL>/1h.parquet`）。资金费的实际布局是 `store.py` 的 `funding/<SYMBOL>.parquet`——平铺，一符号一文件。于是 `is_dir()` 对每一个资金费文件都为假，全部跳过。
+
+盘上 231 个文件 / 20,196,970 字节，修复前 `build_manifest` 读到：
+
+```
+klines : {'symbols': 231, 'bytes': 444306711, 'fingerprint': 'fb9391ce34395763'}
+funding: {'symbols': 0,   'bytes': 0,         'fingerprint': '44136fa355b3678a'}   ← 经核即 _digest({})
+```
+
+后果不是「少记一个字段」，而是**`manifest_problems` 对资金费归档永远不会告警**：记录侧与当前侧恒等于同一个零，两边永远相等。D-034 把 1,010,914 条结算里的 441,678 条从静默填零改成正确对齐，重写了那份归档的含义，而没有任何一份报告的清单能看见这件事。KILL-027 / D-038 的同一个形状——一个声称自己是某个量、实际不是的数字，且没有仪器能看见——低了一层。
+
+### 二、修法：布局只留一份，让清单去问 store
+
+按「分支处理平铺布局」修（`if interval is None`）能让数字对，但**会把导致这次事故的重复原封不动留在原地**。所以改成让 store 自己交出路径：新增 `FundingStore.symbols()` 与两个 store 的 `directory` 属性，`_store_fact(directory, paths)` 只接收已解析好的路径。`manifest.py` 现在一个字的布局知识都没有。测试夹具同样经由真 store 写文件——夹具里手写一遍布局，就是这次事故本身的第三次重演。
+
+复核（真实数据根）：`funding` 231 符号 / 20,196,970 字节 / 指纹 `08ada6f733c09ee1`；**`klines` 三个字段逐位不变**（`231 / 444306711 / fb9391ce34395763`），所以历史报告的 klines 侧仍然可比，这次修复没有顺手作废别的东西。
+
+### 三、处置已落盘的报告：v1 的零读作「没测过」，不是「归档是空的」
+
+先量再决定。全仓 `reports/` 里**带 dataset 清单的报告只有 4 份**，全部是 2026-09-04 的，全部带着瞎掉的资金费事实。修复前跑一遍 `manifest_problems`：其中 3 份**本来就已经在告警**（universe.selected_at_ms 与 klines 229→231），只有 `tsmom-validation-20260904T193707Z.json` 一份是干净的。所以「修完会淹掉一片告警」这个担心量出来是 **1 份报告从干净变成不干净**，不是洪水。
+
+三个选项，取第三个：
+
+1. **照常报成漂移**——会输出 `funding.symbols: 0 -> 231`，即断言「归档从无到有长出来了」。**这是对历史的假陈述**：归档一直在，瞎的是仪器。而且这种行文会训练读者忽略 funding 那一行。
+2. **静默压掉**——把「不知道」塌缩成「一致」。本模块唯一明确拒绝的就是这件事，`test_a_result_with_no_manifest_reports_unknown_provenance_not_agreement` 就是为它写的。
+3. **报成「未记录」**（采纳）——说真话：那份报告的资金费出处从未被记录过，无法核对。
+
+v1 的零本来就是**真歧义**：`{0, 0, _digest({})}` 既可能是 231 个文件也可能是空目录，记录里没有任何东西能分辨——所以「未知」是它的准确读数，不是权宜。（`funding: null` 不在此列，仍然可信：目录确实不存在，那一点 v1 看得见。）
+
+为了不让这个歧义变成永久性的，清单加 `MANIFEST_VERSION = 2` 印戳：**v1 的零不可读，v2 的零是一次测量**。没有印戳的话，为了对旧报告诚实，将来每一个真正空的归档都得被叫作「未知」。印戳落在 `MANIFEST_FIELDS` 之外，**不移动任何既有 digest**。
+
+修复后那 4 份的输出：3 份原有的 klines/universe 漂移行一字不变，各自多一行「funding provenance was never recorded」；第 4 份只多那一行。
+
+### 四、代价与没做的事
+
+`beidou_data` +55 行，ceiling 1258 → 1313，第二十次抬升，理由句写在 `test_source_budget.py` 里。行数不在那个一字修复上，在「布局只存一份」和版本印戳上。
+
+测试：`tests/data/test_manifest.py` 5 → 9 条，两条新的先红后绿（其中一条红在 `assert []`——整份资金费归档被加进去而 `manifest_problems` 一声不吭，这才是缺陷在它真正要害处的样子）。全套 342 passed，ruff / mypy 干净。
+
+没做的事，也是本条留下的开口：**`manifest_problems` 至今没有生产调用方**。`research_cmd.py` 两处只写 `build_manifest(...).to_dict()`，没有任何路径在读报告时核对它。也就是说这次修好的是一件**还没有被接上的仪器**——它现在会说真话了，但仍然没有人问它。接上它是独立的一条，不与本条捆绑。
+
+## 2026-09-05 · D-041：给 `manifest_problems` 接上第一个调用方——严重度分级是这条的全部内容
+
+D-040 修好了清单对资金费的瞎点，同时留下一句话：**`manifest_problems` 至今没有生产调用方**。`validate` 自 D-024 起把 dataset 清单写进每一份报告，而没有任何代码路径把它读回来比对过。也就是说这件仪器修好了却没接线，它要抓的「证据指针失效」依然抓不到。本条接线。
+
+### 一、接在哪：启动闸门 + 日报/周报
+
+`beidou_alpha` 不允许 import 任何 `beidou_*`（`test_import_rules.py`），所以检查不能进 `registry.py`。落点是 `beidou_live/config.py` 的 `registry_dataset_problems`，与既有的 `registry_evidence_problems` 并排；`live run` 启动时调用，`report daily` / `report weekly` 各自把结果写进 payload 与 markdown。顺带删掉一处重复：两个 report 命令持有**逐字节相同**的证据读取循环，现在是一个 `_evidence_reports`。
+
+### 二、严重度分级：不分级的闸门一周内就会被关掉
+
+`manifest_check` 返回 `blocking` / `advisory` 两桶：
+
+- **`membership` 无条件阻断。**验证跑在时点成员表上，换了节奏就等于换了一本书——P12 就是这个形状。
+- **`klines` / `funding` 永不阻断。**数据任务每天 01:xx 追加 bar，阻断它等于每次同步后都拒绝启动，操作者会把 `--allow-unvalidated` 变成常驻参数，那比没有闸门更糟。
+- **`universe` 有条件阻断**，这一格是量出来的而不是想出来的。初版设计把 universe 列为无条件阻断，实测立刻发现 **tsmom 会当场卡住实盘**：其引用的 universe 是 `pool-refresh`/15 币，而盘上是 `live-refresh`/16 币。原因是 **`universe.json` 由实盘循环自己重写**（`write_universe`），所以那不是证据失效，是循环自己的记账。最终规则：**source 不变而符号集变了才阻断**；source 变了归 advisory。
+
+### 三、「从未记录」一律 advisory，沿用 portfolio 块的先例
+
+没有清单的报告、以及 D-040 认定为 v1 未知的资金费，都不阻断。这不是新发明的宽容，是 `construction_problems` 已经立下的规矩：*Reports written before `validate` recorded its construction have no `portfolio` block and are skipped, so nothing in flight today is blocked.* 加一个闸门维度不该停掉已经在跑的东西。
+
+实测确认（真实归档，`registry_dataset_problems` 对 shipped registry）：**blocking 为空**，三条 advisory——tsmom 的 universe 记账差异、tsmom 的 v1 资金费未知、flow 的报告根本没有清单。日报 / 周报端到端跑通，`## Dataset provenance (D-041)` 正常渲染。
+
+### 四、代价与没做的事
+
+`beidou_data` +62、`beidou_live` +64、`beidou_cli` +18（cli 涨得最少是因为删掉了那份重复循环），ceiling 第二十一次抬升，理由句在 `test_source_budget.py`。全套 356 passed / 1 skipped，ruff 与 mypy 干净。
+
+那个 skip 是 `test_the_shipped_registry_is_not_blocked_on_the_machine_that_runs_the_loop`：它需要 `.beidou/data`，worktree 与 CI 里都没有，所以只在持有归档的机器上运行。**这是有意的**——它回答的是「今天这台机器上实盘还能不能起来」，别处的答案没有意义。
+
+没做的事，明确记下来：**`live run` 里那段组装（打印 advisory、blocking 并入拒绝条件）没有自动化测试覆盖**。`live run` 无法离线调用（要建 venue 与行情连接），所以它是被人眼审的六行，两个输入（`registry_evidence_problems`、`registry_dataset_problems`）各自有测试。要真正覆盖它得先把启动闸门从命令函数里拆出来，那是独立的一条。
+
+另外，advisory 现在只是被打印和写进报告，**没有任何东西统计它、也没有告警**。tsmom 的 v1 资金费未知会一直挂在那里，直到它被重新验证——这正是 D-040 第三节选择「说未记录」而不是「说漂移」时接受的状态，不是遗漏。
+
 ## 2026-09-05 · P17：提案者不是瓶颈——一次否决自己上一条建议的分析（PIVOT）
 
 起点是与 microsoft/RD-Agent 的对照评分，结论是「北斗的约束是候选供给不够，应该借它的 `fin_factor_report` 当提案者」。**这条建议是错的，推翻它的证据 P14 那天就在仓库里。**
@@ -1401,3 +1557,104 @@ E-013 此前把 P14 结论的限定归给 `vol_target`（0.15 vs 0.30，上限 b
 - **C-003 仍记 PARTIAL，不记 SUPPORTED。** M-P17-01 把裁决权给了 `validate --prior-trials 267`，两个分支（REFUTED / SUPPORTED）都要求它跑过。carry 轴在候选榜阶段就死了，够不到判决门——但「够不到」不等于「已判」，写成 SUPPORTED 就是拿全样本读数当判决，正是 KILL-P17-01 要拦的动作。
 - **上面三个正边际候选是候选，不是发现。** +0.1228 是 267 个全样本抽样的最大值，而 KILL-P17-01 说的就是这个量会产假阳性。它们要不要进 validate 是一个单独决定，代价是三行不可撤回的账本。
 - **§7.2 的 Firewall 两条重开条件都还没被触发**，因为触发它们的是 M-P17-01 的裁决而不是这张表。
+
+### 八、AC-P17-03：C-003 SUPPORTED，而杀死最好候选的恰好是搜索代价本身
+
+按 D-P17-05 取边际前三，各跑 `validate --prior-trials 267 --universe pit`（2026-09-06 操作者授权写账本）。账本 135 → 138，**恰好三行，一候选一行**——账本按 strategy 过滤，所以每个候选自成一档，搜索的代价靠 `--prior-trials` 带进去，这正是 `search.py` 文档字符串要求的那个形状。
+
+| 候选 | OOS | 阈值 @268 | 折一致 | CPCV 负 | 成本 2× | DSR p | 判定 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `cs_rank(rz(ret(720), 336))` | 0.86 | **1.27** | 0.80 | 0.07 | +0.27 | 0.006 | **FAIL** |
+| `cs_rank(z(ret(720), 336))` | 0.70 | 1.26 | 0.80 | 0.13 ✗ | −0.05 ✗ | 0.016 | **FAIL** |
+| `cs_rank(rz(ret(168), 336))` | 0.63 | 1.26 | 0.80 | 0.20 ✗ | −0.20 ✗ | 0.024 | **FAIL** |
+
+**M-P17-01：0 个 PASS / WEAK_PASS → C-003 SUPPORTED。** 按 §7.2 的 Scope Firewall，这打开「频率 / universe」那一支，**不打开数据源**那一支。
+
+#### 第一个候选值得单独看：它只死在搜索代价上
+
+`cs_rank(rz(ret(720), 336))` 过了每一道硬门——折一致 0.80、CPCV 负比例 0.07（门是 0.10）、成本 2× 仍 +0.27、DSR p 0.006。它唯一没过的是 D-028 的选择缩减：OOS 0.86 对阈值 1.27。
+
+而那个阈值**几乎全部是搜索代价**。`oos_selection` 记 `variance 2.2521e-05`、`n_trials 268`；把试验数代回 `expected_max_sharpe`：
+
+```
+n =   1   →  0.0000 /期   →  年化 0.00
+n =   2   →  0.0025       →       0.23
+n =  50   →  0.0108       →       1.01
+n = 268   →  0.0136       →       1.27      ← 实际阈值 1.2702
+```
+
+**不申报那 267 次搜索，阈值就是 0，这个候选会以 OOS 0.86 通过并进 registry。** 它其他每一项都够。
+
+这是 `search.py` 那条规则第一次在真实候选上咬合，也是它存在的全部理由被完整演示了一遍：「一次评估了 400 个表达式、报告最好那个的搜索，就是做了 400 次试验，不管幸存者最后被记在哪个 id 下」。P14 那次搜索没有任何候选走到这一步，所以这条机制此前只是写着。
+
+#### 三条限定，写在前面免得被读大
+
+1. **这不证明那个候选没有 edge**，只证明**在申报了 267 次搜索之后，它的样本外读数不足以把自己从「一堆里的最大值」里区分出来**。若它是先验提出、单独验证的，同一份数据会给出不同的判定——而那正是 D-020 想要的区别。
+2. **C-003 SUPPORTED 说的是这个特征面板**，不是「加密只有一个因子」。KILL-09 仍 UNKNOWN：carry 阴性 + 这三个 FAIL 把它往主要解释推了一步，但 §7.2 的重开条件只授权换频率 / universe 去测它，没有确立它。
+3. **三行账本不可撤回**，此后每个 mined 候选的 DSR 分母都带着它们。这是预登记的代价，不是意外。
+
+#### 本轮结束时的状态
+
+- carry 轴：0/42 正边际（§七）
+- 边际前三：3/3 FAIL（本节）
+- **C-003：SUPPORTED**；Firewall 打开「频率 / universe」，数据源仍关
+- 账本 138 行；registry 未动，实盘未动
+## 2026-09-06 · E-040 的另一半：研究路径也在跑没有输入的信号——连着五轮，后四轮修的都是前一轮的修复
+
+`AlphaModel.targets` 自 D-023 起就拒绝「信号读资金费而没有资金费」的实盘运行。`strategy_targets` 从来不拒绝，而那是**每一条 research 命令都要穿过的缝**。于是：
+
+```
+beidou research backtest --strategy tsmom --no-funding     # exit 0
+```
+
+tsmom 的 registry 参数带 `crowding_window: 72`，`needs_funding` 为真，回测照常跑完并写出一份 `params` 里印着 `crowding_window: 72` 的报告——而那个 modifier 一点输入都没消费。固定盘上复现为 Sharpe 4.34。这是 E-040 / KILL-027 的原形，只是换了一边：**实盘那半在 D-023 关掉了，产生证据的这半没有**，而 registry 的 `evidence` 指针绑的正是这些报告。
+
+### 一、守卫放在 `strategy_targets`，不是 `evaluate`
+
+`evaluate` 看上去是对称的落点，diff 也更小。但 `decompose_book` 是**直接调 `strategy_targets`** 的（`decompose.py:70`），从不经过 `evaluate`——守卫放 `evaluate` 会正好放过 `research decompose`，让它继续产出这条要防的报告。`strategy_targets` 是 `evaluate` / `weights` / `combined_targets` / `decompose_book` / 实盘 `targets` 共同穿过的唯一一条缝。
+
+`tests/` 里没有任何一条测试在裸 panel 上评估会消费资金费的模型，所以库层收紧不需要任何既有测试让路。CLI 侧另有一个 `_require_funding`，因为 `research diagnose` **根本不建模型**（直接 `get_signal(...).compute`），库守卫看不见它。
+
+### 二、后四轮：每一轮都是前一轮的修复本身出的问题
+
+| 轮次 | 缺陷 | 怎么暴露的 |
+| --- | --- | --- |
+| 2a | 守卫只修了一半：`_require_funding` 学会了「全零 frame 不算资金费」，`strategy_targets` 还停在 `is None`，于是**库守卫成了两者中较弱的那个** | 直接调用：0 结算的 panel 上返回 targets、不抛异常 |
+| 2b | 新测试**看不见 modifier**：固定盘给两个币写了同一个常数费率，横截面 rank 全部并列 0.0，`rank >= crowding_cut` 永不成立 | crowding ON / OFF 的 summary 逐字节相同（差异 0 个 cell） |
+| 3 | `research overlay --min-history` 手写重列构造器时漏了 `books=` | 接守卫时撞上：`strategy flow refers to undeclared book 'flow_short'` |
+| 4 | 报告新块叫 `funding`，而报告里**早就有一个** `dataset.funding`（D-040），两个块各带一个含义不同的 `symbols` | 半同步 root 上两个数字还会巧合相等（都读 2，来自不同测量） |
+| 5 | 守卫会被 blanket handler 吞掉：`mine` 把它变成逐候选 `error` 行，`parameter_neighborhood` 把它记成 `None` | 造一个声明读资金费的 family：exit 0、34 条 error 行、`--prior-trials 225` |
+
+2b 值得单独说：那两条 funded 测试断言的报告，写着 `crowding_window: 72` 而 modifier 什么也没改——**E-040 的形状，出现在为防止它而写的测试里**。删掉 `tsmom.compute` 里的 `apply_crowding_modifier` 调用，当时全部新测试依旧全绿。现在钉住的是差异本身：接上 671 个 target cell 变化，拔掉 0 个。
+
+第 5 轮的要害不是 exit 0，是那个 **225**：shortlist 印的 `declared_trials` 把从未被评分的候选也算了进去，而这个数正是 `research validate --prior-trials` 喂进 DSR 分母的量。两个循环把失败当作**被评分对象**的属性都是对的；缺失的归档是**这次运行**的属性。所以修法是让拒绝可识别（`FundingUnavailable(ValueError)`），不是把 handler 改宽。
+
+### 三、实测（真实归档，不是推理）
+
+- **实盘不会被误伤。**守卫从 `is None` 改成 `settled_symbols == 0`，实盘也跟着变严了。全部 48,327 个完整 1443-bar 请求窗口里，结算币数最少 **10/18**，**零个**窗口为 0——安静的资金费率期不可能让 loop 停摆。单个币确实会在某个窗口读到 0（`TRUMPUSDT`、`AKEUSDT`，新上币尚无资金费），那正是**告警**而不是拒绝该覆盖的情形。
+- 时点 universe：**205/205** 结算，既不拒绝也不告警。
+- registry 证据链完好：两份被引用的报告都在、digest 都对、`evidence_problems` 对每个启用策略均为空 → `live run` 照常启动。`param_problems` 只读 `best_params` / `sleeve.params`，新顶层 key 够不到它。
+- 无自动化受影响：`ci.yml` 不跑 research，`run_data.sh` 只在注释里提到，三个 launchd 是 data / live / check；docs 与 README 里所有 `beidou research` 调用都没有 `--no-funding`。
+
+### 四、历史证据：这个问题的答案是空的
+
+原始范围把「早先用 `--no-funding` 跑出来的证据算不算数」留给操作者，并指定记在本文件而不是由代码悄悄解决。现在可以量化了：`costs.use_funding` 逐字镜像 `--funding`（`cost_model(..., use_funding=funding)`），所以它是可靠的代理。
+
+扫描 `reports/research/` 全部 **80** 份报告：
+
+- 以 `--no-funding` 产出的：**0 份**（69 份 `use_funding=True`，11 份没有 costs 块）。
+- 参数里带 `crowding_window: 72` 的 **8** 份，**全部** `use_funding=True`。
+
+**没有一份在册证据受影响，这条决定不需要做。**
+
+留一个诚实的开口，形状与 D-040 的「未记录」一致：那 11 份没有 costs 块的是 6 份 correlation、1 份 mine-shortlist 与 4 份分析产物——`research correlate` 的报告**从不记录 funding 口径**，所以那 6 份的资金费出处是不可知的，不是「已知为真」。它们都不是 registry 证据，本条不追溯。
+
+### 五、代价与没做的事
+
+`beidou_alpha` 4,876 → 4,922，`beidou_cli` 2,600 → 2,680；ceiling 第二十二至二十五次抬升（其中一次是**下调**——`overlay` 改用 `dataclasses.replace` 后 cli 反而少了 3 行），理由句都在 `test_source_budget.py`。测试 356 → **388 passed / 1 skipped**，ruff 与 mypy 干净。
+
+方法上值得记一笔：**五轮里有四轮是评审在自己的改动里挖出来的**，而最初那版守卫看起来是对的——测试全绿、端到端也验过。四个洞（真实归档上的默认 flag、blanket handler、报告可读性、测试自身的盲区）没有一个是读代码能看出来的，全部要靠实际去跑。
+
+评审本身两次因 session limit 全灭：第一次 26 个 agent 里 13 个报错，第二次 4 个 sweep agent 全部失败、`agents_done: 0`。**返回的空结果是「什么都没跑」，不是「什么都没查到」**——blast-radius 那一路最终是手工走完的，所以本条的覆盖不均匀：证据链、报告消费方、文档与自动化、误伤四项是逐项实测的，其余部分只有单轮评审。
+
+补记（同日）：**`correlate` 与 `mine-shortlist` 的 `costs` 块已补上**。两者都按**扣费后**的净值 Sharpe 排序，却既不记录成本也不记录 funding 口径——这正是上面那 6 份历史 correlation 报告不可知的原因。补的是 `costs`（含 `use_funding`）与 `funding_inputs`，其余五份报告本来就有。历史那 6 份仍然不可追溯，本条不回填。
