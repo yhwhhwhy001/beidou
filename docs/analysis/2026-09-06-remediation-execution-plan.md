@@ -383,9 +383,11 @@ Quality Score（1–5）：问题真实性 5 · 证据充分度 5（全部 E1 �
 | 项 | 值 |
 | --- | --- |
 | 项目 / 等级 / Interaction | 北斗 V5 剩余问题执行方案 / L / Yellow |
-| 当前 Phase | 8–10 COMPLETE（本文件）；Phase 1–7 继承报告 |
+| 当前 Phase | 8–10 COMPLETE（本文件）；Phase 1–7 继承报告；**执行中：B0 ✔ B1 ✔ B2 ✔（均在 worktree `expr-nodes`），重启 #1 ✔（2026-09-07 01:16 本地）** |
 | 已完成结论 | D-P1..D-P7；G7 由报告的 PARTIAL 补为 PASS（测试矩阵在 §6.2） |
-| 待决 | ~~Q1、Q2、Q3~~ 已答（B / A / A）；A-P2 的 15 分钟探测；A-P4 的启动耗时实测 |
-| 开放 Kill | KILL-P2（P1，待 Q2）；报告层 KILL-Q4/Q5/Q6/Q7/Q8/Q9/Q11/Q16 状态不变，各自绑定到本文件的 DL |
-| 证据缺口 | 远端介质；demo `forceOrders`；启动耗时 |
-| 下一动作 | B0 开 worktree `fix/ruler-debts`，第一件事跑 T-R1-3（操作者 2026-09-06 指示「从 B0 开始」） |
+| 待决 | ~~Q1、Q2、Q3~~ 已答（B / A / A）；~~A-P2~~ 已探（`liquidationPrice` 0 = 不可达，14/14 多头为 0、4/4 空头非 0）；~~A-P4~~ 已测（DL-L4 窗口 71.8 s）；**B2 合并 main 待操作者**；**DL-X1 余下四件待裁（见下）** |
+| 开放 Kill | KILL-P2（P1）已由 Q2 裁定（抬 ceiling 并写理由，随 B1 提交）；报告层 KILL-Q4/Q5/Q6/Q7/Q8/Q9/Q11/Q16 状态不变，各自绑定到本文件的 DL |
+| 证据缺口 | 远端介质（Q1=B，DL-X2 取消）；demo `forceOrders`（未探，DL-X1 余项）；实盘真实成交成本（P20 阳性候选的 ×2 压力靠它才从假设变测量） |
+| **DL-X1 实际交付** | B1 只交付了**算法**：`Position.liquidation_price`、venue `parse_position` 0→None、`beidou_live/health.py` 的 `liquidation_distance` / `min_liquidation_distance` / `margin_mode_problems` + 单测。**四件未接线**：(1) 引擎每周期落盘 `min_liq_distance`（`cycles.jsonl` 里没有这个字段）；(2) 启动断言保证金模式并拒绝启动；(3) `force_orders()` 一次 GET；(4) `attribution.py` 的 `INSURANCE_CLEAR` 桶。三个函数在生产代码里**零调用点**（2026-09-07 核实）。因此 **B4 不是"实质完成"**，且余项落地需要重启 #2 |
+| P20 / DL-A1 裁决 | **阳性**（预登记预期为阴性）。`cs_rank(ret(336)/semi(ret(1),168))` OOS 1.7862 vs 门槛 1.6453 @ N=575，`p_family` 0.0135，VERDICT PASS。五个新族里三个干净阴性。**建议记阳性、不晋级**：成本 ×2 时跌到 1.011（tsmom 1.682）。详见 `docs/RESEARCH_LOG.md` 2026-09-06 P20 裁决节 |
+| 下一动作 | 操作者裁定三件：(a) B2 是否合并 main；(b) P20 阳性候选是否跑 `research book` 取 D-018 边际；(c) DL-X1 余下四件接线 + 重启 #2 的排序（原计划在 B3 之后） |
