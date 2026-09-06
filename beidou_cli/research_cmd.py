@@ -846,6 +846,9 @@ def research_correlate(
         "strategies": ids,
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
+        # every Sharpe and correlation below is NET of these costs, so a report without them cannot be
+        # reproduced or compared - and `use_funding` is the field that says how the run was produced.
+        "costs": cost.__dict__,
         "funding_inputs": _funding_facts(list(entries.values()), panel),
         "range": {"start": str(frame.index[0]), "end": str(frame.index[-1]), "bars": len(frame)},
         "correlation": corr.round(4).to_dict(),
@@ -1802,6 +1805,8 @@ def research_mine(
         "rejected": search.rejected,
         "symbols": panel.symbols,
         "range": [str(panel.index[0]), str(panel.index[-1])],
+        "costs": cost.__dict__,
+        "funding_inputs": _funding_facts(entries, panel),
         "dataset": build_manifest(root, interval).to_dict(),
         "candidates": rows,
         "not_evidence": (

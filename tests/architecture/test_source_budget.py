@@ -365,10 +365,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # alpha lines are the docstring saying why the type exists at all; it subclasses ValueError so no existing
 # caller changes.  `mine` now also refuses up front, after enumeration, since its candidates ARE its
 # strategies and `--strategy` is ignored there.  A guard any blanket handler can absorb is not a guard.
+# Twenty-sixth raise, 2026-09-06, with the sentence the rule requires: +6 in beidou_cli, giving the
+# `correlation` and `mine-shortlist` payloads the `costs` block every other research report already had.
+# Both rank on cost-NET Sharpe and recorded neither the costs nor the funding stance that produced them,
+# which is what left six historical correlate reports unknowable when the 2026-09-06 log entry tried to
+# settle which evidence had been produced under `--no-funding`: `costs.use_funding` mirrors that flag
+# verbatim everywhere else, and these two simply did not carry it.  Four of the six lines are the comment
+# saying the numbers are net, because that is the part that makes the block look necessary rather than
+# decorative to whoever next tidies a payload.
 CEILING = {
     "beidou_alpha": 4_922,
     "beidou_live": 4_262,
-    "beidou_cli": 2_680,
+    "beidou_cli": 2_685,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

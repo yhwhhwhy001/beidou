@@ -906,3 +906,63 @@ def test_mine_refuses_a_funding_consuming_family_instead_of_error_rowing_it(
     assert result.exit_code != 0, result.output
     assert "--funding" in result.output, result.output
     assert not list(out.glob("*.json")), "a refused search must not leave a shortlist behind"
+
+
+def _short_registry(path: Path, *, crowding: int) -> Path:
+    """Two strategies the 720-bar fixture can actually score; tsmom's crowding term is the funding read."""
+    path.write_text(
+        "version: 1\n"
+        "ensemble: {method: mean}\n"
+        "strategies:\n"
+        f"  - {{id: tsmom, enabled: true, params: {{vol_window: 100, horizons: [5, 20, 50],"
+        f" horizon_weights: [0.2, 0.3, 0.5], crowding_window: {crowding}}}}}\n"
+        "  - {id: breakout, enabled: true, params: {window: 24, entry_threshold: 0.05}}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _zero_history_profile(path: Path) -> Path:
+    """`correlate` and `mine` take no --min-history, so the fixture needs it lowered via the profile."""
+    path.write_text("market_data: {interval: 1h}\nportfolio: {min_history_bars: 0}\n", encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("command", ["correlate", "mine"])
+def test_the_cost_stance_reaches_the_reports_that_had_no_costs_block(
+    command: str, tmp_path: Path, august_dir: Path
+) -> None:
+    """Both report cost-NET Sharpes and recorded neither the costs nor the funding stance that produced them.
+
+    That is what made six historical `correlate` reports unknowable when the 2026-09-06 log entry tried to
+    settle which evidence had been produced under `--no-funding`: `costs.use_funding` mirrors the flag
+    verbatim everywhere else, and these two payloads simply did not carry it.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    _funding_for(august_dir, root, ("BTCUSDT", "ETHUSDT"))
+    out = tmp_path / "reports"
+    common = [
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--out",
+        str(out),
+        "--funding",
+        "--registry",
+        str(_short_registry(tmp_path / "reg.yaml", crowding=72)),
+        "--profile",
+        str(_zero_history_profile(tmp_path / "profile.yaml")),
+    ]
+    extra = (
+        ["--strategies", "tsmom,breakout"]
+        if command == "correlate"
+        else ["--strategy", "tsmom", "--max-complexity", "3", "--max-lookback", "200"]
+    )
+    result = CliRunner().invoke(main, ["research", command, *extra, *common])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(next(out.glob("*.json")).read_text())
+    assert payload["costs"]["use_funding"] is True, "the flag every other report records"
+    assert set(payload["costs"]) >= {"turnover_bps", "carry_bps_per_bar", "use_funding"}
+    assert payload["funding_inputs"]["symbols_settled"] == 2

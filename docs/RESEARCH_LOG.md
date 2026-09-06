@@ -1434,4 +1434,4 @@ tsmom 的 registry 参数带 `crowding_window: 72`，`needs_funding` 为真，�
 
 评审本身两次因 session limit 全灭：第一次 26 个 agent 里 13 个报错，第二次 4 个 sweep agent 全部失败、`agents_done: 0`。**返回的空结果是「什么都没跑」，不是「什么都没查到」**——blast-radius 那一路最终是手工走完的，所以本条的覆盖不均匀：证据链、报告消费方、文档与自动化、误伤四项是逐项实测的，其余部分只有单轮评审。
 
-没做的事：**`research correlate` 仍然不记录 funding 口径**（它的 payload 没有 costs 块，现在有 `funding_inputs` 但那是本次新加的，历史 6 份没有）。补齐它要动 correlate 的 payload 形状，与本条不捆绑。
+补记（同日）：**`correlate` 与 `mine-shortlist` 的 `costs` 块已补上**。两者都按**扣费后**的净值 Sharpe 排序，却既不记录成本也不记录 funding 口径——这正是上面那 6 份历史 correlation 报告不可知的原因。补的是 `costs`（含 `use_funding`）与 `funding_inputs`，其余五份报告本来就有。历史那 6 份仍然不可追溯，本条不回填。
