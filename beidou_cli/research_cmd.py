@@ -244,6 +244,12 @@ def _require_funding(entries: Sequence[StrategyEntry], panel: Panel) -> None:
 def _funding_facts(entries: Sequence[StrategyEntry], panel: Panel) -> dict[str, Any]:
     """What the signals required of funding, beside what the panel actually carried.
 
+    Recorded as ``funding_inputs``, deliberately not ``funding``: a report already carries
+    ``dataset.funding`` (D-040), which counts FILES IN THE ARCHIVE, and both blocks would then hold a
+    ``symbols`` key meaning different things - 2 files on disk against a 4-symbol panel.  On a
+    partially-synced root the two numbers even coincide by accident, which is the worst kind of
+    collision to leave in the artifact an operator reads to decide whether to trust a strategy.
+
     Reports recorded the *cost model's* ``use_funding`` and nothing about the signals' own requirement, so
     a reader could not tell a modifier that was absent from one that ran on nothing.  ``_require_funding``
     now refuses both of the wholly-inert cases, which leaves this to record the partial one it lets run:
@@ -252,9 +258,9 @@ def _funding_facts(entries: Sequence[StrategyEntry], panel: Panel) -> dict[str, 
     """
     return {
         "required_by": _funding_consumers(entries),
-        "panel": panel.funding is not None,
+        "panel_carried": panel.funding is not None,
         "symbols_settled": panel.settled_symbols,
-        "symbols": len(panel.symbols),
+        "panel_symbols": len(panel.symbols),
     }
 
 
@@ -344,7 +350,7 @@ def research_backtest(
         "symbols": panel.symbols,
         "range": {"start": str(result.weights.index[0]), "end": str(result.weights.index[-1]), "bars": summary["bars"]},
         "costs": cost.__dict__,
-        "funding": _funding_facts([entry], panel),
+        "funding_inputs": _funding_facts([entry], panel),
         "execution": execution,
         "summary": summary,
         "benchmark": {"gross_return": compound(bench), "sharpe": sharpe(bench, panel.bars_per_year)},
@@ -579,7 +585,7 @@ def research_validate(
         "symbols": panel.symbols,
         "range": {"start": str(common_index[0]), "end": str(common_index[-1]), "bars": n_bars},
         "costs": cost.__dict__,
-        "funding": _funding_facts([StrategyEntry(id=strategy, params=c) for c in combos], panel),
+        "funding_inputs": _funding_facts([StrategyEntry(id=strategy, params=c) for c in combos], panel),
         "execution": execution,
         "grid_size": len(combos),
         "grid": json.loads(grid) if grid else DEFAULT_GRIDS.get(strategy, {}),
@@ -840,7 +846,7 @@ def research_correlate(
         "strategies": ids,
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
-        "funding": _funding_facts(list(entries.values()), panel),
+        "funding_inputs": _funding_facts(list(entries.values()), panel),
         "range": {"start": str(frame.index[0]), "end": str(frame.index[-1]), "bars": len(frame)},
         "correlation": corr.round(4).to_dict(),
         "individual_sharpe": individual,
@@ -990,7 +996,7 @@ def research_overlay(
         "symbols": panel.symbols,
         "range": {"start": str(base.weights.index[0]), "end": str(base.weights.index[-1]), "bars": len(base.weights)},
         "costs": cost.__dict__,
-        "funding": _funding_facts(model.entries, panel),
+        "funding_inputs": _funding_facts(model.entries, panel),
         "folds": folds,
         "min_train": min_train,
         "baseline": baseline,
@@ -1496,7 +1502,7 @@ def research_book(
         "universe_mode": universe_mode,
         "robustness_universe": None if robustness is None else robustness_mode,
         "costs": cost.__dict__,
-        "funding": _funding_facts([main_entry, sleeve_entry], panel),
+        "funding_inputs": _funding_facts([main_entry, sleeve_entry], panel),
         "folds": folds,
         "min_train": min_train,
         "purge": purge,
@@ -1676,7 +1682,7 @@ def research_decompose(
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
         "costs": cost.__dict__,
-        "funding": _funding_facts([entry], panel),
+        "funding_inputs": _funding_facts([entry], panel),
         **payload,
         "generated_at": datetime.now(UTC).isoformat(),
     }

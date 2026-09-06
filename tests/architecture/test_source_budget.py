@@ -345,10 +345,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # because `research overlay` stopped rebuilding its model by re-listing seven constructor fields and started
 # using `dataclasses.replace`.  The re-listing had dropped `books=`, so `--min-history` raised on any
 # registry declaring a sleeve.  Re-listing fields IS the bug class; the shorter form cannot rot.
+# Twenty-fourth raise, 2026-09-06, with the sentence the rule requires: +6 in beidou_cli, all of it the
+# paragraph explaining why the report block is called `funding_inputs` and not `funding`.  The blast-radius
+# review found the collision the shorter name creates: a validation report already carries `dataset.funding`
+# from D-040, which counts FILES IN THE ARCHIVE, so the report held two blocks named `funding`, each with a
+# `symbols` key meaning a different thing - 2 files on disk against a 4-symbol panel.  On a partially-synced
+# root the two even coincide by accident (both read 2, from different measurements), which is the worst kind
+# of collision to leave in the artifact an operator reads to decide whether to trust a strategy.  No code
+# confused them - the paths differ - so the whole cost of this is the comment that stops the next reader,
+# or the next author looking for a shorter name, from re-creating it.
 CEILING = {
     "beidou_alpha": 4_907,
     "beidou_live": 4_262,
-    "beidou_cli": 2_670,
+    "beidou_cli": 2_676,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

@@ -612,12 +612,13 @@ def test_a_report_records_what_the_signals_required_of_funding_and_what_the_pane
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     payload = json.loads(next(out.glob("tsmom-backtest-*.json")).read_text())
-    assert payload["funding"] == {
+    assert payload["funding_inputs"] == {
         "required_by": ["tsmom"],
-        "panel": True,
+        "panel_carried": True,
         "symbols_settled": 2,
-        "symbols": 4,
+        "panel_symbols": 4,
     }
+
     assert payload["costs"]["use_funding"] is True  # the cost model's flag stays what it was
 
 
@@ -630,7 +631,12 @@ def test_a_control_arm_report_says_no_signal_required_funding(tmp_path: Path, au
     args = _research_args("backtest", ["--strategy", "tsmom", "--params", control, "--min-history", "0"], root, out)
     assert CliRunner().invoke(main, args).exit_code == 0
     payload = json.loads(next(out.glob("tsmom-backtest-*.json")).read_text())
-    assert payload["funding"] == {"required_by": [], "panel": False, "symbols_settled": 0, "symbols": 4}
+    assert payload["funding_inputs"] == {
+        "required_by": [],
+        "panel_carried": False,
+        "symbols_settled": 0,
+        "panel_symbols": 4,
+    }
 
 
 def test_research_refuses_when_the_funding_archive_holds_no_settlement_at_all(tmp_path: Path, august_dir: Path) -> None:
@@ -747,7 +753,7 @@ def test_validate_guards_the_grid_arms_rather_than_the_base_params(tmp_path: Pat
     allowed = CliRunner().invoke(main, [*base, "--params", crowded, "--grid", '{"crowding_window": [0]}'])
     assert allowed.exit_code == 0, allowed.output
     payload = json.loads(next(out.glob("tsmom-validation-*.json")).read_text())
-    assert payload["funding"]["required_by"] == [] and payload["grid_size"] == 1
+    assert payload["funding_inputs"]["required_by"] == [] and payload["grid_size"] == 1
 
 
 @pytest.mark.parametrize("command", ["backtest", "validate", "decompose"])
@@ -786,7 +792,17 @@ def test_the_funding_block_reaches_the_reports_the_registry_reads(
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(next(out.glob("*.json")).read_text())
-    assert payload["funding"] == {"required_by": ["tsmom"], "panel": True, "symbols_settled": 2, "symbols": 4}
+    assert payload["funding_inputs"] == {
+        "required_by": ["tsmom"],
+        "panel_carried": True,
+        "symbols_settled": 2,
+        "panel_symbols": 4,
+    }
+    if "dataset" in payload:
+        # the two must stay distinguishable: `dataset.funding` counts FILES in the archive (D-040),
+        # `funding_inputs` counts settled columns in the panel.  Here both read 2, from different things.
+        assert set(payload["dataset"]["funding"]) == {"bytes", "fingerprint", "symbols"}
+        assert "funding" not in payload, "a second top-level `funding` block would re-create the collision"
 
 
 def test_overlay_min_history_keeps_the_registry_books(tmp_path: Path, august_dir: Path) -> None:
