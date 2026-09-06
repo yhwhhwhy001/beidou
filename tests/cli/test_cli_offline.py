@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from click.testing import CliRunner
 
-from beidou_alpha.mining import Funding, Ratio, Ret, Squash, Vol
+from beidou_alpha.mining import Funding, Ratio, Ret, Squash, Vol, enumerate_candidates
 from beidou_alpha.mining.search import Candidate
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_cli import main
@@ -1245,3 +1246,66 @@ def test_research_overlay_keeps_book_sleeves_under_min_history(tmp_path: Path, a
     overlay = json.loads(next(out.glob("overlay-*.json")).read_text())
     assert overlay["strategies"] == ["tsmom", "meanrev"]  # the sleeve reached the evidence, not just the registry
     assert overlay["registry"]["books"] == {"sleeve": 0.5}
+
+
+def test_mine_can_rescale_the_search_space_and_says_which_one_it_searched(tmp_path: Path, august_dir: Path) -> None:
+    """P19: every grid is a bar COUNT, so the same search at another interval must be rescaled.
+
+    Without this the pre-registered daily experiment is unrunnable: `--max-lookback 58` alone truncates
+    the 1h-scale grids to 33 of 267 candidates - two families out of seven survive - while all 267 are
+    still charged to `declared_trials`.  Paying for a search you did not run is the shape the ledger
+    exists to prevent.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    grids = '{"horizons": [1, 3, 7], "vol_windows": [2, 7], "z_windows": [3, 7], "range_windows": [1, 3]}'
+    code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding", "--grids", grids)
+    assert code == 0, output
+
+    default = enumerate_candidates(include_funding=False)
+    assert payload["evaluated"] != default.evaluated, "the override did not reach the enumerator"
+    assert payload["run"]["grids"] == json.loads(grids)  # the space searched, stated in the artefact
+
+    # Every candidate is drawn from the rescaled grids, not the defaults.
+    windows = {int(m) for row in payload["candidates"] for m in re.findall(r"ret\((\d+)\)", row["expression"])}
+    assert windows and windows <= {1, 3, 7}
+
+
+def test_mine_refuses_a_grid_key_it_does_not_have(tmp_path: Path, august_dir: Path) -> None:
+    """A typo must fail loudly: silently searching the defaults while `run.grids` claims otherwise is
+    exactly the artefact-that-lies failure the run block was added to close."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    code, output, _ = _mine(
+        root, tmp_path / "reports", "--no-funding", "--no-include-funding", "--grids", '{"horizon": [1, 3]}'
+    )
+    assert code == 1
+    assert "no such parameter" in output and "horizon" in output
+
+
+def test_the_baseline_params_are_overridable(tmp_path: Path, august_dir: Path) -> None:
+    """`--baseline tsmom --interval 1d` on registry params compares against a two-year-horizon book,
+    because tsmom's horizons are bar counts.  The override is what makes the baseline expressible at
+    the interval the run actually uses."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    # Three horizons, because tsmom refuses a set that does not align with `horizon_weights` -
+    # the same constraint P19's rescaling has to respect (168/336/720 -> 7/14/30, still three).
+    override = '{"horizons": [5, 20, 50], "vol_window": 30, "crowding_window": 0}'
+    code, output, payload = _mine(
+        root,
+        out,
+        "--no-funding",
+        "--no-include-funding",
+        "--baseline",
+        "tsmom",
+        "--baseline-params",
+        override,
+    )
+    assert code == 0, output
+    assert payload["run"]["baseline_params"] == json.loads(override)
+    # The recorded params are what the baseline RAN under, not what the registry says.
+    assert payload["baseline"]["params"]["horizons"] == [5, 20, 50]
+    assert payload["baseline"]["params"]["vol_window"] == 30

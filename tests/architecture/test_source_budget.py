@@ -482,10 +482,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # The live half is `_crowding_effect`, wrapped in a bare `except` on purpose and following `asset_vol`'s
 # precedent above it: observability may not stop a trading cycle, and a run that cannot supply it
 # records why rather than a zero (D-035's rule).
+# Twenty-ninth raise, 2026-09-06, with the sentence the rule requires: +49 in beidou_cli for P19's two
+# missing knobs, found by writing the pre-registration before running it.  Every grid in
+# `enumerate_candidates` is a bar COUNT, and `research mine` exposed none of them, so the daily
+# experiment the Firewall opened was unrunnable as specified: `--max-lookback 58` alone leaves 33 of 267
+# candidates - two families out of seven - while all 267 are still charged to `declared_trials`, which is
+# paying for a search that did not happen.  `--baseline` had the same shape one level down: it read the
+# registry and ignored `--params`, so `--baseline tsmom --interval 1d` would have measured every marginal
+# against a two-year-horizon book.
+#
+# The keys are validated against the signature rather than splatted, and that check is the load-bearing
+# half: a typo would have searched the defaults while the report's own `run.grids` named something else -
+# an artefact that lies about its own space, which is what the run block was added to stop.  Both the
+# grids and the baseline params are recorded there for the same reason.
+#
+# Recorded as a governance cost, not hidden: exposing the grids makes the search space tunable from the
+# command line, which `search.py`'s docstring warns about - a fourth scale raises `declared_trials`
+# without adding a hypothesis.  The ledger still charges it and the artefact now states it, so the cost
+# is visible rather than prevented.
 CEILING = {
     "beidou_alpha": 5_243,
     "beidou_live": 4_378,
-    "beidou_cli": 2_856,
+    "beidou_cli": 2_879,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

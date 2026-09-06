@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import itertools
 import json
 import math
@@ -1729,6 +1730,8 @@ def research_decompose(
     help="search the carry family (needs the funding panel)",
 )
 @click.option("--baseline", default="", help="strategy id to compare each candidate against (registry params)")
+@click.option("--baseline-params", default="", help="JSON overriding the baseline's registry params")
+@click.option("--grids", default="", help="JSON of enumerate_candidates grids, e.g. '{\"horizons\": [1, 3, 7]}'")
 def research_mine(
     strategy: str,
     params: str,
@@ -1751,6 +1754,8 @@ def research_mine(
     max_lookback: int,
     include_funding: bool,
     baseline: str,
+    baseline_params: str,
+    grids: str,
 ) -> None:
     """Enumerate candidate expressions and rank them full-sample.  This produces a SHORTLIST, not evidence.
 
@@ -1783,6 +1788,16 @@ def research_mine(
     # was not.  `panel.settled_symbols` is the quantity that answers it, and `_require_funding` below is the
     # backstop for anything this narrowing lets through - a `--baseline` in particular.
     searched_funding = include_funding and panel.settled_symbols > 0
+    # Every grid is a bar COUNT, so the same search at another interval needs them rescaled: at 1d the
+    # default `horizons` of 24..720 mean 24..720 DAYS, and `max_lookback` 1400 outruns the sample.  Keys
+    # are checked against the signature rather than splatted blind - a typo would search the default
+    # space while the report's own `run.grids` claimed otherwise, which is the failure this block exists
+    # to make impossible.
+    grid_overrides: dict[str, Any] = json.loads(grids) if grids else {}
+    allowed = set(inspect.signature(enumerate_candidates).parameters)
+    unknown = sorted(set(grid_overrides) - allowed)
+    if unknown:
+        raise click.ClickException(f"--grids has no such parameter(s): {', '.join(unknown)}; known: {sorted(allowed)}")
     if include_funding and not searched_funding:
         click.echo(
             "no settlement in this panel: narrowing the search space, the carry family is neither searched "
@@ -1791,7 +1806,10 @@ def research_mine(
     baseline_net: pd.Series | None = None
     if baseline:
         _resolve_mined(baseline)  # a mined candidate is addressable by its hash, like any other id
-        baseline_entry = _entry(baseline, registry_path, "")
+        # The baseline every marginal is measured against must be expressible at this interval too:
+        # `--baseline tsmom --interval 1d` on registry params would compare each candidate to a
+        # two-year-horizon book, because tsmom's horizons are bar counts.
+        baseline_entry = _entry(baseline, registry_path, baseline_params)
         # Every candidate's marginal is measured against this book, so a baseline running its modifier
         # inert would corrupt the whole column (E-040 / KILL-027).  Same refusal every other command uses.
         _require_funding([baseline_entry], panel)
@@ -1802,7 +1820,10 @@ def research_mine(
         # replaying it on one leg only would leak that replay into every candidate's correlation.
         baseline_net = run_backtest(panel, baseline_weights, cost, execution=execution).portfolio_net  # type: ignore[arg-type]
     search = enumerate_candidates(
-        max_complexity=max_complexity, max_lookback=max_lookback, include_funding=searched_funding
+        max_complexity=max_complexity,
+        max_lookback=max_lookback,
+        include_funding=searched_funding,
+        **grid_overrides,
     )
     click.echo(
         f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
@@ -1894,6 +1915,8 @@ def research_mine(
             "portfolio": portfolio.__dict__,  # the cost model is the top-level `costs`, as in every report
             "max_complexity": max_complexity,
             "max_lookback": max_lookback,
+            "grids": grid_overrides,  # {} means the declared defaults; the space searched, stated
+            "baseline_params": json.loads(baseline_params) if baseline_params else {},
             "top": top,
             "ranked_by": ranked_by,
             "baseline": baseline or None,
