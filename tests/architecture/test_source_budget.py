@@ -510,10 +510,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # valid enumerator parameter and a CLI flag, so  setting it passed the same keyword twice and the
 # first P19 attempt died on a  - loud, but silent about which of the two to use.  An
 # instruction the tool cannot obey is refused where it is written.
+#
+# 2026-09-06, +78 in beidou_alpha and +24 in beidou_cli: KILL-Q2/Q3, the two halves of "the ruler
+# cannot tell a candidate from noise".  Q3 is one line of mathematics and its explanation: the D-028
+# gate compared the OOS Sharpe against E[max of N nulls], and a single noise curve exceeds the
+# EXPECTATION of the maximum about half the time - measured on the shipped report's own null, that
+# gate admitted pure noise at 43.5%.  It is now the 1-alpha quantile (solve Phi(x)^N = 1-alpha), with
+# `p_family` reported so a verdict can say how surprising the number is; `expected_max_sharpe` is left
+# exactly as it was, because the DSR wants the expectation as a benchmark and only the GATE was wrong.
+# N stays the raw ledger count rather than an effective number of independent trials: the ledger holds
+# near-duplicates, so this is conservative, and inventing an N_eff estimator without a correlation
+# structure would be guessing - recorded as owed, in the docstring, not silently assumed away.
+# Q2 is annotation, not a new gate (the holdout half of the original prescription was withdrawn - it
+# contradicted the operator's KILL-006 ruling): `oos_is_full_sample_tail` says when no fold had a
+# choice to make, which is the shape every tsmom report has had since 2026-09-04, and
+# `best_key_oos_sharpe` gives the shipped configuration its own walk-forward number instead of letting
+# the fold-selected mixture stand in for it.  The lines are mostly the sentences that say why.
 CEILING = {
-    "beidou_alpha": 5_243,
+    "beidou_alpha": 5_321,
     "beidou_live": 4_378,
-    "beidou_cli": 2_887,
+    "beidou_cli": 2_911,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

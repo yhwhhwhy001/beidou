@@ -179,7 +179,31 @@ def probability_of_backtest_overfitting(
     )
 
 
-def oos_selection_threshold(oos_returns: np.ndarray, *, n_trials: int, bars_per_year: float) -> dict[str, Any]:
+def max_sharpe_quantile(n_trials: int, sharpe_variance: float, alpha: float = 0.05) -> float:
+    """The ``1 - alpha`` quantile of the maximum of ``n_trials`` null Sharpes (per period).
+
+    Solves ``Phi(x)^N = 1 - alpha``: the level below which the best of N pure-noise trials
+    stays with probability ``1 - alpha``.  This is the object a *gate* needs.  Its sibling
+    ``expected_max_sharpe`` returns E[max], which is what the DSR needs as a benchmark and is
+    the wrong thing to compare a candidate against: a single null exceeds the expectation of
+    the maximum roughly half the time, so a gate set there admits noise at about one half.
+    """
+    if n_trials <= 1 or sharpe_variance <= 0 or not 0.0 < alpha < 1.0:
+        return 0.0
+    return math.sqrt(sharpe_variance) * normal_ppf((1.0 - alpha) ** (1.0 / n_trials))
+
+
+def family_p_value(sharpe_period: float, n_trials: int, sharpe_variance: float) -> float | None:
+    """P(the best of ``n_trials`` nulls reaches ``sharpe_period``) - the gate's own p-value."""
+    if sharpe_variance <= 0:
+        return None
+    trials = max(1, int(n_trials))
+    return float(1.0 - normal_cdf(sharpe_period / math.sqrt(sharpe_variance)) ** trials)
+
+
+def oos_selection_threshold(
+    oos_returns: np.ndarray, *, n_trials: int, bars_per_year: float, alpha: float = 0.05
+) -> dict[str, Any]:
     """D-028: the out-of-sample Sharpe a strategy must clear given how many configurations were tried.
 
     Walk-forward embeds the selection that happens *inside* a fold; nothing in D-020 is sensitive to the
@@ -191,22 +215,47 @@ def oos_selection_threshold(oos_returns: np.ndarray, *, n_trials: int, bars_per_
     The null is the sampling distribution of one OOS Sharpe estimate, not the ledger's pooled dispersion:
     that dispersion degenerated in both directions (near zero among near-duplicate trials, inflated by
     heterogeneous ones) and is what round 7 was called to fix.  The threshold is derived, never chosen.
+
+    2026-09-06 (KILL-Q3 / F2): the threshold is the ``1 - alpha`` **quantile** of the null's maximum,
+    not its **expectation**.  It had been ``expected_max_sharpe``, and a single noise curve exceeds
+    E[max] roughly half the time - measured on the shipped report's own null, that gate admitted pure
+    noise at 43.5%, which is no gate at all for the Sharpe 1.0-1.4 candidates the pipeline now has to
+    tell apart.  ``expected_max_sharpe`` is untouched: the DSR wants the expectation as a benchmark.
+
+    ``n_trials`` is the ledger count, and it is deliberately NOT reduced to an effective number of
+    independent trials.  The ledger holds near-duplicate configurations, so the true N_eff is smaller
+    and this gate is therefore **conservative** - it asks for more than the evidence strictly requires.
+    That is the safe direction to be wrong in, and estimating N_eff needs a correlation structure this
+    function is not given; it is recorded as owed rather than guessed.
     """
     values = np.asarray(oos_returns, dtype=float)
     values = values[np.isfinite(values)]
     n_obs = int(values.size)
     period = sharpe_per_period(values)
+    trials = max(1, int(n_trials))
     if n_obs < 3 or period is None:
-        return {"n_obs": n_obs, "n_trials": max(1, int(n_trials)), "variance": 0.0, "threshold_annual": None}
+        return {
+            "n_obs": n_obs,
+            "n_trials": trials,
+            "alpha": alpha,
+            "variance": 0.0,
+            "threshold_annual": None,
+            "expected_max_annual": None,
+            "p_family": None,
+        }
     skew, kurt = moments(values)
     variance = sampling_variance(period, n_obs, skew, kurt)
-    threshold = expected_max_sharpe(max(1, int(n_trials)), variance)
+    scale = math.sqrt(bars_per_year)
     return {
         "n_obs": n_obs,
-        "n_trials": max(1, int(n_trials)),
+        "n_trials": trials,
+        "alpha": alpha,
         "variance": variance,
-        "threshold_annual": threshold * math.sqrt(bars_per_year),
-        "oos_sharpe_annual": period * math.sqrt(bars_per_year),
+        "threshold_annual": max_sharpe_quantile(trials, variance, alpha) * scale,
+        # reported beside the gate so the change from E[max] to the quantile stays visible in the artefact
+        "expected_max_annual": expected_max_sharpe(trials, variance) * scale,
+        "p_family": family_p_value(period, trials, variance),
+        "oos_sharpe_annual": period * scale,
     }
 
 

@@ -618,6 +618,11 @@ def research_validate(
         },
         "best_params": params_by_key[best_key],
         "full_sample": results[best_key].summary(),
+        # F3 (KILL-Q2): `best_params` is the full-sample argmax and is what reaches the registry,
+        # while `walk_forward.oos_sharpe` belongs to whatever each fold chose.  When the two differ
+        # the headline describes a mixture no configuration ever was, so the shipped configuration's
+        # own walk-forward number is recorded next to it rather than left for a reader to assume.
+        "best_key_oos_sharpe": wf.oos_sharpe_for(best_key, fold_list, bpy),
         "walk_forward": wf_summary,
         # D-028: the OOS Sharpe a strategy must clear given how many configurations were tried on it.
         "oos_selection": oos_selection_threshold(
@@ -645,7 +650,13 @@ def research_validate(
             ),
             ("Best params (full sample)", params_by_key[best_key]),
             ("Full sample", report["full_sample"]),
-            ("Walk-forward (out of sample)", {k: v for k, v in wf_summary.items() if k != "chosen_params"}),
+            (
+                "Walk-forward (out of sample)",
+                {
+                    **{k: v for k, v in wf_summary.items() if k != "chosen_params"},
+                    "best_key_oos_sharpe": report["best_key_oos_sharpe"],
+                },
+            ),
             ("CPCV", {k: v for k, v in cpcv.items() if k != "chosen"}),
             ("Multiple testing", mt),
             ("Selection-deflated OOS threshold (D-028)", report["oos_selection"]),
@@ -690,6 +701,18 @@ def research_validate(
     click.echo(
         f"walk-forward OOS sharpe={_fmt(wf_summary['oos_sharpe'])} return={wf_summary['oos_return']:.4f} consistency={_fmt(wf_summary['fold_consistency'])}"
     )
+    if wf_summary["oos_is_full_sample_tail"]:
+        # KILL-Q2: said out loud, because the number above reads like an out-of-sample estimate of a
+        # selection procedure and here no fold had a choice to make.
+        click.echo(
+            "  NOTE: no fold had a choice (single configuration, or every fold picked the same one), "
+            "so this OOS is the tail of one full-sample series, not a selection's out-of-sample record"
+        )
+    elif report["best_key_oos_sharpe"] is not None:
+        click.echo(
+            f"  the shipped configuration's own walk-forward OOS is {_fmt(report['best_key_oos_sharpe'])} "
+            "(the headline above is the fold-selected mixture)"
+        )
     click.echo(
         f"cpcv mean={_fmt(cpcv['oos_sharpe_mean'])} q05={_fmt(cpcv['oos_sharpe_q05'])} negative={_fmt(cpcv['fraction_negative'])}"
     )
@@ -698,7 +721,8 @@ def research_validate(
     )
     click.echo(
         f"oos selection threshold={_fmt(report['oos_selection']['threshold_annual'])} "
-        f"at {report['oos_selection']['n_trials']} trials (D-028)"
+        f"at {report['oos_selection']['n_trials']} trials, alpha={report['oos_selection']['alpha']}, "
+        f"p_family={_fmt(report['oos_selection']['p_family'])} (D-028)"
     )
     click.echo(f"VERDICT: {verdict} {reasons if reasons else ''}")
     click.echo(f"report: {path} sha256={digest}")

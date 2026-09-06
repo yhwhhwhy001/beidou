@@ -85,11 +85,33 @@ class WalkForwardResult:
     param_keys: list[str]
     is_sharpes: dict[str, list[float | None]] = field(default_factory=dict)
     oos_sharpes: dict[str, list[float | None]] = field(default_factory=dict)
+    # kept so one configuration's own OOS series can be rebuilt after the fact (F3)
+    net_returns_by_params: dict[str, pd.Series] = field(default_factory=dict)
+
+    def oos_sharpe_for(self, key: str, folds: Sequence[Fold], bars_per_year: float) -> float | None:
+        """The walk-forward OOS Sharpe of ONE configuration, rather than of the fold-selected mixture.
+
+        F3: ``best_params`` is picked by full-sample argmax and is what reaches the registry, while
+        the headline OOS belongs to whatever each fold chose.  When those differ, the number that
+        describes the shipped configuration is this one, and a report that prints only the headline
+        invites the reader to attribute a mixture's performance to a single parameter set.
+        """
+        series = self.net_returns_by_params.get(key) if self.net_returns_by_params else None
+        if series is None:
+            return None
+        parts = [series.iloc[fold.test_slice] for fold in folds]
+        return sharpe(pd.concat(parts), bars_per_year) if parts else None
 
     def summary(self, bars_per_year: float) -> dict[str, Any]:
         test_sharpes = [f.test_sharpe for f in self.folds if f.test_sharpe is not None]
         # D-020: the OOS mean return's Newey-West t-statistic is the verdict's significance test
         significance = newey_west_tstat(self.oos_returns)
+        # KILL-Q2 / F1: with one grid point - or with every fold choosing the same one - no fold had a
+        # choice to make, so the "walk-forward OOS" is the tail of a single full-sample series rather
+        # than an out-of-sample estimate of a selection procedure.  Every tsmom report since
+        # 2026-09-04 was of that shape while the artefact said only "oos_sharpe".
+        chosen = [param_key(outcome.chosen_params) for outcome in self.folds]
+        consistent = len(set(chosen)) <= 1
         return {
             "folds": len(self.folds),
             "oos_sharpe": sharpe(self.oos_returns, bars_per_year),
@@ -101,6 +123,8 @@ class WalkForwardResult:
             "fold_sharpes": [f.test_sharpe for f in self.folds],
             "fold_consistency": (float(np.mean([s > 0 for s in test_sharpes])) if test_sharpes else None),
             "chosen_params": [f.chosen_params for f in self.folds],
+            "selection_consistent": consistent,
+            "oos_is_full_sample_tail": consistent or len(self.param_keys) <= 1,
         }
 
 
@@ -153,5 +177,10 @@ def walk_forward_evaluate(
         )
     oos = pd.concat(oos_parts) if oos_parts else pd.Series(dtype=float)
     return WalkForwardResult(
-        folds=outcomes, oos_returns=oos, param_keys=keys, is_sharpes=is_table, oos_sharpes=oos_table
+        folds=outcomes,
+        oos_returns=oos,
+        param_keys=keys,
+        is_sharpes=is_table,
+        oos_sharpes=oos_table,
+        net_returns_by_params=dict(net_returns_by_params),
     )
