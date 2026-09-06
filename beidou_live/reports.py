@@ -580,12 +580,24 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
     }
 
 
+def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
+    """D-041: what the cited evidence's dataset manifest says about the data on disk.
+
+    Empty lists rather than ``None`` when nothing was passed, so a reader never has to distinguish
+    "not checked" from "checked and clean" by the shape of the value - the same mistake the manifest
+    itself made about funding.
+    """
+    block = dict(dataset or {})
+    return {"blocking": list(block.get("blocking", [])), "advisory": list(block.get("advisory", []))}
+
+
 def daily_payload(
     store: StateStore,
     day: str,
     expectations: dict[str, Any] | None = None,
     probes: Sequence[ProbeParams] = (),
     risk_budget: RiskBudgetParams | None = None,
+    dataset: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -669,6 +681,7 @@ def daily_payload(
         "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
+        "dataset": _dataset_block(dataset),
     }
 
 
@@ -715,6 +728,7 @@ def weekly_payload(
     *,
     expectations: dict[str, Any] | None = None,
     changed_lines: Mapping[str, int] | None = None,
+    dataset: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The plan's weekly research report, which was listed as a deliverable and never built.
 
@@ -745,6 +759,7 @@ def weekly_payload(
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),
         "effort": effort_share(changed_lines) if changed_lines is not None else None,
+        "dataset": _dataset_block(dataset),
     }
 
 
@@ -756,6 +771,15 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
             (
                 "Cycles",
                 {key: payload.get(key) for key in ("cycles", "skipped_cycles", "equity_start", "equity_end")},
+            ),
+            (
+                # D-041: the manifest was written into every report and read by nothing.  It is read now,
+                # and this is where a human sees the answer after startup has scrolled away.
+                "Dataset provenance (D-041)",
+                {
+                    key: json_dumps(value) if value else "none"
+                    for key, value in (payload.get("dataset") or {"blocking": [], "advisory": []}).items()
+                },
             ),
             (
                 "Promotions this week (the plan allows one)",
@@ -811,6 +835,15 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 {
                     k: payload[k]
                     for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
+                },
+            ),
+            (
+                # D-041: the manifest was written into every report and read by nothing.  It is read now,
+                # and this is where a human sees the answer after startup has scrolled away.
+                "Dataset provenance (D-041)",
+                {
+                    key: json_dumps(value) if value else "none"
+                    for key, value in (payload.get("dataset") or {"blocking": [], "advisory": []}).items()
                 },
             ),
             ("Orders", payload["orders"] or {"none": 0}),

@@ -18,7 +18,7 @@ import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
 from beidou_alpha.mining import enumerate_candidates, to_signal
-from beidou_alpha.model import AlphaModel
+from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
@@ -205,6 +205,70 @@ def _load(root: str, symbols: list[str], interval: str, start: str | None, end: 
     )
 
 
+def _funding_consumers(entries: Sequence[StrategyEntry]) -> list[str]:
+    return sorted({entry.id for entry in entries if get_signal(entry.id).needs_funding(entry.params)})
+
+
+def _require_funding(entries: Sequence[StrategyEntry], panel: Panel) -> None:
+    """Refuse a run whose signals consume funding against a panel that carries none (E-040 / KILL-027).
+
+    ``AlphaModel.strategy_targets`` refuses the same thing and is the guard that cannot be forgotten;
+    this one exists for three reasons it cannot cover.  ``research diagnose`` computes the signal directly
+    and never builds a model, so nothing else would stop it.  The operator asked for ``--no-funding``, so
+    the answer belongs at the flag - which strategy, which flag - rather than in a library traceback.
+
+    And ``--funding`` is the DEFAULT, which is the case the library guard is blind to by construction.
+    ``FundingStore.load`` returns an empty frame for a symbol with no archive, so an unsynced root yields
+    a funding frame of all zeros rather than ``None``; tsmom's crowding rank then reads every symbol as
+    uncrowded and the run writes the exact report E-040 is about, at exit 0, with nothing said anywhere.
+    A signal that reads no settlement at all is as inert as one handed no frame, so it is refused alike.
+    """
+    hungry = _funding_consumers(entries)
+    if not hungry:
+        return
+    settled, total = panel.settled_symbols, len(panel.symbols)
+    if panel.funding is None:
+        raise click.ClickException(
+            f"{', '.join(hungry)} consumes funding history under these params, so --no-funding would run the "
+            "signal on inputs it was never judged on (E-040 / KILL-027). Pass --funding, or choose params "
+            "that read none (tsmom: crowding_window 0) to run the control arm deliberately."
+        )
+    if settled == 0:
+        raise click.ClickException(
+            f"{', '.join(hungry)} consumes funding history, but the archive under this root holds no "
+            f"settlement for any of the {total} symbols in the panel, so the signal would read zeros and be "
+            "as inert as it is under --no-funding (E-040 / KILL-027). Run `beidou data sync` first."
+        )
+    if settled < total:
+        click.echo(
+            f"warning: {', '.join(hungry)} reads funding and only {settled}/{total} symbols have any "
+            "settlement stored; the rest read as zero, which the signal cannot tell from calm funding."
+        )
+
+
+def _funding_facts(entries: Sequence[StrategyEntry], panel: Panel) -> dict[str, Any]:
+    """What the signals required of funding, beside what the panel actually carried.
+
+    Recorded as ``funding_inputs``, deliberately not ``funding``: a report already carries
+    ``dataset.funding`` (D-040), which counts FILES IN THE ARCHIVE, and both blocks would then hold a
+    ``symbols`` key meaning different things - 2 files on disk against a 4-symbol panel.  On a
+    partially-synced root the two numbers even coincide by accident, which is the worst kind of
+    collision to leave in the artifact an operator reads to decide whether to trust a strategy.
+
+    Reports recorded the *cost model's* ``use_funding`` and nothing about the signals' own requirement, so
+    a reader could not tell a modifier that was absent from one that ran on nothing.  ``_require_funding``
+    now refuses both of the wholly-inert cases, which leaves this to record the partial one it lets run:
+    a symbol with no archive contributes a zero column that tsmom's crowding rank reads as uncrowded, so
+    ``symbols_settled`` is what keeps a thinner modifier legible on disk rather than merely quieter.
+    """
+    return {
+        "required_by": _funding_consumers(entries),
+        "panel_carried": panel.funding is not None,
+        "symbols_settled": panel.settled_symbols,
+        "panel_symbols": len(panel.symbols),
+    }
+
+
 def _write(out: str, name: str, payload: dict[str, Any], markdown: str) -> tuple[Path, str]:
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
@@ -260,6 +324,7 @@ def research_backtest(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([entry], panel)
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
@@ -290,6 +355,7 @@ def research_backtest(
         "symbols": panel.symbols,
         "range": {"start": str(result.weights.index[0]), "end": str(result.weights.index[-1]), "bars": summary["bars"]},
         "costs": cost.__dict__,
+        "funding_inputs": _funding_facts([entry], panel),
         "execution": execution,
         "summary": summary,
         "benchmark": {"gross_return": compound(bench), "sharpe": sharpe(bench, panel.bars_per_year)},
@@ -436,6 +502,8 @@ def research_validate(
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     combos = _grid(strategy, grid, entry.params)
+    # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
+    _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
     bpy = panel.bars_per_year
     nets: dict[str, pd.Series] = {}
     params_by_key: dict[str, dict[str, Any]] = {}
@@ -522,6 +590,7 @@ def research_validate(
         "symbols": panel.symbols,
         "range": {"start": str(common_index[0]), "end": str(common_index[-1]), "bars": n_bars},
         "costs": cost.__dict__,
+        "funding_inputs": _funding_facts([StrategyEntry(id=strategy, params=c) for c in combos], panel),
         "execution": execution,
         "grid_size": len(combos),
         "grid": json.loads(grid) if grid else DEFAULT_GRIDS.get(strategy, {}),
@@ -675,6 +744,7 @@ def research_diagnose(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([entry], panel)
     if min_history is None:
         min_history = int((load_yaml(profile).get("portfolio", {}) or {}).get("min_history_bars", 720))
     eligible = panel.close.notna().cumsum() >= min_history
@@ -755,11 +825,13 @@ def research_correlate(
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    entries = {strategy: _entry(strategy, registry_path, "") for strategy in ids}
+    _require_funding(list(entries.values()), panel)
     membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     nets: dict[str, pd.Series] = {}
     for strategy in ids:
-        entry = _entry(strategy, registry_path, "")
+        entry = entries[strategy]
         weights, _c, _p = _model(entry, profile_payload, interval).evaluate(panel, membership)
         nets[strategy] = run_backtest(panel, weights, cost).portfolio_net
     frame = pd.DataFrame(nets).dropna(how="all").fillna(0.0)
@@ -777,6 +849,10 @@ def research_correlate(
         "strategies": ids,
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
+        # every Sharpe and correlation below is NET of these costs, so a report without them cannot be
+        # reproduced or compared - and `use_funding` is the field that says how the run was produced.
+        "costs": cost.__dict__,
+        "funding_inputs": _funding_facts(list(entries.values()), panel),
         "range": {"start": str(frame.index[0]), "end": str(frame.index[-1]), "bars": len(frame)},
         "correlation": corr.round(4).to_dict(),
         "individual_sharpe": individual,
@@ -863,15 +939,13 @@ def research_overlay(
     registry = load_registry(registry_path)
     model = build_model(registry, profile_payload)
     if min_history is not None:
-        model = AlphaModel(
-            entries=model.entries,
-            portfolio=model.portfolio,
-            interval=model.interval,
-            ensemble_method=model.ensemble_method,
-            min_history_bars=min_history,
-        )
+        # `replace`, not a hand-listed constructor: the hand-listed one omitted `books=`, so
+        # `--min-history` died on any registry declaring a sleeve - the shipped one does (D-018) - before
+        # it could reach the data.  Re-listing fields is the bug; carrying them all is the fix.
+        model = replace(model, min_history_bars=min_history)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding(model.entries, panel)
     membership = _membership(root, universe_mode, panel)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     bpy = panel.bars_per_year
@@ -928,6 +1002,7 @@ def research_overlay(
         "symbols": panel.symbols,
         "range": {"start": str(base.weights.index[0]), "end": str(base.weights.index[-1]), "bars": len(base.weights)},
         "costs": cost.__dict__,
+        "funding_inputs": _funding_facts(model.entries, panel),
         "folds": folds,
         "min_train": min_train,
         "baseline": baseline,
@@ -1343,6 +1418,7 @@ def research_book(
     ledger_path = Path(out) / "trials.jsonl"
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([main_entry, sleeve_entry], panel)
     universes: list[tuple[str, Panel, pd.DataFrame | None]] = [
         (universe_mode, panel, _membership(root, universe_mode, panel))
     ]
@@ -1432,6 +1508,7 @@ def research_book(
         "universe_mode": universe_mode,
         "robustness_universe": None if robustness is None else robustness_mode,
         "costs": cost.__dict__,
+        "funding_inputs": _funding_facts([main_entry, sleeve_entry], panel),
         "folds": folds,
         "min_train": min_train,
         "purge": purge,
@@ -1597,6 +1674,7 @@ def research_decompose(
     entry = _entry(strategy, registry_path, params)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
+    _require_funding([entry], panel)
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
@@ -1610,6 +1688,7 @@ def research_decompose(
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
         "costs": cost.__dict__,
+        "funding_inputs": _funding_facts([entry], panel),
         **payload,
         "generated_at": datetime.now(UTC).isoformat(),
     }
@@ -1701,9 +1780,9 @@ def research_mine(
     # weaker tests pass while every carry candidate evaluates to a constant: 42 expressions kept, charged to
     # `declared_trials`, scored on zeros, and a report recording `include_funding: true`.  That is KILL-027
     # standing inside the guard written to prevent it - an artefact asserting a family was searched when it
-    # was not.  What is counted here is settlements actually present.
-    funding_symbols = 0 if panel.funding is None else int((panel.funding != 0.0).any().sum())
-    searched_funding = include_funding and funding_symbols > 0
+    # was not.  `panel.settled_symbols` is the quantity that answers it, and `_require_funding` below is the
+    # backstop for anything this narrowing lets through - a `--baseline` in particular.
+    searched_funding = include_funding and panel.settled_symbols > 0
     if include_funding and not searched_funding:
         click.echo(
             "no settlement in this panel: narrowing the search space, the carry family is neither searched "
@@ -1713,13 +1792,9 @@ def research_mine(
     if baseline:
         _resolve_mined(baseline)  # a mined candidate is addressable by its hash, like any other id
         baseline_entry = _entry(baseline, registry_path, "")
-        # `AlphaModel.targets` refuses a funding-consuming model without funding history (D-023), but
-        # `evaluate` - the research path - does not, so tsmom's crowding modifier would run inert here and
-        # every candidate's marginal would be measured against a book nobody validated (E-040 / KILL-027).
-        if get_signal(baseline).needs_funding(baseline_entry.params) and funding_symbols == 0:
-            raise click.ClickException(
-                f"--baseline {baseline} consumes funding under its registry params; pass --funding"
-            )
+        # Every candidate's marginal is measured against this book, so a baseline running its modifier
+        # inert would corrupt the whole column (E-040 / KILL-027).  Same refusal every other command uses.
+        _require_funding([baseline_entry], panel)
         baseline_model = _model(baseline_entry, profile_payload, interval, history)
         baseline_weights, _bc, _bp = baseline_model.evaluate(panel, membership)
         # Guard-free on purpose, byte-identical to the candidates' call below: the shortlist buys internal
@@ -1733,18 +1808,22 @@ def research_mine(
         f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
         f"({json.dumps(search.rejected)}) on {len(panel.symbols)} symbols x {len(panel.index)} bars"
     )
+    # The candidates ARE the strategies here, so the funding check belongs after enumeration rather than
+    # on `--strategy` (which this command ignores).  It has to happen before the loop: a family that reads
+    # funding would otherwise land in the `error` rows below and the command would still exit 0, writing a
+    # shortlist whose `declared_trials` counts candidates that were never scored - and that count is what
+    # `research validate --prior-trials` feeds into the DSR denominator.
+    specs = [register_signal(to_signal(candidate)) for candidate in search.candidates]
+    entries = [StrategyEntry(id=spec.id, params=dict(spec.default_params)) for spec in specs]
+    _require_funding(entries, panel)
     rows: list[dict[str, Any]] = []
-    for candidate in search.candidates:
-        spec = register_signal(to_signal(candidate))
-        model = AlphaModel(
-            entries=(StrategyEntry(id=spec.id, params=dict(spec.default_params)),),
-            portfolio=portfolio,
-            interval=interval,
-            min_history_bars=history,
-        )
+    for candidate, entry in zip(search.candidates, entries, strict=True):
+        model = AlphaModel(entries=(entry,), portfolio=portfolio, interval=interval, min_history_bars=history)
         try:
             weights, _combined, _per = model.evaluate(panel, membership)
             result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
+        except FundingUnavailable:
+            raise  # belt and braces: the run has no funding, which is not this candidate being unscoreable
         except Exception as exc:  # a candidate that cannot be evaluated is dropped, never silently scored
             rows.append({**candidate.to_dict(), "error": f"{type(exc).__name__}: {exc}"})
             continue
@@ -1801,9 +1880,10 @@ def research_mine(
         # funding charged - took a four-arm reproduction rather than a read (D-024 applied to `mine`).
         "run": {
             "funding": funding,
-            "include_funding": searched_funding,  # what was searched, not what was asked for
+            # What was searched against what was asked for; the settlement count that decides between
+            # them is `funding_inputs.symbols_settled`, recorded once at the top level like every report.
+            "include_funding": searched_funding,
             "include_funding_requested": include_funding,
-            "funding_symbols": funding_symbols,
             "execution": execution,
             "universe_mode": universe_mode,
             "min_tenure": min_tenure,
@@ -1811,8 +1891,7 @@ def research_mine(
             "start": start,
             "end": end,
             "min_history_bars": history,  # resolved, not the raw option, which is None by default
-            "portfolio": portfolio.__dict__,
-            "costs": cost.__dict__,
+            "portfolio": portfolio.__dict__,  # the cost model is the top-level `costs`, as in every report
             "max_complexity": max_complexity,
             "max_lookback": max_lookback,
             "top": top,
@@ -1830,6 +1909,8 @@ def research_mine(
         "rejected": search.rejected,
         "symbols": panel.symbols,
         "range": [str(panel.index[0]), str(panel.index[-1])],
+        "costs": cost.__dict__,
+        "funding_inputs": _funding_facts(entries, panel),
         "dataset": build_manifest(root, interval).to_dict(),
         "outcomes": {
             "evaluated": search.evaluated,
