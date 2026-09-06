@@ -6,4 +6,4 @@
 
 | 文件 | 来源 | 说明 |
 | --- | --- | --- |
-| `tsmom-validation-20260906T030942Z.{json,md}` | 深度分析报告 E-36（2026-09-06 03:09Z，六角色复核期间） | `research validate --strategy tsmom --universe pit --prior-trials 30`，16 点默认网格，当前构造（0.30 / 0.40 / pit / crowding 72 / D-034 后）。诚实走前 OOS 1.4852，折 [1.19, 0.06, 2.30, 1.25, 2.57]，零假设年化 SD 0.4428。**它的 16 个格子仍欠账本**：下次对 tsmom 跑 validate 时 `--prior-trials` +16（操作者 2026-09-06 裁定）。 |
+| `tsmom-validation-20260906T030942Z.{json,md}` | 深度分析报告 E-36（2026-09-06 03:09Z，六角色复核期间） | `research validate --strategy tsmom --universe pit --prior-trials 30`，16 点默认网格，当前构造（0.30 / 0.40 / pit / crowding 72 / D-034 后）。诚实走前 OOS 1.4852，折 [1.19, 0.06, 2.30, 1.25, 2.57]，零假设年化 SD 0.4428。**它的 16 个格子已经记过账**：093705Z 的 `--prior-trials` 30 → 60 里就含这 +16（registry 证据块的注释写明了分解）。不欠。 |
