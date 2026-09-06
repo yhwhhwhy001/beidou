@@ -6,8 +6,8 @@
 > - Reading Check：本次理解为「对北斗 V5 做一次全系统质量体检并给出提升方案：与开源同类系统对照评分；重点回答 alpha 供给（策略/因子稀少、挖掘能否自动化或交给 LLM）、三个自适应层（杠杆 / 下单量 / 止盈止损）的优化空间，以及止盈止损应走交易所条件单还是保持 bar 收盘软件层；交付对象是单一操作者，目标是把系统从"能跑的 demo"推到"可托付真实资金"」。最高风险预设为 Pre-1「因子挖掘没有实现、alpha 的瓶颈是候选供给」；若该预设不成立（仓库已有挖掘器、225 个候选全部阴性、P17 已把瓶颈改判为"可表达空间与数据宽度"），方案方向从"造一个挖掘器 / 接 LLM"变为"扩叶节点与数据源，再让现有挖掘器与账本去审"。
 > - Interaction Mode：**Yellow**。关键事实全部可由代码、配置、研究日志、实盘状态文件取证（E1）；外部事实（同类系统、币安 API、文献）由网络取证（E3/E4）。操作者的三条前提与仓库记录有出入，但不改变框架方向，不需要提问。
 > - S/M/L：**L**。命中：≥3 模块（alpha / data / live / exchange / cli）；触及资金链路（下单、止损、杠杆）；AI/策略/自动化维度为"自主决策 + 生产影响 + 难回滚"（挖掘结果一旦进入账本即改变后续 DSR 分母）。
-> - 当前 Gate 决策上限：**Weak GO（受控执行）**——demo 继续运行；**真实资金：HOLD**（且按操作者现行范围为 DEFERRED，不在 12 周路线图内）。**[C 修订]** Weak GO 授权的具体动作重新绑定到修订后的 §9：Phase A 的第 0 步是"任何重启之前使 registry、循环、证据三者一致"，在此之前不得重启循环。理由见 §1 与 §8。
-> - **[执行 2026-09-06]** 操作者选择路径 (b)（先修 P1-01 再有意重启）。**两条 P0 均已 CLOSED**，执行记录见 §12；本文件此后的 OPEN/CLOSED 状态以 §12 与 §8 的状态列为准，正文其余段落保持 09-05/09-06 复核时的原文，不回填。
+> - 当前 Gate 决策上限：**Weak GO（受控执行）**——demo 继续运行；**真实资金：HOLD**（且按操作者现行范围为 DEFERRED，不在 12 周路线图内）。**[C 修订]** Weak GO 授权的具体动作重新绑定到修订后的 §9：Phase A 的第 0 步是"任何重启之前使 registry、循环、证据三者一致"，在此之前不得重启循环。理由见 §1 与 §8。 **[执行 2026-09-06]** 现为 **GO（受控执行）**，依据是操作者对 tsmom WEAK_PASS 的裁定（§12.6），不是更好的数字；真实资金仍 HOLD。
+> - **[执行 2026-09-06]** 操作者选择路径 (b)（先修 P1-01 再有意重启）。**两条 P0 均已 CLOSED**；KILL-Q2/Q3 代码已交付但 C-2 的 falsifier 触发（tsmom WEAK_PASS），操作者裁定后判定升为 GO（§12.5–12.6）；执行记录见 §12；本文件此后的 OPEN/CLOSED 状态以 §12 与 §8 的状态列为准，正文其余段落保持 09-05/09-06 复核时的原文，不回填。
 > - 外部动作授权：**无**。本轮只读仓库与网络；两次研究运行都输出到 scratchpad：`beidou research backtest --universe pit`（E-09..E-11）与 **[C 修订]** `beidou research validate --universe pit`（16 点默认网格，E-36；写入的是 scratch 目录下的账本，仓库 `trials.jsonl` 未动——按 D-039 的先例，下次对 tsmom 跑 validate 时应把这 16 个格子作为"手工补的坑"申报进 `--prior-trials`）。不改 registry/profile、不重启循环、不提交任何文件。
 > - 独立性声明：第一遍工程审查由 4 个独立子代理各限定文件范围执行（§4）；致命/高危项由主分析者亲自复核（§4.3）。**[C 修订]** Phase 7 已由六个独立反方角色（Skeptical PM、User Reality Auditor、Evidence Prosecutor、Complexity Accountant、Delivery Saboteur、Risk & Abuse Red Team）在冻结的 09-05 版本上执行，各角色只读仓库、互不读取对方输出、不读取作者会话；合并结果见附录 C；其中 KILL-R1、R4、R6、R14 的事实链由主分析者再次独立核实（附录 C.0）。六角色对"demo 继续"与"真实资金 HOLD"两个上限无一反对；四个维持 Weak GO，一个要求 PIVOT（第一动作），一个要求 Need Evidence（FWER 门的数字，已由 E-36 补上）。
 > - 同伴会话通报：**[C 修订]** `main` 在 304e549（bd7cd6e 的 D-040 manifest 资金费修复、D-041 启动数据集门，再加一条 `fix(cli): research overlay dropped the books when --min-history rebuilt the model`）；`refactor/alpha-first-v5` 与实盘循环未动；main 的 ratchet 上限比本分支高 +199 行非 alpha。worktree 分支 `feat/mining-funding-node`（be963ad，+1,166 行）已实现 `Funding` 叶节点与 42 条 carry 族，且其提交说明指出 P14 是在读不到 funding、`vol_target 0.15` 下测的。本文件不改 `docs/RESEARCH_LOG.md`。
@@ -21,11 +21,11 @@
 | Final Decision | **Weak GO（受控执行）**：demo 继续；按修订后的 §9 执行——Phase A 第 0 步先使 registry、循环、证据一致（在此之前不重启），再修尺子（P1-01 契约、F1/F2/F3、账本签名），再扩因子表达空间；Phase B 做数据宽度与退市建模。**真实资金 HOLD 且 DEFERRED**（操作者现行范围为"demo 是测试环境、mainnet 不在范围内"，所有 mainnet 前提项移入附录 D 的 pre-flight backlog，不占 12 周路线图）。解除条件写在 §11。 **[执行 2026-09-06]** 维持 **Weak GO**，但理由已第三次改写：P0 已清零、尺子已修完，现在挡住 GO 的是尺子量出来的**第一个数**——tsmom 自己（§11 新升级条件，§12.5）。 **[操作者裁定 2026-09-06]** 判定升为 **GO（受控执行）**——但升级依据是操作者对 tsmom WEAK_PASS 的一次**显式裁定**（附录 B / §12.6），不是一个更好的数字。**真实资金仍 HOLD 且 DEFERRED，不受影响。** |
 | 对操作者五个问题的直接回答 | ① **[C 修订] 用两个硬数字回答"是不是玩具"**：当前构造（指纹 0dcd044d0158）只有 38 根干净 bar，88 个周期跑过 4 个构造指纹，归因合计 tsmom −13.4 / flow +3.1 USDT（≈ −0.1% 权益）——**尚无任何实盘盈利证据，而且按功效计算一年内也不可能有**（30 天窗口的年化 Sharpe 标准误 ≈ √(365/30) ≈ 3.5；在 t=2 下把 1.7 与 0 分开需要约 (2/1.7)² ≈ 1.4 年**构造不变**的干净数据）。demo 真正能证明的是**执行保真**（换手、滑点、迟到成交、registry≡循环）与**无人值守存活**，这两件事本轮为它定义了指标（M-Q03/M-Q08/M-Q09）。按维度：验证 / 证据 / 回测口径三个维度在同类开源系统之上（但见 F1/F2/F6，验证维度本轮自评从 8 下调为 6，修完可回到 8）；alpha 供给、因子挖掘、执行层、数据宽度在生产线以下；§6.1 的联赛表是作者判断（E4/E5），总分区间 4.95–5.25，名次对权重敏感，只作附录参考。② **因子挖掘"没有实现"不成立**：`beidou_alpha/mining` 已有类型化表达式枚举器并跑过 225 个候选，全部阴性；真瓶颈是表达式语言只读 5 个字段、12 个节点，且面板缺 OI / 基差 / 多空比 / 清算 / 盘口。**[C 修订]** 补一条限定：P14 的 225 个候选是在读不到 funding、`vol_target 0.15` 下测的（be963ad 提交说明），worktree 分支已实现 `Funding` 叶与 42 条 carry 族，Phase A 的第一步是合并它而不是重写它。③ **自动化挖掘：做，但按"扩空间 → 枚举 + GP → 账本计费"的顺序，不接 LLM 提案者**（维持 P17 的 PIVOT）。**[C 修订]** "LLM 可做什么"改写为与提案者无关的机械规则：到达 validate 的每个候选必被计费、预登记必须是早于报告时间戳的 git 提交、晋级节奏由账本层强制——因为仓库最近 200 次提交里 129 次由 LLM 共同署名，"LLM 不进账本路径"没有执行主体。④ **自适应杠杆：维持 D-037 的 KILL**，补一项 `notionalCap` 档位校验；自适应下单量的真实缺口是冲击成本模型（KILL-A，mainnet 前提）与稳态之外的迟到成交（重启后整本书重建），不是新的比例。⑤ **止盈止损：作为 alpha 改进项维持软件层 + 维持"不调参"。[C 修订] 作为灾难保险，09-05 版建议的"异机心跳 → 只读+平仓 key → flatten"看门狗按现有代码不可交付**（心跳是本机文件、崩溃循环每 60 s 刷新心跳、`flatten` 不停循环、币安 key 无 reduce-only 作用域），改为三步：先做**远端可挂起的 kill switch（dead-man lease）+ 循环主动推送心跳 + 告警去重**（demo 范围内）；原生灾难止损降为 Won't（D-012 的预登记重开条件"进入 mainnet 且信号进入日内"两条都不满足，且 18 日波动单位的距离在当前 18 币中 7 个上根本不可下单）。 |
 | 本轮最重要的发现 | **[C 修订] KILL-Q15（P0）：registry 与运行中的循环已经分叉，且没有任何仪表看得见。** 实盘进程启动于 2026-09-04T17:21:22Z（`state.json.restarted_at`，restarts 12），把 `crowding_window` 从 0 改为 72 并把 evidence 指向 193707Z 的提交 3ac8d49 在 2026-09-04T20:03:32Z——晚 2 小时 42 分，此后未重启；引擎只在启动时构建模型，88 个周期的 `inputs.funding_history` 全为 False/None（`beidou_live/inputs.py:65-68` 只在 `model.needs_funding` 为真时取资金费）。所以循环里的 tsmom 是 crowding OFF（对应 145321Z），磁盘 registry 说的是 crowding ON（193707Z）。后果：`live status --check`、`live verify`（M-011 按磁盘 registry 建模，而它此刻碰巧与进程一致，是因为两边都没读到 funding）和日报都看不见这条分叉；D-026 构造指纹不含信号参数，下一次 launchd KeepAlive 重启会把信号静默切到 crowding ON，M-010 证据窗口不清零，两种信号的收益混进同一窗口；若启动时资金费历史取不到，则进入 60 s 重试循环、书无人管理。**KILL-Q1（横截面参照总体）据此拆成两半**：tsmom 半边是**潜伏的**（下次重启起生效），flow 探针的去均值半边**当下在跑**（降 P2，并入 D-029 复审）。最便宜的关闭动作是把 registry 回退到 crowding 0 + 145321Z（`git revert 3ac8d49`，零研究成本、不清零 M-010），或在重启前完成 P1-01 修复并由操作者明示有意切换；09-05 版 §11 恰好禁止前者，已改写。 |
-| 第二重要的发现 | **验证管线对下一个更弱的候选几乎没有区分力**：(F1) 2026-09-04 之后所有 tsmom 证据都是单配置或全折同 key 的 validate，"walk-forward OOS 1.76"实为全样本序列的后 91.8%；(F2) D-028 的选择敏感门槛用的是零假设最大值的**期望**而非**分位数**，纯噪声通过率 43.5%；(F6) 账本签名不含构造 / 覆盖层参数，P10/P13/D-039 三轮扫描对 DSR 分母隐身。**[C 修订]** 复核指出 09-05 版把 F1 与 F2 分开论证——"tsmom 在 FWER 门下仍过"引用的是伪 OOS 1.76。本轮补做了那次计算（E-36）：在**当前构造**（0.30 / 0.40 / pit 205 / crowding 72 / D-034 后）跑 16 点默认网格，诚实的走前 OOS 是 **1.485**（折 [1.19, 0.06, 2.30, 1.25, 2.57]，NW t 3.34，CPCV q05 1.25，PBO 0.007，成本 ×2 1.68），5% FWER 阈值在 N=93 时 1.445、N=110 时 1.466——**tsmom 以 0.02–0.04 的余量通过**，第 2 折（2022-07→2023-07）几乎为零。结论从"现行结论不倒"改为"现行结论以极薄余量成立，任何 +20 次试验或一次不利的构造变更都可能翻转"，这正是先修尺子再扩空间的理由。同时撤回 F1 处方里的"留出必选"（与 KILL-006 冲突）。 **[执行 2026-09-06]** 尺子已修（§12.5：分位数门 + `p_family` + 伪 OOS 标注）。重算全部 11 份历史报告，判定无一改变；但**用它量 tsmom 自己，C-2 的 falsifier 触发**——诚实网格 OOS 1.485 对申报 +16 后 N=141 的阈值 1.483–1.497（取决于用哪一次运行的零假设 SD），**余量已小于阈值的估计误差**，按预登记记 **WEAK_PASS**。「+20 次试验就可能翻转」这句话，+16 就到了。 |
+| 第二重要的发现 | **验证管线对下一个更弱的候选几乎没有区分力**：(F1) 2026-09-04 之后所有 tsmom 证据都是单配置或全折同 key 的 validate（精确：自 09-04T05:22Z 起的五份；凌晨四份的五折选择仍有变化，D-043 §五），"walk-forward OOS 1.76"实为全样本序列的后 91.8%；(F2) D-028 的选择敏感门槛用的是零假设最大值的**期望**而非**分位数**，纯噪声通过率 43.5%；(F6) 账本签名不含构造 / 覆盖层参数，P10/P13/D-039 三轮扫描对 DSR 分母隐身。**[C 修订]** 复核指出 09-05 版把 F1 与 F2 分开论证——"tsmom 在 FWER 门下仍过"引用的是伪 OOS 1.76。本轮补做了那次计算（E-36）：在**当前构造**（0.30 / 0.40 / pit 205 / crowding 72 / D-034 后）跑 16 点默认网格，诚实的走前 OOS 是 **1.485**（折 [1.19, 0.06, 2.30, 1.25, 2.57]，NW t 3.34，CPCV q05 1.25，PBO 0.007，成本 ×2 1.68），5% FWER 阈值在 N=93 时 1.445、N=110 时 1.466——**tsmom 以 0.02–0.04 的余量通过**，第 2 折（2022-07→2023-07）几乎为零。结论从"现行结论不倒"改为"现行结论以极薄余量成立，任何 +20 次试验或一次不利的构造变更都可能翻转"，这正是先修尺子再扩空间的理由。同时撤回 F1 处方里的"留出必选"（与 KILL-006 冲突）。 **[执行 2026-09-06]** 尺子已修（§12.5：分位数门 + `p_family` + 伪 OOS 标注）。重算全部 11 份历史报告，判定无一改变；但**用它量 tsmom 自己，C-2 的 falsifier 触发**——诚实网格 OOS 1.485 对申报 +16 后 N=141 的阈值 1.483–1.497（取决于用哪一次运行的零假设 SD），**余量已小于阈值的估计误差**，按预登记记 **WEAK_PASS**。「+20 次试验就可能翻转」这句话，+16 就到了。 |
 | 第三重要的发现 | **[C 修订] 迟到成交是开发期现象，不是稳态。** 09-05 版写"留出期四分之三成交不在回测口径内"；按周期复算，88 个周期里 22 个 `--immediate` 周期承载了 119 笔中的 90 笔，全部对应操作者动作（首次建仓、flatten 事故恢复、重配置、账户重置后整本书重建）；最后一次重启（09-04 17:21Z）之后，8 笔常规周期成交全部在收盘后 0.1–0.3 分钟内。机制（`deploy/run_live.sh:25` 无条件 `--immediate`）成立、修法一行，但它降为运维项：不重开 M-010 计数，改为 trade 行打 `late_seconds` 标签并在 M-010 里剔除。真正挤占留出期的是**每次改构造都清零证据窗口**——88 个周期已经历 4 个指纹——所以修订后的路线图把所有改变实盘构造 / 信号的变更捆绑成 Phase A 内的**一次**重启，此后冻结到 Phase C 末。 |
 | 被推翻 / 修正的操作者前提 | Pre-1（挖掘未实现）REFUTED；Pre-2（瓶颈是候选供给）REFUTED（P17 已判）；Pre-3（自适应杠杆可优化）REFUTED（D-037 已判，本轮补逐仓 / 名义档位分析后维持）；Pre-4（条件单）**[C 修订]** REFUTED——作为 alpha 否，作为保险也不是当前正确形态（远端 kill switch 先于原生单，原生单降 Won't）；Pre-5（玩具）PARTIAL——按维度判断，且盈利证据一年内不可裁决；Pre-7（LLM 处理因子模块）PARTIAL——不区分 LLM 与人，只区分是否进账本。 |
-| 开放 P0 / P1 | **[执行 2026-09-06]** P0 现为 **0**：KILL-Q15 与 KILL-Q1-tsmom 均已关闭（§12）。以下为复核当时的清单，保留原文：P0：KILL-Q15（registry ≠ 运行进程，重启前必须一致化）、KILL-Q1-tsmom（潜伏，与 Q15 同一动作关闭）。P1：KILL-Q2（伪 OOS 标注，处方已去掉留出）、Q3（FWER 分位数门，N_eff 待定）、Q5（账本签名）、Q6（退市幽灵 bar 与冻结仓位）、Q7（单实例锁，升 P1）、Q8/Q9（改回 OPEN，直到机械计费与时间戳规则落地）、Q16（远端 kill switch 设计）、Q17（构造冻结点与证据窗口）。DEFERRED（范围）：KILL-Q12（冲击成本模型）、Q10（原生单）、Q13、Q14。 |
-| G0–G7 / Quality Score | **[C 修订]** G0 PASS · G1 PASS · G2 PASS（C-2 的数字由 E-36 升为 E1；对标评分仍 E4/E5 但已降为参考）· G3 PASS · G4 PASS（Cost of Delay 改"高"：每一天都是一次崩溃即静默换信号的风险）· G5 PARTIAL · G6 **PARTIAL（已独立复核；OPEN P0 = 2，均有一步可关闭的动作）** · G7 PARTIAL（DL-Q8 已按复核重写；测试矩阵仍未写）。Quality Score 37/50（对抗生存 3 → 4，执行可交付性 3 → 2，证据 4 → 4，范围收敛 4 → 3）；硬门禁 OPEN P0 > 0 → Weak GO。 |
+| 开放 P0 / P1 | **[执行 2026-09-06]** P0 现为 **0**：KILL-Q15 与 KILL-Q1-tsmom 均已关闭（§12）。以下为复核当时的清单，保留原文：P0：KILL-Q15（registry ≠ 运行进程，重启前必须一致化）、KILL-Q1-tsmom（潜伏，与 Q15 同一动作关闭）。P1：KILL-Q2（伪 OOS 标注，处方已去掉留出）、Q3（FWER 分位数门，N_eff 待定）、Q5（账本签名）、Q6（退市幽灵 bar 与冻结仓位）、Q7（单实例锁，升 P1）、Q8/Q9（改回 OPEN，直到机械计费与时间戳规则落地）、Q16（远端 kill switch 设计）、Q17（构造冻结点与证据窗口）。DEFERRED（范围）：KILL-Q12（冲击成本模型）、Q10（原生单）、Q13、Q14。 **[执行 2026-09-06 补]** P1 中 Q2/Q3 代码已交付（欠账四项见 §12.5）、Q18 已关闭；其余 P1 不变。 |
+| G0–G7 / Quality Score | **[C 修订]** G0 PASS · G1 PASS · G2 PASS（C-2 的数字由 E-36 升为 E1；对标评分仍 E4/E5 但已降为参考）· G3 PASS · G4 PASS（Cost of Delay 改"高"：每一天都是一次崩溃即静默换信号的风险）· G5 PARTIAL · G6 **PARTIAL（已独立复核；OPEN P0 = 2，均有一步可关闭的动作）** · G7 PARTIAL（DL-Q8 已按复核重写；测试矩阵仍未写）。Quality Score 37/50（对抗生存 3 → 4，执行可交付性 3 → 2，证据 4 → 4，范围收敛 4 → 3）；硬门禁 OPEN P0 > 0 → Weak GO。 **[执行 2026-09-06]** G6 已 PASS（OPEN P0 = 0）；分数不变，判定升为 GO 的依据是 §12.6 的裁定而非分数。 |
 
 ---
 
@@ -35,11 +35,11 @@
 | --- | --- | --- | --- | --- | --- |
 | G0 Interaction/Kill | PASS | §2 | 无 FATAL；K3/K5 命中已处理（Option Set、Scope Firewall） | — | — |
 | G1 Problem/Axiom | PASS | C-1..C-6 | 问题在移除"LLM / 条件单"方案后仍独立成立（alpha 供给窄、验证区分力弱、执行口径漂移、生产缺口） | — | — |
-| G2 Evidence/Reality | PASS **[C 修订]** | E-01..E-38 | 对标评分为 E4/E5 判断，已降为附录参考；P1-01 的 1.8× 触发率仍为代理复算（E2），但机制 E1 且六角色全部确认；C-2 的关键数字由 E-36 升为 E1 | Weak GO | 修 P1-01 后重跑即得触发率的 E1 |
+| G2 Evidence/Reality | PASS **[C 修订]** | E-01..E-40 | 对标评分为 E4/E5 判断，已降为附录参考；P1-01 的 1.8× 触发率仍为代理复算（E2），但机制 E1 且六角色全部确认；C-2 的关键数字由 E-36 升为 E1。**[执行]** E-12 已实测升 E1（10.60% 对 17.28%、重合 52%，§12.2） | Weak GO → GO（裁定，§12.6） | 已完成（§12.2） |
 | G3 Relative Value | PASS | §6 | 已比较 No-Build / Small / Full / System；20% 成本方案存在（Phase A 前四项） | — | — |
 | G4 Strategic/Economic | PASS **[C 修订]** | §5 | 单操作者、无外部经济角色；**Cost of Delay 高**：KILL-Q15 使每一次无人值守崩溃都可能静默换信号 | — | Phase A 第 0 步 |
 | G5 System/Solution | PARTIAL | §4 §7 | 工程未知项：metrics 归档发布时刻 / REST 桶可得时延 / 两者同桶值差（KILL-Q11 三项核查）；币安 key 权限粒度（E4）；mined 哈希在新增节点后是否稳定 | 不进入数据摄入与原生条件单的交付契约 | §7.1 的三项 15 分钟核查 |
-| G6 Adversarial | **PASS**（2026-09-06 执行后；复核时为 PARTIAL） | §8 §12 附录 C | 六角色独立复核已完成：29 条 Kill，3 条 P0（R1/R2/R3），R3 由 E-36 关闭，R1/R2 转为 KILL-Q15/Q16；**Q15 与 Q1-tsmom 已于 2026-09-06 关闭（§12），OPEN P0 = 0** | 硬门禁解除 | 判定仍为 Weak GO，但理由改为 KILL-Q2/Q3 未做，不再是未关闭的 P0 |
+| G6 Adversarial | **PASS**（2026-09-06 执行后；复核时为 PARTIAL） | §8 §12 附录 C | 六角色独立复核已完成：29 条 Kill，3 条 P0（R1/R2/R3），R3 由 E-36 关闭，R1/R2 转为 KILL-Q15/Q16；**Q15 与 Q1-tsmom 已于 2026-09-06 关闭（§12），OPEN P0 = 0** | 硬门禁解除 | **[执行]** Q2/Q3 代码已交付；用它量 tsmom 自己得 WEAK_PASS（E-40），操作者裁定足以受控执行 → **GO**（§12.6）；欠账四项见 §12.5 |
 | G7 Delivery/Learning | PARTIAL **[C 修订]** | §10 | DL-Q8 已按复核重写为可交付规格；DL-Q2 去掉留出条件；DL-Q3 拆两步；DL-Q4 改 `fcntl` + key 指纹锁 + `--armed`；测试矩阵仍未写 | 不进入正式 PRD | Phase A 开工前按 C.3/C.4 补 |
 
 ---
@@ -89,7 +89,7 @@ Early Kill：K1/K2/K7 不成立；K3（必须比较替代）与 K5（范围需�
 | E-09 | EXPERIMENT | 本轮 `research backtest --universe pit`（scratchpad，不入账） | 全样本 Sharpe 1.83、MDD −22.1%、与等权多头相关 −0.12、69.6% 月份为正、最差月 −9.2%（2024-01）、最差日 −6.87%（2021-09-07）、最差小时 −6.24%、7 小时 < −3%、4 天 < −5%、偏度 +0.72、峰度 26；gross 均值 0.86 / p95 1.80；多 0.425 / 空 0.434；持仓均 17.5 币；guards 重放：暂停 37 bar、capped 460 bar、`liquidation_touches` 0、`min_margin_buffer` 99.2 | E1 |
 | E-10 | EXPERIMENT | 同上，压力窗口 | 2022-05 LUNA +21.4%（等权多头 −45.2%）、2022-06 3AC +8.7%、2022-11 FTX −5.3%（−29.4%）、2023-03 SVB −3.1%（+13.4%）、2024-08 日元套息 +8.7%（−21.1%）、2025-02 关税 +9.3%、2025-04 +2.4%、2025-10-10 清算潮 +4.2%（−12.7%）。**[C 修订]** 2021-05 在样本内（首个决策 bar 2021-01-31，KILL-R23）：**2021-05-10→05-23 书 +2.4%（等权多头 −41.1%），05-19 当日 +4.2%（−22.8%）**，当日多 0.46 / 空 0.51，最坏小时 −2.2%；2020-03 不在样本内。九个窗口七正两负 | E1 |
 | E-11 | EXPERIMENT | 同上，回撤（**[C 修订]** 按"新高之间的谷底"重新提取，两种方法结果一致；小时级净收益序列已存为 scratchpad `bt/tsmom_pit_net_hourly.csv`，未入库） | −22.1%（2022-01-22→04-19，107 天恢复）、−22.1%（2023-03-10→04-29，91 天）、−15.8%（2024-07-05→08-01）、−15.8%（2021-09-06→10-12）、−15.6%（2025-05-23→07-03，112 天）、−14.4%（2024-10-21→11-07）。两对深度在 0.1% 精度上重合经复核为真实巧合，非提取缺陷 | E1 |
-| E-12 | CODE+DATA | 审计 alpha-signals P1-01 + `tsmom.py:185-191`、`flow.py:87-88`、`model.py:121-130`、`research_cmd.py:135-154`、`engine.py:277-296` | 横截面参照总体不一致（机制由主分析者读码确认，六个反方角色全部确认；1.8× 触发率、49.6% 重合为代理读盘复算，未被独立复现）。**[C 修订]** 实盘参照不是固定 15 币：`refresh: daily`，09-06 已是 18 币，等价契约必须按逐日成员而非固定 n 写（KILL-R5） | E1（机制）/ E2（数字） |
+| E-12 | CODE+DATA | 审计 alpha-signals P1-01 + `tsmom.py:185-191`、`flow.py:87-88`、`model.py:121-130`、`research_cmd.py:135-154`、`engine.py:277-296` | 横截面参照总体不一致（机制由主分析者读码确认，六个反方角色全部确认；1.8× 触发率、49.6% 重合为代理读盘复算，未被独立复现）。**[C 修订]** 实盘参照不是固定 15 币：`refresh: daily`，09-06 已是 18 币，等价契约必须按逐日成员而非固定 n 写（KILL-R5） | E1（机制）/ E2（数字）→ **[执行]** 数字已实测升 E1：10.60% 对 17.28%、重合 52%（§12.2） |
 | E-13 | CODE | 审计 backtest-validation F1 + `walk_forward.py:134-154`、`verdict.py:57-83`、`research_cmd.py:453-463` | 单配置 / 全折同 key 时 OOS = 序列后 91.8%；`best_key = max(full_sharpes)` | E1 |
 | E-14 | CODE+MATH | 审计 F2 + `multiple_testing.py:182-210` | `threshold = expected_max_sharpe(...)` 即 E[max]，非分位数；由 193707Z 反算噪声通过率 0.435、5% FWER 阈值 1.43、tsmom p 0.0026 | E1 |
 | E-15 | CODE | 审计 F6 + `ledger.py:46-48` | `signature = (param_key, range_start, range_end, symbols)`，构造参数不在签名；`scratchpad/no_trade_band_sweep.py:26`、`vol_target_drawdown_bootstrap.py:12` 自述不入账 | E1 |
@@ -113,11 +113,11 @@ Early Kill：K1/K2/K7 不成立；K3（必须比较替代）与 K5（范围需�
 | E-33 | USER+CODE | 同伴会话消息（2026-09-05）+ **[C 修订]** 复核角色 `git show main` | `main` 在 304e549：D-040 manifest 资金费修复、D-041 启动数据集门、以及 `fix(cli): research overlay dropped the books when --min-history rebuilt the model`；`git diff db9efd9 main` 只触及 live_cmd / research_cmd / live/config / live/reports，**本轮四条核心发现在 main 上均未修**；main 的 ratchet 上限比本分支高 +64 live / +18 cli / +117 data | E1 |
 | E-34 | CODE | `tests/` 清单 | 架构比率 / 依赖方向 / 因果性 / 护栏惰性 / 资金费对齐 / 启动门等测试存在；无"研究面板 ⊃ 实盘面板"的等价测试 | E1 |
 | E-35 **[C]** | DATA+CODE | `.beidou/live/state.json`（restarted_at 2026-09-04T17:21:22Z，restarts 12）；`git log -1 --format=%ci 3ac8d49` = 2026-09-04T20:03:32Z；`cycles.jsonl` 88 行 `inputs.funding_history` ∈ {False, None}；`beidou_live/inputs.py:65-68`；`beidou_live/engine.py:849-899`（构造指纹 payload 无信号参数）；`docs/RUNBOOK.md:46` | **循环在跑 crowding 0（145321Z），磁盘 registry 是 crowding 72（193707Z）**；进程启动早于该提交 2h42m 且此后未重启；构造指纹看不见信号参数，下次重启静默切换且证据窗口不清零。主分析者独立核实 | E1 |
-| E-36 **[C]** | EXPERIMENT | 本轮 `research validate --strategy tsmom --universe pit --prior-trials 30`（16 点默认网格，输出到 scratchpad `val/`，仓库账本未动；报告 `tsmom-validation-20260906T030942Z`） | 当前构造（0.30 / 0.40 / pit 205 / crowding 72 / D-034 后）下诚实的网格走前 OOS Sharpe **1.485**，NW t 3.34，折 [1.19, 0.06, 2.30, 1.25, 2.57]，一致性 1.0，逐折选择 [24/72/168 h, 阈值 0.3, 基线, 基线, 基线]，全样本 argmax = registry 参数，CPCV 1.79 / q05 1.25 / 0% 负，PBO 0.007，成本 ×2 1.68；零假设年化 SD 0.443；5% FWER 阈值：N=16 → 1.207、46 → 1.354、**93 → 1.445、110 → 1.466**。tsmom 通过，余量 0.02–0.04。**待申报：下次 validate 的 `--prior-trials` +16** | E1 |
+| E-36 **[C]** | EXPERIMENT | 本轮 `research validate --strategy tsmom --universe pit --prior-trials 30`（16 点默认网格，输出到 scratchpad `val/`，仓库账本未动；报告 `tsmom-validation-20260906T030942Z`） | 当前构造（0.30 / 0.40 / pit 205 / crowding 72 / D-034 后）下诚实的网格走前 OOS Sharpe **1.485**，NW t 3.34，折 [1.19, 0.06, 2.30, 1.25, 2.57]，一致性 1.0，逐折选择 [24/72/168 h, 阈值 0.3, 基线, 基线, 基线]，全样本 argmax = registry 参数，CPCV 1.79 / q05 1.25 / 0% 负，PBO 0.007，成本 ×2 1.68；零假设年化 SD 0.443；5% FWER 阈值：N=16 → 1.207、46 → 1.354、**93 → 1.445、110 → 1.466**。tsmom 通过，余量 0.02–0.04。**待申报：下次 validate 的 `--prior-trials` +16**。**[执行 复审]** 报告已入库 `reports/research/scratch/tsmom-validation-20260906T030942Z.{json,md}`（未记账、不在任何 registry 证据路径上；入库前从 scratchpad 复核：OOS 1.4852、σ 0.4428、五折选出 3 种配置） | E1 |
 | E-37 **[C]** | DATA | `.beidou/live/state.json` `exit_states.*.unit`（2026-09-06T02:00Z） | 18 币中 7 个的入场时日波动单位 > 1/18（AKE 0.256、CYS 0.149、TUT 0.140、ENA 0.081、UNI 0.080、ZEC 0.078、TRUMP 0.072）：18 单位的多头止损价 ≤ 0、空头止损在 +130%…+461% | E1 |
 | E-38 **[C]** | CODE | `docs/RESEARCH_LOG.md:732-760`（KILL-006 §二）、`beidou_cli/research_cmd.py:374-378` | 操作者 2026-09-04 裁决：六个月留出**不启用、刻意不使用**；CLI 帮助文本写 `unused by choice`；:740 的"建议（待操作者确认）"未被采纳 | E1 |
 | E-39 **[执行]** | EXPERIMENT+CODE | `beidou_alpha/validation/multiple_testing.py`（`max_sharpe_quantile` / `family_p_value`）；仓库内 11 份带 `oos_selection` 的报告 | 旧门槛 = σ·E[max of N]，**放进纯噪声的概率 43.4%–43.5%，十一份全一样而 N 从 90 到 268**——它没有 α，收再多搜索费也不会降。新门槛 = σ·Φ⁻¹((1−α)^(1/N))。重算全部 11 份：**无一判定改变，无一候选被救活**。新代码在 N=93/110 上复现了 E-36 手算的 1.445/1.466 | E1 |
-| E-40 **[执行]** | EXPERIMENT | 同上，作用在 E-36 的诚实网格 OOS 1.485 上 | 阈值随 N 单调上升，**达到 1.485 的 N 是 128（σ=0.4430，E-36）或 144（σ=0.4389，093705Z）**；上次 tsmom validate 为 N=125，操作者已裁定下次补申报 +16 → N≥141，阈值 1.483–1.497。**余量已小于阈值本身的估计误差**（两个 σ 差在小数点后第三位，判定就翻）。未重跑 validate 确认：跑一次就再加一行、把阈值又推高，用会让结论更坏的观测去确认结论没有意义 | E1 |
+| E-40 **[执行]** | EXPERIMENT | 同上，作用在 E-36 的诚实网格 OOS 1.485 上 | 阈值随 N 单调上升，**达到 1.485 的 N 是 128（σ=0.4430，E-36）或 144（σ=0.4389，093705Z）**；上次 tsmom validate 为 N=125，操作者已裁定下次补申报 +16 → N≥141，阈值 1.483–1.497。**余量已小于阈值本身的估计误差**（两个 σ 差在小数点后第三位，判定就翻）。未重跑 validate 确认：跑一次就再加一行、把阈值又推高，用会让结论更坏的观测去确认结论没有意义。**N 的来源**：`n_trials` = 账本去重行数 63 + 本次网格点数 + 申报先验 60（+16）；同区间重放 → 141（1.497 / 1.483），数据推进后重放 → 143（1.499 / 1.485，余量 0.0002），16 点网格 → ≈ 157（1.510 / 1.496，**两个 σ 下都 WEAK_PASS**） | E1 |
 
 ### 3.2 Claim Register
 
@@ -172,7 +172,7 @@ Early Kill：K1/K2/K7 不成立；K3（必须比较替代）与 K5（范围需�
 **[🟠 高危] F2 D-028 门槛是 E[max]，不是分位数：纯噪声通过率 43.5%**
 位置：`beidou_alpha/validation/multiple_testing.py:182-210`（:203）、`verdict.py:61-66`
 问题：`threshold = expected_max_sharpe(n_trials, variance)`，即零假设下 N 次尝试最大 Sharpe 的期望；一条噪声曲线有近一半概率越过期望。由 193707Z 反算：年化零假设 SD 0.438、阈值 1.098、P(max of 93 nulls > 1.098) = 0.435；5% FWER 阈值应为 1.43；tsmom 1.765 对应 p 0.0026 仍过。
-复核：代码与数学确认。**成立。对下一个弱候选（flow 0.92、mined 1.07）几乎无区分力。** **[C 修订]** 09-05 版写"tsmom 在 5% FWER 下仍以 p 0.0026 通过"用的是伪 OOS 1.76（F1），两条发现从未合并；E-36 补做了合并后的计算——诚实网格 OOS 1.485 对 N=93…110 的阈值 1.445…1.466，**通过，余量 0.02–0.04**，第 2 折 0.06。
+复核：代码与数学确认。**成立。对下一个弱候选（flow 0.92、mined 1.07）几乎无区分力。** **[C 修订]** 09-05 版写"tsmom 在 5% FWER 下仍以 p 0.0026 通过"用的是伪 OOS 1.76（F1），两条发现从未合并；E-36 补做了合并后的计算——诚实网格 OOS 1.485 对 N=93…110 的阈值 1.445…1.466，**通过，余量 0.02–0.04**，第 2 折 0.06。 **[执行]** 该余量在 093705Z 的 N=125 上已降为 0.003 / 0.017，申报 +16 后为负或 0.002——见 E-40、§12.5。
 修复（**[C 修订]** 按 KILL-R25 细化）：只改 `oos_selection_threshold`（解 Φ(x)^N = 1−α，α 预登记 0.05），不动 `expected_max_sharpe`（DSR 仍用它）；N 取账本 N_eff（用 CSCV 已有的 T×N 收益矩阵估相关结构；85 行账本里 24 行重复、大量近似重复，N_eff ≪ 93，N_eff≈10 时阈值 ≈ 1.13），并在 verdict reasons 输出 `p_family` 与 N_eff；预登记 N=1 的处理（保留 `test_selection_gate.py:28`"单试验不算选择"）；DL-Q2 的验收改为"相关噪声（同一面板块自举）下通过率 ≤ 5% 且 tsmom 仍 PASS"，而不是 93 个独立噪声。
 
 **[🟡 中，原判高危] [C 修订] L1-01 每次重启都 `--immediate`：机制成立，"73%"是开发期比率**
@@ -254,7 +254,7 @@ Early Kill：K1/K2/K7 不成立；K3（必须比较替代）与 K5（范围需�
 | L1-01 | 由 `trades.jsonl` 独立复算 | 成立且数字一致；维持高危 → **[C 修订]** 归因被 KILL-R6 推翻（稳态 0/8），降为运维项 |
 | L1-02 | 读 `execute_order`、grep 锁；核对币安 id 语义 | 成立但 query-before-submit 覆盖串行情形；降为中危 → **[C 修订]** 并发来源是 worktree 而非竞态，升 P1 进 Phase A |
 | **[C]** KILL-R1 / Q15 | `state.json.restarted_at` vs `git log 3ac8d49`；`cycles.jsonl` 88 行 `funding_history`；`inputs.py:65-68`；`engine.py:849-899` | **成立**（E-35）；升为本轮头号 P0 |
-| **[C]** KILL-R3 | 在当前构造跑 16 点网格 validate（scratch） | tsmom 诚实网格 OOS 1.485 > FWER 阈值 1.445–1.466；**关闭**，余量 0.02–0.04 写进 §0（E-36） |
+| **[C]** KILL-R3 | 在当前构造跑 16 点网格 validate（scratch） | tsmom 诚实网格 OOS 1.485 > FWER 阈值 1.445–1.466；**关闭**，余量 0.02–0.04 写进 §0（E-36） → **[执行]** 关闭依据已失效：E-40 在 N=125 上余量 0.003 / 0.017，+16 后 WEAK_PASS；处置见 §12.5–12.6 |
 | **[C]** KILL-R4 | 读 `RESEARCH_LOG:732-760`、`research_cmd.py:374-378` | **成立**：留出不启用是操作者裁决；F1 处方撤回留出必选（E-38） |
 | **[C]** KILL-R6 | 按周期重算 `trades.jsonl`（重启后 23 笔：15 笔来自 17:21 重启周期，8 笔常规 ≤ 0.3 分钟） | **成立**：73% 是开发期比率（E-18） |
 | **[C]** KILL-R14 | 读 `state.json.exit_states.*.unit` | **成立**：7/18 个名字 18 单位止损不可下单（E-37） |
@@ -456,8 +456,8 @@ demo 无人值守最小集（按 ratchet 记账：每行给出落点包与预计
 | --- | --- | --- | --- | --- | --- | --- |
 | **KILL-Q15**（新，= R1） | **磁盘 registry（crowding 72 → 193707Z）≠ 运行进程（crowding 0 → 145321Z）**；构造指纹看不见信号参数，下次重启静默切换且 M-010 不清零 | C-1(a), D-026, KILL-027 | **E-35** | **P0** | **CLOSED 2026-09-06**（§12） | 操作者选路径 (b)：先修 P1-01，再有意重启；registry digest 已逐周期落盘，`status --check` 报两侧一致 |
 | KILL-Q1（拆两半） | 横截面参照总体研究 ≠ 实盘：(a) tsmom crowding——**潜伏**，下次重启起生效；(b) flow 探针去均值——**当下在跑** | C-1(b), D-023 | E-12 | (a) **P0** / (b) P2 | (a) **CLOSED 2026-09-06** / (b) 代码已修，判定仍 REJECT，留在 D-029 复审 | 契约按 KILL-R5：参照集合为显式参数、只作用于秩 / 去均值；逐日等价测试；修后重跑两臂与 book、更新指针 |
-| KILL-Q2 | 单配置 validate 的 OOS 是全样本尾段 | C-2, D-020 | E-13, E-36 | P1 | OPEN | 报告标注 `oos_is_full_sample_tail` + 当前构造的网格走前 OOS 并列（E-36）；**不**加留出（KILL-R4） |
-| KILL-Q3 | D-028 门槛噪声通过率 43.5% | C-2, D-028 | E-14, E-36 | P1 | OPEN | FWER 分位数（只改 `oos_selection_threshold`）+ N_eff + `p_family`；tsmom 在诚实网格上以 0.02–0.04 余量通过（KILL-R3 CLOSED） |
+| KILL-Q2 | 单配置 validate 的 OOS 是全样本尾段 | C-2, D-020 | E-13, E-36 | P1 | **代码 CLOSED 2026-09-06**（§12.5）；**欠**：registry 并列记录 1.485 未做 | 报告标注 `oos_is_full_sample_tail` + 当前构造的网格走前 OOS 并列（E-36）；**不**加留出（KILL-R4） |
+| KILL-Q3 | D-028 门槛噪声通过率 43.5% | C-2, D-028 | E-14, E-36, E-39, E-40 | P1 | **代码 CLOSED 2026-09-06**（§12.5）；**欠**：N_eff、NW t 降 reported、相关噪声验收 | FWER 分位数（只改 `oos_selection_threshold`）+ N_eff + `p_family`；tsmom 在诚实网格上以 0.02–0.04 余量通过（KILL-R3 CLOSED） → **[执行]** E-40：WEAK_PASS；操作者裁定足以受控执行（§12.6） |
 | KILL-Q4 | 迟到成交（`--immediate`） | — | E-18 | **P2**（原 P1） | OPEN | 两步修法（KILL-R6）；`late_seconds` 标签；不重开 M-010 计数 |
 | KILL-Q5 | 账本签名不含构造 / 覆盖层参数 | D-024 | E-15 | P1 | OPEN | 签名扩展（signal + construction + overlay digest + symbol-set hash）+ `record_trial()` 钩子接入 backtest / overlay / book / scratch + 固定账本路径 |
 | KILL-Q6 | 退市幽灵 bar 与冻结仓位使 pit 证据偏乐观 | D-013 | E-17 | P1 | OPEN | 退市日历 + 结算 + 掩码；重跑 pit |
@@ -471,13 +471,13 @@ demo 无人值守最小集（按 ratchet 记账：每行给出落点包与预计
 | KILL-Q14 | demo 成交量合成，被动执行无法在 demo 证明 | 7.3 | D-002 | P2 | ACCEPTED | 推迟到小额真实资金 |
 | **KILL-Q16**（新，= R2） | 09-05 版的外部看门狗设计不可交付且自带攻击面（第二把全权交易 key、误触发平掉手工仓、维护窗口平掉健康书） | C-6, §7.2 | KILL-R2 | P1（demo 范围内为设计项） | OPEN | DL-Q8 按七点重写；看门狗只持只读 key |
 | **KILL-Q17**（新，= R7） | 证据窗口每改构造清零，12 周路线图与"30 天干净窗口"叠不起来；demo 盈利证据一年内不可裁决 | M-010, §9 | E-02, KILL-R7 | P1 | OPEN | 所有改构造 / 信号的变更捆绑成 Phase A 内一次重启，此后冻结到 Phase C 末；demo 目标改写为执行保真 + 无人值守存活（M-Q08/M-Q09） |
-| **KILL-Q18**（新，= R10/R12） | 合并列车缺失（be963ad +1,166 行、main +731 行、4 条领先分支）；六个包全部顶在 ratchet 上限而方案零删除项 | §9 | KILL-R10, R12 | P1 | OPEN | Phase A 第 1 步合并列车；每条 DL 带行数与删除项 |
+| **KILL-Q18**（新，= R10/R12） | 合并列车缺失（be963ad +1,166 行、main +731 行、4 条领先分支）；六个包全部顶在 ratchet 上限而方案零删除项 | §9 | KILL-R10, R12 | P1 | **CLOSED 2026-09-06**（D-040 / D-041 / 304e549 / be963ad 均已在 main，§11） | Phase A 第 1 步合并列车；每条 DL 带行数与删除项 |
 
 Pre-Mortem（若 12 周后失败）**[C 修订]**：最可能的原因不再是"先扩空间再修尺子"，而是**一次无人值守的崩溃重启把信号静默切换**——registry 与循环的分叉在没人看的时候合上，M-010 把两种信号混在一起，之后每一个数字都不知道在描述谁。反向控制 = Phase A 第 0 步（重启前一致化 + registry digest 仪表）。第二可能的原因是"每次部署都清零证据窗口"——反向控制 = 构造冻结点（KILL-Q17）。
 
 Inversion：要让本轮白做，只需"继续用 193707Z 的指针不重启、等下一次崩溃、把 P1-01 当作小事、并直接接 LLM 提案者"。
 
-Final Kill Decision **[C 修订]**：最强反方 = KILL-Q15（PM 与 EP 独立到达同一事实链，仅严重度分歧，取 P0）；未关闭 P0 = 2（Q15、Q1-tsmom，同一动作可关闭）；无 P0 Claim 被推翻（C-1 加强、C-2 由 E-36 升 E1、C-5 保险半边 REFUTED 为 P1 Claim）；需要的新证据 = 修正总体后的两臂重跑（在一致化之后）；必须改变的 Scope = Phase A 第 0 步与顺序、mainnet 项出路线图、构造冻结点。**结论：Weak GO（两个上限成立；授权动作重新绑定到修订后的 §9）。**
+Final Kill Decision **[C 修订]**：最强反方 = KILL-Q15（PM 与 EP 独立到达同一事实链，仅严重度分歧，取 P0）；未关闭 P0 = 2（Q15、Q1-tsmom，同一动作可关闭）；无 P0 Claim 被推翻（C-1 加强、C-2 由 E-36 升 E1、C-5 保险半边 REFUTED 为 P1 Claim）；需要的新证据 = 修正总体后的两臂重跑（在一致化之后）；必须改变的 Scope = Phase A 第 0 步与顺序、mainnet 项出路线图、构造冻结点。**结论：Weak GO（两个上限成立；授权动作重新绑定到修订后的 §9）。** **[执行 2026-09-06]** 两条 P0 已关闭；Q2/Q3 交付后 C-2 的 falsifier 触发，操作者裁定后判定为 GO（受控执行），见 §12.5–12.6。
 
 ---
 
@@ -493,7 +493,7 @@ Final Kill Decision **[C 修订]**：最强反方 = KILL-Q15（PM 与 EP 独立�
 
 | Phase | 交付（按顺序） | alpha 占比（仪表 / 操作者口径） | 成功判据（预登记） | 停止条件 |
 | --- | --- | --- | --- | --- |
-| **A（第 1–3 周）** | **第 0 步（任何重启之前，≤ 1 天）**：使 registry、循环、证据一致——操作者二选一：回退 3ac8d49（crowding 0 + 145321Z），或先做完第 2 步再有意重启；registry digest 逐周期落盘 + `status --check` 比对（KILL-Q15）。**第 1 步 合并列车**：main（D-040 / D-041 / 304e549）与 be963ad（Funding 叶 + 42 carry 族），列冲突文件与顺序（KILL-Q18）。**第 2 步 修尺子**：P1-01 参照总体契约 + 逐日等价测试；F1 标注 + 当前构造网格 OOS 并列（E-36 已算）+ F2 分位数 / N_eff / `p_family` + F3 `best_key_oos` + NW t 降为 reported；F6 账本签名扩展 + `record_trial` 钩子；F7 `_resolve_mined` 一行 + mined 持久身份；`fcntl` 锁 + `--armed`；启动只读对账两步 + `late_seconds`；熔断 exit 0。**第 3 步 一次性重启并冻结构造**（此后到 Phase C 末不再改实盘构造 / 信号）。**第 4 步 扩空间**：只读 Panel 现有列的 5 个节点（Abs / Moment / Semi / Beta-Residual / Trades），各自预登记；在 0.30 口径重跑 267 + 新族 | 仪表 ≈ 60% / 操作者口径 ≈ 50% | (i) `live status --check` 报 registry ≡ 已加载模型；(ii) 两臂重跑（修正总体后）的 crowding 臂在 eligible 总体上仍被逐折选中，且 FWER 门作用在**当前构造的网格走前 OOS**上仍 PASS（基线 E-36：1.485 对 1.445–1.466）；(iii) §7.1.6 的 falsifier 有裁决（正或负都算成功） | 若 crowding 臂在 eligible 总体上不再被选中 → **维持 / 回到 crowding 0，不停书**；只有 FWER 门下**基础** tsmom（crowding 0）FAIL 才复审书；若 N_eff 估计使阈值 ≥ 1.485 → tsmom 记 WEAK_PASS，§11 改写 |
+| **A（第 1–3 周）** | **第 0 步（任何重启之前，≤ 1 天）**：使 registry、循环、证据一致——操作者二选一：回退 3ac8d49（crowding 0 + 145321Z），或先做完第 2 步再有意重启；registry digest 逐周期落盘 + `status --check` 比对（KILL-Q15）。**第 1 步 合并列车**：main（D-040 / D-041 / 304e549）与 be963ad（Funding 叶 + 42 carry 族），列冲突文件与顺序（KILL-Q18）。**第 2 步 修尺子**：P1-01 参照总体契约 + 逐日等价测试；F1 标注 + 当前构造网格 OOS 并列（E-36 已算）+ F2 分位数 / N_eff / `p_family` + F3 `best_key_oos` + NW t 降为 reported；F6 账本签名扩展 + `record_trial` 钩子；F7 `_resolve_mined` 一行 + mined 持久身份；`fcntl` 锁 + `--armed`；启动只读对账两步 + `late_seconds`；熔断 exit 0。**第 3 步 一次性重启并冻结构造**（此后到 Phase C 末不再改实盘构造 / 信号）。**第 4 步 扩空间**：只读 Panel 现有列的 5 个节点（Abs / Moment / Semi / Beta-Residual / Trades），各自预登记；在 0.30 口径重跑 267 + 新族 | 仪表 ≈ 60% / 操作者口径 ≈ 50% | (i) `live status --check` 报 registry ≡ 已加载模型；(ii) 两臂重跑（修正总体后）的 crowding 臂在 eligible 总体上仍被逐折选中，且 FWER 门作用在**当前构造的网格走前 OOS**上仍 PASS（基线 E-36：1.485 对 1.445–1.466）；(iii) §7.1.6 的 falsifier 有裁决（正或负都算成功） **[执行 2026-09-06]** (i) 达成（§12.1）；(ii) 前半达成（093705Z 五折全选修饰器），后半 **WEAK_PASS**（E-40）；(iii) 六个新族未跑，未裁决。第 0–3 步已做，第 4 步未做 | 若 crowding 臂在 eligible 总体上不再被选中 → **维持 / 回到 crowding 0，不停书**；只有 FWER 门下**基础** tsmom（crowding 0）FAIL 才复审书；若 N_eff 估计使阈值 ≥ 1.485 → tsmom 记 WEAK_PASS，§11 改写 **[执行]** 此条已触发（按原始 N 而非 N_eff，E-40）；§11 已改写，裁定见 §12.6 |
 | **B（第 4–7 周）** | ① `metrics` / `premiumIndexKlines` / `markPriceKlines` 摄入：先做 20 币 × 1 年吞吐实验定工作量；同源契约（自建 5 分钟 REST 快照流为研究与实盘共同真源，逐日与归档 diff）；`needs_metrics` 自声明 + 启动门；KILL-Q11 三项核查；② 对应叶节点（含 MarkGap，与 markPriceKlines 同提交）与新族；③ 退市日历 + 结算 + 幽灵 bar 掩码，重跑 pit；④ 远端停机（DL-Q8）+ 心跳外推 + 告警去重 + 强平可观测（REST）；⑤ SIGTERM / 原子提交 / 撤单按前缀 | 仪表 ≈ 45% / 操作者口径 ≈ 35%（①③④⑤在 data/live，显式记为"非 alpha 但前置"） | 至少一个新族候选进入 validate 且账本计费完整；pit 证据在退市建模后的变化写入 registry；远端停机演练两条路径通过 | 若 metrics 三项核查任一不可核 → 该数据不进实盘信号，只做研究诊断；若吞吐实验 > 3 天 → 缩到池内 45 币 |
 | **C（第 8–12 周）** | ① GP 搜索（固定评估预算计为 N，进同一账本）；② 线性组合器；③ LLM 离线助理（proposals.jsonl，按 7.1.4 计费） | 仪表 ≈ 90% / 操作者口径 ≈ 85% | 组合边际 Sharpe ≥ +0.10 的候选进入探针书 | 若 GP 两轮的 `noise_null` 上限 > 最优候选 → 停 GP |
 
@@ -511,7 +511,7 @@ Final Kill Decision **[C 修订]**：最强反方 = KILL-Q15（PM 与 EP 独立�
 | --- | --- | --- | --- | --- | --- |
 | DL-Q0 registry ≡ 循环 | C-1(a) ← E-35 ← KILL-Q15 | 每周期把 registry 规范化参数 digest 写进 `cycles.jsonl` 与心跳；`live status --check` 比对磁盘 registry 与已加载模型（live +≈50） | 单元：改 registry 不重启 → `status --check` 非零退出 | 一致化后首个周期 digest 一致；D-026 或日报把信号参数纳入证据窗口的清零条件 | M-Q10 |
 | DL-Q1 横截面参照总体契约 | C-1(b) ← E-12 ← KILL-Q1 | 参照集合为显式参数（只作用于 rank / demean 步骤，不裁面板）；实盘传 universe（写明 leaving 是否计入），研究传当 bar 时点成员；逐日成员日志（alpha +≈60，live +≈20） | 两条：同一参照 → 逐位相等；参照 ≠ 面板列 → 结果随参照变而不随多余列变；对真实逐日 universe 序列做等价；重写 `test_shipped_registry_live_path_matches_research_path` | 两臂重跑与 book 报告更新；registry 指针变更记账 | M-Q01 |
-| DL-Q2 验证门修正 | C-2 ← E-13/14/36 ← KILL-Q2/Q3 | `oos_is_full_sample_tail`、`best_key_oos_sharpe`、`selection_consistent`；只改 `oos_selection_threshold` 为分位数（N_eff 由 CSCV 收益矩阵估）、输出 `p_family`；`pass_oos_t` 降 reported；**无留出条件**（alpha +≈80） | 相关噪声（同一面板块自举）下通过率 ≤ 5% 且 tsmom PASS；`test_selection_gate.py:28` 的 N=1 语义保留 | 报告字段可见、verdict reasons 输出 `p_family` 与 N_eff | M-Q04 |
+| DL-Q2 验证门修正 | C-2 ← E-13/14/36 ← KILL-Q2/Q3 | `oos_is_full_sample_tail`、`best_key_oos_sharpe`、`selection_consistent`；只改 `oos_selection_threshold` 为分位数（N_eff 由 CSCV 收益矩阵估）、输出 `p_family`；`pass_oos_t` 降 reported；**无留出条件**（alpha +≈80） | 相关噪声（同一面板块自举）下通过率 ≤ 5% 且 tsmom PASS；`test_selection_gate.py:28` 的 N=1 语义保留 | 报告字段可见、verdict reasons 输出 `p_family` 与 N_eff **[执行]** 已做：三个标注字段、分位数门、CLI 输出 `p_family`；未做：N_eff、NW t 降 reported、相关噪声验收、verdict reasons 内的 `p_family`（§12.5 欠账） | M-Q04 |
 | DL-Q3 启动两步 + 迟到标签 | KILL-Q4 ← KILL-R6 | 启动始终只读对账 + 保护单核对；rebalance 受推导窗口（grace + ThrottleInterval + 启动耗时，写进 config）约束；补跑 / 跳过策略 + 漏掉 bar 计数器；trade 行 `late_seconds`（live +≈40） | 单元：重启落在窗口外不下 rebalance 单但完成对账；漏掉 bar 被计数 | 日报"迟到入场仓位的 bar 小时占比"与"漏掉的再平衡数" | M-Q03 |
 | DL-Q4 单实例 + 武装门 | KILL-Q7 ← KILL-R20 | `fcntl.flock`，锁键 = API key 指纹，绝对路径；非 dry-run 必须 `--armed` 且校验 REPO == plist WorkingDirectory；`flatten` 同锁；被拒实例 exit 0 + 告警（去重）（live/cli +≈80；删 `consecutive_errors` 持久化） | 第二实例（含另一 worktree）启动被拒并告警；`flatten` 在循环存活时先置 kill switch | — | M-Q07 |
 | DL-Q5 Expr 节点 ×5 + mined 通道（一本账本） | C-3 ← KILL-Q8/Q9 | Abs / Moment / Semi / Beta-Residual / Trades（各 ≈45 行，alpha）；`_resolve_mined` 进 validate（1 行）；mined 持久身份 = 表达式字符串；`mine` 的 `declared_trials` 经 `_record_trial` 进 `trials.jsonl`（含搜索空间版本）；预登记时间戳校验进 `report weekly` | 量纲规则、因果性、规范化哈希、哈希在新增节点后的稳定性（UNVERIFIED → 测试） | §7.1.6 裁决 | M-Q02 |
@@ -523,16 +523,16 @@ Learning Plan（**[C 修订]** M-010 保留为长期指标，不再作 Phase 判
 
 | Metric | Claim | 指标 | 基线 | 阈值 | 窗口 | 失败动作 |
 | --- | --- | --- | --- | --- | --- | --- |
-| M-Q01 | C-1(b) | 实盘 vs 研究 crowding 触发集**按日**重合率（预登记非零残差容忍度） | 49.6%（E2） | ≥ 95% | 修后首次重跑 | 继续查参照差异 |
+| M-Q01 | C-1(b) | 实盘 vs 研究 crowding 触发集**按日**重合率（预登记非零残差容忍度） | 49.6%（E2）→ 实测 52%（E1） | ≥ 95% → **[执行]** 阈值判为预登记失当（§12.2）；裁决量改为判定与逐折选择的稳定性，两者均不变 | 修后首次重跑 | 继续查参照差异 |
 | M-Q02 | C-3 | 新族候选对 tsmom 的最优边际 Sharpe（以 267 为基数） | −0.08 | ≥ +0.05 | Phase A 末 | 转数据宽度 |
 | M-Q03 | KILL-Q4 | 迟到入场仓位的 bar 小时占比 + 漏掉的再平衡数 | 稳态 0/8（开发期 73% 按笔） | ≤ 5% / 0 | 修后 7 天 | 查重启原因 |
-| M-Q04 | C-2 | 门的噪声通过率（相关噪声仿真） | 43.5% | ≤ 5% | 修后 | 重查公式 / N_eff |
+| M-Q04 | C-2 | 门的噪声通过率（相关噪声仿真） | 43.5% | ≤ 5% **[执行]** 门已改分位数（独立零假设下按构造为 5%）；相关噪声仿真未跑，本项仍 OPEN | 修后 | 重查公式 / N_eff |
 | M-Q05 | KILL-Q5 | 评分入口写账本覆盖率 | ~50% | 100% | Phase A | 补钩子 |
 | M-Q06 | C-6 | 最小强平距离（日波动单位） | 未测 | ≥ 10 | 每周期 | 告警 |
 | M-Q07 | KILL-Q16 | 远端停机演练（两条路径） | 无 | 2 bar 停权 + 平仓；误报路径不触发 | Phase B | 修 |
 | **M-Q08** | Pre-5 | 执行保真：换手 vs 回测同期、滑点 vs 模型 2 bps、`late_seconds`、registry ≡ 循环 | — | 换手 ±25%、滑点 ≤ 2×模型、迟到 ≤ 5%、一致性 100% | 冻结后 30 天 | 复审执行层 |
 | **M-Q09** | Pre-5 | 无人值守存活：连续无人干预天数、失联自动停机次数 | 12 次重启 / 2 天 | ≥ 30 天、0 次未处理失联 | 冻结后 30 天 | 复审运维 |
-| **M-Q10** | C-1(a) | registry digest 与已加载模型一致的周期占比 | 0%（当前分叉） | 100% | 每周期 | 拒绝启动 / 告警 |
+| **M-Q10** | C-1(a) | registry digest 与已加载模型一致的周期占比 | 0%（当前分叉）→ **[执行]** 周期 98 起 100% | 100% | 每周期 | 拒绝启动 / 告警 |
 | M-010 | edge | 30 天 income Sharpe（构造固定、迟到入场剔除） | — | 长期指标；**功效不足以在 1 年内裁决 alpha** | 30 天滚动 | 仅记录，不触发决策 |
 
 ---
@@ -545,7 +545,7 @@ Learning Plan（**[C 修订]** M-010 保留为长期指标，不再作 Phase 判
 - **升级为 GO：已发生（2026-09-06，操作者裁定）。** 原四条条件的实际结局：KILL-Q15 **CLOSED**、KILL-Q1-tsmom **CLOSED**、KILL-Q18 合并列车 **完成**；第三条 KILL-Q2/Q3 **代码 CLOSED 但判据未达成**——诚实网格 OOS 1.485 对 N≈141 的阈值 1.483–1.497，按 C-2 预登记记 WEAK_PASS。曾列出的两条出路是 (i) 重测取可读余量、(ii) 操作者裁定 WEAK_PASS 足够；**操作者选 (ii)**（附录 B）。**作废条件**：基础 tsmom（crowding 0）在门下 FAIL，或新的诚实网格 OOS 低于当时阈值达 0.05 以上 → 判定退回 Weak GO 并走 §9 第 2 步复审。
 - 真实资金：**HOLD 且 DEFERRED**。解除条件（只在操作者显式重开 mainnet 后适用）：附录 D 的 P0 全部关闭 + KILL-Q12 的冲击模型下 `vol_target` 重推 + 构造冻结后 30 天干净窗口（M-Q08 四项达标、M-Q09 ≥ 30 天、构造不变）+ 上线断言四项（CROSSED / multiAssets 与验证口径一致、全新 `state_dir`、账户空仓空挂单、告警端到端演练）。按 §9 的日期推算，最早在第 16 周之后。
 
-Quality Score（1–5）**[C 修订]**：问题真实性 5 · 证据充分度 4 · 根因清晰度 4 · 战略一致性 4 · 相对价值与经济 4 · 方案可行性 4 · 范围收敛度 3 · 执行可交付性 2 · 上线可验证性 3 · 对抗生存 4 = **37/50**（映射 Weak GO / Need Evidence 档，与硬门禁一致：OPEN P0 = 2 → Weak GO）。执行可交付性从 3 降到 2 的理由：路线图有五处在 09-05 版里不能按写的那样执行（留出必选、周上限无工具、看门狗不可交付、合并列车缺失、证据窗口叠不起来），本次修订改正了它们，但 Phase A 的交付契约仍未写到测试矩阵级别。
+Quality Score（1–5）**[C 修订]**：问题真实性 5 · 证据充分度 4 · 根因清晰度 4 · 战略一致性 4 · 相对价值与经济 4 · 方案可行性 4 · 范围收敛度 3 · 执行可交付性 2 · 上线可验证性 3 · 对抗生存 4 = **37/50**（映射 Weak GO / Need Evidence 档，与硬门禁一致：OPEN P0 = 2 → Weak GO）。 **[执行 2026-09-06]** 分数不变，仍对应 Weak GO 档；判定为 GO 的依据是 §12.6 的操作者裁定，不是分数——这个不一致是有意保留的。执行可交付性从 3 降到 2 的理由：路线图有五处在 09-05 版里不能按写的那样执行（留出必选、周上限无工具、看门狗不可交付、合并列车缺失、证据窗口叠不起来），本次修订改正了它们，但 Phase A 的交付契约仍未写到测试矩阵级别。
 
 ---
 
@@ -560,7 +560,7 @@ Quality Score（1–5）**[C 修订]**：问题真实性 5 · 证据充分度 4 
 | **KILL-Q15**（registry ≠ 运行进程） | OPEN P0 | **CLOSED** | 每周期与心跳记录进程持有的 registry digest；`live status --check` 与磁盘比对。重启后首个周期 digest `16671c63a12e` 两侧一致，`--check` 报 `registry: matches the running loop` |
 | **KILL-Q1-tsmom**（横截面参照总体，潜伏半边） | OPEN P0 | **CLOSED** | `Panel.reference` 契约 + 研究/实盘两侧接线 + 逐日等价测试；证据重出为 `tsmom-validation-20260906T093705Z`（PASS，五折全选修饰器），registry 指针已换 |
 | **KILL-Q1-flow**（去均值，当下在跑的半边） | P2 | **CLOSED（代码）/ 保留在 D-029 复审** | 同一契约；`book-tsmom-flow-20260906T094008Z` 重出，判定仍 REJECT，探针安排不变 |
-| **KILL-Q2/Q3**（伪 OOS 标注 + FWER 分位数门） | OPEN（升级条件） | **代码 CLOSED / 判据未达成** | 门槛改为解 Φ(x)^N = 1−α 的分位数，并报 `p_family`；报告带 `oos_is_full_sample_tail` 与 `selection_consistent`，`best_key_oos_sharpe` 给上线构造自己的走前数。**但**用它量 tsmom 自己，C-2 的 falsifier 触发（§12.5）——所以这一条不能作为 GO 的支撑 |
+| **KILL-Q2/Q3**（伪 OOS 标注 + FWER 分位数门） | OPEN（升级条件） | **代码 CLOSED / 判据未达成** | 门槛改为解 Φ(x)^N = 1−α 的分位数，并报 `p_family`；报告带 `oos_is_full_sample_tail` 与 `selection_consistent`，`best_key_oos_sharpe` 给上线构造自己的走前数。**但**用它量 tsmom 自己，C-2 的 falsifier 触发（§12.5）——所以这一条不能作为 GO 的支撑；欠账四项见 §12.5，裁定见 §12.6 |
 | KILL-Q7（单实例锁） | P1 | 仍 OPEN | 本轮未做；重启后实测确为单进程，但那是运气不是保证 |
 | 其余 P1 / DEFERRED | — | 不变 | — |
 
@@ -597,13 +597,14 @@ Quality Score（1–5）**[C 修订]**：问题真实性 5 · 证据充分度 4 
 
 ### 12.5 KILL-Q2/Q3：尺子修好了，量出来的第一个数是自己
 
-完整过程见 `docs/RESEARCH_LOG.md` 的 **D-043 / M-019**。代码在 `feat/fwer-selection-gate`（`750e5c6` + 两次 main 合并），四步 CI 全绿。
+完整过程见 `docs/RESEARCH_LOG.md` 的 **D-043 / M-019**。代码已并入 main（`b218f1c`；分支随后删除），四步 CI 全绿。
 
 **做了什么**
 
 - **Q3（门槛）**：D-028 用 `expected_max_sharpe` = σ·E[max of N nulls] 当门槛。E[max] 是个平均数，单条纯噪声曲线越过它的概率约 43%。改为解 Φ(x)^N = 1−α 的分位数（α=0.05），并报 `p_family` = 1 − Φ(S/σ)^N。`expected_max_sharpe` **原样保留**——DSR 要的就是这个期望，错的是拿它当门槛。
 - **Q2（形状）**：报告带 `oos_is_full_sample_tail` 与 `selection_consistent`；`best_key_oos_sharpe` 给上线构造自己的走前数。原处方的另一半 `--holdout-months` **维持撤回**（与 KILL-006 冲突，KILL-R4）。
 - **没有装的**：N 仍是账本原始行数，不是 N_eff。账本里有大量近邻重复，所以现在这条是保守的；没有相关性结构就编一个 N_eff 估计量只是猜，记为欠账写进 docstring。
+- **欠账（复审 2026-09-06 补记）**——处方里写了、本轮没做、本节初稿没披露的四项：① `pass_oos_t` / `weak_oos_t` 仍在 `verdict.py:83` 强制（DL-Q2、§7.1.4 第 6 条、附录 B 都写"降为 reported"）；② registry evidence 块未并列记录当前构造的诚实网格 OOS 1.485（§4.1 F1 修复、KILL-Q2 触发动作）；③ DL-Q2 / M-Q04 的验收"相关噪声块自举下通过率 ≤ 5%"未跑，新测试全用独立零假设；④ `p_family` 只在 CLI 输出，不在 verdict reasons 里。另：E-36 的报告原本只在 scratchpad，复审时已入库 `reports/research/scratch/`（未记账，见该目录 README）。
 
 **对已有结论的影响：一份也没翻**（E-39）。11 份报告，旧门槛的噪声通过率 43.4%–43.5%，新门槛下 5 份 tsmom 仍 PASS、6 份 mined 仍 FAIL，没有任何候选被救活。registry 引用的那份报告早于本次修改，**不用重跑，一次额度也没花**。
 
@@ -619,6 +620,8 @@ C-2 预登记过：**阈值 ≥ 1.485 → tsmom 转 WEAK_PASS，§11 与 §0 改
 | 093705Z（0.4389） | 144 | 1.468 | 1.483 → PASS，余量 0.002 |
 
 **两个同样合理的 σ 估计差在小数点后第三位，判定就翻。**余量已经小于阈值本身的估计误差。按 C-2 写下的那条线，读作 **WEAK_PASS**——那条线正是为这种情形写的。
+
+**N 的来源与三种下一次运行**（复审补记）：`n_trials` = 账本去重行数 63 + 本次网格点数 + 申报先验（60 + 16）。同区间重放两臂 → 141（阈值 1.497 / 1.483）；数据推进一天后重放 → 143（1.499 / 1.485，后者余量 0.0002）；按 §12.6 的路径 (i) 跑 16 点网格 → ≈ 157（1.510 / 1.496，**两个 σ 下都是 WEAK_PASS**）。也就是说，(i) 只有在新的诚实 OOS 自己升到 ≥ 1.55 时才可能给出 ≥ 0.05 的余量。
 
 边界，逐条说清：
 
@@ -641,6 +644,7 @@ C-2 预登记过：**阈值 ≥ 1.485 → tsmom 转 WEAK_PASS，§11 与 §0 改
 1. 跑一次就往共享账本追加一行，而阈值随 N **单调上升**。用一个**会让结论变差的观测**去确认结论，得到的"确认"没有信息量。
 2. (i) 要回答的问题是「1.485 究竟比 1.49 大还是小」。两个同样合理的零假设 SD（0.4430 与 0.4389）给出的阈值分别是 1.497 与 1.483——**这个精度本来就不在这套证据的分辨能力之内**。再跑一次不会把分辨率变高，只会换一组同样在噪声里的数字。
 3. 把"余量已经薄到不可读"直接记下来，比再花一次不可逆的额度去证明它薄更诚实，也更便宜。
+4. （复审补记，裁定时没有算出来）按 (i) 跑 16 点网格，N ≈ 157，阈值 1.496–1.510——**两个 σ 下都是 WEAK_PASS**；(i) 能给出 ≥ 0.05 余量的唯一方式是新 OOS 自己 ≥ 1.55。算出来只让 (ii) 更明显。
 
 **这次升级依据的是一次裁定，不是一个更好的数字。**这句话写进 §0、§11 与附录 B 三处，是为了让任何后来读这份报告的人不会把 GO 误读成"证据变强了"。
 
@@ -658,10 +662,10 @@ C-2 预登记过：**阈值 ≥ 1.485 → tsmom 转 WEAK_PASS，§11 与 §0 改
 - 外部对标代理因会话额度中断；对标评分为主分析者判断（E4/E5）并已降为附录参考，Qlib / vnpy 未抓取。
 - 币安 Query Order 与 openInterestHist 文档本轮被网络策略拦截，E-24 凭已知条文，标 E4；币安 API key 无 reduce-only 作用域为三个复核角色的 E4 判断，未核。
 - metrics 的粒度与发布延迟未核（KILL-Q11 UNKNOWN）；REST 30 天窗口与时延、住宅网络吞吐未核。
-- E-12 的"1.8× 触发率、49.6% 重合"为审计代理复算（E2），无人独立复现；修 P1-01 后重跑即得 E1。
-- 两次研究运行均输出到 scratchpad：`research backtest`（E-09..E-11）与 `research validate` 16 点网格（E-36）；仓库 `trials.jsonl` 未动；**E-36 的 16 个格子待下次 validate 以 `--prior-trials` +16 申报**。小时级净收益序列存于 scratchpad，未入库。
-- 未改 registry/profile、未重启循环、未提交任何文件。**KILL-Q15 的关闭动作（回退或有意重启）是操作者的实盘决定，本文件只给出两条路径。**
-- 本文件不修改 `docs/RESEARCH_LOG.md`（同伴会话的 D-040/D-041 待合并）；E-010 行的"已由 D-040 修复"由拥有该文件的会话补记。
+- E-12 的"1.8× 触发率、49.6% 重合"为审计代理复算（E2），无人独立复现；修 P1-01 后重跑即得 E1。 → **[执行]** 已实测，E1（§12.2）。
+- 两次研究运行均输出到 scratchpad：`research backtest`（E-09..E-11）与 `research validate` 16 点网格（E-36）；仓库 `trials.jsonl` 未动；**E-36 的 16 个格子待下次 validate 以 `--prior-trials` +16 申报**。小时级净收益序列存于 scratchpad，未入库。 **[执行 复审]** E-36 报告已入库 `reports/research/scratch/`（未记账）；+16 仍待申报；E-09..E-11 的回测序列仍未入库。
+- （复核时）未改 registry/profile、未重启循环、未提交任何文件。**KILL-Q15 的关闭动作（回退或有意重启）是操作者的实盘决定，本文件只给出两条路径。** → **[执行]** 09-06 起三者都已发生（路径 (b)），见 §12。
+- 本文件不修改 `docs/RESEARCH_LOG.md`（同伴会话的 D-040/D-041 待合并）；E-010 行的"已由 D-040 修复"由拥有该文件的会话补记。 → D-040/D-041 已在 main（KILL-Q18）；执行期的记录写在 RESEARCH_LOG 的 P18 / D-042 / D-043。
 - 审计代理的原始结构化输出（40 条发现、60 条排除、39 条生产缺口）与六个复核角色的原始输出保存在会话 scratchpad，未入库；若需入库，建议作为 `reports/audit/2026-09-05-*.json` 提交。
 - Phase A 的交付契约未写到 C.3/C.4 的测试矩阵级别（G7 PARTIAL）。
 
@@ -672,7 +676,7 @@ C-2 预登记过：**阈值 ≥ 1.485 → tsmom 转 WEAK_PASS，§11 与 §0 改
 | D-012 不做原生条件单 | **维持**（alpha 与保险两个半边都维持）；预登记重开条件"进入 mainnet 且信号进入日内"不变；将来重开先记录条件变更决策 | E-09, E-21, E-31, E-37 |
 | D-013 时点成员表 | 修订：加"最近 N 日有成交"与退市日历 | E-17 |
 | D-017 覆盖层证据门控 | 维持 | — |
-| D-020 / D-028 判定 | **重开**：FWER 分位数（N_eff）、`oos_is_full_sample_tail`、`best_key_oos`、NW t 降 reported；**不加留出** | E-13, E-14, E-36 |
+| D-020 / D-028 判定 | **重开**：FWER 分位数（N_eff）、`oos_is_full_sample_tail`、`best_key_oos`、NW t 降 reported；**不加留出** **[执行]** 已做：分位数门、`p_family`、三个标注字段；未做：N_eff、NW t 降 reported（§12.5 欠账） | E-13, E-14, E-36 |
 | D-023 信号自声明输入 | 扩展：声明横截面参照总体；`needs_metrics` | E-12 |
 | D-024 账本 / 可复现 | 扩展：签名含构造与覆盖层 digest 与搜索空间版本；mine 报告自复现；一本账本 | E-15, E-16 |
 | D-026 构造指纹 | **扩展**：信号参数 digest 进指纹或日报，使信号变化也清零证据窗口 | E-35 |
@@ -693,7 +697,7 @@ C-2 预登记过：**阈值 ≥ 1.485 → tsmom 转 WEAK_PASS，§11 与 §0 改
 | Kill | 主分析者核验 | 结果 | 正文修订处 |
 | --- | --- | --- | --- |
 | KILL-R1（registry ≠ 运行进程） | `state.json.restarted_at` 2026-09-04T17:21:22Z vs `git log 3ac8d49` 2026-09-04T20:03:32Z；`cycles.jsonl` 88 行 `funding_history` ∈ {False, None}；`inputs.py:65-68`；`engine.py:849-899` | **成立**，升为 P0 KILL-Q15 | §0、§4.1、§8、§9 第 0 步、§11 |
-| KILL-R3（FWER 门作用在诚实网格 OOS 上） | 在当前构造跑 16 点网格 validate（scratch）：OOS 1.485，阈值 1.445（N=93）/ 1.466（N=110） | **关闭**：通过，余量 0.02–0.04 | §0、§4.1 F2、E-36 |
+| KILL-R3（FWER 门作用在诚实网格 OOS 上） | 在当前构造跑 16 点网格 validate（scratch）：OOS 1.485，阈值 1.445（N=93）/ 1.466（N=110） | **关闭**：通过，余量 0.02–0.04 → **[执行]** E-40 后为 WEAK_PASS，见 §12.5 | §0、§4.1 F2、E-36、E-40 |
 | KILL-R4（留出必选与 KILL-006 冲突） | `RESEARCH_LOG:732-760`、`research_cmd.py:374-378` | **成立**，撤回留出必选 | §4.1 F1、§7.1.4、附录 B |
 | KILL-R6（73% 为开发期比率） | 按周期重算 `trades.jsonl`：最后一次重启后 8 笔常规周期成交全部 ≤ 0.3 分钟 | **成立**，L1-01 降运维项 | §0、§4.1、E-18、M-Q03 |
 | KILL-R14（18 单位止损不可下单） | `state.json.exit_states.*.unit`：7/18 > 1/18 | **成立** | §7.2、C-5、E-37 |
