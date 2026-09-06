@@ -1679,11 +1679,6 @@ def research_mine(
     denominator will never learn the search happened.  ``--strategy`` is inherited from the shared
     options and ignored here; the candidates are the strategies.
     """
-    # Otherwise silent by degradation: with no funding panel every carry candidate raises into the loop's
-    # broad `except` below, lands as an `{"error": ...}` row that `scored` filters out, and is still
-    # charged to `declared_trials` - the whole family paid for and none of it searched.
-    if include_funding and not funding:
-        raise click.ClickException("--include-funding needs the funding panel; pass --funding or --no-include-funding")
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
@@ -1695,6 +1690,22 @@ def research_mine(
         if min_history is not None
         else int((profile_payload.get("portfolio", {}) or {}).get("min_history_bars", 720))
     )
+    # F-1.  The search space narrows to what this panel can actually answer; it does not refuse, because a
+    # refusal makes `mine` unrunnable on the OHLCV-only panels the rest of the suite uses.
+    #
+    # The predicate is the panel, never the flag, and never `panel.funding is not None` either.  `--funding`
+    # against a store with no funding archive yields an all-zero frame rather than None, so both of those
+    # weaker tests pass while every carry candidate evaluates to a constant: 42 expressions kept, charged to
+    # `declared_trials`, scored on zeros, and a report recording `include_funding: true`.  That is KILL-027
+    # standing inside the guard written to prevent it - an artefact asserting a family was searched when it
+    # was not.  What is counted here is settlements actually present.
+    funding_symbols = 0 if panel.funding is None else int((panel.funding != 0.0).any().sum())
+    searched_funding = include_funding and funding_symbols > 0
+    if include_funding and not searched_funding:
+        click.echo(
+            "no settlement in this panel: narrowing the search space, the carry family is neither searched "
+            "nor charged to --prior-trials (pass --funding, or --no-include-funding to silence this)"
+        )
     baseline_net: pd.Series | None = None
     if baseline:
         _resolve_mined(baseline)  # a mined candidate is addressable by its hash, like any other id
@@ -1702,7 +1713,7 @@ def research_mine(
         # `AlphaModel.targets` refuses a funding-consuming model without funding history (D-023), but
         # `evaluate` - the research path - does not, so tsmom's crowding modifier would run inert here and
         # every candidate's marginal would be measured against a book nobody validated (E-040 / KILL-027).
-        if get_signal(baseline).needs_funding(baseline_entry.params) and panel.funding is None:
+        if get_signal(baseline).needs_funding(baseline_entry.params) and funding_symbols == 0:
             raise click.ClickException(
                 f"--baseline {baseline} consumes funding under its registry params; pass --funding"
             )
@@ -1713,7 +1724,7 @@ def research_mine(
         # replaying it on one leg only would leak that replay into every candidate's correlation.
         baseline_net = run_backtest(panel, baseline_weights, cost, execution=execution).portfolio_net  # type: ignore[arg-type]
     search = enumerate_candidates(
-        max_complexity=max_complexity, max_lookback=max_lookback, include_funding=include_funding
+        max_complexity=max_complexity, max_lookback=max_lookback, include_funding=searched_funding
     )
     click.echo(
         f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
@@ -1768,7 +1779,9 @@ def research_mine(
         # funding charged - took a four-arm reproduction rather than a read (D-024 applied to `mine`).
         "run": {
             "funding": funding,
-            "include_funding": include_funding,
+            "include_funding": searched_funding,  # what was searched, not what was asked for
+            "include_funding_requested": include_funding,
+            "funding_symbols": funding_symbols,
             "execution": execution,
             "universe_mode": universe_mode,
             "min_tenure": min_tenure,

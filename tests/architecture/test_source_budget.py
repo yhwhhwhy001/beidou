@@ -270,7 +270,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (fold 5, 2.66 -> 2.56), which is a tail-mitigation shape and not a return enhancer, and the docstring
 # would be a story rather than a statement without it.  Marked in the text as a hypothesis: the pattern
 # was read after the fact, five folds is five observations, and M-010 is the live arbiter.
-# Twentieth raise, 2026-09-05, with the sentence the rule requires: +136 in beidou_alpha and +103 in
+# Twentieth raise, 2026-09-05, with the sentence the rule requires: +136 in beidou_alpha and +116 in
 # beidou_cli, for P17's carry search.  The alpha lines are the kind this file says it should welcome,
 # because they buy hypothesis space rather than plumbing: a `Funding` leaf, `Expr.reads_funding`, and a
 # `_funding_family` of 42 expressions.  Funding was the one panel input no node could read - the archive
@@ -298,12 +298,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # every candidate's marginal against a book nobody validated.  The general hole in the research path is
 # older than P17 and is not closed here.
 #
+# Thirteen of the cli lines are the second time this file extracted a guard, and the first version of
+# that guard was wrong.  It read `if include_funding and not funding` - the CLI FLAG, not the panel.
+# `--funding` against a store with no funding archive yields an all-zero frame rather than None, so the
+# flag says funding was requested, a None-check would say it arrived, and neither is the question.  Under
+# that guard the whole carry family was kept, charged to `--prior-trials`, scored on constants, and the
+# report recorded `include_funding: true`: an artefact asserting a family was searched when it was not,
+# which is KILL-027 standing inside the guard written to stop it.  Measured before the fix on the August
+# fixture with `--funding`: 267 evaluated, 42 carry candidates kept, 36 of them never traded.  The guard
+# now counts symbols carrying a settlement and NARROWS - which is what the delivery contract asked for
+# and what the first version had silently replaced with a refusal - and the run block records the
+# searched value, the requested value and the count, so the three can never disagree unnoticed.
+#
 # The three plan thresholds below all move the safe way: non-alpha grew, but beidou_live did not move at
-# all, and the alpha share rose (5,012 of 13,964 against 4,876 of 13,732).
+# all, and the alpha share rose (5,012 of 13,977 against 4,876 of 13,732).
 CEILING = {
     "beidou_alpha": 5_012,
     "beidou_live": 4_198,
-    "beidou_cli": 2_685,
+    "beidou_cli": 2_698,
     "beidou_data": 1_258,
     "beidou_exchange": 539,
     "beidou_shared": 280,

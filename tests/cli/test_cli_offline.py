@@ -473,7 +473,11 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
 
 
 def _mine(root: Path, out: Path, *extra: str) -> tuple[int, str, dict]:
-    """Run `research mine` on the August fixtures, which carry no funding, and read the report back."""
+    """Run `research mine` on the August fixtures and read the report back.
+
+    The funding flags are NOT fixed here: F-1's whole subject is what happens when they disagree with the
+    panel, so a helper that pinned them would make that case unreachable from the tests.
+    """
     result = CliRunner().invoke(
         main,
         [
@@ -487,8 +491,6 @@ def _mine(root: Path, out: Path, *extra: str) -> tuple[int, str, dict]:
             ",".join(SYMBOLS),
             "--out",
             str(out),
-            "--no-funding",
-            "--no-include-funding",
             "--max-lookback",
             "200",
             "--min-history",
@@ -508,7 +510,7 @@ def test_mine_records_the_parameters_of_its_own_run(tmp_path: Path, august_dir: 
     root = tmp_path / "data"
     _store_from_fixtures(august_dir, root)
     out = tmp_path / "reports"
-    code, output, payload = _mine(root, out)
+    code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding")
     assert code == 0, output
 
     run = payload["run"]
@@ -547,7 +549,7 @@ def test_mine_compares_every_candidate_against_a_named_baseline(tmp_path: Path, 
     # A price-only tree on purpose: this fixture carries OHLCV alone, so quote_volume and
     # taker_buy_quote arrive as all-NaN frames and any flow candidate scores nothing.
     baseline_id = f"mined_{Candidate.of(Squash(Ratio(Ret(24), Vol(48)), 1.0)).hash}"
-    code, output, payload = _mine(root, out, "--baseline", baseline_id)
+    code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding", "--baseline", baseline_id)
     assert code == 0, output
 
     assert payload["run"]["baseline"] == baseline_id
@@ -565,3 +567,41 @@ def test_mine_compares_every_candidate_against_a_named_baseline(tmp_path: Path, 
         if "error" in row:
             assert "baseline_correlation" not in row
     assert "| marginal | corr |" in sorted(out.glob("mine-shortlist-*.md"))[-1].read_text()
+
+
+def test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_answer(
+    tmp_path: Path, august_dir: Path, fixtures_dir: Path
+) -> None:
+    """F-1: the carry family is neither searched nor charged when there is nothing to search.
+
+    The flags here are the ones an operator gets by DEFAULT: --funding and --include-funding are both on,
+    and the August store has no funding archive.  Three weaker guards would all pass this and let the
+    whole family run on constants:
+
+      * checking the CLI flag - it says funding was requested, not that any arrived;
+      * checking ``panel.funding is not None`` - ``_load`` returns an all-zero frame, not None;
+      * refusing outright - which the contract explicitly did not ask for, and which would make `mine`
+        unrunnable on every OHLCV-only panel in this suite.
+
+    What the guard must do instead is narrow, and say in the artefact that it narrowed.  Without that,
+    the report records ``include_funding: true`` over 42 expressions that read nothing but zeros while
+    still being charged to ``--prior-trials`` - KILL-027 standing inside the guard written to stop it.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    code, output, payload = _mine(root, out, "--funding")
+    assert code == 0, output
+    assert "narrowing the search space" in output
+
+    run = payload["run"]
+    assert run["include_funding"] is False  # what was searched
+    assert run["include_funding_requested"] is True  # what was asked for
+    assert run["funding_symbols"] == 0  # the evidence for the difference
+
+    # Neither searched nor charged: the trial count is the pre-carry space, pinned to the recorded
+    # fixture rather than to a literal, so widening the miner cannot quietly widen this assertion.
+    baseline = json.loads((fixtures_dir / "mining_baseline_hashes.json").read_text(encoding="utf-8"))
+    assert payload["evaluated"] == baseline["evaluated"]
+    assert payload["declared_trials"] == baseline["evaluated"]
+    assert not any("funding(" in row["expression"] for row in payload["candidates"])
