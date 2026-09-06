@@ -250,11 +250,14 @@ def enumerate_candidates(
     its panel carries no funding.
 
     ``max_complexity`` is 10 rather than 8 because the contract's signed momentum-times-carry product is a
-    ten-node tree - the minus sign costs two nodes.  The raise is inert on what came before: the recorded
-    baseline has ``rejected["too_complex"] == 0``, so nothing existing sits near the cap, and enumerating
-    at 10 on the pre-``Funding`` tree reproduces the 225 recorded hashes bit for bit with all four
-    counters zero.  At 8, the six negated interaction trees would be charged to ``declared_trials`` and
-    then dropped unscored, which is the worst of both.
+    ten-node tree - the minus sign costs two nodes.  The raise is inert on what came before, and the
+    reason is monotonicity, not headroom: relaxing an upper bound can only admit trees, never drop them,
+    and the recorded baseline has ``rejected["too_complex"] == 0``, so nothing that existed exceeded 8.
+    Headroom is precisely what there is none of - 75 of the 225, the single largest bucket, sit *at*
+    complexity 8 - so the next momentum-shaped family will land on the cap again.  Asserted rather than
+    argued: the identity test enumerates the pre-``Funding`` space at both 8 and 10 and requires the same
+    225 hashes in the same order.  At 8 the six negated interaction trees are charged to
+    ``declared_trials`` and then dropped unscored, which is the worst of both.
     """
     seen: dict[str, Candidate] = {}
     rejected = {"malformed": 0, "duplicate": 0, "too_complex": 0, "too_long": 0}
