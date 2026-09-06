@@ -103,9 +103,11 @@ def test_the_existing_search_space_is_bit_for_bit_what_p14_recorded(fixtures_dir
     # Both caps, because the delivery raised one of them: at the recorded cap of 8 and at today's 10, the
     # pre-funding space must be the same 225.  That is what makes the raise provably inert rather than
     # merely believed to be.
+    # DL-A1 added five more families behind their own switch, for the same reason `include_funding`
+    # exists: growth has to be a dimension that can be turned off, or a frozen space stops being one.
     for result in (
-        enumerate_candidates(include_funding=False),
-        enumerate_candidates(include_funding=False, max_complexity=8),
+        enumerate_candidates(include_funding=False, include_panel_nodes=False),
+        enumerate_candidates(include_funding=False, include_panel_nodes=False, max_complexity=8),
     ):
         assert [candidate.hash for candidate in result.candidates] == baseline["hashes"]
         assert {candidate.hash: str(candidate.expr) for candidate in result.candidates} == baseline["expressions"]

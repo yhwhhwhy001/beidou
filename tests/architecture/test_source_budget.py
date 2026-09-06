@@ -600,8 +600,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # every long forever.  `min_liquidation_distance` therefore reports the closest measurable position
 # AND how many have no reachable price - two facts that must never look like one missing number.  The
 # margin-mode check asserts and refuses; it never sets.
+#
+# 2026-09-06 B2 (DL-A1), +~230 in beidou_alpha, all of it alpha: five expression nodes over columns
+# the panel already carries, and one family each.  KILL-R28 drew the line they sit behind - a node
+# needing a NEW panel field re-opens the "research panel superset of live panel" obligation and
+# belongs in Phase B with the ingestion that feeds it - so these read close, quote_volume and trades,
+# every one of which already flows to the live loop.  Abs gives magnitude without direction; Moment
+# gives the skewness and kurtosis a mean and a variance cannot see; Semi lets "risk" mean the losing
+# half only; Residual gives the part of a move the market did not explain; TradeSize is the one thing
+# `trades` says that `quote_volume` does not - few large prints or many small.
+#
+# Residual is cross-sectional, so it takes its market from `panel.reference` exactly as
+# CrossSectional does.  That is P1-01's contract inherited rather than re-opened, and it is the
+# reason a cross-sectional node was allowed into this batch at all.
+#
+# The cost is stated rather than absorbed: the default space goes 267 -> 514 candidates (+45 surprise,
+# +28 shape, +70 downside, +70 residual, +34 print size), so anything promoted after this pays a DSR
+# denominator roughly twice as large.  The frozen 225 are untouched and every id already in the ledger
+# still resolves - asserted, not assumed, by the hash regression in tests/alpha/test_panel_column_nodes.py
+# and by the P14 space test, which now switches the new families off the same way it switches funding
+# off.  Growth has to be a dimension that can be turned off, or a frozen space stops being one.
 CEILING = {
-    "beidou_alpha": 5_373,
+    "beidou_alpha": 5_703,
     "beidou_live": 4_774,
     "beidou_cli": 3_021,
     "beidou_data": 1_375,

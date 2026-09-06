@@ -24,18 +24,23 @@ from typing import Any
 import pandas as pd
 
 from beidou_alpha.mining.expr import (
+    Abs,
     Const,
     CrossSectional,
     Expr,
     ExprError,
     Funding,
+    Moment,
     Mul,
     RangePosition,
     Ratio,
+    Residual,
     Ret,
+    Semi,
     Squash,
     Sum,
     TakerBuy,
+    TradeSize,
     Vol,
     VolumeRatio,
     ZScore,
@@ -216,6 +221,106 @@ def _funding_family(
             yield Squash(Sum(((0.5, momentum), (0.5, carry))), interaction_scale)
 
 
+# --- DL-A1: five families over the panel's existing columns ------------------------------------
+#
+# One family per new node, and each says something none of the seven before it could.  All of them
+# emit both signs wherever the outer operator is odd (`cross_sectional_rank` and `tanh` both are), so
+# - exactly as `_funding_family` records - "a candidate of this family ranked first" is not
+# information; the mirror of the worst tree is the best one.  Only the margin over the baseline is.
+
+
+def _surprise_family(horizons: Sequence[int], z_windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
+    """How *far* a symbol moved, with the direction thrown away.
+
+    The hypothesis the language could not state before ``Abs``: an unusually large move is itself a
+    predictor, whichever way it went.  ``|ret|`` z-scored against its own history is the "surprise",
+    and both signs are searched because the crypto literature disagrees with itself about whether a
+    shock continues or reverts - which is the honest reason to let the data answer.
+    """
+    for horizon in horizons:
+        surprise = ZScore(Abs(Ret(horizon)), z_windows[0])
+        for window in z_windows:
+            yield CrossSectional(ZScore(Abs(Ret(horizon)), window), "rank")
+        for scale in scales:
+            yield Squash(surprise, scale)
+            yield Squash(Mul(Const(-1.0), surprise), scale)
+
+
+def _shape_family(moment_windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
+    """Skewness and kurtosis of one-bar returns: the two shapes a mean and a variance cannot see.
+
+    A distribution that has been paying small gains and taking rare large losses looks identical to
+    ``Vol`` and quite different to ``Moment``.  Both orders and both signs; nothing here has a prior
+    strong enough to fix one.
+    """
+    for window in moment_windows:
+        for order in (3, 4):
+            shape = Moment(Ret(1), order, window)
+            yield CrossSectional(shape, "rank")
+            for scale in scales:
+                yield Squash(shape, scale)
+                yield Squash(Mul(Const(-1.0), shape), scale)
+
+
+def _downside_family(horizons: Sequence[int], semi_windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
+    """Momentum scaled by the risk that hurts, instead of by all movement.
+
+    ``_momentum_family`` divides a return by ``Vol``, which charges a rally and a crash the same
+    amount.  This divides by ``Semi``, so a symbol that rose in a straight line is not penalised for
+    having risen.  It is the same hypothesis measured with a different denominator, which is exactly
+    the sort of thing a search should settle rather than an author.
+    """
+    for horizon in horizons:
+        for window in semi_windows:
+            scaled = Ratio(Ret(horizon), Semi(Ret(1), window))
+            yield CrossSectional(scaled, "rank")
+            for scale in scales:
+                yield Squash(scaled, scale)
+                yield Squash(Mul(Const(-1.0), scaled), scale)
+
+
+def _residual_family(
+    horizons: Sequence[int], residual_windows: Sequence[int], vol_window: int, scales: Sequence[float]
+) -> Iterator[Expr]:
+    """Residual momentum: the part of the move the market did not explain.
+
+    tsmom trades the whole move, so in a market where everything rises together it is largely long
+    beta.  Residualising against the cross-sectional mean asks whether what is left over - the part
+    specific to the symbol - carries the edge.  The market is taken over ``panel.reference``, so this
+    family inherits P1-01's contract rather than re-opening it.
+    """
+    for horizon in horizons:
+        for window in residual_windows:
+            residual = Ratio(Residual(Ret(horizon), window), Vol(vol_window))
+            yield CrossSectional(residual, "rank")
+            for scale in scales:
+                yield Squash(residual, scale)
+                yield Squash(Mul(Const(-1.0), residual), scale)
+
+
+def _print_size_family(
+    trade_windows: Sequence[int], z_windows: Sequence[int], horizons: Sequence[int], scales: Sequence[float]
+) -> Iterator[Expr]:
+    """Whether the volume arrived as a few large prints or many small ones.
+
+    The only hypothesis in this batch that reads a column no node had ever read (``panel.trades``).
+    ``_flow_family`` knows how much traded and who lifted; it cannot tell one 10 BTC print from a
+    thousand 0.01 ones, and the folklore that large prints lead is at least worth one family.  The
+    interaction with momentum is included because "big prints in the direction of the trend" is the
+    specific version of the claim that would be interesting.
+    """
+    for window in trade_windows:
+        size = ZScore(TradeSize(window), z_windows[0])
+        yield CrossSectional(size, "rank")
+        for scale in scales:
+            yield Squash(size, scale)
+            yield Squash(Mul(Const(-1.0), size), scale)
+        for horizon in horizons:
+            interaction = Mul(Ratio(Ret(horizon), Vol(z_windows[0])), size)
+            yield Squash(interaction, scales[0])
+            yield Squash(Mul(Const(-1.0), interaction), scales[0])
+
+
 def enumerate_candidates(
     *,
     horizons: Sequence[int] = (24, 72, 168, 336, 720),
@@ -229,6 +334,13 @@ def enumerate_candidates(
     funding_windows: Sequence[int] = (24, 72, 168),
     funding_horizons: Sequence[int] = (72, 168),
     funding_scale: float = 1.0,
+    # DL-A1 windows.  Reused from the families above wherever the meaning carries over, so the space
+    # grows by hypotheses rather than by a fourth value of something already searched (KILL-P6).
+    moment_windows: Sequence[int] = (168, 336),
+    semi_windows: Sequence[int] = (72, 168),
+    residual_windows: Sequence[int] = (168, 336),
+    trade_windows: Sequence[int] = (24, 72),
+    include_panel_nodes: bool = True,
     max_complexity: int = 10,
     max_lookback: int = 1400,
 ) -> SearchResult:
@@ -275,6 +387,18 @@ def enumerate_candidates(
         families = (
             *families,
             _funding_family(funding_windows, vol_windows[0], scales, funding_horizons, funding_scale),
+        )
+    if include_panel_nodes:
+        # Appended, never interleaved: a family's position does not enter a candidate's hash, but the
+        # order candidates are *first seen* in decides which duplicate is kept, and every id already in
+        # the ledger has to keep resolving (T-A1-3).
+        families = (
+            *families,
+            _surprise_family(horizons, z_windows, scales),
+            _shape_family(moment_windows, scales),
+            _downside_family(horizons, semi_windows, scales),
+            _residual_family(horizons, residual_windows, vol_windows[0], scales),
+            _print_size_family(trade_windows, z_windows, horizons, scales),
         )
     for family in families:
         while True:

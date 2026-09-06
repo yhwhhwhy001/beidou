@@ -301,6 +301,212 @@ class Funding(Expr):
 # --- operators -------------------------------------------------------------------------------------
 
 
+# --- DL-A1: five nodes over columns the panel already carries (KILL-R28's line) ---------------
+
+
+@dataclass(frozen=True)
+class Abs(Expr):
+    """Magnitude without direction.
+
+    What it buys: a return becomes "how far did it move", which can then be z-scored into a surprise.
+    ``|price|`` is refused because a price is already non-negative, so the node would be an identity
+    wearing a hat - and identities that are not folded away pollute a search's budget.
+    """
+
+    KIND: ClassVar[str] = "abs"
+    inner: Expr
+
+    def __post_init__(self) -> None:
+        if self.inner.dim is Dim.PRICE:
+            raise ExprError("abs of a price is the price")
+
+    @property
+    def dim(self) -> Dim:
+        return self.inner.dim
+
+    def children(self) -> tuple[Expr, ...]:
+        return (self.inner,)
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        return self.inner.evaluate(panel).abs()
+
+    def canonical(self) -> Expr:
+        inner = self.inner.canonical()
+        if isinstance(inner, Abs):  # |‖x‖| is ‖x‖
+            return inner
+        return Abs(inner)
+
+    def describe(self) -> str:
+        return f"abs({self.inner})"
+
+
+@dataclass(frozen=True)
+class Moment(Expr):
+    """Rolling standardised skewness (k=3) or kurtosis (k=4): the shapes a mean and a variance miss.
+
+    Standardised, so the output is dimensionless whatever went in - which is what lets it combine
+    with the ratio-typed half of the language.  k=2 is refused because that is the variance and
+    ``Vol`` already says it; a window shorter than 30 is refused because a third or fourth moment
+    over a dozen points is mostly the estimator's own noise.
+    """
+
+    KIND: ClassVar[str] = "moment"
+    inner: Expr
+    order: int
+    window: int
+
+    MIN_WINDOW: ClassVar[int] = 30
+
+    def __post_init__(self) -> None:
+        if self.order not in (3, 4):
+            raise ExprError("moment order must be 3 (skewness) or 4 (kurtosis); the variance is vol()")
+        if self.window < self.MIN_WINDOW:
+            raise ExprError(f"a moment of order {self.order} needs at least {self.MIN_WINDOW} bars to mean anything")
+        if self.inner.dim is Dim.PRICE:
+            raise ExprError("moments of a raw price level are not comparable across symbols")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RATIO
+
+    def children(self) -> tuple[Expr, ...]:
+        return (self.inner,)
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        values = self.inner.evaluate(panel)
+        rolling = values.rolling(self.window, min_periods=self.window)
+        return rolling.skew() if self.order == 3 else rolling.kurt()
+
+    def lookback(self) -> int:
+        return self.window + self.inner.lookback() - 1
+
+    def canonical(self) -> Expr:
+        return Moment(self.inner.canonical(), self.order, self.window)
+
+    def describe(self) -> str:
+        return f"{'skew' if self.order == 3 else 'kurt'}({self.inner}, {self.window})"
+
+
+@dataclass(frozen=True)
+class Semi(Expr):
+    """Downside semideviation: the root-mean-square of the negative half only.
+
+    "Risk" in this language meant ``Vol``, which counts a rally and a crash the same.  This counts
+    only the half that hurts, so a candidate can ask about drawdown risk rather than about movement.
+    Refused on a SCORE or a RATIO: the semideviation of a bounded score is a number without a use.
+    """
+
+    KIND: ClassVar[str] = "semi"
+    inner: Expr
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.inner.dim is not Dim.RETURN:
+            raise ExprError("semideviation is defined here for returns; other dimensions have no downside half")
+        if self.window < 2:
+            raise ExprError("semideviation window must be at least two bars")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RETURN
+
+    def children(self) -> tuple[Expr, ...]:
+        return (self.inner,)
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        values = self.inner.evaluate(panel)
+        downside = values.clip(upper=0.0)
+        return (downside.pow(2).rolling(self.window, min_periods=self.window).mean()) ** 0.5
+
+    def lookback(self) -> int:
+        return self.window + self.inner.lookback() - 1
+
+    def canonical(self) -> Expr:
+        return Semi(self.inner.canonical(), self.window)
+
+    def describe(self) -> str:
+        return f"semi({self.inner}, {self.window})"
+
+
+@dataclass(frozen=True)
+class Residual(Expr):
+    """The part of a symbol's move the market did not explain (residual momentum).
+
+    Cross-sectional, so the "market" is the equal-weighted mean **over the panel's reference
+    population** and not over whichever columns the caller happened to load.  That is P1-01 / DL-Q1's
+    contract: a promoted candidate must not be able to re-open the defect the hand-written signals
+    just closed, and the only way to guarantee that is for the node to read ``panel.reference`` the
+    same way ``CrossSectional`` does.
+    """
+
+    KIND: ClassVar[str] = "residual"
+    inner: Expr
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.inner.dim is not Dim.RETURN:
+            raise ExprError("residualisation needs a return; a level has no market to be regressed on")
+        if self.window < 30:
+            raise ExprError("a rolling beta needs at least 30 bars")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RETURN
+
+    def children(self) -> tuple[Expr, ...]:
+        return (self.inner,)
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        values = self.inner.evaluate(panel)
+        eligible = features.within_reference(values, panel.reference)
+        market = eligible.mean(axis=1)
+        beta = features.rolling_beta(values, market, self.window)
+        return features.residual_returns(values, market, beta)
+
+    def lookback(self) -> int:
+        return self.window + self.inner.lookback() - 1
+
+    def canonical(self) -> Expr:
+        return Residual(self.inner.canonical(), self.window)
+
+    def describe(self) -> str:
+        return f"residual({self.inner}, {self.window})"
+
+
+@dataclass(frozen=True)
+class TradeSize(Expr):
+    """Average trade size against its own trailing mean.
+
+    The one thing ``trades`` says that ``quote_volume`` does not: whether the same volume arrived as
+    a few large prints or many small ones.  ``quote_volume / trades`` is a level in quote currency,
+    so it is divided by its own trailing mean to become dimensionless and comparable across symbols.
+    """
+
+    KIND: ClassVar[str] = "tradesize"
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.window < 2:
+            raise ExprError("trade-size window must be at least two bars")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RATIO
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        counts = _required(panel, "trades", "tradesize")
+        volume = _required(panel, "quote_volume", "tradesize")
+        # A bar with no prints is a real bar on a thin symbol, not a division to crash on.
+        average = volume.where(counts > 0) / counts.where(counts > 0)
+        return features.volume_ratio(average, self.window)
+
+    def lookback(self) -> int:
+        return self.window + 1
+
+    def describe(self) -> str:
+        return f"tradesize({self.window})"
+
+
 @dataclass(frozen=True)
 class Ratio(Expr):
     """``numerator / denominator`` for two nodes of the *same* dimension, which cancels it.

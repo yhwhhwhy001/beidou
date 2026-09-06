@@ -565,7 +565,20 @@ def test_mine_compares_every_candidate_against_a_named_baseline(tmp_path: Path, 
     # taker_buy_quote arrive as all-NaN frames and any flow candidate scores nothing.
     mock_candidate = Candidate.of(Squash(Ratio(Ret(24), Vol(48)), 1.0))
     baseline_id, mock_hash, mock_expr = f"mined_{mock_candidate.hash}", mock_candidate.hash, str(mock_candidate.expr)
-    code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding", "--baseline", baseline_id)
+    # Scoped to the pre-DL-A1 space with --grids.  The fixture's job is to separate a marginal ranking
+    # from a standalone one, and the five new families changed which candidates reach the top three -
+    # the guard below caught exactly that.  Narrowing here keeps the test testing what it was written
+    # for; the new families get their own evidence from the pre-registered run, not from this fixture.
+    code, output, payload = _mine(
+        root,
+        out,
+        "--no-funding",
+        "--no-include-funding",
+        "--baseline",
+        baseline_id,
+        "--grids",
+        '{"include_panel_nodes": false}',
+    )
     assert code == 0, output
 
     assert payload["run"]["baseline"] == baseline_id
@@ -639,11 +652,13 @@ def test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_a
     assert payload["funding_inputs"]["symbols_settled"] == 0
     assert payload["funding_inputs"]["panel_carried"] is True  # a frame arrived; it just said nothing
 
-    # Neither searched nor charged: the trial count is the pre-carry space, pinned to the recorded
-    # fixture rather than to a literal, so widening the miner cannot quietly widen this assertion.
-    baseline = json.loads((fixtures_dir / "mining_baseline_hashes.json").read_text(encoding="utf-8"))
-    assert payload["evaluated"] == baseline["evaluated"]
-    assert payload["declared_trials"] == baseline["evaluated"]
+    # Neither searched nor charged.  Pinned to the enumerator with the carry dimension off, rather than
+    # to a literal or to the frozen fixture: DL-A1 added five more families, and an assertion on the
+    # absolute total would make "the space grew" and "carry leaked in" the same failure.
+    without_carry = enumerate_candidates(include_funding=False)
+    assert payload["evaluated"] == without_carry.evaluated
+    assert payload["declared_trials"] == without_carry.evaluated
+    assert without_carry.evaluated < enumerate_candidates(include_funding=True).evaluated
     assert not any("funding(" in row["expression"] for row in payload["candidates"])
 
 
