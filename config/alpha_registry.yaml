@@ -30,10 +30,15 @@ strategies:
     # CROSS-SECTIONAL rank of funding - so 181803Z ranked a panel missing 43.7% of its settlements.  552ca9a
     # re-ran the evidence under the corrected funding the same evening but added ONE ledger row
     # (crowding_window=0): only the control arm was re-scored, so the comparison itself was never redone.
-    # Redone 2026-09-05 as a registered two-arm run (193707Z, the evidence below): all five folds select the
-    # modifier, OOS 1.7647 / NW t 4.0266, consistency 1.00, CPCV 1.795 / q05 1.338 / 0% negative, cost x2 1.68,
-    # PBO 0.136 - against 181803Z's PBO 0.5484, which fails D-020's own hard gate.  The PBO collapse is the
-    # tell: a corrupted input destabilises per-fold selection, and PBO is what measures that.
+    # Redone 2026-09-05 as a registered two-arm run, 193707Z.  That run is itself superseded: the evidence
+    # block below points at 093705Z (2026-09-06), which re-ran the same protocol under the corrected
+    # cross-sectional reference population; the P1-01 paragraph further down carries that run's numbers,
+    # and PBO is the figure below that moves most under it - 0.136 -> 0.219, informational at N=2 either way.
+    # 193707Z's numbers are kept here because what they are for is the argument against 181803Z, which is
+    # this paragraph's subject: all five folds select the modifier, OOS 1.7647 / NW t 4.0266, consistency
+    # 1.00, CPCV 1.795 / q05 1.338 / 0% negative, cost x2 1.68, PBO 0.136 - against 181803Z's PBO 0.5484,
+    # which fails D-020's own hard gate.  The PBO collapse is the tell: a corrupted input destabilises
+    # per-fold selection, and PBO is what measures that.
     # Recorded honestly: this is a 2-point grid, so PBO at N=2 stays informational by our own convention, and
     # D-020's two PASS conditions are not independent over a 5-year window (RESEARCH_LOG:344) - the verdict
     # rests on one Sharpe gate plus three hard gates, not on two independent tests.
