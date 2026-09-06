@@ -204,11 +204,6 @@ def _funding_consumers(entries: Sequence[StrategyEntry]) -> list[str]:
     return sorted({entry.id for entry in entries if get_signal(entry.id).needs_funding(entry.params)})
 
 
-def _settled_symbols(panel: Panel) -> int:
-    """Symbols with at least one settlement stored.  A zero column and no column are the same input."""
-    return 0 if panel.funding is None else int((panel.funding.abs().sum(axis=0) > 0).sum())
-
-
 def _require_funding(entries: Sequence[StrategyEntry], panel: Panel) -> None:
     """Refuse a run whose signals consume funding against a panel that carries none (E-040 / KILL-027).
 
@@ -226,7 +221,7 @@ def _require_funding(entries: Sequence[StrategyEntry], panel: Panel) -> None:
     hungry = _funding_consumers(entries)
     if not hungry:
         return
-    settled, total = _settled_symbols(panel), len(panel.symbols)
+    settled, total = panel.settled_symbols, len(panel.symbols)
     if panel.funding is None:
         raise click.ClickException(
             f"{', '.join(hungry)} consumes funding history under these params, so --no-funding would run the "
@@ -258,7 +253,7 @@ def _funding_facts(entries: Sequence[StrategyEntry], panel: Panel) -> dict[str, 
     return {
         "required_by": _funding_consumers(entries),
         "panel": panel.funding is not None,
-        "symbols_settled": _settled_symbols(panel),
+        "symbols_settled": panel.settled_symbols,
         "symbols": len(panel.symbols),
     }
 

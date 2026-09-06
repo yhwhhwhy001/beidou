@@ -91,3 +91,39 @@ def test_the_same_model_runs_once_the_panel_carries_funding(august_panel: Panel)
     assert funded.funding is not None
     weights, _combined, per = _model(**CROWDING).evaluate(funded)
     assert per["tsmom"].notna().any().any() and weights.notna().any().any()
+
+
+def test_the_guard_refuses_a_funding_frame_that_carries_no_settlement(august_panel: Panel) -> None:
+    """An all-zero frame is not funding.  `--funding` is the CLI default, and against a root whose klines
+    are synced but whose funding never was, `FundingStore.load` returns an empty frame per symbol and
+    `load_panel` builds a frame of zeros - not `None`.  A guard that only tests `is None` is satisfied by
+    it, which is how the refusal and the docstring's claim to be "the guard that cannot be forgotten"
+    came apart: the CLI learned this case and the library did not, leaving `research book`'s robustness
+    panels and every direct library caller on the weaker test.
+    """
+    frames = {
+        symbol: pd.DataFrame(
+            {field: getattr(august_panel, field)[symbol] for field in ("open", "high", "low", "close", "volume")}
+        )
+        for symbol in august_panel.symbols
+    }
+    zeros = pd.DataFrame(0.0, index=august_panel.index, columns=list(august_panel.symbols))
+    unsynced = Panel.from_frames(frames, interval="1h", funding=zeros)
+    assert unsynced.funding is not None  # the frame exists; it just says nothing
+    with pytest.raises(ValueError, match="funding"):
+        _model(**CROWDING).strategy_targets(unsynced)
+
+
+def test_the_crowding_modifier_actually_reads_the_funding_it_demanded(august_panel: Panel) -> None:
+    """The conclusion, not just the precondition: a guard that admits a run proves nothing on its own.
+
+    Every other test here asserts that funding was *present*.  None of them would notice
+    `apply_crowding_modifier` being dropped from `tsmom.compute` altogether, which is the refactor most
+    likely to reintroduce E-040 from the inside - the guard would keep passing and the report would keep
+    citing `crowding_window: 72`.  This pins the difference the modifier makes, so unwiring it fails here.
+    """
+    funded = _funded(august_panel)
+    on = _model(**CROWDING).strategy_targets(funded)["tsmom"]
+    off = _model(crowding_window=0).strategy_targets(funded)["tsmom"]
+    changed = int((on.fillna(-9.0) != off.fillna(-9.0)).to_numpy().sum())
+    assert changed > 0, "the modifier consumed funding and changed nothing; this fixture cannot detect it"

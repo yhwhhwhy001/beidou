@@ -324,10 +324,27 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # it refuses a missing frame, and warns on the partial case instead of leaving it in the JSON where the
 # operator will not look.  `_funding_consumers` and `_settled_symbols` are extracted because the guard and
 # the report block would otherwise compute the same two things three times between them.
+# Twenty-third raise, 2026-09-06, with the sentence the rule requires: +18 in beidou_alpha, and beidou_cli
+# comes DOWN 5 to 2,673.  A second review round found that the twenty-second raise had fixed its own bug in
+# one place only: `_require_funding` learned that an all-zero funding frame is not funding, and
+# `AlphaModel.strategy_targets` was left on `panel.funding is None`, so the library guard - the one the
+# docstring calls "the guard that cannot be forgotten" - had become the WEAKER of the two.  Verified by
+# direct call: `strategy_targets` on a 0-settlement panel returned targets and raised nothing, which left
+# `research book`'s robustness universes and every direct library caller (including
+# scratchpad/verify_crowding_arms.py, the script the registry cites as corroboration for the crowding
+# modifier) on the weak test.  The lines are `Panel.settled_symbols` and its docstring: the predicate now
+# exists once, in the layer that owns the frame, and both guards ask it - which is why the cli figure falls
+# rather than rises.  The alpha count also carries the test that the modifier CHANGES SOMETHING, and that
+# one is the uncomfortable half: the same review showed a mutation deleting `apply_crowding_modifier` from
+# `tsmom.compute` left every new test green, because the funded fixture wrote one constant rate to two
+# symbols, so the trailing cross-sectional rank tied at 0.0 and `rank >= crowding_cut` never held.  The
+# suite proved the precondition (funding was present) and never the conclusion (the signal read it and it
+# mattered) - which is E-040's own shape, reproduced inside the tests written to prevent it.  Measured:
+# 671 target cells move with the modifier wired, 0 with it unwired.
 CEILING = {
-    "beidou_alpha": 4_889,
+    "beidou_alpha": 4_907,
     "beidou_live": 4_262,
-    "beidou_cli": 2_678,
+    "beidou_cli": 2_673,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

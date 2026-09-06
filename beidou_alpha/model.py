@@ -119,17 +119,24 @@ class AlphaModel:
     ) -> dict[str, pd.DataFrame]:
         """Per-strategy held targets; ``previous`` seeds NO_ACTION with what the live loop held last cycle.
 
-        The panel must carry funding whenever an enabled signal reads it - the same refusal ``targets``
-        makes for the live path (KILL-027), made here because research is where evidence is produced.
-        Without it ``beidou research backtest --strategy tsmom --no-funding`` exited 0 and wrote a report
-        whose ``params`` cited ``crowding_window: 72`` for a modifier that had consumed nothing (E-040).
+        The panel must carry funding whenever an enabled signal reads it - the refusal ``targets`` makes
+        for the live path (KILL-027), made here because research is where evidence is produced.  Without
+        it ``beidou research backtest --strategy tsmom --no-funding`` exited 0 and wrote a report whose
+        ``params`` cited ``crowding_window: 72`` for a modifier that had consumed nothing (E-040).
         The guard sits on this method rather than on ``evaluate`` because it is the one seam every caller
         crosses: ``decompose_book`` reaches the signals through here without ever calling ``evaluate``.
+
+        It asks ``settled_symbols``, not ``funding is None``.  The first draft asked the latter, which
+        answers "was funding requested" rather than "did any arrive": ``--funding`` is the CLI default,
+        and against an unsynced archive the panel carries a frame of zeros that satisfies an ``is None``
+        test while the modifier reads nothing.  That was fixed in the CLI first and left asymmetric here,
+        which put ``research book``'s robustness panels and every direct library caller - including the
+        scratchpad script the registry cites as corroboration - back on the weaker test.
         """
-        if self.needs_funding and panel.funding is None:
+        if self.needs_funding and panel.settled_symbols == 0:
             raise ValueError(
-                "an enabled signal reads funding history but the panel carries none; the signal would run "
-                "on inputs it did not have when it was judged (E-040 / KILL-027)"
+                "an enabled signal reads funding history but the panel carries no settlement for any "
+                "symbol; the signal would run on inputs it did not have when it was judged (E-040 / KILL-027)"
             )
         eligible = self.eligible(panel, membership)
         targets: dict[str, pd.DataFrame] = {}

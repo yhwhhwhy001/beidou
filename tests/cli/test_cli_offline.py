@@ -499,7 +499,10 @@ FUNDING_COMMANDS: dict[str, list[str]] = {
 }
 # `mine` takes `--funding` but ignores `--strategy`: its candidates are the strategies, and no enumerated
 # candidate reads funding on this branch.  Its baseline arm is guarded where the baseline is introduced.
-EXEMPT_FROM_FUNDING_GUARD = {"list", "mine"}
+# `list` used to sit here too and never belonged - it carries no `--funding` at all, so subtracting it was
+# silently a no-op, which is exactly how an exemption set rots.  The membership assertion below is what
+# stops the next stale entry from being invisible.
+EXEMPT_FROM_FUNDING_GUARD = {"mine"}
 
 
 def _research_args(command: str, extra: list[str], root: Path, out: Path) -> list[str]:
@@ -516,6 +519,7 @@ def test_the_funding_command_table_covers_every_command_that_takes_the_flag() ->
         for name, command in research.commands.items()
         if any("--funding" in (param.opts + param.secondary_opts) for param in command.params)
     }
+    assert with_flag >= EXEMPT_FROM_FUNDING_GUARD, "an exemption for a command that has no flag exempts nothing"
     assert with_flag - EXEMPT_FROM_FUNDING_GUARD == set(FUNDING_COMMANDS)
 
 
@@ -693,3 +697,93 @@ def test_partial_funding_coverage_is_announced_rather_than_left_in_the_json(tmp_
     result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     assert "2/4" in result.output and "tsmom" in result.output, result.output
+
+
+def test_validate_guards_the_grid_arms_rather_than_the_base_params(tmp_path: Path, august_dir: Path) -> None:
+    """`research validate` deliberately checks the combos, not `entry.params` — in both directions.
+
+    The dangerous half is a base configuration that reads no funding with a grid arm that does: guarding
+    the base would let that arm be scored on a panel with none, and write a two-arm validation report —
+    the registry's own evidence format — in which the "on" arm consumed nothing and so ties the "off" arm.
+    The permissive half matters too: a grid that switches the term off in every arm must not be refused
+    for a base configuration it never evaluates.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+    base = [
+        "research",
+        "validate",
+        "--strategy",
+        "tsmom",
+        "--root",
+        str(root),
+        "--symbols",
+        ",".join(SYMBOLS),
+        "--registry",
+        REGISTRY,
+        "--out",
+        str(out),
+        "--no-funding",
+        "--min-history",
+        "0",
+        "--folds",
+        "3",
+        "--min-train",
+        "300",
+        "--purge",
+        "5",
+        "--cpcv-groups",
+        "4",
+    ]
+    control = '{"horizons": [5, 20, 50], "vol_window": 100, "crowding_window": 0}'
+    # an arm that reads funding is refused even though the base params do not
+    refused = CliRunner().invoke(main, [*base, "--params", control, "--grid", '{"crowding_window": [0, 72]}'])
+    assert refused.exit_code != 0, refused.output
+    assert "--funding" in refused.output and "tsmom" in refused.output, refused.output
+    assert not list(out.glob("*.json")), "a refused run must not leave evidence behind"
+    # ...and a grid that switches it off in every arm runs, though the base params turn it on
+    crowded = '{"horizons": [5, 20, 50], "vol_window": 100, "crowding_window": 72}'
+    allowed = CliRunner().invoke(main, [*base, "--params", crowded, "--grid", '{"crowding_window": [0]}'])
+    assert allowed.exit_code == 0, allowed.output
+    payload = json.loads(next(out.glob("tsmom-validation-*.json")).read_text())
+    assert payload["funding"]["required_by"] == [] and payload["grid_size"] == 1
+
+
+@pytest.mark.parametrize("command", ["backtest", "validate", "decompose"])
+def test_the_funding_block_reaches_the_reports_the_registry_reads(
+    command: str, tmp_path: Path, august_dir: Path
+) -> None:
+    """Only backtest's block was ever produced during a test run; `validate` is what `evidence` points at."""
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    _funding_for(august_dir, root, ("BTCUSDT", "ETHUSDT"))
+    out = tmp_path / "reports"
+    extra = ["--folds", "3", "--min-train", "300", "--purge", "5"] if command != "backtest" else []
+    extra += ["--grid", "{}"] if command == "validate" else []
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            command,
+            "--strategy",
+            "tsmom",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--registry",
+            REGISTRY,
+            "--out",
+            str(out),
+            "--funding",
+            "--min-history",
+            "0",
+            "--params",
+            SHORT_HORIZONS,
+            *extra,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(next(out.glob("*.json")).read_text())
+    assert payload["funding"] == {"required_by": ["tsmom"], "panel": True, "symbols_settled": 2, "symbols": 4}
