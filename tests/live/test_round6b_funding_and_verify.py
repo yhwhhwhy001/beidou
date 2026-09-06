@@ -8,6 +8,7 @@ and the engine refuses to start when the market port cannot supply it.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -331,7 +332,7 @@ class RecordingAlerts(WebhookAlerts):
         super().__init__("")
         self.sent: list[str] = []
 
-    async def send(self, text: str) -> bool:
+    async def send(self, text: str, *, key: str | None = None, force: bool = False) -> bool:
         self.sent.append(text)
         return True
 
@@ -436,10 +437,13 @@ async def test_a_recovered_cycle_clears_the_error_streak_on_disk(august_panel: P
     await engine.startup()
     market.fail_next = 1
     assert await engine.guarded_cycle(market.bar_open_ms(399)) is None
-    assert store.load().consecutive_errors == 1  # the failure is persisted, as it must be
+    # DL-L2: the streak is process-scoped now, so what has to reach disk is the *evidence* of the
+    # failure - the append-only ERROR row and the heartbeat - not a counter that a restart would inherit.
+    assert engine.consecutive_errors == 1
+    assert json.loads(store.heartbeat_path.read_text(encoding="utf-8"))["consecutive_errors"] == 1
     assert await engine.guarded_cycle(market.bar_open_ms(399)) is not None
-    assert engine.state.consecutive_errors == 0
-    assert store.load().consecutive_errors == 0, "the recovery must reach disk, not just memory"
+    assert engine.consecutive_errors == 0
+    assert not hasattr(store.load(), "consecutive_errors"), "a restart must not inherit the streak"
 
 
 def test_the_construction_fingerprint_sees_what_the_evidence_gate_cannot(tmp_path: Path) -> None:

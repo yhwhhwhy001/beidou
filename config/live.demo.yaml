@@ -189,3 +189,7 @@ paths:
   reports_dir: reports
 alerts:
   webhook_url: "${BEIDOU_ALERTS_WEBHOOK_URL:-}"   # expanded from the environment; empty disables
+  # DL-L3: one URL is a single point of silence, and the breaker (DL-L2) is only allowed to stop the
+  # loop cleanly if a channel accepts its last message.  Empty disables the second channel.
+  webhook_url_2: "${BEIDOU_ALERTS_WEBHOOK_URL_2:-}"
+  dedup_window_seconds: 3600        # the same alert once an hour, not once a cycle (KILL-R7)

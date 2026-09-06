@@ -150,9 +150,9 @@ async def test_market_failure_increments_errors_but_does_not_crash(world: dict) 
     await engine.startup()
     market.fail_next = 1
     assert await engine.guarded_cycle(world["bar"]) is None
-    assert engine.state.consecutive_errors == 1
+    assert engine.consecutive_errors == 1
     assert (await engine.guarded_cycle(world["bar"])) is not None
-    assert engine.state.consecutive_errors == 0
+    assert engine.consecutive_errors == 0
 
 
 async def test_stale_market_data_skips_cycle(world: dict) -> None:

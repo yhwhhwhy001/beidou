@@ -34,7 +34,9 @@ class LiveState:
     )  # probe books closed by their stop rule (D-019)
     last_clock_skew_ms: float | None = None  # venue time minus host time at the last cycle
     last_guard_reasons: list[str] = field(default_factory=list)  # edge-trigger for the guard alert
-    consecutive_errors: int = 0
+    # `consecutive_errors` deliberately absent (DL-L2): the streak belongs to the process, not to the
+    # book.  Persisting it meant a restart inherited a tripped breaker's count and tripped again at once
+    # (L1-03 / KILL-R29).  `from_dict` drops the key, so an old state.json still loads.
     restarts: int = 0  # process restarts since the state file was created (M-004)
     restarted_at: str | None = None
     cycles: int = 0

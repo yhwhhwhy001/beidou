@@ -33,7 +33,7 @@ from beidou_live.config import (
     resolve_universe,
     universe_sink,
 )
-from beidou_live.engine import LiveEngine, registry_digest
+from beidou_live.engine import BreakerTripped, LiveEngine, registry_digest
 from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.paper import PaperVenue
@@ -147,7 +147,12 @@ def live_run(
         venue = _paper_venue(market.base_url, paper_balance, store.directory / "paper_venue.json")
     else:
         venue = build_venue(payload, config.kill_switch_path)
-    alerts = WebhookAlerts(str((payload.get("alerts", {}) or {}).get("webhook_url", "")))
+    alert_config = payload.get("alerts", {}) or {}
+    alerts = WebhookAlerts(
+        str(alert_config.get("webhook_url", "")),
+        secondary_url=str(alert_config.get("webhook_url_2", "")),
+        dedup_window_seconds=float(alert_config.get("dedup_window_seconds", 3600.0)),
+    )
     pool = build_pool(payload, market)
     engine = LiveEngine(
         config,
@@ -176,7 +181,15 @@ def live_run(
                 await close()
             await market.aclose()
 
-    done = asyncio.run(main())
+    try:
+        done = asyncio.run(main())
+    except BreakerTripped as tripped:
+        # DL-L2: the breaker already said this out loud on a channel that accepted it, so exit 0 and
+        # let launchd leave the process down (KeepAlive.SuccessfulExit=false).  A non-zero exit here
+        # would be relaunched into the same wall every ThrottleInterval seconds, which is L1-03.
+        click.echo(f"breaker tripped: {tripped}")
+        click.echo("exiting 0 so launchd does not relaunch; run `beidou live run` to resume")
+        return
     click.echo(f"completed {done} cycle(s) without error")
     if cycles is not None and done < cycles:
         raise click.ClickException(f"{cycles - done} of {cycles} cycle(s) failed; see {store.heartbeat_path}")

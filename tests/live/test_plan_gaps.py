@@ -31,7 +31,10 @@ class RecordingAlerts:
     def enabled(self) -> bool:
         return True
 
-    async def send(self, text: str) -> bool:
+    def clear(self, key: str) -> None:
+        pass
+
+    async def send(self, text: str, *, key: str | None = None, force: bool = False) -> bool:
         self.sent.append(text)
         return True
 
@@ -192,7 +195,7 @@ async def test_failed_cycles_back_off_exponentially_up_to_an_hour(august_panel: 
         assert await engine.guarded_cycle(bar + i * 3_600_000) is None
     assert slept == [60.0, 120.0, 240.0, 480.0, 960.0]
 
-    engine.state.consecutive_errors = 30  # a long outage must not sleep past the cap
+    engine.consecutive_errors = 30  # a long outage must not sleep past the cap
     assert engine.backoff_seconds() == 3600.0
 
 

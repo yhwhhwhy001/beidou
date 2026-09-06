@@ -552,10 +552,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # correct.  `effective_trials` (Li & Ji) is reported and never substituted - an N_eff would LOWER the
 # bar, and it is scoped to the run's own grid because the ledger stores Sharpes, not return series,
 # which is the concrete reason a ledger-wide N_eff stays owed rather than guessed.
+#
+# 2026-09-06 B1 (DL-L2/L3), +105 in beidou_live and +18 in beidou_cli: the two halves of "an
+# unattended loop's only output is its alerts".  DL-L3 deduplicates them - the repo's own logs held
+# 36 identical FAIL lines over 36 hours, unhandled (KILL-R7), which is how the one alert that matters
+# gets missed - and adds a second channel, because one URL is a single point of silence.  DL-L2 is a
+# net DELETION of state: the breaker now alerts and exits 0, which under KeepAlive.SuccessfulExit=false
+# is what stops launchd relaunching into the same wall every 60s, and `consecutive_errors` leaves the
+# persisted LiveState entirely - carrying it across restarts is what made a tripped breaker trip again
+# at once (L1-03 / KILL-R29).  No TRIPPED flag, no process-level backoff counter, no tests for either.
+# The sequencing between them is load-bearing and enforced in code, not in prose: a clean exit is only
+# taken when a channel actually accepted the alert; if none did, the original exception propagates and
+# the loop fails loudly, because a book that vanishes silently is worse than one that hot-loops
+# (KILL-P1).  Most of the lines are that decision and its reasons.
 CEILING = {
     "beidou_alpha": 5_373,
-    "beidou_live": 4_378,
-    "beidou_cli": 2_928,
+    "beidou_live": 4_485,
+    "beidou_cli": 2_941,
     "beidou_data": 1_375,
     "beidou_exchange": 539,
     "beidou_shared": 280,

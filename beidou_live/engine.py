@@ -46,6 +46,40 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY_BARS = 1500
 
 
+class BreakerTripped(Exception):
+    """The breaker decided to stop this process, and said so out loud first.
+
+    Distinct from the errors that caused it so the CLI can exit 0 - which under
+    ``KeepAlive.SuccessfulExit=false`` is what stops launchd relaunching into the same wall every
+    60 seconds.  Raised only after an alert was accepted by a channel (see ``breaker_stop``).
+    """
+
+
+async def breaker_stop(
+    alerts: Any, *, consecutive_errors: int, detail: str, original: BaseException | None = None
+) -> None:
+    """Announce the stop, then decide how loudly to fail.
+
+    A clean exit has to be earned.  If a channel took the alert, raise ``BreakerTripped`` and the
+    process ends quietly and stays ended.  If nothing took it - no webhook configured, or both
+    channels down - the original exception propagates instead: a non-zero exit, launchd relaunches,
+    and the operator eventually finds a log full of restarts.  That is worse than a clean stop and
+    much better than a book that vanishes without a word (KILL-P1).
+    """
+    delivered = await alerts.send(
+        f"beidou breaker tripped after {consecutive_errors} consecutive failures, stopping the loop "
+        f"(launchd will not relaunch a clean exit; run `beidou live run` to resume): {detail}",
+        key="breaker",
+        force=True,
+    )
+    if delivered:
+        raise BreakerTripped(f"{consecutive_errors} consecutive cycle failures: {detail}")
+    logger.error("breaker tripped but no alert channel accepted it; failing loudly instead of exiting quietly")
+    if original is not None:
+        raise original
+    raise RuntimeError(f"{consecutive_errors} consecutive cycle failures and no alert channel: {detail}")
+
+
 @dataclass(frozen=True)
 class LiveConfig:
     interval: str
@@ -114,6 +148,9 @@ class LiveEngine:
         self.rules: dict[str, Any] = {}
         self.exits = ExitOverlay(config.exits, config.interval_ms)
         self._alignment_alerted = False
+        # DL-L2: the error streak is a property of this process, not of the book.  Persisting it is what
+        # made a tripped breaker trip again on the next start (L1-03 / KILL-R29).
+        self.consecutive_errors = 0
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
@@ -228,14 +265,14 @@ class LiveEngine:
         try:
             record = await self.run_cycle(bar_open_ms)
         except Exception as exc:
-            self.state.consecutive_errors += 1
+            self.consecutive_errors += 1
             self.store.save(self.state)
             self.store.heartbeat(
                 {
                     "phase": "ERROR",
                     "bar_open_ms": bar_open_ms,
                     "error": f"{type(exc).__name__}: {exc}",
-                    "consecutive_errors": self.state.consecutive_errors,
+                    "consecutive_errors": self.consecutive_errors,
                 }
             )
             # A failed cycle must leave a durable row: the heartbeat is overwritten by the next cycle, so
@@ -248,24 +285,33 @@ class LiveEngine:
                     "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
                     "phase": "ERROR",
                     "error": f"{type(exc).__name__}: {exc}",
-                    "consecutive_errors": self.state.consecutive_errors,
+                    "consecutive_errors": self.consecutive_errors,
                     "targets": dict(self.state.last_targets),
                     "orders": [],
                     "dry_run": self.config.dry_run,
                 }
             )
             logger.exception("cycle %s failed", bar_open_ms)
+            # Deduplicated on the failure's type: a venue that is down for six hours says so once an
+            # hour, not six times, and the operator's channel stays readable (DL-L3 / KILL-R7).
             await self.alerts.send(
-                f"beidou cycle failed ({self.state.consecutive_errors}x): {type(exc).__name__}: {exc}"
+                f"beidou cycle failed ({self.consecutive_errors}x): {type(exc).__name__}: {exc}",
+                key=f"cycle-failed:{type(exc).__name__}",
             )
-            if self.state.consecutive_errors >= self.config.max_consecutive_errors:
-                raise
+            if self.consecutive_errors >= self.config.max_consecutive_errors:
+                await breaker_stop(
+                    self.alerts,
+                    consecutive_errors=self.consecutive_errors,
+                    detail=f"{type(exc).__name__}: {exc}",
+                    original=exc,
+                )
             # M-004: back off exponentially, capped at an hour, before the next attempt.  launchd's
             # ThrottleInterval only paces process restarts; a loop that stays up and retries a failing
             # venue every cycle needs its own brake, and the plan capped it at 1h.
             await self.clock.sleep(self.backoff_seconds())
             return None
-        self.state.consecutive_errors = 0
+        self.consecutive_errors = 0
+        self.alerts.clear("cycle-failed")
         return record
 
     # --- one bar ----------------------------------------------------------------
@@ -789,7 +835,7 @@ class LiveEngine:
 
     def backoff_seconds(self) -> float:
         """Delay after a failed cycle: 60s doubling per consecutive error, capped at 1 hour (M-004)."""
-        return float(min(3600.0, 60.0 * 2 ** max(0, self.state.consecutive_errors - 1)))
+        return float(min(3600.0, 60.0 * 2 ** max(0, self.consecutive_errors - 1)))
 
     async def _announce_guards(self, decision: GuardDecision, bar_open_ms: int) -> None:
         """Alert on every change of the guard state, in both directions (M-001).
@@ -813,9 +859,10 @@ class LiveEngine:
 
     def _finish_cycle(self, record: dict[str, Any], contributions: Mapping[str, Mapping[str, float]]) -> None:
         # Reaching here means the cycle completed (a guard skip is a completed cycle too), so the error streak
-        # is over.  It has to be cleared *before* the save: clearing it in ``guarded_cycle`` afterwards left the
-        # stale count on disk until the next cycle wrote, and a restart in that window loaded a phantom error.
-        self.state.consecutive_errors = 0
+        # is over.  The count used to live on the persisted state and had to be cleared before the save, or a
+        # restart in the gap loaded a phantom error; since DL-L2 it is a process attribute and that whole class
+        # of bug is gone with the field - a fresh process starts at zero because it cannot do otherwise.
+        self.consecutive_errors = 0
         # T-L07: every position change must trace back to (bar, strategy, score, weight).  The score lives in
         # `contributions`, which state.json overwrites every cycle, so without this line the trail is gone within
         # the hour; cycles.jsonl is append-only and already carries the bar and the final weights.
