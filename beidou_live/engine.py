@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -30,6 +31,7 @@ from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardDecision, GuardParams, evaluate_guards
+from beidou_live.health import margin_mode_problems, min_liquidation_distance
 from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
@@ -137,6 +139,15 @@ class LiveConfig:
     # the book's size, because LiveConfig never carried it.  Changing `vol_target` changed every weight
     # and left the construction digest identical, which is the same silence the digest was built to end.
     portfolio: PortfolioParams = field(default_factory=PortfolioParams)
+    # DL-X1 / KILL-R19: the collateral mode the evidence was produced under.  Asserted at startup and
+    # never set - flipping an account's margin mode under an open book has consequences the loop
+    # cannot evaluate, so this refuses and hands the decision back.
+    expect_multi_assets: bool = True
+    # M-Q06's floor, in daily-volatility units.  Alerts; never trades - the same separation
+    # `risk_budget` makes, and for the same reason: rewriting position sizing from an instrument is a
+    # different risk from measuring it.  Baseline measured 2026-09-07: nearest reachable liquidation
+    # 242 units (TUTUSDT), so this floor is 24x below where the book actually sits.
+    min_liq_distance: float = 10.0
 
     @property
     def interval_ms(self) -> int:
@@ -240,6 +251,18 @@ class LiveEngine:
         hedge_probe = getattr(self.venue, "hedge_mode", None)
         if callable(hedge_probe) and await hedge_probe():
             raise RuntimeError("account is in hedge (dual-side) position mode; switch to one-way mode first")
+        # DL-X1 / KILL-R19: the second account-shape refusal, in the same place and the same shape as
+        # the first.  `getattr` because paper and fake venues do not implement the probe - a venue that
+        # cannot report its margin mode is not evidence that the mode is wrong.
+        margin_probe = getattr(self.venue, "margin_mode", None)
+        if callable(margin_probe):
+            refusal = margin_mode_refusal(
+                await margin_probe(),
+                expect_multi_assets=self.config.expect_multi_assets,
+                symbols=self.managed_symbols(),
+            )
+            if refusal is not None:
+                raise RuntimeError(refusal)
         snapshot = await startup_reconcile(
             self.venue, self.managed_symbols(), cancel_stale_orders=not self.config.dry_run
         )
@@ -494,6 +517,15 @@ class LiveEngine:
             # which is uniform by construction and adapts to nothing (D-037).  `getattr` because
             # this is observability: a model that cannot supply it must still be able to trade.
             "asset_vol": dict(getattr(targets, "asset_vol", {}) or {}),
+            # DL-X1 / M-Q06: how far the nearest liquidation is, in the daily-vol units `exits`
+            # already speaks.  Foreign positions are in it: under cross margin a liquidation is an
+            # account event, and D-014's "leave them alone" is about not TRADING them, not about not
+            # looking at them.  They have no `asset_vol`, which is why the view counts what it cannot
+            # measure separately from what the venue says is out of reach.
+            "min_liq_distance": liquidation_view(
+                positions=[*snapshot.positions.values(), *snapshot.foreign_positions.values()],
+                daily_vol=daily_vol_from_annual(dict(getattr(targets, "asset_vol", {}) or {})),
+            ),
             # M-018: what the crowding modifier DID this bar, not merely that its input arrived.
             # `inputs.funding_history` says a frame was fetched; it stayed true for 37 cycles while the
             # modifier was inert because the process held crowding_window 0 (D-042's correction).  Two
@@ -504,6 +536,12 @@ class LiveEngine:
             "skipped": [],
         }
         await self._announce_guards(decision, bar_open_ms)
+        # M-Q06.  Before the skip check on purpose: a book approaching liquidation while a guard has
+        # stopped it trading is exactly the state an operator needs told about, and it is the state in
+        # which the loop will do nothing about it on its own.
+        breach = liquidation_alert(record["min_liq_distance"], threshold=self.config.min_liq_distance)
+        if breach is not None:
+            await self.alerts.send(breach, key="liquidation-distance")
         if decision.skip_cycle:
             self._finish_cycle(record, targets.contributions)
             return record
@@ -991,6 +1029,89 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def daily_vol_from_annual(annual: Mapping[str, float]) -> dict[str, float]:
+    """Turn stage 1's annualised sizing divisor into the daily unit the exit overlay is written in.
+
+    ``asset_vol`` is annualised (``beidou_alpha.portfolio.asset_vol``); ``exits.stop_loss`` is in daily
+    volatility units.  Dividing by sqrt(365) puts the liquidation distance on the same axis as the
+    stop, so "the stop is 6 units away and the liquidation is 40" is a sentence an operator can read
+    off one cycle row.
+
+    Which way the floor errs is worth knowing: ``asset_vol`` is clipped at ``min_asset_vol``, so a
+    genuinely quiet symbol is divided by a volatility LARGER than its own and therefore reads CLOSER
+    to liquidation than it is.  Conservative, and stated rather than discovered.
+    """
+    out: dict[str, float] = {}
+    for symbol, value in annual.items():
+        try:
+            vol = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(vol) or vol <= 0.0:
+            continue
+        out[str(symbol)] = vol / math.sqrt(365.0)
+    return out
+
+
+def liquidation_view(*, positions: Sequence[Any], daily_vol: Mapping[str, float]) -> dict[str, Any]:
+    """M-Q06 for one cycle: how close the account is to a liquidation, and how much it cannot see.
+
+    Observability, so it may not stop a cycle - the same contract as ``asset_vol`` above and
+    ``_crowding_effect`` below.  A metric that can halt the book is a worse instrument than no metric,
+    so its own failure is recorded in the row instead of raised.
+    """
+    empty: dict[str, Any] = {
+        "min_distance": None,
+        "symbol": None,
+        "measured": 0,
+        "unreachable": 0,
+        "unmeasurable": 0,
+    }
+    try:
+        return min_liquidation_distance(list(positions), daily_vol)
+    except Exception as exc:
+        return empty | {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def liquidation_alert(view: Mapping[str, Any], *, threshold: float) -> str | None:
+    """M-Q06's failure action: the message to send, or ``None`` when there is nothing to say.
+
+    Only a *measured* distance can breach.  "Every position is out of reach" is the account's ordinary
+    state under cross margin - 14 of 18 on 2026-09-07 - and the instrument's own failure is a bug
+    report, not a margin call; neither is an alarm about the book, and treating them as one would
+    train the operator to ignore this channel.
+
+    Baseline, measured rather than left as the plan's "unmeasured": the nearest reachable liquidation
+    sat at 242 daily-vol units (TUTUSDT), 24x this threshold.
+    """
+    distance = view.get("min_distance")
+    if not isinstance(distance, (int, float)) or distance >= threshold:
+        return None
+    return (
+        f"beidou: nearest liquidation is {distance:.1f} daily-vol units away ({view.get('symbol')}), "
+        f"inside the {threshold:.0f}-unit floor (M-Q06); {view.get('measured')} position(s) measurable"
+    )
+
+
+def margin_mode_refusal(mode: Mapping[str, Any], *, expect_multi_assets: bool, symbols: Sequence[str]) -> str | None:
+    """KILL-R19 at startup: the reason to refuse this account, or ``None`` to proceed.
+
+    Scoped to the symbols this book can trade.  ``positionRisk`` returns every listed contract - 736
+    rows against a universe of 18 on 2026-09-07 - so an unscoped assertion would refuse to start over
+    a symbol no order will ever be sent for.
+
+    A residual this does NOT cover, recorded rather than left to be found: the universe is re-ranked
+    daily (D-014), and a symbol that enters it later is not re-checked until the next restart.
+    """
+    wanted = set(symbols)
+    problems = margin_mode_problems(
+        multi_assets=bool(mode.get("multi_assets", False)),
+        isolated_symbols=[str(s) for s in mode.get("isolated_symbols", ()) if str(s) in wanted],
+        expect_multi_assets=expect_multi_assets,
+    )
+    return "; ".join(problems) if problems else None
 
 
 def _crowding_effect(model: Any, inputs: Any) -> dict[str, Any]:

@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping
 from typing import Any
 
-INCOME_TYPES = ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE")
+# DL-X1 / T-X1-3: INSURANCE_CLEAR is the liquidation clearance fee.  It was not in this tuple, so
+# `summarize_income` skipped it - the one income row that exists ONLY after the event this whole item
+# is built to observe would have been the one row attribution never saw.  It is a trading cost, so it
+# belongs here and not in EXTERNAL_FLOW_TYPES: treating it as a cash flow would re-base the day's
+# equity and hide the loss instead of booking it (E-044's path, in reverse).
+INCOME_TYPES = ("REALIZED_PNL", "COMMISSION", "FUNDING_FEE", "INSURANCE_CLEAR")
 # Money that arrives or leaves without a trade: deposits/withdrawals, a demo-account reset (E-044 showed up as
 # two TRANSFER rows and vanished positions), collateral swaps.  They make equity non-comparable across cycles.
 EXTERNAL_FLOW_TYPES = frozenset(

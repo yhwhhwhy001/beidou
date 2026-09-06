@@ -7,6 +7,13 @@ venue:
   api_key_env: BEIDOU_BINANCE_API_KEY
   api_secret_env: BEIDOU_BINANCE_API_SECRET
   recv_window_ms: 10000
+  # DL-X1 / KILL-R19: what the account's collateral mode IS, verified against demo-fapi 2026-09-07
+  # (multiAssetsMargin true; all 18 open positions on `cross`, spelled lowercase).  Startup asserts
+  # this and refuses to run when it differs - it never sets it, because changing an account's margin
+  # mode under an open book has consequences the loop cannot evaluate.  This is a record of the state
+  # the live evidence was produced in, not a preference: equity that floats with collateral prices is
+  # a different book from the one the backtest describes, and the backtest models no collateral at all.
+  multi_assets_margin: true
 market_data:
   rest_url: https://fapi.binance.com               # public, unauthenticated reads only (D-002)
   interval: 1h
@@ -176,6 +183,11 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   max_slippage_bps: 10.0      # against the cost model's 7 bps; above this, the impact model owed before
   slippage_window_days: 30    # real capital (KILL-A) is owed sooner
   min_slippage_fills: 30
+  # M-Q06 (DL-X1): alert when the nearest REACHABLE liquidation price comes inside this many daily-vol
+  # units.  Measured baseline 2026-09-07, replacing the plan's "unmeasured": 242 units (TUTUSDT), with
+  # 14 of 18 positions reporting no reachable price at all - the ordinary shape of a cross-margin long,
+  # and not an alarm.  Like everything else in this block it alerts and does not trade.
+  min_liq_distance: 10.0
   guard_window_days: 90       # DAILY_LOSS_PAUSE / GROSS_CAPPED counts; reported, not enforced (M-003)
 guards:
   daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%

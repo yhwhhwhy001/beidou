@@ -14,6 +14,7 @@ metric is for.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -147,10 +148,20 @@ def min_liquidation_distance(positions: Sequence[Position], daily_vol: Mapping[s
     """
     measured: list[tuple[float, str]] = []
     unreachable = 0
+    unmeasurable = 0
     for position in positions:
         if position.qty == 0.0:
             continue
-        distance = liquidation_distance(position, daily_vol=float(daily_vol.get(position.symbol, 0.0)))
+        vol = float(daily_vol.get(position.symbol, 0.0))
+        # Three outcomes, not two.  `unmeasurable` is the caller having no volatility estimate for
+        # this symbol - the live case is a foreign position, which `asset_vol` never covers because
+        # it only sizes the universe.  Folding it into `unreachable` would say "the venue reports no
+        # liquidation price" about a symbol the venue was never asked, which is this function's own
+        # mistake made one level up.
+        if not math.isfinite(vol) or vol <= 0.0:
+            unmeasurable += 1
+            continue
+        distance = liquidation_distance(position, daily_vol=vol)
         if distance is None:
             unreachable += 1
         else:
@@ -161,6 +172,7 @@ def min_liquidation_distance(positions: Sequence[Position], daily_vol: Mapping[s
         "symbol": None if closest is None else closest[1],
         "measured": len(measured),
         "unreachable": unreachable,
+        "unmeasurable": unmeasurable,
     }
 
 

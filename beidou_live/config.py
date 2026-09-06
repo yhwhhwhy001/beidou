@@ -98,6 +98,11 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         max_bar_alignment_ms=int(float(guards.get("max_bar_alignment_seconds", 60.0)) * 1000),
         # the same mapping the model reads, so the digest describes the book that actually ran
         portfolio=PortfolioParams.from_mapping(portfolio),
+        # DL-X1: the collateral mode the live record was produced under, asserted at startup.  Not part
+        # of `construction_fingerprint` on purpose - it describes the ACCOUNT, not the construction, so
+        # adding it must not reset M-010's evidence window the way a weight change would.
+        expect_multi_assets=bool((profile.get("venue", {}) or {}).get("multi_assets_margin", True)),
+        min_liq_distance=float((profile.get("risk_budget", {}) or {}).get("min_liq_distance", 10.0)),
     )
 
 

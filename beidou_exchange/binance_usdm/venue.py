@@ -14,6 +14,8 @@ from beidou_shared.types import AccountState, InstrumentRules, OrderAck, OrderRe
 
 RULES_TTL_SECONDS = 3600.0
 ORDER_NOT_FOUND = -2013
+# /fapi/v1/forceOrders caps `limit` here, unlike the 1000 the paged endpoints accept.
+FORCE_ORDERS_LIMIT = 100
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -214,6 +216,42 @@ class BinanceUsdmVenue:
         ``symbol`` and returned all 68 fills of the hour.
         """
         return await self._paged("/fapi/v1/userTrades", start_ms, end_ms)
+
+    async def force_orders(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """Liquidation and ADL orders in the window (DL-X1, the A-P2 half that was never probed).
+
+        Verified against demo-fapi 2026-09-07: the endpoint answers a signed GET with no ``symbol``,
+        and an account that has never been liquidated returns ``[]``.  That empty list is the useful
+        answer - it is what distinguishes "no liquidations" from "we never looked", which is the state
+        this loop was in.
+
+        One GET, not ``_paged``: this endpoint caps ``limit`` at 100 where the paged ones take 1000,
+        and a window that returns a full page is not a paging problem to solve quietly - it means
+        something happened that reading page two will not explain.
+        """
+        rows = await self._client.get(
+            "/fapi/v1/forceOrders",
+            {"startTime": int(start_ms), "endTime": int(end_ms), "limit": FORCE_ORDERS_LIMIT},
+            signed=True,
+        )
+        return list(rows)
+
+    async def margin_mode(self) -> dict[str, Any]:
+        """Account collateral mode and the symbols set to ISOLATED margin (KILL-R19).
+
+        Reads the ``isolated`` boolean rather than ``marginType``.  demo-fapi spells that field
+        lowercase - ``cross`` / ``isolated``, all 18 open positions checked 2026-09-07 - so the
+        obvious ``marginType == "CROSSED"`` assertion would have matched nothing and refused every
+        startup, or, written the other way round, refused nothing.  A spelling change is silent; a
+        boolean going missing is loud.
+
+        Every row is inspected, including flat ones: margin mode is a per-symbol setting that outlives
+        the position, so a symbol that is flat today is still isolated when the book opens it tomorrow.
+        """
+        multi = await self._client.get("/fapi/v1/multiAssetsMargin", signed=True)
+        rows = await self._client.get("/fapi/v2/positionRisk", signed=True)
+        isolated = sorted({str(row.get("symbol", "")) for row in rows if bool(row.get("isolated", False))})
+        return {"multi_assets": bool(multi.get("multiAssetsMargin", False)), "isolated_symbols": isolated}
 
     async def _paged(self, path: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []

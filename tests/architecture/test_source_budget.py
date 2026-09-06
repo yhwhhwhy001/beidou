@@ -620,12 +620,45 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # still resolves - asserted, not assumed, by the hash regression in tests/alpha/test_panel_column_nodes.py
 # and by the P14 space test, which now switches the new families off the same way it switches funding
 # off.  Growth has to be a dimension that can be turned off, or a frozen space stops being one.
+#
+# 2026-09-07 DL-X1 the rest of it, +111 in beidou_live and +38 in beidou_exchange, and the sentence the
+# rule requires has to start by correcting the entry above it.  The 2026-09-06 raise described what
+# `min_liquidation_distance` and `margin_mode_problems` DO.  Both were true and neither was reachable:
+# the two functions had zero call sites in production code, so `cycles.jsonl` carried no liquidation
+# field, startup asserted nothing, and B4 was recorded in this session as "effectively complete" on the
+# strength of a comment.  A tested function nobody calls buys observability the way a fire extinguisher
+# in a locked cabinet buys safety.  These lines are the call sites: a per-cycle `min_liq_distance` in the
+# record, the margin refusal next to the hedge-mode refusal in `startup()`, `force_orders()`, and
+# `margin_mode()`.
+#
+# Three things the wiring found that the arithmetic could not.  (1) `marginType` comes back lowercase -
+# `cross`, all 18 open positions, demo-fapi 2026-09-07 - so the obvious `== "CROSSED"` assertion would
+# have matched nothing; the check reads the `isolated` boolean instead, because a spelling change is
+# silent and a missing boolean is loud.  (2) `asset_vol` covers the universe, so a foreign position has
+# no volatility estimate, and "no estimate" was being counted as "no reachable liquidation price" - the
+# exact conflation the `unreachable` field was invented to prevent, reappearing one level up; there is
+# now a third bucket, `unmeasurable`.  (3) positionRisk returns 736 rows against a universe of 18, so the
+# refusal is scoped to symbols the book can actually trade, or it would refuse to start over a contract
+# no order will ever be sent for.
+#
+# +38 in beidou_exchange is two endpoints and their docstrings.  A-P2's unprobed half is now probed:
+# GET /fapi/v1/forceOrders answers on demo-fapi and returns [] for an account that has never been
+# liquidated, which is the useful answer - it is what separates "no liquidations" from "we never
+# looked", and the loop had been in the second state for its whole life.
+#
+# +32 of the beidou_live figure are M-Q06's failure action, and they are here rather than deferred for
+# the reason the whole entry above exists: this session's finding was a tested function with no caller,
+# and a threshold nothing evaluates is the same defect one layer up.  The plan left M-Q06's baseline
+# "unmeasured"; it is measured now - the nearest reachable liquidation on the live account sits 242
+# daily-vol units away (TUTUSDT, 2026-09-07), 24x the 10-unit floor - which is also what makes wiring
+# the alert safe rather than a new hourly noise source.  It alerts and does not trade, the separation
+# `risk_budget` already makes.
 CEILING = {
     "beidou_alpha": 5_703,
-    "beidou_live": 4_774,
+    "beidou_live": 4_917,
     "beidou_cli": 3_021,
     "beidou_data": 1_375,
-    "beidou_exchange": 544,
+    "beidou_exchange": 582,
     "beidou_shared": 284,
 }
 
