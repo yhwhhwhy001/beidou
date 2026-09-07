@@ -7,6 +7,7 @@ import inspect
 import itertools
 import json
 import math
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -1469,6 +1470,18 @@ def _evaluate_book(
     return payload, record
 
 
+def _durable(handle: Any) -> None:
+    """Flush and fsync an append-only ledger row.
+
+    DL-L6 did this for `.beidou/live/*.jsonl` and left this file, which is the same contract and the
+    more consequential one: `reports/research/trials.jsonl` IS the DSR denominator, so a row lost to a
+    crash makes N smaller, and a smaller N flatters every verdict computed afterwards.  At a few rows
+    per run the cost is nothing.
+    """
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
 def _record_trials(ledger_path: Path, records: Sequence[TrialRecord]) -> int:
     """Append every record whose signature is not already in the ledger, reading the file once.
 
@@ -1495,6 +1508,7 @@ def _record_trials(ledger_path: Path, records: Sequence[TrialRecord]) -> int:
     with ledger_path.open("a", encoding="utf-8") as handle:
         for record in fresh:
             handle.write(record.to_json() + "\n")
+        _durable(handle)
     return len(fresh)
 
 
@@ -1510,6 +1524,7 @@ def _record_trial(ledger_path: Path, record: TrialRecord) -> bool:
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     with ledger_path.open("a", encoding="utf-8") as handle:
         handle.write(record.to_json() + "\n")
+        _durable(handle)
     return True
 
 

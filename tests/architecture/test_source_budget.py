@@ -764,10 +764,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # judgements were already right (the venue client reads Binance's body `code` even on a 2xx; the
 # archive verifies a checksum, not a status).  The wrong one was the newest.  Finding the third
 # copy cost one grep; not finding it would have cost a stopped book nobody was told about.
+#
+# +~15 cli, the last thing the scan turned up and an adjacent family rather than the same one:
+# DL-L6 flushed and fsynced `.beidou/live/*.jsonl` because "unlikely is not what an append-only
+# ledger is for", and left `reports/research/trials.jsonl` - the same contract, and the more
+# consequential file, because it IS the DSR denominator.  A row lost to a crash makes N smaller,
+# and a smaller N flatters every verdict computed after it.
 CEILING = {
     "beidou_alpha": 5_808,
     "beidou_live": 5_219,
-    "beidou_cli": 3_377,
+    "beidou_cli": 3_392,
     "beidou_data": 1_375,
     "beidou_exchange": 603,
     "beidou_shared": 284,

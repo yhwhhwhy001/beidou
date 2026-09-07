@@ -268,3 +268,23 @@ def test_a_mined_sleeve_in_a_book_pays_for_its_search_too() -> None:
     assert ledger_scope("mined_abc") == ("mined_abc", "mined")
     assert ledger_scope("tsmom") == ("tsmom",)
     assert ledger_scope("xsmom") == ("xsmom",)
+
+
+def test_the_trials_ledger_is_appended_as_durably_as_the_live_ones(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """DL-L6 fsynced `.beidou/live/*.jsonl` and left the other append-only ledger alone.
+
+    Same contract, and this is the one that IS the DSR denominator: a row lost to a crash makes N
+    smaller, and a smaller N flatters every verdict computed after it.  "Unlikely" is not what an
+    append-only ledger is for - DL-L6's own sentence, applied to the file it did not cover.
+    """
+    from beidou_cli.research_cmd import _record_trials
+
+    ledger = tmp_path / "trials.jsonl"
+    monkeypatch.setenv("BEIDOU_TRIALS_LEDGER", str(ledger))
+    rows = [TrialRecord("s", f"k{i}", 1.0, 8760.0, "t", "a", "b", 1, f"r{i}") for i in range(50)]
+
+    assert _record_trials(ledger, rows) == 50
+
+    lines = ledger.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 50
+    assert all(json.loads(line)["run_id"] == f"r{i}" for i, line in enumerate(lines))
