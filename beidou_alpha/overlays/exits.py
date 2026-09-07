@@ -40,12 +40,15 @@ class ExitParams:
     vol_halflife: int = 48
     bars_per_day: int = 24
     min_unit: float = 0.005  # floor on sigma_1d (fraction) so a dead-quiet series cannot make a 1-tick stop
+    unit_mode: str = "entry"  # entry | current: which sigma_1d the k-units are measured in (EXP-EX3)
 
     def __post_init__(self) -> None:
         if min(self.stop_loss, self.trailing_stop, self.take_profit) < 0:
             raise ValueError("exit thresholds must be >= 0")
         if self.cooldown_bars < 0 or self.vol_halflife <= 0 or self.bars_per_day <= 0 or self.min_unit <= 0:
             raise ValueError("invalid exit parameters")
+        if self.unit_mode not in {"entry", "current"}:
+            raise ValueError("unit_mode must be 'entry' or 'current'")
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ExitParams:
@@ -102,6 +105,27 @@ def _sign(value: float) -> int:
     return 0
 
 
+def _unit_price(state: ExitState, sigma_1d: float, params: ExitParams) -> float:
+    """The price distance one k-unit is worth on this bar.
+
+    ``entry``: the sigma frozen when the position opened (D-012's definition - the same k is the same
+    statistical distance, measured once).  ``current``: this bar's sigma, so the thresholds breathe with
+    volatility - tighter when the market calms, wider when it wakes - which is what the Chandelier / ATR
+    family does by default and what EXP-EX3 tests.  A missing current sigma falls back to the entry unit.
+
+    Both modes multiply by ``state.entry_price``, never the current price: every comparison this feeds
+    (``adverse``, ``favourable``, ``retrace``) has a numerator that is a price difference measured FROM
+    the entry anchor, so dividing by ``sigma * entry_price`` yields "the move from entry, expressed in
+    daily sigmas".  Using the current price in the denominator would silently mix two reference points -
+    the numerator anchored at entry, the denominator anchored at now - and change what ``k`` means from
+    bar to bar even under ``unit_mode="entry"``.
+    """
+    unit = state.unit
+    if params.unit_mode == "current" and not math.isnan(sigma_1d) and sigma_1d > 0:
+        unit = sigma_1d
+    return max(unit, params.min_unit) * state.entry_price
+
+
 def exit_step(
     state: ExitState,
     target: float,
@@ -128,7 +152,7 @@ def exit_step(
         extreme = max(state.extreme, price) if held > 0 else min(state.extreme, price)
         if math.isnan(extreme):
             extreme = price
-        unit_price = max(state.unit, params.min_unit) * state.entry_price
+        unit_price = _unit_price(state, sigma_1d, params)
         adverse = (state.entry_price - price) * held / unit_price
         favourable = -adverse
         retrace = (extreme - price) * held / unit_price
@@ -211,7 +235,7 @@ def apply_exits(
             states[j] = new_state
             out[t, j] = weight
             if reason and reason != COOLDOWN:
-                unit_price = max(before.unit, params.min_unit) * before.entry_price
+                unit_price = _unit_price(before, vols[t, j], params)
                 events.append(
                     {
                         "time": weights.index[t],

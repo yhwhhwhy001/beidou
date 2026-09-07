@@ -737,9 +737,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # assumption into a number.  The counter is a running total held on the engine and resets per
 # process, so summing the column double-counts - max per stretch, summed across stretches, which
 # is the part a later reader is most likely to "simplify" back into a sum.
+# Raise 2026-09-07, with the sentence the rule requires: +12 in beidou_alpha and +1 in beidou_live for
+# `ExitParams.unit_mode` (EXP-EX3): the k-units of the exit overlay can now be measured in this bar's sigma
+# instead of the entry bar's, which is the cheapest test of "adaptive" exits the operator asked for, and the
+# construction fingerprint records which unit a cycle ran under so an adoption cannot be silent.  Measured
+# rather than estimated, the alpha delta is +24, not +12: `_unit_price` carries a second docstring paragraph,
+# beyond the plan's draft, stating why the denominator is always `entry_price` and never the current price,
+# so a later reader cannot "simplify" the two reference points back together.  The live delta lands exactly
+# on the plan's +1.
 CEILING = {
-    "beidou_alpha": 5_808,
-    "beidou_live": 5_177,
+    "beidou_alpha": 5_832,
+    "beidou_live": 5_178,
     "beidou_cli": 3_313,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
