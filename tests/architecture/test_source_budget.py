@@ -956,9 +956,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # `ruff format` wrapping and none of it behaviour"): format before measuring the ratchet, not after.
 # Merged again 2026-09-07 (P22b/P23 follow-up).  Same rule as the merge above: both raises stand as
 # written, and the dict is the merged tree re-measured rather than either side's numbers.
+# Raise 2026-09-07 (fifth today), with the sentence the rule requires: +68 in beidou_live for the
+# construction-identity mechanisms the operator ruled on after restart #5.  The fingerprint's own field
+# set grew TWICE in one day - P22's `exits.unit_mode`, then P23's four `exits.regime_*` - and each time
+# the digest moved while every construction value was identical, so `evidence_window` read a changed
+# ruler as a changed book and reset M-010's window to one bar.  Nothing failed, which is why it happened
+# twice.  The lines buy three things: a `payload_version` reported OUTSIDE the hash (inside, introducing
+# it would move the digest, which is the bug it explains), an alias table declaring which digests are
+# the same book - in code, so the claim takes a commit that carries its proof - and the readers
+# (`evidence_window`, `realised_vol`) comparing through it.  History is never rewritten: old rows keep
+# the digest they were written with.
 CEILING = {
     "beidou_alpha": 5_947,
-    "beidou_live": 5_737,
+    "beidou_live": 5_805,
     "beidou_cli": 3_447,
     "beidou_data": 1_805,
     "beidou_exchange": 611,

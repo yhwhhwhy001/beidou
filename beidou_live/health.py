@@ -196,3 +196,52 @@ def margin_mode_problems(
             "floats with collateral prices is a different book from the one the evidence describes"
         )
     return problems
+
+
+# --- construction identity: when the fingerprint's DEFINITION changes (2026-09-07) ------------------
+
+# The field set `construction_fingerprint` hashes.  Bumped whenever a key is added or removed, and
+# reported OUTSIDE the hash so that bumping it does not itself move the digest - inside, the version
+# would change the very number it exists to explain.
+#   1: the original 22 fields
+#   2: + `exits.unit_mode` (P22).  The field is right - it decides what the exit overlay does, and
+#      KILL-R14's 7-of-18 unplaceable stops are that setting - but adding it moved the digest while the
+#      book was byte-identical, and `evidence_window` read that as a construction change.
+#   3: + the four `exits.regime_*` (P23), the same day and the same way.  Inert at the shipped config:
+#      `regime_window` defaults to 0 and `regime_tp_scale()` returns None at <= 0, and the profile sets
+#      none of the four - so again the values are unchanged and only the shape moved.  Twice in one day
+#      is why `test_construction_identity` now pins the field set: the next one fails a test instead.
+CONSTRUCTION_PAYLOAD_VERSION = 3
+
+# Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
+# because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
+#
+# 2026-09-07, restart #5.  Recomputing both field sets against the one live config reproduced both
+# digests exactly - 22 fields -> 0dcd044d..., 23 fields -> b441ea62... - so no construction VALUE
+# changed, only the shape of what was hashed.  Operator ruled the pre-15:00Z rows are the same
+# construction, so M-010's window continues across the boundary instead of restarting.
+#
+# History is not rewritten: the old rows keep the digest they were written with.  The equivalence lives
+# here, in the reader, where it can be read and argued with.
+CONSTRUCTION_ALIASES: dict[str, str] = {
+    # v2 (+ unit_mode), recorded by the running loop from restart #5.
+    "b441ea62d02184bfb6292ec1033f20482bc9c7c0a2c6ebfcc14623241b967417": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v3 (+ the four regime_*), what the next restart will record.  Declared before it is ever written,
+    # which is the right order: the claim is about values that are already known to be unchanged.
+    "c0e5c49c5a4acb1d0e5bb709873ce38b0674c10a027405d5269dbb724d734d1c": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+}
+
+
+def canonical_construction(digest: str | None) -> str | None:
+    """The digest a row's construction should be COMPARED as.
+
+    One hop only, never a chain: a chain would make the answer depend on resolution order, and a test
+    holds every alias target out of the table's own keys so the single hop is always enough.
+    """
+    if digest is None:
+        return None
+    return CONSTRUCTION_ALIASES.get(str(digest), str(digest))

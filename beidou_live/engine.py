@@ -31,7 +31,11 @@ from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardDecision, GuardParams, evaluate_guards
-from beidou_live.health import margin_mode_problems, min_liquidation_distance
+from beidou_live.health import (
+    CONSTRUCTION_PAYLOAD_VERSION,
+    margin_mode_problems,
+    min_liquidation_distance,
+)
 from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
@@ -1382,7 +1386,9 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
         "strategy_weights": dict(sorted(config.strategy_weights.items())),
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
-    return {"digest": digest, **payload}
+    # `payload_version` is deliberately NOT part of what is hashed.  Inside, it would move the digest the
+    # moment it was introduced - which is the exact failure it exists to make legible (2026-09-07).
+    return {"digest": digest, "payload_version": CONSTRUCTION_PAYLOAD_VERSION, **payload}
 
 
 def _without_books(model: SignalModel, books: Sequence[str]) -> SignalModel:

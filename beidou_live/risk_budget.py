@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
 
+from beidou_live.health import canonical_construction
+
 DAY_MS = 86_400_000
 
 
@@ -128,7 +130,9 @@ def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) ->
     cutoff = _latest_ms(rows) - params.vol_window_days * DAY_MS
     window = [row for row in rows if int(row.get("bar_open_ms") or 0) >= cutoff]
     priced = [row for row in window if isinstance(row.get("equity"), int | float)]
-    constructions = {str(row.get("construction")) for row in window if row.get("construction")}
+    # Canonicalised: a fingerprint field-set change is not a construction change, and this gate gave up
+    # entirely when it saw two digests (2026-09-07, twice).
+    constructions = {canonical_construction(row.get("construction")) for row in window if row.get("construction")}
     returns = [
         float(b["equity"]) / float(a["equity"]) - 1.0
         for a, b in pairwise(priced)

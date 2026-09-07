@@ -18,6 +18,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import DECAY_WINDOW_DAYS, max_drawdown, sharpe, window_sharpes
 from beidou_data.store import KlineStore
+from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, risk_budget_status
 from beidou_live.state import StateStore
@@ -118,19 +119,27 @@ def evidence_window(store: StateStore) -> dict[str, Any]:
     rows = [row for row in _cycles(store) if row.get("construction")]
     if not rows:
         return {"construction": None, "since_ms": None, "bars": 0, "changes_7d": 0}
-    current = rows[-1]["construction"]
+    # Compared through `canonical_construction`, because a digest can move without the book moving: the
+    # fingerprint's own field set grew twice on 2026-09-07 (P22, P23) and each time this window reset to
+    # one bar while every construction VALUE was identical.  Old rows keep the digest they were written
+    # with - history is not rewritten - and the equivalence is declared in code, with its proof.
+    current = canonical_construction(rows[-1]["construction"])
     since = rows[-1]
     for row in reversed(rows):
-        if row.get("construction") != current:
+        if canonical_construction(row.get("construction")) != current:
             break
         since = row
     latest_ms = int(rows[-1].get("bar_open_ms") or 0)
     recent = [row for row in rows if int(row.get("bar_open_ms") or 0) >= latest_ms - 7 * DAY_MS]
-    changes = sum(1 for a, b in pairwise(recent) if a.get("construction") != b.get("construction"))
+    changes = sum(
+        1
+        for a, b in pairwise(recent)
+        if canonical_construction(a.get("construction")) != canonical_construction(b.get("construction"))
+    )
     return {
         "construction": str(current)[:12],
         "since_ms": int(since.get("bar_open_ms") or 0),
-        "bars": sum(1 for row in rows if row.get("construction") == current),
+        "bars": sum(1 for row in rows if canonical_construction(row.get("construction")) == current),
         "changes_7d": changes,
     }
 
