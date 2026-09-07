@@ -683,6 +683,37 @@ C-2 预登记过：**阈值 ≥ 1.485 → tsmom 转 WEAK_PASS，§11 与 §0 改
 
 ---
 
+### 12.8 状态清点（2026-09-07）：§8 的九条已过期
+
+关窗前对着代码逐条核了 §8 的 Kill Register 与 §10 的 DL 表。**没有新缺陷**，但 §8 与 §12.1 的状态列
+有九条停在 09-06，而它们描述的世界已经变了——与 remediation 方案 checkpoint 那处
+「写着未做、实际在跑」是同一类漂移，所以就地记清。
+
+| Kill | §8 记的 | 现状（2026-09-07，逐条核过代码） |
+| --- | --- | --- |
+| KILL-Q2 | 代码 CLOSED；**欠 registry 并列记录 1.485** | **欠账已还**：`config/alpha_registry.yaml:169-175` 并列记录诚实走前 OOS 1.4852、指针 `scratch/tsmom-validation-20260906T030942Z.json`、以及它在 N=125 分位数门下 0.003 的余量 |
+| KILL-Q4 | OPEN | **CLOSED**：`within_rebalance_window`（窗口由 grace + ThrottleInterval + 实测启动耗时推导，非硬编码）、`late_seconds`、`missed_rebalances` 逐周期落盘；日报有 Restart cost 一节 |
+| KILL-Q5 | OPEN | **CLOSED**：`TrialRecord` 签名 +4 字段（construction / overlay digest、symbol-set hash、搜索空间版本），`backtest`/`overlay`/`validate`/`book`/`mine` 五个入口全部计费，账本地址锚定 checkout（`--out` 换不出空账本） |
+| KILL-Q6 | OPEN | **不开工，入口条件实测不成立**：pit 成员期只有 0.70% 的 bar 冻结（全 panel 6.92%，集中在 FTT 83% / ALPACA 91%）；「持有穿过」的诚实代价 −0.021 Sharpe（1.7301 → 1.7094）。DL-D1 的入口条件是「B2 阴性或候选依赖退市期数据」，两条都不成立 |
+| KILL-Q7 | **仍 OPEN，本轮未做**（§12.1） | **CLOSED**：`beidou_live/lock.py` 的 `fcntl.flock`，锁键 = `sha256(api_key)[:16]`（绑账户不绑目录），绝对路径；非 dry-run 必须 `--armed` 且校验 REPO ≡ plist WorkingDirectory；被拒实例告警后 exit 0。**AC-L1 实跑过**：从另一 worktree 启动被拒 + 一条告警 + 主循环无异常 |
+| KILL-Q8 / Q9 | OPEN（散文不算缓解） | **CLOSED**：`mine` 每轮把保留候选经 `_record_trial` 记进同一本账本（`--prior-trials` 不再手抄）；`report weekly` 校验预登记提交时间戳早于报告时间戳。P20 的 `n_trials` 575 = 账本 514 + 申报 60 + 网格 1，**是算出来的** |
+| KILL-Q11 | **UNKNOWN** | **CLOSED**：三项核查全部可核——归档 T+1 约 06:45–07:00 UTC；REST 时延约 2 分钟；**同桶数值一致但时间戳差整整一个 5m 桶**（−5min 偏移下 166/166 精确，其余偏移 0/165）。同源契约两半都在：`beidou_data/metrics.py` 的对齐契约（规范戳 `open_time`，一根 bar 能读哪些桶由桶的**收**决定）+ 循环每周期记录它自己能读到的桶。`needs_metrics` 自声明 + `metrics_refusal` 启动门已上线，实盘覆盖度从 1 根 bar 起算、门要求 720 |
+| KILL-Q16 | OPEN | **ACCEPTED（残余，操作者具名接受）**：操作者裁定 Q1 = B（没有远端介质），DL-X2 取消，B4 降级为 O-X1。「循环活但下不了单」由熔断 → 告警 → exit 0 覆盖；「主机死 / 网络分区」无自动动作，告警在 12 个周期内到达，平仓由操作者手工执行 |
+| KILL-Q17 | OPEN | **构造已冻结**（`0dcd044d0158`，四次重启均未变），M-Q08/M-Q09 的钟在跑。`clean_days` 今天 = 0，因为今天有四次操作者授权的重启——数诚实，读法是「钟从今天起算」而不是「坏了」 |
+
+**§4.2 里两个「待作者」的问题仍然没有答案**，它们是给操作者的，不是给实现的：
+(1) 用什么统计在实盘期检测 edge 衰减（报告建议 M-010 的 30 天滚动 Sharpe 对回测同期分布的分位数，
+预登记「连续两个 30 天窗口 < 回测 q10 即复审」，但从未被裁定）；
+(2) 密钥轮换与 IP 白名单在仓库之外是否有流程。
+
+**🔵 低 24 项**从未获得 DL 契约（§9 的 Phase A/B/C 只契约化了 DL-Q0..Q8），所以它们是**记录在案的发现**
+而不是待办。其中被后续工作顺带关掉的有 L1-06 / L1-07 / L1-09 / L1-11 / L1-14（DL-L3/L5/L6）与 P1-02
+（`held.mask(~eligible & held.notna(), 0.0)`，离开 universe 是显式退出而非持有）。其余仍是原样，
+包括 L1-04（滑点仪表参照 mark、阈值 10 bps 对含手续费的实测 4.3 bps）、L1-08、L1-10、L1-12、L1-13、
+F9、F10、DATA-03/04/06/07、P1-04..P1-09——**它们没有被修，也没有被承诺修**。
+
+---
+
 ## 附录 A · 本轮未做与限制 **[C 修订]**
 
 - 外部对标代理因会话额度中断；对标评分为主分析者判断（E4/E5）并已降为附录参考，Qlib / vnpy 未抓取。
