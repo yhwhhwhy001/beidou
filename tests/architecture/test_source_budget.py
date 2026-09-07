@@ -815,11 +815,31 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # strategy that backtests well and trades on nothing.  `metrics_refusal` refuses to start any
 # strategy declaring `needs_metrics` until a LIVE source covers the bars it needs.  It costs
 # nothing to everything shipping today, because nothing shipping today declares it.
+#
+# 2026-09-07 DL-Q6, the same-source contract: the loop records the metrics IT could read, and the
+# archive becomes something to check that recording against rather than something to trade on.
+# +~110 data, +~45 live, +~5 cli, +3 alpha (a `needs_metrics` predicate on SignalSpec, the same
+# shape `uses_funding` already had for exactly this question).
+#
+# The design decision worth the lines: there is NO separate five-minute daemon.  The granularity
+# that matters belongs to the bucket, not the poll - the REST window is 30 days deep, so one poll
+# an hour retrieves all twelve buckets of the past hour with nothing missed - and polling at the
+# bar close does something a daemon cannot: it records exactly the buckets that had CLOSED when
+# the loop decided, which is the set `align_to_bars` selects.  A daemon would have bought a second
+# process, a second failure mode and a second thing to restart, in exchange for a superset of the
+# same rows recorded at instants no decision was made at.
+#
+# Two directions chosen deliberately, because both could have gone the flattering way.  Parity
+# reports `rate: None` when nothing overlaps rather than 1.0 - zero disagreements out of zero
+# comparisons is not agreement, and calling it perfect is how a dead stream would look healthiest
+# exactly while it stopped recording.  And coverage is counted from buckets HELD, not from
+# first-to-last span: a span treats an outage as covered, and for a gate that is the wrong
+# direction to be wrong in.
 CEILING = {
-    "beidou_alpha": 5_808,
-    "beidou_live": 5_300,
-    "beidou_cli": 3_441,
-    "beidou_data": 1_695,
+    "beidou_alpha": 5_812,
+    "beidou_live": 5_357,
+    "beidou_cli": 3_445,
+    "beidou_data": 1_805,
     "beidou_exchange": 603,
     "beidou_shared": 284,
 }

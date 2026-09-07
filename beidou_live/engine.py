@@ -170,6 +170,7 @@ class LiveEngine:
         alerts: WebhookAlerts | None = None,
         pool: UniverseProvider | None = None,
         universe_sink: Callable[[UniverseUpdate], None] | None = None,
+        metrics_store: Any = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -178,6 +179,10 @@ class LiveEngine:
         self.clock = clock
         self.store = store
         self.alerts = alerts or WebhookAlerts("")
+        # DL-Q6: the loop's own recording of the metrics it could read, which is what makes research
+        # and live one source rather than two (KILL-Q11).  Optional, because a paper or offline run
+        # has nothing to record for.
+        self.metrics_store = metrics_store
         self.pool = pool
         self.universe_sink = universe_sink
         self.state: LiveState = store.load()
@@ -199,6 +204,33 @@ class LiveEngine:
             self.model = _without_books(self.model, list(self.state.stopped_books))
 
     # --- lifecycle ------------------------------------------------------------
+    def strategies_needing_metrics(self) -> list[str]:
+        """Which enabled strategies declare they read metrics, under THEIR params.
+
+        Under their params, not under the signal's defaults: `uses_funding` learned that lesson for
+        the funding term, where a grid arm that zeroes it makes the same signal need nothing.
+        """
+        out: list[str] = []
+        for entry in getattr(self.model, "entries", ()):
+            try:
+                spec = get_signal(entry.id)
+            except Exception:  # a mined id resolved in another process is not a reason to refuse
+                continue
+            if _needs_metrics(spec, entry.params):
+                out.append(entry.id)
+        return sorted(out)
+
+    async def _snapshot_metrics(self) -> dict[str, Any]:
+        """One poll of the REST metrics window, recorded where the decision is made (DL-Q6)."""
+        if self.metrics_store is None:
+            return {"stored": {}, "reason": "no metrics store wired"}
+        client = getattr(self.market, "client", None)
+        if client is None:
+            return {"stored": {}, "reason": "market feed exposes no client"}
+        from beidou_data.metrics_snapshot import snapshot_metrics
+
+        return await snapshot_metrics(client, self.metrics_store, self.managed_symbols())
+
     def managed_symbols(self) -> list[str]:
         """The universe plus symbols that left it but still hold a position (D-014: exits follow positions)."""
         return list(dict.fromkeys([*self.universe, *self.state.leaving]))
@@ -257,6 +289,22 @@ class LiveEngine:
         # DL-X1 / KILL-R19: the second account-shape refusal, in the same place and the same shape as
         # the first.  `getattr` because paper and fake venues do not implement the probe - a venue that
         # cannot report its margin mode is not evidence that the mode is wrong.
+        needs = self.strategies_needing_metrics()
+        if needs:
+            from beidou_data.metrics_snapshot import live_coverage_bars
+
+            coverage = (
+                live_coverage_bars(self.metrics_store, self.managed_symbols(), interval_ms=self.config.interval_ms)
+                if self.metrics_store is not None
+                else 0
+            )
+            refusal = metrics_refusal(
+                needs_metrics=needs,
+                live_coverage_bars=coverage,
+                required_bars=self.history_bars,
+            )
+            if refusal is not None:
+                raise RuntimeError(refusal)
         margin_probe = getattr(self.venue, "margin_mode", None)
         if callable(margin_probe):
             refusal = margin_mode_refusal(
@@ -513,6 +561,9 @@ class LiveEngine:
             interval_ms=config.interval_ms,
             params=config.guards,
         )
+        # DL-Q6: record what this loop could read, at the instant it decided.  Best-effort by
+        # contract - collecting data may never be the reason a book stops trading.
+        metrics_snapshot = await self._snapshot_metrics()
         record: dict[str, Any] = {
             "bar_open_ms": bar_open_ms,
             "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
@@ -549,6 +600,7 @@ class LiveEngine:
             # account event, and D-014's "leave them alone" is about not TRADING them, not about not
             # looking at them.  They have no `asset_vol`, which is why the view counts what it cannot
             # measure separately from what the venue says is out of reach.
+            "metrics_snapshot": metrics_snapshot,
             "min_liq_distance": liquidation_view(
                 positions=[*snapshot.positions.values(), *snapshot.foreign_positions.values()],
                 daily_vol=daily_vol_from_annual(dict(getattr(targets, "asset_vol", {}) or {})),
@@ -1056,6 +1108,11 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def _needs_metrics(spec: Any, params: Mapping[str, Any]) -> bool:
+    predicate = getattr(spec, "needs_metrics", None)
+    return bool(predicate(params)) if callable(predicate) else False
 
 
 def kill_switch_engaged(paths: Sequence[Path]) -> bool:

@@ -23,6 +23,7 @@ from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, resolve_ledger_path
 from beidou_cli import live, report
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
+from beidou_data.store import MetricsStore
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.composition import build_model, load_registry
 from beidou_live.config import (
@@ -243,6 +244,9 @@ def live_run(
         alerts=alerts,
         pool=pool,
         universe_sink=universe_sink(data_root) if pool is not None else None,
+        # DL-Q6: the loop records the metrics it could read, which is what makes research and live one
+        # source rather than two (KILL-Q11).
+        metrics_store=MetricsStore(data_root, kind="metrics_snapshot"),
     )
     leverage = "auto" if config.leverage_mode == "auto" else str(config.leverage)
     click.echo(

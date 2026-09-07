@@ -35,6 +35,10 @@ class SignalSpec:
     warmup_bars: int = 0  # under the default params
     warmup: WarmupFunction | None = None  # under arbitrary (registry) params
     uses_funding: FundingPredicate | None = None  # does the signal read ``panel.funding`` under these params?
+    # DL-Q6 / KILL-Q11, and the same question one source over: research can read the T+1 metrics
+    # archive and live can read only the 30-day REST window, so a signal that needs metrics must
+    # say so and be refused at startup until the LIVE recording covers it (`metrics_refusal`).
+    needs_metrics: FundingPredicate | None = None
     canonical: CanonicalFunction | None = None  # params with this signal's defaults applied
 
     def warmup_for(self, params: Mapping[str, Any]) -> int:

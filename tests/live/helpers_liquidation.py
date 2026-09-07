@@ -400,3 +400,114 @@ async def startup_with_foreign_order(client_order_id: str) -> list[str]:
     )
     await engine.startup()
     return alerts.sent
+
+
+async def cycle_with_metrics(panel: Any, tmp_path: Any, *, rows: Any) -> tuple[dict[str, Any], Any]:
+    """One real cycle with a metrics store wired, returning the cycle row and the store (DL-Q6)."""
+    from beidou_alpha.model import AlphaModel
+    from beidou_alpha.portfolio import PortfolioParams
+    from beidou_alpha.registry import StrategyEntry
+    from beidou_alpha.signals.tsmom import TsmomParams
+    from beidou_data.store import MetricsStore
+
+    symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]
+    cursor = 400
+    market = FakeMarketData(panel, cursor)
+
+    class _Client:
+        async def get(self, path: str, params: Any = None) -> Any:
+            if isinstance(rows, Exception):
+                raise rows
+            return rows
+
+    market.client = _Client()  # type: ignore[attr-defined]
+    prices = {s: float(panel.close[s].iloc[cursor - 1]) for s in symbols}
+    store = MetricsStore(Path(tmp_path) / "data", kind="metrics_snapshot")
+    engine = LiveEngine(
+        LiveConfig(
+            interval="1h",
+            history_bars=300,
+            universe=tuple(symbols),
+            leverage=2,
+            rebalance=RebalanceParams(no_trade_band=0.002),
+            guards=GuardParams(),
+            kill_switch_path=Path(tmp_path) / "KILL_SWITCH",
+            strategy_weights={"tsmom": 1.0},
+            poll_interval_seconds=0.0,
+            grace_seconds=1.0,
+            dry_run=True,
+        ),
+        model=AlphaModel(
+            entries=(
+                StrategyEntry(
+                    "tsmom",
+                    params=dict(TsmomParams(vol_window=100).__dict__)
+                    | {"horizons": [5, 20, 50], "horizon_weights": [0.2, 0.3, 0.5], "entry_threshold": 0.05},
+                ),
+            ),
+            portfolio=PortfolioParams(covariance_halflife=48, vol_halflife=24, max_weight=0.15, max_gross=0.6),
+            interval="1h",
+            min_history_bars=0,
+        ),
+        market=market,
+        venue=FakeVenue(balance=10_000.0, prices=prices),
+        clock=FakeClock(market.bar_open_ms(cursor) + 5_000),
+        store=StateStore(Path(tmp_path) / "live"),
+        alerts=_RecordingAlerts(),  # type: ignore[arg-type]
+        metrics_store=store,
+    )
+    await engine.startup()
+    row = await engine.run_cycle(market.bar_open_ms(cursor))
+    return row, store
+
+
+def engine_needing_metrics(tmp_path: Any, *, coverage_buckets: int) -> Any:
+    """An engine whose one strategy declares `needs_metrics`, with a snapshot store of a given depth."""
+    import pandas as pd
+
+    from beidou_alpha.model import AlphaModel
+    from beidou_alpha.portfolio import PortfolioParams
+    from beidou_alpha.registry import StrategyEntry
+    from beidou_alpha.signals import SIGNALS, get_signal
+    from beidou_alpha.signals import register as register_signal
+    from beidou_data.store import MetricsStore
+
+    base = get_signal("tsmom")
+    if "mined_needsmetrics" not in SIGNALS:
+        register_signal(replace(base, id="mined_needsmetrics", needs_metrics=lambda params: True))
+
+    root = Path(tmp_path)
+    store = MetricsStore(root / "data", kind="metrics_snapshot")
+    if coverage_buckets:
+        for symbol in ("BTCUSDT", "ETHUSDT"):
+            store.append(
+                symbol,
+                pd.DataFrame({"open_time": [i * 300_000 for i in range(coverage_buckets)], "symbol": symbol}),
+            )
+    return LiveEngine(
+        LiveConfig(
+            interval="1h",
+            history_bars=720,
+            universe=("BTCUSDT", "ETHUSDT"),
+            leverage=2,
+            rebalance=RebalanceParams(),
+            guards=GuardParams(),
+            kill_switch_path=root / "KILL_SWITCH",
+            strategy_weights={"mined_needsmetrics": 1.0},
+            poll_interval_seconds=0.0,
+            grace_seconds=1.0,
+            dry_run=True,
+        ),
+        model=AlphaModel(
+            entries=(StrategyEntry("mined_needsmetrics", params=dict(SIGNALS["mined_needsmetrics"].default_params)),),
+            portfolio=PortfolioParams(),
+            interval="1h",
+            min_history_bars=0,
+        ),
+        market=None,  # type: ignore[arg-type]
+        venue=FakeVenue(),
+        clock=FakeClock(1_700_000_000_000),
+        store=StateStore(root / "live"),
+        alerts=_RecordingAlerts(),  # type: ignore[arg-type]
+        metrics_store=store,
+    )

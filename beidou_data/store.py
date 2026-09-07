@@ -153,12 +153,16 @@ class MetricsStore:
     ``timestamp`` - because two names for one instant is how the five-minute look-ahead got in.
     """
 
-    def __init__(self, root: str | Path = ".beidou/data") -> None:
+    def __init__(self, root: str | Path = ".beidou/data", *, kind: str = "metrics") -> None:
         self._root = Path(root)
+        # Two stores of one shape: `metrics` is what the T+1 archive says, `metrics_snapshot` is what
+        # the loop could actually read.  They have to be comparable, so they cannot be one file - the
+        # parity check between them is the whole of the same-source contract (M-011).
+        self._kind = kind
 
     @property
     def directory(self) -> Path:
-        return self._root / "metrics"
+        return self._root / self._kind
 
     def path(self, symbol: str) -> Path:
         return self.directory / f"{symbol}.parquet"
