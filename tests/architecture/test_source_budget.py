@@ -755,9 +755,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # remaining 8 - the brief's own shown implementation already summed to this much once copied through, so +77
 # undercounted the code it specified rather than describing scope added during implementation.  The
 # beidou_cli delta lands exactly on the brief's +2.
+#
+# Raise 2026-09-07, second one the same day, with the sentence the rule requires: +2 in beidou_live for
+# a two-line comment.  Commit 25af442 fixed the review's Important finding on `exit_counterfactuals` -
+# a dry-run cycle's `exit_events` were priced as real, because the function walked `cycles.jsonl` raw
+# instead of through `_cycles`'s dry-run/no-equity filter - at zero net lines, reasoning in its commit
+# message that the new regression test's docstring carries the "why" so the call site did not need to.
+# The fix review that commissioned this raise asked for the reasoning at the call site as well, in this
+# file's own convention of explaining WHY rather than leaving it to a test alone; this adds that comment
+# without touching the already-shipped, already-tested filter condition itself.
 CEILING = {
     "beidou_alpha": 5_832,
-    "beidou_live": 5_327,
+    "beidou_live": 5_329,
     "beidou_cli": 3_315,
     "beidou_data": 1_375,
     "beidou_exchange": 582,

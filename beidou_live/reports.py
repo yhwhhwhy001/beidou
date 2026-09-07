@@ -414,6 +414,8 @@ def exit_counterfactuals(
     cache: dict[str, pd.Series] = {}
     for record in store.read_jsonl(store.cycles_path):
         events = record.get("exit_events") or []
+        # a dry run never submits an order (engine.py: DRY_RUN) and so never pays the exit's fee; kept in,
+        # it would fabricate a cost and a counterfactual into this permanent, append-only, full-history scan
         if not events or record.get("equity") is None or record.get("dry_run"):
             continue
         equity = float(record["equity"])
