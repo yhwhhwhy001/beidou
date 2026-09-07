@@ -912,9 +912,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # multi-assets margin nobody could tell how much of a drawdown reading was BTC collateral rather than the
 # book.  It is recorded and printed, NOT subtracted from what the book sizes on - that denominator is a
 # construction decision that would reset M-010's window, and it belongs to the operator, not to a fix.
+# Raise 2026-09-07 (third today), with the sentence the rule requires: +97 in beidou_live for the edge
+# decay rule the operator adopted from report 4.2 Ⅰ.  The report proposed a statistic and asked which one
+# to use; the question sat unanswered, so nothing measured decay at all.  Most of the 97 lines are the
+# docstrings pinning the three things that would otherwise loosen the rule after the fact - windows must
+# not overlap, the comparison is to an empirical distribution rather than to oos_sharpe with a normal
+# standard error, and a missing q10 is INSUFFICIENT_DATA rather than OK.  Written before any live window
+# exists, which is the point: a decay rule authored after seeing the decay is not a rule.
 CEILING = {
     "beidou_alpha": 5_838,
-    "beidou_live": 5_638,
+    "beidou_live": 5_735,
     "beidou_cli": 3_447,
     "beidou_data": 1_805,
     "beidou_exchange": 611,

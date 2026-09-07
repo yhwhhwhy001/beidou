@@ -186,6 +186,85 @@ def income_drift(
     return {"status": status, "by_strategy": rows}
 
 
+def decay_watch(
+    store: StateStore,
+    expectations: dict[str, Any],
+    *,
+    equity: float | None,
+    window_days: int = 30,
+    bars_per_year: float = 8760.0,
+) -> dict[str, Any]:
+    """Per strategy, the adopted decay rule against the whole income history (not just today).
+
+    The window is `window_days` of hourly bars and the history is read from bar zero, because the rule
+    is about the live period as a whole; every other number in this report is about one day.
+
+    `q10` is looked up on the strategy's own evidence block.  It is not there yet for any strategy, so
+    every row reads INSUFFICIENT_DATA and says which half is missing.  That is the correct reading today
+    and it is meant to stay visible until somebody computes the quantile - a blank row would be read as
+    "fine".
+    """
+    bars = int(window_days * 24)
+    rows: dict[str, Any] = {}
+    for strategy, points in sorted(_series_by_strategy(store, None).items()):
+        if not equity or equity <= 0:
+            rows[strategy] = {"status": "INSUFFICIENT_DATA", "why": "no equity", "below": 0}
+            continue
+        returns = [value / equity for _bar, value in points]
+        windows = window_sharpes(returns, bars_per_window=bars, bars_per_year=bars_per_year)
+        q10 = (expectations.get(strategy) or {}).get("oos_window_sharpe_q10")
+        verdict = decay_verdict(live_windows=windows, q10=q10)
+        rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days}
+    return rows
+
+
+def window_sharpes(returns: Sequence[float], *, bars_per_window: int, bars_per_year: float) -> list[float | None]:
+    """Sharpe of each whole NON-OVERLAPPING window, in order.  A partial tail is not a window.
+
+    Non-overlapping is the load-bearing word.  With a daily step, "two consecutive 30-day windows" is two
+    observations sharing 29 days of data - very nearly one observation - and the rule below would fire far
+    more often than its design intends.  Non-overlapping makes the trigger cost 60 days of evidence.
+
+    ``None`` for a window with no dispersion, for the reason `_has_dispersion` records: the standard
+    deviation of identical floats is not exactly zero once summed and divided, and the naive ratio came
+    back as 3e17.  A ratio to a dispersion that is not there is not a measurement.
+    """
+    values = np.asarray(list(returns), dtype=float)
+    out: list[float | None] = []
+    for start in range(0, values.size - bars_per_window + 1, bars_per_window):
+        chunk = values[start : start + bars_per_window]
+        out.append(sharpe(chunk, bars_per_year) if _has_dispersion(chunk, minimum=bars_per_window) else None)
+    return out
+
+
+def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, consecutive: int = 2) -> dict[str, Any]:
+    """The edge-decay rule adopted 2026-09-07 (report 4.2 Ⅰ; ruling in 12.9).
+
+    Two consecutive non-overlapping 30-day windows whose live Sharpe sits below the backtest's q10 for
+    windows of the same length -> REVIEW.  The comparison is to an EMPIRICAL distribution, not to
+    ``oos_sharpe`` with a normal standard error: a 1.7-Sharpe strategy has enormous 30-day dispersion, so
+    its q10 is likely well below zero, and the point-estimate test is much weaker.  That weaker test still
+    exists as `drift_vs_expectation`; the two coexist and answer different questions.
+
+    A missing ``q10`` is INSUFFICIENT_DATA and never OK.  The quantile must come from the same
+    construction, so it dies with every construction change exactly as M-010's window does; reporting OK
+    while there is nothing to compare against is how a detector that has never worked looks healthiest.
+    """
+    usable = [value for value in live_windows if value is not None]
+    if q10 is None:
+        return {"status": "INSUFFICIENT_DATA", "why": "no q10 for this construction yet", "below": 0}
+    if len(usable) < consecutive:
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "why": f"{len(usable)} whole windows, needs {consecutive}",
+            "below": 0,
+        }
+    tail = usable[-consecutive:]
+    below = sum(1 for value in tail if value < q10)
+    status = "REVIEW" if below == consecutive else "OK"
+    return {"status": status, "below": below, "q10": q10, "windows": tail}
+
+
 def collateral_share(*, equity: float, usdt_equity: float | None) -> dict[str, float | None]:
     """L1-10: the part of `equity` that is collateral rather than the book's own currency.
 
@@ -1096,6 +1175,7 @@ def weekly_payload(
     window = evidence_window(store)
     equities = [float(row["equity"]) for row in cycles if row.get("equity") is not None]
     income = income_drift(store, expectations or {}, equity=equities[-1] if equities else None, since_ms=since_ms)
+    decay = decay_watch(store, expectations or {}, equity=equities[-1] if equities else None)
     constructions = sorted({str(row.get("construction")) for row in cycles if row.get("construction")})
     return {
         "week_ending": day,
@@ -1109,6 +1189,10 @@ def weekly_payload(
         "promotion_budget": 1,
         "evidence_window": window,
         "income": income,
+        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly rather than daily on purpose: it
+        # asks about the live period as a whole, and every other number in the daily report is about
+        # one day.  It reads INSUFFICIENT_DATA until somebody computes the q10 for this construction.
+        "decay": decay,
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),
         "effort": effort_share(changed_lines) if changed_lines is not None else None,
@@ -1124,6 +1208,19 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
             (
                 "Cycles",
                 {key: payload.get(key) for key in ("cycles", "skipped_cycles", "equity_start", "equity_end")},
+            ),
+            (
+                # The adopted decay rule.  It cannot fire before roughly 2026-11-05 - the construction
+                # froze 2026-09-06 and two whole non-overlapping 30-day windows have to follow it - and
+                # it needs a q10 nobody has computed yet.  Both facts are printed rather than hidden,
+                # because a rule that is silently unable to fire is the same as no rule.
+                "Edge decay (M-010 vs backtest q10)",
+                {
+                    name: f"{row['status']}"
+                    + (f" - {row['why']}" if row.get("why") else f" ({row['below']}/2 below q10)")
+                    for name, row in sorted((payload.get("decay") or {}).items())
+                }
+                or {"none": "no attributed income yet"},
             ),
             (
                 # D-041: the manifest was written into every report and read by nothing.  It is read now,
