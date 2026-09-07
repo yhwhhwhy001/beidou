@@ -463,6 +463,9 @@ def test_the_construction_fingerprint_sees_what_the_evidence_gate_cannot(tmp_pat
     exits_on = dc_replace(base, exits=ExitParams(take_profit=6.0))
     assert construction_fingerprint(exits_on)["digest"] != construction_fingerprint(base)["digest"]
     assert construction_fingerprint(exits_on)["exits"]["take_profit"] == 6.0
+    breathing = dc_replace(base, exits=dc_replace(base.exits, unit_mode="current"))
+    assert construction_fingerprint(breathing)["digest"] != construction_fingerprint(base)["digest"]
+    assert construction_fingerprint(breathing)["exits"]["unit_mode"] == "current"
 
 
 async def test_a_cycle_records_the_construction_it_ran_under(august_panel: Panel, tmp_path: Path) -> None:

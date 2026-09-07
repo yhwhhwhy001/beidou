@@ -122,3 +122,32 @@ def test_drawdown_scalar_shape_and_throttle_path() -> None:
     assert ones.eq(1.0).all()
     with pytest.raises(ValueError):
         DrawdownThrottleParams(start=0.3, stop=0.2)
+
+
+def test_unit_mode_entry_is_the_default_and_bit_identical() -> None:
+    """EXP-EX3 / T-EX7-1: `unit_mode: entry` must reproduce the shipped overlay exactly, and it is the default."""
+    rng = np.random.default_rng(7)
+    path = list(100.0 * np.exp(np.cumsum(rng.normal(0, 0.02, size=120))))
+    weights, close, vol = _frames(path)
+    shipped = ExitParams(stop_loss=6.0, take_profit=6.0)
+    explicit = ExitParams(stop_loss=6.0, take_profit=6.0, unit_mode="entry")
+    assert shipped.unit_mode == "entry"
+    a = apply_exits(weights, close, shipped, sigma_1d=vol)
+    b = apply_exits(weights, close, explicit, sigma_1d=vol)
+    pd.testing.assert_frame_equal(a.weights, b.weights)
+    pd.testing.assert_frame_equal(a.events, b.events)
+    with pytest.raises(ValueError):
+        ExitParams(unit_mode="atr")
+
+
+def test_unit_mode_current_measures_distance_in_this_bars_sigma() -> None:
+    """The same 3-point adverse move is 1.5 entry-units (no stop) but 3 current-units once sigma halves."""
+    path = [100.0, 100.0, 98.5, 97.0, 97.0]
+    weights, close, _ = _frames(path)
+    vol = pd.DataFrame({"A": [0.02, 0.02, 0.01, 0.01, 0.01]}, index=close.index)
+    entry = apply_exits(weights, close, ExitParams(stop_loss=2.0, unit_mode="entry"), sigma_1d=vol)
+    current = apply_exits(weights, close, ExitParams(stop_loss=2.0, unit_mode="current"), sigma_1d=vol)
+    assert len(entry.events) == 0  # 3 points / (0.02 * 100) = 1.5 units < 2
+    assert len(current.events) == 1 and current.events.iloc[0]["rule"] == STOP_LOSS  # 3 / (0.01 * 100) = 3 units
+    assert current.events.iloc[0]["units"] <= -2.0  # reported in the unit that fired, not the entry unit
+    assert current.weights["A"].iloc[3] == 0.0

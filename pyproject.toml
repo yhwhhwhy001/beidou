@@ -60,6 +60,13 @@ ignore = ["RUF001", "RUF002", "RUF003", "E501"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# Records, not source - the same reason `.claude/skills` is excluded above, applied to our own files.
+# Ruff formats python blocks inside markdown, and every `.md` here quotes code as it was rather than as it
+# should be: an execution plan's blocks are the text a task was handed verbatim, and a RESEARCH_LOG entry
+# quotes the code a decision was made against.  `scratchpad/*.py` is committed for the same reason -
+# `.gitignore` keeps those scripts because "they reproduce adoption decisions".  Reformatting either edits
+# a record of what happened.  Excluded from the FORMATTER only, so `ruff check` still lints the scripts.
+exclude = ["*.md", "scratchpad/*.py"]
 
 [tool.mypy]
 python_version = "3.12"

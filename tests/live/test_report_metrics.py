@@ -40,6 +40,12 @@ def _cycle(i: int, *, construction: str = "aaa", equity: float = 10_000.0, **ext
     return {"bar_open_ms": BASE + i * HOUR, "bar": f"bar-{i}", "equity": equity, "construction": construction, **extra}
 
 
+def _aligned(i: int, equity: float, **extra: object) -> dict:
+    """Like `_cycle`, but starting at a UTC midnight so a three-bar giveback cannot straddle a day boundary."""
+    start = BASE - BASE % (24 * HOUR) + 24 * HOUR
+    return {"bar_open_ms": start + i * HOUR, "bar": f"bar-{i}", "equity": equity, "construction": "aaa", **extra}
+
+
 def test_evidence_window_starts_at_the_current_construction(tmp_path: Path) -> None:
     """Changing the band or a signal parameter resets what the live record is evidence of."""
     cycles = [_cycle(i, construction="old") for i in range(5)] + [_cycle(i, construction="new") for i in range(5, 9)]
@@ -140,10 +146,216 @@ def test_exit_and_pool_events_reach_the_report(tmp_path: Path) -> None:
     assert result["pool_entered"] == ["NEW"] and result["pool_left"] == ["OLD"] and result["pool_changes"] == 2
 
 
+def test_exit_and_pool_events_ignore_dry_run_cycles(tmp_path: Path) -> None:
+    """This is the same M-005 exit list `exit_counterfactuals` excludes dry runs from, a few sections higher.
+
+    A `--dry-run` cycle submits no order (engine.py: DRY_RUN), so its `exit_events` name exits that never
+    happened.  Counted here they inflate `exit_count` and `by_rule` in the very report whose counterfactual
+    section is carefully counting only real exits toward `n_needed_for_decision`.  The filter is on the row,
+    so the dry run's `universe_update` line goes with it.
+    """
+    real = {
+        "bar_open_ms": BASE,
+        "bar": "b0",
+        "equity": 1.0,
+        "exit_events": [{"symbol": "A", "rule": "TAKE_PROFIT"}],
+        "universe_update": {"entered": ["NEW"], "left": []},
+    }
+    simulated = {
+        "bar_open_ms": BASE + HOUR,
+        "bar": "b1",
+        "equity": 1.0,
+        "dry_run": True,
+        "exit_events": [{"symbol": "B", "rule": "STOP_LOSS"}],
+        "universe_update": {"entered": ["GHOST"], "left": []},
+    }
+    result = exit_and_pool_events(_store(tmp_path, [real, simulated]), _day_of_bar(BASE))
+    assert result["exit_count"] == 1 and result["by_rule"] == {"TAKE_PROFIT": 1}
+    assert [event["symbol"] for event in result["exits"]] == ["A"]
+    assert result["pool_entered"] == ["NEW"] and result["pool_changes"] == 1
+
+
 def _day_of_bar(bar_ms: int) -> str:
     from datetime import UTC, datetime
 
     return datetime.fromtimestamp(bar_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
+
+
+def test_noise_scale_reads_a_giveback_in_design_sigma(tmp_path: Path) -> None:
+    """DL-EX0: a 65 U giveback on a 10,949 U book at vol_target 0.30 is 0.38 design daily sigma, not an event."""
+    from beidou_live.reports import BACKTEST_EXITS_PER_WEEK, noise_scale
+
+    path = [10_704.0 + 5.0 * i for i in range(60)] + [11_014.0, 10_979.0, 10_949.0]
+    cycles = [_aligned(i, value) for i, value in enumerate(path)]  # bars 48-62 share the third UTC day
+    day = _day_of_bar(cycles[60]["bar_open_ms"])
+    result = noise_scale(_store(tmp_path, cycles), day, vol_target=0.30)
+    assert abs(result["design_daily_sigma_u"] - 10_949.0 * 0.30 / math.sqrt(365.0)) < 1e-6
+    assert result["peak_giveback_u"] == pytest.approx(65.0)
+    assert result["giveback_in_design_sigma"] == pytest.approx(65.0 / (10_949.0 * 0.30 / math.sqrt(365.0)))
+    assert result["realised_daily_sigma_u"] is not None
+    assert result["expected_exits_so_far"] == pytest.approx(BACKTEST_EXITS_PER_WEEK / 7 * (63 / 24))
+    assert result["exits_so_far"] == 0
+
+
+def test_noise_scale_without_vol_target_or_cycles_does_not_crash(tmp_path: Path) -> None:
+    from beidou_live.reports import noise_scale
+
+    empty = noise_scale(_store(tmp_path, []), "2026-09-07", vol_target=None)
+    assert empty["design_daily_sigma_u"] is None and empty["peak_giveback_u"] is None
+
+
+def test_noise_scale_does_not_count_a_cooldown_as_an_exit(tmp_path: Path) -> None:
+    """`ExitOverlay.apply` appends an event for every truthy reason, and `exit_step` returns COOLDOWN once per
+    *blocked* cycle, so at the live `cooldown_bars: 24` a single take-profit writes 24 more rows behind it.
+    `BACKTEST_EXITS_PER_WEEK` is derived from 544 take-profits plus 18 stops - `apply_exits` never emits
+    COOLDOWN at all - so counting them prints an expected and an actual up to 25x apart on denominators that
+    do not mean the same thing.  `exit_counterfactuals` already drops them; this number did not.
+    """
+    from beidou_live.reports import noise_scale
+
+    cycles = [_aligned(i, 10_000.0) for i in range(48)]
+    cycles[10]["exit_events"] = [{"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "price": 100.0}]
+    for i in range(11, 35):  # the 24 cycles the one take-profit blocked
+        cycles[i]["exit_events"] = [{"symbol": "AAAUSDT", "rule": "COOLDOWN", "price": 100.0}]
+    day = _day_of_bar(int(cycles[10]["bar_open_ms"]))
+    result = noise_scale(_store(tmp_path, cycles), day, vol_target=0.30)
+    assert result["exits_so_far"] == 1, "one take-profit and the 24 cycles it blocked is one exit"
+
+
+def test_noise_scale_counts_exits_over_the_window_it_scales_the_expectation_by(tmp_path: Path) -> None:
+    """The two exit counts printed side by side have to be on one window, or their ratio means nothing.
+
+    `expected_exits_so_far` pro-rates the backtest rate by `evidence_window(...)["bars"]` - every cycle under
+    the current construction, over all history - while the actual count read only `_cycles(window_days=30)`,
+    the last 720 rows.  They agree until the window passes 720 bars and then silently diverge, and 720 bars
+    is exactly the state K-EX14's clean-window rule is working toward.
+    """
+    from beidou_live.reports import BACKTEST_EXITS_PER_WEEK, noise_scale
+
+    cycles = [_aligned(i, 10_000.0) for i in range(960)]
+    for i in range(0, 960, 96):  # ten real exits; only the seven at bar >= 240 fall inside a 720-bar tail
+        cycles[i]["exit_events"] = [{"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "price": 100.0}]
+    day = _day_of_bar(int(cycles[-1]["bar_open_ms"]))
+    result = noise_scale(_store(tmp_path, cycles), day, vol_target=0.30)
+    assert result["expected_exits_so_far"] == pytest.approx(BACKTEST_EXITS_PER_WEEK / 7 * (960 / 24))
+    assert result["exits_so_far"] == 10, "the evidence window holds ten, the trailing 30 days only seven"
+
+
+def test_exit_counterfactuals_mark_young_events_pending_and_price_old_ones(tmp_path: Path) -> None:
+    """M-005 as monitoring (K-EX12): what the exited position would have earned had it stayed in."""
+    import pandas as pd
+
+    from beidou_live.reports import exit_counterfactuals
+
+    event = {
+        "symbol": "AAAUSDT",
+        "rule": "TAKE_PROFIT",
+        "target": 0.05,
+        "price": 100.0,
+        "entry_price": 90.0,
+        "unit": 0.02,
+    }
+    cycles = [_cycle(0, equity=10_000.0, exit_events=[event])] + [_cycle(i, equity=10_000.0) for i in range(1, 100)]
+    young = [_cycle(i, equity=10_000.0) for i in range(0, 10)]
+    young[5] = _cycle(5, equity=10_000.0, exit_events=[event])
+    close_series = {
+        "AAAUSDT": pd.Series(
+            [100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE + i * HOUR for i in range(200)]
+        )
+    }
+    priced = exit_counterfactuals(_store(tmp_path / "a", cycles), closes=lambda symbol: close_series[symbol])
+    assert priced["events"] == 1 and priced["pending"] == 0
+    # stayed in: 0.05 x 10,000 x (close_{t+24}/close_t - 1) = 500 x 0.024 = 12.0 U; the exit paid 2 x 7 bps x 500 = 0.7 U
+    assert priced["by_horizon"]["24"]["mean_counterfactual_u"] == pytest.approx(12.0)
+    assert priced["by_horizon"]["72"]["mean_counterfactual_u"] == pytest.approx(36.0)
+    assert priced["by_horizon"]["24"]["n"] == 1 and priced["cost_saved_u"] == pytest.approx(0.7)
+    pending = exit_counterfactuals(_store(tmp_path / "b", young), closes=lambda symbol: close_series[symbol].iloc[:8])
+    assert pending["events"] == 1 and pending["pending"] == 1 and pending["by_horizon"]["24"]["n"] == 0
+    assert priced["n_needed_for_decision"] == 16
+
+
+def test_exit_counterfactuals_ignore_dry_run_cycles(tmp_path: Path) -> None:
+    """A --dry-run cycle's exits never happened, and must not be priced against real closes.
+
+    `exit_counterfactuals` walked `cycles.jsonl` raw, unlike `_cycles` and `drift_check`, which filter
+    `dry_run`.  The filter is a property of each call site rather than of the file, so several other readers
+    of the same file still do not have it; those are recorded and deliberately deferred, not closed here.  A
+    dry run pointed at the live `state_dir` - the cross-worktree path collision DL-L1's lock guards against
+    elsewhere - would have folded simulated exits into the one count M-005 keeps honest before a verdict is
+    drawn, which is what `n_needed_for_decision` is counting toward.
+    """
+    import pandas as pd
+
+    from beidou_live.reports import exit_counterfactuals
+
+    event = {"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "target": 0.05, "price": 100.0, "unit": 0.02}
+    live = [_cycle(0, equity=10_000.0, exit_events=[event])] + [_cycle(i, equity=10_000.0) for i in range(1, 100)]
+    mixed = [*live]
+    mixed[5] = _cycle(5, equity=10_000.0, exit_events=[event], dry_run=True)
+    closes = pd.Series([100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE + i * HOUR for i in range(200)])
+
+    only_dry = exit_counterfactuals(_store(tmp_path / "a", [mixed[5]]), closes=lambda _symbol: closes)
+    assert only_dry["events"] == 0 and only_dry["pending"] == 0
+    assert only_dry["cost_saved_u"] == 0.0
+    assert only_dry["by_horizon"]["24"]["n"] == 0 and only_dry["by_horizon"]["24"]["mean_counterfactual_u"] is None
+
+    # the dry-run bar is the only difference between the two stores, so every number has to match
+    both = exit_counterfactuals(_store(tmp_path / "b", mixed), closes=lambda _symbol: closes)
+    real = exit_counterfactuals(_store(tmp_path / "c", live), closes=lambda _symbol: closes)
+    assert both["events"] == real["events"] == 1
+    assert both["cost_saved_u"] == pytest.approx(0.7)
+    assert both["cost_saved_u"] == pytest.approx(real["cost_saved_u"])
+    assert both["by_horizon"] == real["by_horizon"]
+
+
+def test_exit_counterfactuals_anchor_the_horizon_on_the_bar_the_data_carried(tmp_path: Path) -> None:
+    """The event's `price` is the close at `as_of_ms`; `bar_open_ms` is the host's own idea of the bar.
+
+    D-025 recorded the host sitting a full hour behind the venue on 2026-09-04, and `_day_of` in this same
+    module already prefers `as_of_ms` for that reason.  Anchoring the counterfactual on the host clock walks
+    the horizon from a bar the price did not come from - a 23-bar hold priced as a 24-bar one - which is a
+    silent misprice of the one number M-005 will be judged on.
+    """
+    import pandas as pd
+
+    from beidou_live.reports import exit_counterfactuals
+
+    event = {"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "target": 0.05, "price": 100.0, "unit": 0.02}
+    # the host runs one bar ahead of the venue: `as_of_ms` is the bar the klines actually closed on
+    cycles = [_cycle(0, equity=10_000.0, as_of_ms=BASE - HOUR, exit_events=[event])]
+    cycles += [_cycle(i, equity=10_000.0, as_of_ms=BASE + (i - 1) * HOUR) for i in range(1, 100)]
+    closes = pd.Series(
+        [100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE - HOUR + i * HOUR for i in range(200)]
+    )
+
+    priced = exit_counterfactuals(_store(tmp_path, cycles), closes=lambda _symbol: closes)
+    # 0.05 x 10,000 x (close_{as_of + 24h}/100 - 1) = 500 x 0.024 = 12.0 U; off the host clock it is 12.5
+    assert priced["events"] == 1 and priced["pending"] == 0
+    assert priced["by_horizon"]["24"]["mean_counterfactual_u"] == pytest.approx(12.0)
+    assert priced["by_horizon"]["72"]["mean_counterfactual_u"] == pytest.approx(36.0)
+    assert priced["rows"][0]["as_of_ms"] == BASE - HOUR
+
+
+def test_exit_counterfactuals_survive_a_truncated_parquet(tmp_path: Path) -> None:
+    """A zero-byte or half-written parquet raises `pyarrow.lib.ArrowInvalid`, not `FileNotFoundError`.
+
+    `data_coverage`, twenty lines away in the same module, catches broad `Exception` off the same store for
+    the stated reason that a missing store is a research problem and never a reporting failure.  The narrow
+    catch here let a truncated file propagate out of `report daily` and stop the unattended monitor - the one
+    instrument that would have said so.
+    """
+    from beidou_live.reports import exit_counterfactuals
+
+    event = {"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "target": 0.05, "price": 100.0, "unit": 0.02}
+    cycles = [_cycle(0, equity=10_000.0, exit_events=[event])] + [_cycle(i, equity=10_000.0) for i in range(1, 100)]
+    archive = tmp_path / "data" / "klines" / "AAAUSDT"
+    archive.mkdir(parents=True)
+    (archive / "1h.parquet").write_bytes(b"")  # the shape an interrupted append leaves behind
+
+    result = exit_counterfactuals(_store(tmp_path / "live", cycles), root=tmp_path / "data")
+    assert result["events"] == 1 and result["pending"] == 1
+    assert result["by_horizon"]["24"]["n"] == 0
+    assert result["cost_saved_u"] == pytest.approx(0.7), "the fee is known without any price series"
 
 
 def test_drift_check_skips_bars_whose_clock_jumped(tmp_path: Path) -> None:
@@ -179,6 +391,7 @@ def test_daily_payload_carries_every_new_section(tmp_path: Path) -> None:
     payload = daily_payload(_store(tmp_path, cycles, attributions), day, {"tsmom": {"oos_sharpe": 1.6}})
     for key in ("evidence_window", "income_drift", "legs", "probe_correlation", "events"):
         assert key in payload, key
+    assert "noise_scale" in payload and "exit_counterfactual" in payload
     assert payload["legs"]["pnl"]["long"] == pytest.approx(3.0)
     assert json.dumps(payload, default=str)
     assert math.isfinite(payload["legs"]["pnl"]["long"])
@@ -254,3 +467,53 @@ def test_effort_share_counts_a_test_with_the_thing_it_tests() -> None:
     assert effort_share({"tests/alpha/test_x.py": 10})["alpha_share"] == 1.0
     assert effort_share({"tests/live/test_x.py": 10})["alpha_share"] == 0.0
     assert effort_share({})["alpha_share"] is None
+
+
+def _archive(root: Path, *symbols: str, interval: str = "1h") -> Path:
+    """A klines archive holding `symbols`.  `KlineStore.symbols` only globs, so empty files suffice."""
+    (root / "klines").mkdir(parents=True, exist_ok=True)  # an archive with no symbols is still an archive
+    for symbol in symbols:
+        (root / "klines" / symbol).mkdir(parents=True, exist_ok=True)
+        (root / "klines" / symbol / f"{interval}.parquet").write_bytes(b"")
+    return root
+
+
+def _store_trading(tmp_path: Path, *symbols: str) -> StateStore:
+    store = StateStore(tmp_path / "live")
+    state = store.load()
+    state.universe = list(symbols)
+    store.save(state)
+    return store
+
+
+def test_data_coverage_reads_the_data_root_the_report_was_given(tmp_path: Path, monkeypatch) -> None:
+    """`data_coverage` exists to name a symbol trading live with no research klines behind it (CYSUSDT,
+    sixteen hours).  It resolved `.beidou/data` against the process's cwd rather than `--data-root`, so
+    run from anywhere but the repo root it answered about an archive nobody was trading against.
+
+    Both directions are pinned, because the failure is silent in each: the wrong root invents missing
+    symbols, and - as this test arranges - it can equally well clear a symbol that is genuinely absent
+    from the archive actually in use.
+    """
+    cwd = tmp_path / "cwd"
+    _archive(cwd / ".beidou" / "data", "AAAUSDT")  # the default the old call resolved to
+    monkeypatch.chdir(cwd)
+    payload = daily_payload(
+        _store_trading(tmp_path, "AAAUSDT"), _day_of_bar(BASE), data_root=_archive(tmp_path / "elsewhere")
+    )
+    assert payload["data_coverage"]["missing_klines"] == ["AAAUSDT"]
+    assert payload["data_coverage"]["missing_count"] == 1
+
+
+def test_data_coverage_does_not_flag_a_symbol_present_under_the_given_data_root(tmp_path: Path, monkeypatch) -> None:
+    """The companion direction: the archive named by `--data-root` holds the symbol, so nothing is missing."""
+    cwd = tmp_path / "cwd"
+    _archive(cwd / ".beidou" / "data")  # the cwd default is empty; only the passed root has the klines
+    monkeypatch.chdir(cwd)
+    payload = daily_payload(
+        _store_trading(tmp_path, "AAAUSDT"),
+        _day_of_bar(BASE),
+        data_root=_archive(tmp_path / "archive", "AAAUSDT"),
+    )
+    assert payload["data_coverage"]["missing_klines"] == []
+    assert payload["data_coverage"]["live_symbols"] == 1

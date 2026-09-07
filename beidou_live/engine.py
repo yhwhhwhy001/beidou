@@ -1348,6 +1348,7 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "take_profit": config.exits.take_profit,
             "cooldown_bars": config.exits.cooldown_bars,
             "vol_halflife": config.exits.vol_halflife,
+            "unit_mode": config.exits.unit_mode,
         },
         "throttle": {
             "enabled": config.throttle.enabled,

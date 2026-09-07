@@ -2962,3 +2962,79 @@ KILL-Q11 说的是研究和实盘读**两个源**——T+1 归档与 30 天 REST
 研究侧摄入 ✔、对齐契约 ✔、吞吐 ✔、**同源契约 ✔**、`needs_metrics` 自声明 + 启动门 ✔、parity 函数 ✔。
 
 **还没接的一处**：parity 的日报接线（M-011 的差异率写进日报）。函数与测试都在，接线是一行——但它要读两个 store 的当日交集，而快照 store 现在是空的（重启后才开始记录）。**先让它跑几天有数据，再把那一行接上**，否则日报第一天就会报一个 `rate: None` 而没人知道那是「还没开始」还是「坏了」。这一条记在这里，不是等发现。
+## 2026-09-07 · P22 预登记：止盈 3σ/4σ 与当前波动单位（先写后跑）
+
+来源：`docs/analysis/2026-09-07-exits-adaptive-tp-sl-deep-analysis.md` §11.2（EXP-EX1b + EXP-EX3），对抗审查 K-EX01 / K-EX03 的关闭条件。操作者对 Q3 的回答：是。
+
+**问题。** D-017 预登记网格里 `take_profit ∈ {0, 6}`，6σ 以内的止盈从未测过；所有退出层证据都在 `vol_target 0.15` 构造上算。
+
+**网格（两个 universe 各两次调用，四份报告）：**
+1. `stop_loss [6.0] × trailing_stop [0.0] × take_profit [3.0, 4.0, 6.0] × unit_mode ["entry"]`——TP6-entry 是现行设置，在 0.30 构造上重跑作为对照；
+2. `stop_loss [6.0] × trailing_stop [0.0] × take_profit [6.0] × unit_mode ["current"]`。
+节流网格用默认（`start 0.05 / stop 0.20 / floor 0.25`），它在两次调用间去重，只计一次；这是对配置注释"启用前必须在 0.30 重跑"的兑现，不是新候选。
+
+**判定规则（写在跑之前，跑完不改）：**
+- 固定止盈 3σ 或 4σ 采纳当且仅当：该档在时点与静态都通过 D-017（对各自报告的 baseline：OOS MDD 改善且 OOS Sharpe 损失 ≤ 0.10）**且** 两个 universe 的 OOS Sharpe 都 ≥ 同报告里 TP6-entry 的 OOS Sharpe − 0.02 **且** 退出次数 ≤ TP6-entry 的 3 倍。
+- 当前波动单位（TP6-current）采纳当且仅当：双 universe 通过 D-017 **且** 双 universe 的 OOS MDD 不差于 TP6-entry **且** 退出次数 ≤ TP6-entry 的 3 倍。
+- 任一条件不满足 → 对应 Claim（C-EX02a-TP / C-EX02c）REFUTED，记负结果，不扩网格。
+- 两档止盈都通过时取 OOS MDD 更优者；止盈与 current 同时通过时**不合并**，各自记录，合并版本需另行预登记。
+
+**账本预期：** tsmom +10、flow +10（退出候选 4 × 2 universe + 节流 1 × 2 universe）。运行后核对每份报告的 `ledger.charged`。
+
+**先验（写在结果之前）：** 止盈 3σ/4σ 为负（趋势系统利润在右尾；E-EX14 的 3 天重放不算证据）；current 方向不确定。
+
+**不做：** 不加 TP3-current / TP4-current（省 8 行账本；若 current 单独通过再另行预登记）。
+
+## 2026-09-07 · 规则：短窗描述性实盘重放不计费（K-EX07 的处置，操作者裁定）
+
+定义：在实盘记录（`cycles.jsonl` 的目标权重 × 公开收盘价）上、窗口 ≤ 100 根 bar、且不用于选择任何参数的重放，记为"描述性重放"，不计入 `trials.jsonl`。条件：(1) 报告里必须标 E5 并写明 n；(2) 不得据此改任何配置；(3) 超过 100 bar 或用于选择即按诊断试验计费。首例：`2026-09-07-exits-adaptive-tp-sl-deep-analysis.md` 的 E-EX14（7 配置 × 60 bar）。
+
+## 2026-09-07 · P22 裁决：止盈 3σ/4σ 与当前波动单位三个新候选全部 REFUTED，现行 TP6σ/6σ-entry 维持
+
+预登记：`ec5f618`（2026-09-07T16:07:15+08:00）；运行：`overlay-20260907T085119Z`（时点·entry）、`overlay-20260907T085155Z`（时点·current）、`overlay-20260907T085209Z`（静态·entry）、`overlay-20260907T085218Z`（静态·current），四份报告 `generated_at`（08:51:19Z 起）均晚于预登记提交（08:07:15Z）。`portfolio.vol_target` 四份报告均为 `0.30`（已核对，非 0.15）。账本 tsmom +10 / flow +10（预期 10/10；与 `trials.jsonl` 新增的 20 行逐一核对，两策略各 10 条，无出入，不需援引"11–12 可接受"条款）。静态 universe 现为存活池 18 个 symbol（P11 系列报告为 15 个）；D-017 按各报告自身 baseline 判定，规则不受影响，但本报告数字与 P11 系列不可横向比较。
+
+| 候选 | 时点 OOS / MDD | 静态 OOS / MDD | D-017 双通过 | 对 TP6-entry | 退出次数比 | 判定 |
+| --- | --- | --- | --- | --- | --- | --- |
+| baseline（各报告自身基线，无退出层） | 1.7737 / −0.2534 | 1.3888 / −0.3011 | — | — | — | — 下方各行均对它判定 |
+| TP3-entry | 1.7151 / −0.2328 | 1.2152 / −0.2377 | 否（静态 Sharpe 损失 0.174 > 0.10） | fail（双 universe Sharpe 均 < TP6-entry − 0.02） | 2.39 | REFUTED |
+| TP4-entry | 1.7136 / −0.2513 | 1.2958 / −0.3024 | 否（静态 MDD 未改善：−0.3024 差于基线 −0.3011） | fail（双 universe Sharpe 均 < TP6-entry − 0.02） | 1.70 | REFUTED |
+| TP6-entry（现行，0.30 重跑） | 1.8483 / −0.2421 | 1.3337 / −0.2821 | 对 baseline：时点通过、静态通过 | — | 1.00 | 关闭 K-EX03 的采纳前提 |
+| TP6-current | 1.7137 / −0.2537 | 1.3209 / −0.3013 | 否（双 universe MDD 均未改善） | fail（双 universe MDD 均差于 TP6-entry） | 1.14 | REFUTED |
+
+节流 0.05/0.20/0.25 在 0.30 上：时点 1.3731/−0.2023 vs baseline 1.7737/−0.2534 → fails D-017；静态 0.9078/−0.2118 vs baseline 1.3888/−0.3011 → fails D-017（informational，保持关闭）。
+
+Claim 更新：C-EX02a-TP → REFUTED（3σ 因静态 Sharpe 损失超限、4σ 因静态 MDD 未改善，均未双通过 D-017，且都够不到 TP6-entry − 0.02 的 Sharpe 门槛）；C-EX02c → REFUTED（current 单位在时点与静态上 MDD 都没有改善，反而略差于各自 baseline，也差于 TP6-entry）。三档判定与预登记先验一致（止盈更紧为负；current 方向本不确定，落地为负）。下一步：记负结果，Task 7 是否进入由 Q1 决定。
+
+### 控制行的意外：现行设置在 0.30 上不再是「无害」
+
+TP6-entry 不是本轮的新候选，是 `config/live.demo.yaml:148-150` 现在线上跑着的设置（止损 6σ、止盈 6σ、entry 单位；`unit_mode` 未显式配置，代码默认即 `entry`，见 `beidou_alpha/overlays/exits.py:43`）。这是它第一次在实盘真实的 `vol_target 0.30` 构造上、对着自己报告的 baseline 重新量过——此前唯一一次以完全相同配置（止损 6σ + 止盈 6σ）量过的读数来自本文件「2026-09-04 · P11」节的 P11-b 结果（`vol_target 0.15`：基线时点 1.7601 / −12.21%、静态 1.5212 / −13.64%，止损 6σ+止盈 6σ 时点 1.7509 / −11.63%、静态 1.4320 / −12.79%）。把两次读数摆在一起看增量：
+
+| 构造 | 时点 ΔSharpe | 时点 ΔMDD | 静态 ΔSharpe | 静态 ΔMDD |
+| --- | --- | --- | --- | --- |
+| 0.15（P11-b） | −0.0092 | +0.58pp | −0.0892 | +0.85pp |
+| 0.30（本轮，TP6-entry vs 上表 baseline） | **+0.0746** | **+1.13pp** | −0.0551 | **+1.90pp** |
+
+时点上，0.15 那次是标准的"Sharpe 让一点、MDD 换回来一点"；0.30 这次是 Sharpe（1.7737→1.8483）与 MDD（−0.2534→−0.2421）一起变好，是这个设置迄今唯一一次双赢读数。静态上仍是让步换改善的形状，但 MDD 改善的量（+1.90pp）比 0.15 那次（+0.85pp）大了一倍还多。本文件在第五轮给这类效应定过噪声线——"MDD 变化 ≤ 0.4 个百分点，Sharpe 变化 ≤ 0.06"——这次两个 universe 的 MDD 变化分别是这条线的约 2.8 倍和 4.75 倍，不再能归进噪声量级。
+
+**这不是什么。** 这不是一次预登记的"TP6-entry 对比 0.30 上不加退出层"的实验——它是 P22 网格里三个新候选（TP3-entry / TP4-entry / TP6-current）的控制行，顺带第一次在真实构造上量到了现行设置。一对 universe 只是一个观察点；时点与静态在 Sharpe 变化的**方向**上并不一致（时点变好、静态变差），这本身就是要谨慎、而不是要下结论的理由。
+
+**这也不改变什么。** `config/live.demo.yaml` 没有改动，TP6-entry 本来就是在跑的配置，这里没有"采纳"可言，也不建议保留、收紧或放松任何退出参数。是否把本文件多处沿用的"无害，不是有益"表述正式改判，是操作者的判断，不由这一行数字自动触发。
+
+## 2026-09-07 · 记录：`unit_mode` 改了构造指纹，行为一个字节没变
+
+执行计划 `docs/analysis/2026-09-07-exits-optimization-execution-plan.md:247` 要求补的那一行，补在这里——它当时没被写下，这条把它补齐。
+
+`ExitParams` 新增 `unit_mode`（默认 `"entry"`），`construction_fingerprint` 的 `exits` 块因此多了一个键。`config/live.demo.yaml` 一个字符都没改，指纹却变了：
+
+| 指纹 payload | digest（前 12 位） |
+| --- | --- |
+| 没有 `unit_mode`（本分支之前） | `0dcd044d0158` |
+| 有 `unit_mode: "entry"`（本分支之后） | `b441ea62d021` |
+
+实测非估计：对 `config/live.demo.yaml` 调 `construction_fingerprint`，`exits` 块现为 `stop_loss 6.0 / trailing_stop 0.0 / take_profit 6.0 / cooldown_bars 24 / vol_halflife 48 / unit_mode "entry"`；去掉 `unit_mode` 一个键重算同一 payload，得到的正是运行中的循环记着的那个 digest。
+
+**行为未变。** `_unit_price` 只在 `unit_mode == "current"` 时改用当前 bar 的 sigma，默认与线上配置都是 `"entry"`，走的仍是入场那根 bar 的波动单位。P22 已把 `current` 判为 REFUTED，`config/live.demo.yaml` 不动。变的只是**这条实盘记录如何描述自己**：D-026 的本意就是让构造能自我说明，多这一个键，一个周期才答得出"我跑的是哪种单位"——此前它连这个问题都不存在。
+
+**后果，也正是要记这一条的原因。** 本分支合并进主 checkout 并重启后，`cycles.jsonl` 的 `construction` 会从 `0dcd044d0158` 变成 `b441ea62d021`（核对：截至 2026-09-07T10:00Z 那根 bar，运行中的循环记的仍是前者）。按 D-026，构造变了就是新构造，M-010 的 30 天窗口与 `evidence_window` 的 `bars` 从重启那一刻重新计数，K-EX14 的最早采纳日随之顺延。这是执行计划给的两个合法选项里默认取的那个（另一个是把 `unit_mode` 移出指纹、等真采纳 `current` 时再加）——代价是重置一次窗口，买到的是指纹如实。
+
+**给操作者：** 窗口起点不写死在任何文档里。读 `beidou report daily` 的 evidence-window 一节（`since_ms` / `bars`），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar；RUNBOOK 的 K-EX14 一节已同步改成指路，不再写死日期。
