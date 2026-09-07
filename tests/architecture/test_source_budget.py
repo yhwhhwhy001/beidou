@@ -737,10 +737,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # assumption into a number.  The counter is a running total held on the engine and resets per
 # process, so summing the column double-counts - max per stretch, summed across stretches, which
 # is the part a later reader is most likely to "simplify" back into a sum.
+#
+# 2026-09-07, the operator ruled one alert channel rather than two, which makes `send()`'s return
+# value the whole of RISK-P1 rather than half of it - and that value was `status_code < 300`
+# against a Lark custom bot, which answers HTTP 200 with `{"code": 19001}` when it cannot read the
+# payload.  Worse, the payload sent was Slack's flat `{"text": ...}` and Lark documents
+# msg_type/content, so the one channel may have been silently dead since it was configured; the
+# logs show no alert ever attempted, delivered or rejected, so nothing contradicted that.
+#
+# +~55 live for `payload_for` and `accepted` (believe the provider when it states a result, keep
+# trusting the status when it does not - it can only turn a false success into a failure), +~60 cli
+# for `beidou live alert-test`.  AC-L3 asks for a drill alert and there was no way to send one: the
+# only path to the channel was a real failure, so the signal the breaker's clean exit depends on
+# could not be exercised without first breaking something.  The drill redacts the URL to its host,
+# because a webhook URL is a credential - whoever holds it posts as the bot.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_177,
-    "beidou_cli": 3_313,
+    "beidou_live": 5_219,
+    "beidou_cli": 3_372,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
     "beidou_shared": 284,

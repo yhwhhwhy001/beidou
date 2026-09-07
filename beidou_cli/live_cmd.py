@@ -13,8 +13,10 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import click
+import httpx
 
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry
@@ -499,6 +501,57 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
     asyncio.run(main())
 
 
+def alert_transport() -> httpx.AsyncBaseTransport | None:
+    """Seam for the drill's tests; None means a real network client."""
+    return None
+
+
+def redacted(url: str) -> str:
+    """A webhook URL is a credential - whoever holds it can post as the bot.  Show the host only."""
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}/...({len(url)} chars)" if parsed.netloc else "(unparseable)"
+
+
+@live.command("alert-test")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--repeat", default=1, show_default=True, help="trigger N times; AC-L3 wants 10 -> 1 message")
+def live_alert_test(profile: str, repeat: int) -> None:
+    """Send one drill alert and say honestly whether it landed (AC-L3).
+
+    Before this the only path to the alert channel was a real failure, so the one signal the breaker's
+    clean exit depends on could not be exercised without first breaking something - which is why it
+    never had been.  With a single channel (operator ruling 2026-09-07) this is the whole verification
+    instrument, so it exits non-zero whenever nothing was delivered, including the case the hardened
+    `accepted()` exists for: HTTP 200 and the message quietly gone.
+    """
+    payload = load_profile(profile)
+    config = payload.get("alerts", {}) or {}
+    alerts = WebhookAlerts(
+        str(config.get("webhook_url", "")),
+        secondary_url=str(config.get("webhook_url_2", "")),
+        dedup_window_seconds=float(config.get("dedup_window_seconds", 3600.0)),
+        transport=alert_transport(),
+    )
+    if not alerts.enabled:
+        click.echo("no alert channel configured: set alerts.webhook_url in the profile")
+        raise SystemExit(1)
+    for url in alerts.urls:
+        click.echo(f"channel: {redacted(url)}")
+    stamp = datetime.now(UTC).isoformat()
+    text = f"beidou alert drill {stamp}: this is a test of the alert channel, no action needed"
+    delivered = suppressed = 0
+    for _ in range(max(1, repeat)):
+        if asyncio.run(alerts.send(text, key="alert-drill")):
+            delivered += 1
+        else:
+            suppressed += 1
+    if delivered:
+        click.echo(f"delivered {delivered} message(s); {suppressed} suppressed as duplicates (dedup window)")
+        return
+    click.echo("not delivered: no channel accepted the drill - the breaker cannot announce a stop")
+    raise SystemExit(1)
+
+
 @live.command("kill-switch")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--engage/--release", default=True, help="engage (default) or release the durable kill switch")
@@ -575,9 +628,14 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
     if alerts:
         message = f"beidou {chosen}: " + " | ".join(alerts)
         click.echo(message, err=True)
-        webhook = str((payload.get("alerts", {}) or {}).get("webhook_url", ""))
-        if webhook:
-            asyncio.run(WebhookAlerts(webhook).send(message))
+        # Every configured channel, not just the first: this path used to read `webhook_url` alone,
+        # so a channel added for redundancy would have covered the loop and not the daily check.
+        alert_config = payload.get("alerts", {}) or {}
+        daily = WebhookAlerts(
+            str(alert_config.get("webhook_url", "")), secondary_url=str(alert_config.get("webhook_url_2", ""))
+        )
+        if daily.enabled and not asyncio.run(daily.send(message)):
+            click.echo(f"notice {chosen}: the alert above was NOT delivered to any channel", err=True)
     if check and alerts:
         raise SystemExit(1)
 
@@ -720,6 +778,7 @@ def report_weekly(
 
 
 __all__ = [
+    "live_alert_test",
     "live_flatten",
     "live_kill_switch",
     "live_run",

@@ -18,10 +18,52 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+# Lark/Feishu custom bots take `{"msg_type": "text", "content": {"text": ...}}`; Slack and most
+# generic relays take the flat `{"text": ...}`.  Sending one shape to both is how a channel dies
+# quietly: Slack accepts the flat form, and Lark answers HTTP 200 and drops it.
+LARK_HOSTS = ("open.larksuite.com", "open.feishu.cn")
+
+
+def payload_for(url: str, text: str) -> dict[str, object]:
+    """The body this provider actually reads."""
+    host = urlparse(url).netloc.lower()
+    if any(host == known or host.endswith(f".{known}") for known in LARK_HOSTS):
+        return {"msg_type": "text", "content": {"text": text}}
+    return {"text": text}
+
+
+def accepted(response: httpx.Response) -> bool:
+    """Did the provider say it took the message?
+
+    A status code is the weakest possible evidence here, and for this repository's one channel it is
+    the wrong evidence: a Lark custom bot answers HTTP 200 with `{"code": 19001}` when it cannot read
+    the payload, so `status_code < 300` reads a dropped message as a delivery - and the breaker is
+    allowed to exit quietly on exactly that boolean (RISK-P1).
+
+    The rule is narrow on purpose: when the provider states its own result, believe the provider; when
+    it does not, keep trusting the status.  It can turn a false success into a failure, never the
+    reverse.
+    """
+    if response.status_code >= 300:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return True
+    if not isinstance(body, dict):
+        return True
+    for field in ("code", "StatusCode"):
+        value = body.get(field)
+        if isinstance(value, int):
+            return value == 0
+    return True
 
 
 class WebhookAlerts:
@@ -75,14 +117,14 @@ class WebhookAlerts:
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             for url in self.urls:
                 try:
-                    response = await client.post(url, json={"text": text})
+                    response = await client.post(url, json=payload_for(url, text))
                 except httpx.HTTPError as exc:
                     logger.warning("alert delivery failed (%s): %s", url, exc)
                     continue
-                if response.status_code < 300:
+                if accepted(response):
                     delivered = True
                 else:
-                    logger.warning("alert rejected by %s: HTTP %s", url, response.status_code)
+                    logger.warning("alert rejected by %s: HTTP %s %s", url, response.status_code, response.text[:200])
         if delivered:
             self._last_sent[fingerprint] = self._clock()
         return delivered
