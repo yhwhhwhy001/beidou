@@ -262,3 +262,34 @@ def test_validating_a_mined_candidate_reads_the_search_that_found_it(  # T-K2-2
     assert report["prior_trials_declared"] == 0
     assert report["multiple_testing"]["ledger_trials"] == len(payload["candidates"])
     assert report["multiple_testing"]["n_trials"] >= len(payload["candidates"])
+
+
+def test_the_weekly_check_sees_book_reports_not_only_validations(tmp_path: Path) -> None:
+    """DL-K3's own coverage, asserted rather than assumed."""
+    from beidou_cli.live_cmd import _validations_since
+
+    directory = tmp_path / "research"
+    directory.mkdir()
+    (directory / "tsmom-validation-x.json").write_text(
+        json.dumps({"kind": "validation", "strategy": "tsmom", "generated_at": "2026-09-08T00:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    (directory / "book-tsmom-mined_abc-x.json").write_text(
+        json.dumps(
+            {
+                "kind": "book",
+                "main": {"strategy": "tsmom"},
+                "sleeve": {"strategy": "mined_abc"},
+                "generated_at": "2026-09-08T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (directory / "mine-shortlist-x.json").write_text(
+        json.dumps({"kind": "mine", "generated_at": "2026-09-08T00:00:00+00:00"}), encoding="utf-8"
+    )
+
+    found = _validations_since(directory, 0)
+
+    # The sleeve is the thing being promoted, so it is the strategy the ordering is checked against.
+    assert sorted(row["strategy"] for row in found) == ["mined_abc", "tsmom"]

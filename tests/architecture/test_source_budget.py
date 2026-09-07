@@ -696,10 +696,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # and reports `ledger_trials: 0` - KILL-Q5's exact state, reached by walking instead of typing, and the
 # harder of the two to trip over deliberately.  The address is anchored to the checkout now (a
 # worktree's `.git` is a file and still a root), which is the L1-07 fix applied one file over.
+#
+# 2026-09-07, same batch, two coverage holes of one shape found while using it.  `ledger_scope` reached
+# `validate` and not `research book`, so a mined sleeve promoted through `book` did not pay for the
+# search that found it while the same sleeve promoted through `validate` did; and DL-K3 globbed
+# `*-validation-*.json` only, so a candidate taken through `book` skipped the ordering check entirely.
+# Both are the same sentence: a protocol whose coverage depends on which command an operator happened
+# to run is not a protocol.  Cheap to fix, and worth the lines because neither would have announced
+# itself - the accounting would simply have been lighter down one path.
 CEILING = {
     "beidou_alpha": 5_808,
     "beidou_live": 5_020,
-    "beidou_cli": 3_298,
+    "beidou_cli": 3_311,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
     "beidou_shared": 284,

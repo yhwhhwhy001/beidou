@@ -165,3 +165,27 @@ def test_the_boundary_is_stated_rather_than_silent() -> None:
     )
 
     assert skipped == 1
+
+
+def test_a_sleeve_promoted_through_book_is_checked_too() -> None:
+    """`research book` scores a sleeve exactly as `validate` does, and can promote one.
+
+    DL-K3 first globbed `*-validation-*.json` only, so a candidate taken through `book` skipped the
+    ordering check entirely - the same shape as `ledger_scope` reaching `validate` and not `book`.
+    A protocol whose coverage depends on which command an operator happened to run is not a protocol.
+    """
+    problems = preregistration_problems(
+        [
+            {
+                "path": "reports/research/book-tsmom-mined_abc-x.json",
+                "strategy": "mined_abc",
+                "generated_at": "2026-09-08T00:00:00+00:00",
+            }
+        ],
+        first_mentioned={},
+        search_charged={},
+        effective_from="2026-09-07T00:00:00+00:00",
+    )
+
+    assert len(problems) == 1
+    assert "no search" in problems[0]

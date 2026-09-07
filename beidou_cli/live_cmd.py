@@ -639,9 +639,16 @@ def _search_charged() -> dict[str, str]:
 
 
 def _validations_since(directory: Path, since_ms: int) -> list[dict[str, str]]:
-    """Validation reports produced inside the window, as {path, strategy, generated_at}."""
+    """Every report inside the window that can promote something, as {path, strategy, generated_at}.
+
+    Both kinds, because both promote.  Globbing `*-validation-*.json` alone let a candidate taken
+    through `research book` skip the ordering check - the same shape as `ledger_scope` reaching
+    `validate` and not `book`, and a protocol whose coverage depends on which command an operator
+    happened to run is not a protocol.  For a book it is the SLEEVE that is being promoted, so the
+    sleeve is the strategy the ordering is checked against.
+    """
     reports: list[dict[str, str]] = []
-    for candidate in sorted(directory.glob("*-validation-*.json")):
+    for candidate in sorted([*directory.glob("*-validation-*.json"), *directory.glob("book-*.json")]):
         try:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -653,7 +660,11 @@ def _validations_since(directory: Path, since_ms: int) -> list[dict[str, str]]:
             continue
         if produced.timestamp() * 1000 < since_ms:
             continue
-        reports.append({"path": str(candidate), "strategy": str(payload.get("strategy", "")), "generated_at": stamp})
+        if payload.get("kind") == "book":
+            strategy = str((payload.get("sleeve") or {}).get("strategy", ""))
+        else:
+            strategy = str(payload.get("strategy", ""))
+        reports.append({"path": str(candidate), "strategy": strategy, "generated_at": stamp})
     return reports
 
 
