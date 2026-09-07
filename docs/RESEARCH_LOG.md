@@ -3059,3 +3059,24 @@ Sharpe 那一半反而更清楚了：时点 +0.0746、静态 −0.0551，**跨 u
 **后果，也正是要记这一条的原因。** 本分支合并进主 checkout 并重启后，`cycles.jsonl` 的 `construction` 会从 `0dcd044d0158` 变成 `b441ea62d021`（核对：截至 2026-09-07T10:00Z 那根 bar，运行中的循环记的仍是前者）。按 D-026，构造变了就是新构造，M-010 的 30 天窗口与 `evidence_window` 的 `bars` 从重启那一刻重新计数，K-EX14 的最早采纳日随之顺延。这是执行计划给的两个合法选项里默认取的那个（另一个是把 `unit_mode` 移出指纹、等真采纳 `current` 时再加）——代价是重置一次窗口，买到的是指纹如实。
 
 **给操作者：** 窗口起点不写死在任何文档里。读 `beidou report daily` 的 evidence-window 一节（`since_ms` / `bars`），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar；RUNBOOK 的 K-EX14 一节已同步改成指路，不再写死日期。
+
+## 2026-09-07 · P23 裁决：O-EX1 信号侧退出滞回停在第 0 步——次阈值持有段没有显著更差
+
+预登记：`docs/analysis/2026-09-07-exits-optimization-execution-plan.md` Task 8 §8.1（K-EX02，`docs/analysis/2026-09-07-exits-adaptive-tp-sl-deep-analysis.md` §11.2 EXP-EX1 第 0 步），随 `aca1f91` 提交，先于本次运行。停止条件写在预登记里：h=72 的「可执行段减次阈值段」前瞻收益差 t < 2.0 → 到此为止，不实现 8.2。
+
+脚本：`scratchpad/p23_subthreshold_forward.py`。构造：现行 registry 的 tsmom（`conviction_mode: sign`、`entry_threshold 0.20`、`crowding_window 72` 开），点时点 universe，2021-01-01 → 2026-09-06，205 个曾入池符号（其中 6 个尚无 1h K 线：ALLOUSDT/BLESSUSDT/ENSOUSDT/REUSDT/SKYAIUSDT/SYNUSDT——`_resolve_symbols` 按 pit 惯例自动剔除，不进入面板，与其余 pit 报告同源，非本次新缺口）。持仓 bar 按原始分数分两段：`|score| >= 0.20` 为可执行，`< 0.20` 为次阈值持有（NO_ACTION 下继续持有前值）；方向取自实际持仓（`model.strategy_targets` 的输出，已过滤 eligible/membership），前瞻收益按持仓方向调整符号后比较。
+
+| h | 可执行段均值 | 可执行段 n | 次阈值段均值 | 次阈值段 n | diff t |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 24 | +20.9 bps | 631,838 | +10.9 bps | 224,875 | +1.26 |
+| 72 | +50.5 bps | 631,174 | +20.2 bps | 224,675 | +0.92 |
+
+h=72 的 t = +0.92 < 2.0：次阈值持有段的前瞻收益不显著低于可执行段——两段同号同向为正，次阈值段更小，但够不到预登记的显著性门槛。**停止条件触发，O-EX1 到此为止，不实现 `exit_threshold` / `exit_dwell_bars`。**
+
+这与 H-001 的既有证据方向一致：`conviction_mode: sign` 对 `score` 的配对检验，逐 bar 收益差 t = −0.047（本文件 621 行），说明分数的**幅度**不携带可交易的收益信息。这里换了一个完全不同的切法——不是比较两种交易分数幅度的方式，而是直接比较「幅度落在可执行区」与「幅度落在次阈值区」两段持仓各自的前瞻收益——得到同一个方向的结论：H-001 是横截面/交易口径上的负证据，这次是持仓时间序列上的负证据，两条独立的路径都测不出幅度值钱。K-EX02 把 O-EX1 的先验从「中」下调到「低–中」是对的方向。
+
+Claim 更新：C-EX03（"对本书，退出应响应的市场状态是周级信号自身的衰减，不是价格相对入场/极值的路径"）→ **REFUTED**，按 `exits-adaptive-tp-sl-deep-analysis.md` 135 行 A-EX03 自己写的证伪条件（"记负结果；C-EX03 降 REFUTED"）执行。
+
+账本：`P23-step0` 记诊断 trial，`_record_trial` 返回 `charged=1`，tsmom 账本行数 99 → 100（`reports/research/trials.jsonl`），`overlay_digest` 标注 `{"kind": "diagnostic", "what": "subthreshold_forward_returns"}` 以区别于回测/validate 行，`sharpe_annual` 记 `null`（这不是一次回测）。
+
+**没做的事，明写。** `exit_threshold` / `exit_dwell_bars` 没有加进 `scores_to_targets` / `TsmomParams` / `StrategyEntry` / `AlphaModel`；`research validate` 的两格网格没有跑；`tests/alpha/test_exit_threshold.py` 没有新建；`beidou_alpha` 的行数预算没有变。这是预登记规则本身的产物，不是省事——第 0 步存在的目的就是在花掉 `validate` 名额之前问一次"这个假设有没有希望"，答案是没有，于是不再往下走。O-EX1 到此关闭。
