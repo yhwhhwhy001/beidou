@@ -2682,3 +2682,22 @@ TP6-entry 不是本轮的新候选，是 `config/live.demo.yaml:148-150` 现在�
 **这不是什么。** 这不是一次预登记的"TP6-entry 对比 0.30 上不加退出层"的实验——它是 P22 网格里三个新候选（TP3-entry / TP4-entry / TP6-current）的控制行，顺带第一次在真实构造上量到了现行设置。一对 universe 只是一个观察点；时点与静态在 Sharpe 变化的**方向**上并不一致（时点变好、静态变差），这本身就是要谨慎、而不是要下结论的理由。
 
 **这也不改变什么。** `config/live.demo.yaml` 没有改动，TP6-entry 本来就是在跑的配置，这里没有"采纳"可言，也不建议保留、收紧或放松任何退出参数。是否把本文件多处沿用的"无害，不是有益"表述正式改判，是操作者的判断，不由这一行数字自动触发。
+
+## 2026-09-07 · 记录：`unit_mode` 改了构造指纹，行为一个字节没变
+
+执行计划 `docs/analysis/2026-09-07-exits-optimization-execution-plan.md:247` 要求补的那一行，补在这里——它当时没被写下，这条把它补齐。
+
+`ExitParams` 新增 `unit_mode`（默认 `"entry"`），`construction_fingerprint` 的 `exits` 块因此多了一个键。`config/live.demo.yaml` 一个字符都没改，指纹却变了：
+
+| 指纹 payload | digest（前 12 位） |
+| --- | --- |
+| 没有 `unit_mode`（本分支之前） | `0dcd044d0158` |
+| 有 `unit_mode: "entry"`（本分支之后） | `b441ea62d021` |
+
+实测非估计：对 `config/live.demo.yaml` 调 `construction_fingerprint`，`exits` 块现为 `stop_loss 6.0 / trailing_stop 0.0 / take_profit 6.0 / cooldown_bars 24 / vol_halflife 48 / unit_mode "entry"`；去掉 `unit_mode` 一个键重算同一 payload，得到的正是运行中的循环记着的那个 digest。
+
+**行为未变。** `_unit_price` 只在 `unit_mode == "current"` 时改用当前 bar 的 sigma，默认与线上配置都是 `"entry"`，走的仍是入场那根 bar 的波动单位。P22 已把 `current` 判为 REFUTED，`config/live.demo.yaml` 不动。变的只是**这条实盘记录如何描述自己**：D-026 的本意就是让构造能自我说明，多这一个键，一个周期才答得出"我跑的是哪种单位"——此前它连这个问题都不存在。
+
+**后果，也正是要记这一条的原因。** 本分支合并进主 checkout 并重启后，`cycles.jsonl` 的 `construction` 会从 `0dcd044d0158` 变成 `b441ea62d021`（核对：截至 2026-09-07T10:00Z 那根 bar，运行中的循环记的仍是前者）。按 D-026，构造变了就是新构造，M-010 的 30 天窗口与 `evidence_window` 的 `bars` 从重启那一刻重新计数，K-EX14 的最早采纳日随之顺延。这是执行计划给的两个合法选项里默认取的那个（另一个是把 `unit_mode` 移出指纹、等真采纳 `current` 时再加）——代价是重置一次窗口，买到的是指纹如实。
+
+**给操作者：** 窗口起点不写死在任何文档里。读 `beidou report daily` 的 evidence-window 一节（`since_ms` / `bars`），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar；RUNBOOK 的 K-EX14 一节已同步改成指路，不再写死日期。
