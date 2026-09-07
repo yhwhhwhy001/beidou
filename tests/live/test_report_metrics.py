@@ -199,6 +199,38 @@ def test_exit_counterfactuals_mark_young_events_pending_and_price_old_ones(tmp_p
     assert priced["n_needed_for_decision"] == 16
 
 
+def test_exit_counterfactuals_ignore_dry_run_cycles(tmp_path: Path) -> None:
+    """A --dry-run cycle's exits never happened, and must not be priced against real closes.
+
+    `_cycles`, `drift_check` and `risk_adaptation` all drop `dry_run` rows; this one walked `cycles.jsonl`
+    raw.  A dry run pointed at the live `state_dir` - the cross-worktree path collision DL-L1's lock guards
+    against elsewhere - would have folded simulated exits into the one count M-005 keeps honest before a
+    verdict is drawn, which is what `n_needed_for_decision` is counting toward.
+    """
+    import pandas as pd
+
+    from beidou_live.reports import exit_counterfactuals
+
+    event = {"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "target": 0.05, "price": 100.0, "unit": 0.02}
+    live = [_cycle(0, equity=10_000.0, exit_events=[event])] + [_cycle(i, equity=10_000.0) for i in range(1, 100)]
+    mixed = [*live]
+    mixed[5] = _cycle(5, equity=10_000.0, exit_events=[event], dry_run=True)
+    closes = pd.Series([100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE + i * HOUR for i in range(200)])
+
+    only_dry = exit_counterfactuals(_store(tmp_path / "a", [mixed[5]]), closes=lambda _symbol: closes)
+    assert only_dry["events"] == 0 and only_dry["pending"] == 0
+    assert only_dry["cost_saved_u"] == 0.0
+    assert only_dry["by_horizon"]["24"]["n"] == 0 and only_dry["by_horizon"]["24"]["mean_counterfactual_u"] is None
+
+    # the dry-run bar is the only difference between the two stores, so every number has to match
+    both = exit_counterfactuals(_store(tmp_path / "b", mixed), closes=lambda _symbol: closes)
+    real = exit_counterfactuals(_store(tmp_path / "c", live), closes=lambda _symbol: closes)
+    assert both["events"] == real["events"] == 1
+    assert both["cost_saved_u"] == pytest.approx(0.7)
+    assert both["cost_saved_u"] == pytest.approx(real["cost_saved_u"])
+    assert both["by_horizon"] == real["by_horizon"]
+
+
 def test_drift_check_skips_bars_whose_clock_jumped(tmp_path: Path) -> None:
     """M-012 promised it; the bars were recorded but still counted as returns."""
     clean = [_cycle(i, equity=10_000.0 + i) for i in range(60)]

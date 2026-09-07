@@ -414,7 +414,7 @@ def exit_counterfactuals(
     cache: dict[str, pd.Series] = {}
     for record in store.read_jsonl(store.cycles_path):
         events = record.get("exit_events") or []
-        if not events or record.get("equity") is None:
+        if not events or record.get("equity") is None or record.get("dry_run"):
             continue
         equity = float(record["equity"])
         bar = int(record.get("bar_open_ms") or 0)
