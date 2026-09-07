@@ -53,11 +53,15 @@ def test_a_full_run_over_the_ceiling_fails_a_session_that_would_have_passed() ->
 
 
 def test_the_message_names_the_measurement_the_ceiling_and_the_plans_threshold() -> None:
-    _, message = suite_verdict(duration=123.4, exitstatus=0, collected=FULL_SUITE_MIN)
+    # Relative to the ceiling, not a literal 123.4: that literal was a breach at 120 and stopped being
+    # one the moment the ceiling was recalibrated, so the test measured the constant rather than the
+    # message.  This one is a breach at any ceiling.
+    duration = CEILING_SECONDS + 3.4
+    _, message = suite_verdict(duration=duration, exitstatus=0, collected=FULL_SUITE_MIN)
     assert message is not None
     # A gate that only says "too slow" gets raised without thought; one that shows all three numbers
     # makes the choice - speed it up, or raise the ceiling in the commit that says why - an informed one.
-    assert "123.4" in message
+    assert f"{duration:.1f}" in message
     assert str(CEILING_SECONDS) in message
     assert str(PLAN_SECONDS) in message
 

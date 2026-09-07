@@ -14,14 +14,32 @@ from typing import Any
 # The refactor plan's M-003 threshold.  Kept, not redefined: measured 45.3 / 47.0 / 47.1 on 2026-09-07.
 PLAN_SECONDS = 30
 
-# The ratchet.  ~2.5x today's reading, which is the loosest thing that is still worth having: it clears
-# the 4% run-to-run spread and a CI box two to three times slower than this laptop, while a sleep, a
-# stray network call or a quadratic fixture still trips it.  Raising it is allowed only in the commit
-# that explains why - the rule `test_source_budget.py` already runs under.
-CEILING_SECONDS = 120
+# The ratchet.  Raising it is allowed only in the commit that explains why - the rule
+# `test_source_budget.py` already runs under.  This is that explanation.
+#
+# 2026-09-08: 120 was `~2.5x today's laptop reading`, with "a CI box two to three times slower" as an
+# ASSUMPTION.  It was never true.  `ubuntu-latest` has now been measured on six consecutive runs of
+# this suite - 106.1 / 118.5 / 128.3 / 143.2 / 148.5 / 153.2 seconds against 46-47 on the laptop, i.e.
+# a ratio of 2.3x to 3.3x, not 2-3x - so THREE of the five runs since this file landed were already
+# over 120.  Nobody saw them: `suite_verdict` refuses to promote a timing breach over a real failure,
+# and there was a real failure in every one of those runs (an "offline" test that reached
+# fapi.binance.com, red on GitHub's geo-blocked runners).  Fixing that test is what made this visible
+# - the second gate standing behind the first, which is the shape this repository keeps finding.
+#
+# 240 is 1.6x the slowest CI run observed and ~5x the laptop's.  Loose on purpose, and honest about
+# what that buys: this number is set by the slowest machine the suite runs on, so on the laptop it
+# catches almost nothing.  What it still catches is a STEP change on either box - a sleep, a
+# quadratic fixture, a fixture that rebuilds the panel per test - which on this suite is tens of
+# seconds, not the 20 that separated 120 from the observed spread.  Drift is the printed line's job,
+# not this one's; that split is the whole design and is unchanged.
+#
+# The alternative considered and NOT taken: parallelising CI (`pytest -n auto`) would cut the wall
+# clock rather than raise the bar, but it adds a dependency and changes what a "run" means, which is
+# a decision for the operator rather than a side effect of a ratchet breach.
+CEILING_SECONDS = 240
 
 # Below this many selected tests the run was filtered (`pytest tests/live`, `-k`, `-m`), and a filtered
-# run is not the thing the plan put a number on.  741 selected as of 2026-09-07, network markers: 0.
+# run is not the thing the plan put a number on.  838 selected as of 2026-09-08, network markers: 0.
 FULL_SUITE_MIN = 700
 
 _STARTED_AT: float | None = None
