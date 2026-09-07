@@ -2624,3 +2624,26 @@ RISK-P2 **假设**每次部署重启带来迟到成交和 7bps 代价；这一�
 这不是「还没跑演练」，是**前置条件从来没满足过**。RISK-P1 的人类确认点写的是「**重启 #1 前**操作者确认第二通道已收到演练告警」——重启 #1 和 #2 都已经发生了。
 
 后果具体：DL-L2 的熔断「先说话再退出」现在整个压在**一个 webhook** 上。那个 URL 挂掉时，`breaker_stop` 会重抛原异常 → 非零退出 → launchd 每 60 秒把它拉起来撞同一堵墙（L1-03 的形状）。**代码是对的（B1 就是这么写的），缺的是运维前提。** 这是操作者的动作，不是我能补的。
+
+## 2026-09-07 · P22 预登记：止盈 3σ/4σ 与当前波动单位（先写后跑）
+
+来源：`docs/analysis/2026-09-07-exits-adaptive-tp-sl-deep-analysis.md` §11.2（EXP-EX1b + EXP-EX3），对抗审查 K-EX01 / K-EX03 的关闭条件。操作者对 Q3 的回答：是。
+
+**问题。** D-017 预登记网格里 `take_profit ∈ {0, 6}`，6σ 以内的止盈从未测过；所有退出层证据都在 `vol_target 0.15` 构造上算。
+
+**网格（两个 universe 各两次调用，四份报告）：**
+1. `stop_loss [6.0] × trailing_stop [0.0] × take_profit [3.0, 4.0, 6.0] × unit_mode ["entry"]`——TP6-entry 是现行设置，在 0.30 构造上重跑作为对照；
+2. `stop_loss [6.0] × trailing_stop [0.0] × take_profit [6.0] × unit_mode ["current"]`。
+节流网格用默认（`start 0.05 / stop 0.20 / floor 0.25`），它在两次调用间去重，只计一次；这是对配置注释"启用前必须在 0.30 重跑"的兑现，不是新候选。
+
+**判定规则（写在跑之前，跑完不改）：**
+- 固定止盈 3σ 或 4σ 采纳当且仅当：该档在时点与静态都通过 D-017（对各自报告的 baseline：OOS MDD 改善且 OOS Sharpe 损失 ≤ 0.10）**且** 两个 universe 的 OOS Sharpe 都 ≥ 同报告里 TP6-entry 的 OOS Sharpe − 0.02 **且** 退出次数 ≤ TP6-entry 的 3 倍。
+- 当前波动单位（TP6-current）采纳当且仅当：双 universe 通过 D-017 **且** 双 universe 的 OOS MDD 不差于 TP6-entry **且** 退出次数 ≤ TP6-entry 的 3 倍。
+- 任一条件不满足 → 对应 Claim（C-EX02a-TP / C-EX02c）REFUTED，记负结果，不扩网格。
+- 两档止盈都通过时取 OOS MDD 更优者；止盈与 current 同时通过时**不合并**，各自记录，合并版本需另行预登记。
+
+**账本预期：** tsmom +10、flow +10（退出候选 4 × 2 universe + 节流 1 × 2 universe）。运行后核对每份报告的 `ledger.charged`。
+
+**先验（写在结果之前）：** 止盈 3σ/4σ 为负（趋势系统利润在右尾；E-EX14 的 3 天重放不算证据）；current 方向不确定。
+
+**不做：** 不加 TP3-current / TP4-current（省 8 行账本；若 current 单独通过再另行预登记）。
