@@ -242,3 +242,95 @@ async def startup_with_foreign_position(foreign: list[str]) -> list[str]:
     )
     await engine.startup()
     return alerts.sent
+
+
+class _FailingVenue(FakeVenue):
+    """Lets `startup()` through, then fails every cycle except the ones named in ``succeed_at``.
+
+    Failing during startup would exercise something else entirely: the loop never reaches a cycle, so
+    the consecutive-error counter never moves and the breaker is not involved at all.
+    """
+
+    def __init__(self, *, succeed_at: int | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._cycle = 0
+        self._succeed_at = succeed_at
+        self.failures = 0
+        self._started = False
+
+    async def account(self) -> Any:
+        if not self._started:  # the startup reconcile
+            self._started = True
+            return await super().account()
+        self._cycle += 1
+        if self._cycle == self._succeed_at:
+            return await super().account()
+        self.failures += 1
+        raise RuntimeError("venue is unreachable")
+
+
+def breaker_engine(
+    tmp_path: Any, panel: Any, *, limit: int, succeed_at: int | None = None
+) -> tuple[Any, Any, Any, Any]:
+    """An engine whose every cycle fails at the VENUE, wired to the real `run()` loop (AC-L2).
+
+    Real market data on purpose: with `market=None` the cycle dies on an AttributeError before the
+    venue is ever called, so the test would pass while exercising a failure mode no operator can hit.
+    """
+    from beidou_alpha.model import AlphaModel
+    from beidou_alpha.portfolio import PortfolioParams
+    from beidou_alpha.registry import StrategyEntry
+    from beidou_alpha.signals.tsmom import TsmomParams
+
+    root = Path(tmp_path)
+    symbols = ["BTCUSDT", "ETHUSDT"]
+    cursor = 400
+    market = FakeMarketData(panel, cursor)
+    prices = {s: float(panel.close[s].iloc[cursor - 1]) for s in symbols}
+    venue = _FailingVenue(succeed_at=succeed_at, prices=prices)
+    # A REAL `WebhookAlerts` over a mock transport, not the recording stub: the stub has no dedup, so
+    # asserting on it would be asserting that the fake records everything - true, and about nothing.
+    import httpx
+
+    from beidou_live.alerts import WebhookAlerts
+
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        body = _json.loads(request.content)
+        sent.append(body.get("content", {}).get("text") or body.get("text", ""))
+        return httpx.Response(200, json={"code": 0})
+
+    alerts = WebhookAlerts("https://open.feishu.cn/x", transport=httpx.MockTransport(handler))
+    alerts.sent = sent  # type: ignore[attr-defined]
+    store = StateStore(root / "live")
+    engine = LiveEngine(
+        LiveConfig(
+            interval="1h",
+            history_bars=300,
+            universe=tuple(symbols),
+            leverage=2,
+            rebalance=RebalanceParams(),
+            guards=GuardParams(),
+            kill_switch_path=root / "KILL_SWITCH",
+            strategy_weights={"tsmom": 1.0},
+            poll_interval_seconds=0.0,
+            grace_seconds=1.0,
+            dry_run=True,
+            max_consecutive_errors=limit,
+        ),
+        model=AlphaModel(
+            entries=(StrategyEntry("tsmom", params=dict(TsmomParams().__dict__)),),
+            portfolio=PortfolioParams(),
+            interval="1h",
+            min_history_bars=0,
+        ),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(cursor) + 5_000),
+        store=store,
+        alerts=alerts,  # type: ignore[arg-type]
+    )
+    return engine, alerts, venue, store
