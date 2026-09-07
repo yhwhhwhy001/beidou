@@ -145,6 +145,29 @@ exits:                        # bar-close exit overlay in daily-vol units (D-012
   #
   # trailing_stop stays 0 and that is not an oversight: every trailing setting loses 0.15-0.22 OOS Sharpe
   # AND worsens OOS drawdown by 0.9-2.8pp, on both universes, in every round that has tested it.
+  #
+  # 2026-09-07 CORRECTION - the two numbers above are corrected rather than deleted, because what they
+  # were wrong ABOUT is the finding.  The tail check's script (`scratchpad/stop_tail.py`) had never been
+  # committed; rebuilt from the log's definition it reproduces the STATIC half to within 0.55% and the
+  # pattern digit for digit, but the PIT half does not reproduce at all (-3.448% XRPUSDT here against the
+  # logged -2.125% TRUMPUSDT - not even the same name).  The fourth axis: the pit run reads the
+  # point-in-time membership table, and that table was rebuilt from monthly to daily on 2026-09-04 13:20
+  # while P11-b ran at 06:33.  The old table is gone, so the pit half is structurally irreproducible.
+  # Read "-2.125% (pit)" as a historical record, not as a quantity.
+  #
+  # The two numbers were also the LEAST informative cell of the table they came from.  On today's
+  # construction (vol_target 0.30) the same ruler gives worst name -4.783% (pit) / -6.214% (static), and
+  # the sum of the 20 worst names - the quantity that says how much is at stake - is -67.94% / -66.88%.
+  #
+  # And the tension the log ends on ("the only thing that could reach it is a trailing stop, which is the
+  # one layer that reliably destroys value") is now closed, at zero ledger cost.  D-017 allows 0.10 OOS
+  # Sharpe, but sl6+tp6 already spent 0.0891 on static, leaving 0.0109.  Nothing that reaches the tail
+  # fits: trailing k=12 fires ZERO times in 5.6 years on either universe, k=9 fires 3-4, k=6 fires on 127
+  # episodes for a projected -0.0302 (2.8x over); take_profit 4 and 3 are 5.1x and 7.5x over; the pool
+  # admission gate costs -0.4352.  The sweet spot is empty, not undiscovered.  The lever that does work is
+  # `vol_target` (static's 20-worst sum: -66.88% at 0.30, -40.71% at 0.15 - measured, and NOT linear,
+  # because max_weight/max_gross bind more often at 0.30).  Evidence:
+  # docs/analysis/2026-09-07-exits-tail-endpoint.md; measurements: scratchpad/exit_reachability.py.
   stop_loss: 6.0
   trailing_stop: 0.0
   take_profit: 6.0
