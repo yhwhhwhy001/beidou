@@ -258,6 +258,13 @@ def pool_history(
                 if index % 50 == 0:
                     click.echo(f"  daily sync {index}/{len(candidates)} ({time.monotonic() - started:.0f}s)")
             click.echo(f"daily sync done: {len(candidates)} symbols, {errors} errors")
+        # Delisted names pass unconditionally (`s not in rules`), which is what keeps the point-in-time
+        # universe survivorship-free.  The residual look-ahead, named because it is small rather than
+        # absent (2026-09-08 audit): a symbol the venue still lists is filtered by TODAY's contract type
+        # and min-notional over its WHOLE history, so one whose min-notional was raised recently is
+        # excluded from years in which it qualified.  Binance changes these rarely and the direction is
+        # not systematic; recorded rather than fixed, since a point-in-time exchangeInfo archive does
+        # not exist to fix it with.
         eligible = {
             s
             for s in candidates

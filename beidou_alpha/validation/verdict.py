@@ -34,6 +34,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from beidou_alpha.validation.multiple_testing import SELECTION_GATE
+
 
 @dataclass(frozen=True)
 class VerdictThresholds:
@@ -72,6 +74,16 @@ def decide(report: dict[str, Any], thresholds: VerdictThresholds | None = None) 
         reasons.append("oos_t_stat not reported: a report that predates D-020 cannot pass")
     selection = report.get("oos_selection") or {}
     threshold = selection.get("threshold_annual")
+    gate = selection.get("gate")
+    if t.enforce_oos_selection and threshold is not None and gate != SELECTION_GATE:
+        # The threshold is read from the artefact, so it outlives the rule that produced it.  KILL-Q3
+        # replaced E[max] with the quantile on 2026-09-06 and every report written before that keeps a
+        # number ~0.32 lower with nothing in it saying which rule made it.  Completeness, like the
+        # `oos_t_stat` refusal above: judged by a gate this function cannot name is not judged.
+        reasons.append(
+            f"oos_selection gate is {gate!r}, not {SELECTION_GATE!r}: "
+            "the threshold predates the current gate and must be re-derived"
+        )
     if t.enforce_oos_selection and threshold is not None and oos < threshold:
         p_family = selection.get("p_family")
         surprise = f", p_family={p_family:.4f}" if isinstance(p_family, (int, float)) else ""

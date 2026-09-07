@@ -21,6 +21,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from beidou_alpha.validation.multiple_testing import SELECTION_GATE
 from beidou_alpha.validation.verdict import decide
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -103,21 +104,45 @@ def test_a_selection_reason_survives_a_report_without_p_family() -> None:
     assert any("deflated threshold" in r for r in reasons)
 
 
-def test_no_archived_verdict_changes() -> None:
-    """T-R1-3, pre-registered: 47 archived reports, 0 flips.
+def _archived_reports() -> list[tuple[str, dict[str, Any]]]:
+    """Every archived report written under the current rules - the ones carrying an ``oos_selection`` block."""
+    out = []
+    for path in sorted(ROOT.glob("reports/research/**/*-validation-*.json")):
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if (report.get("oos_selection") or {}).get("n_trials"):
+            out.append((path.name, report))
+    return out
+
+
+def test_no_archived_verdict_changes_for_any_reason_but_the_gate_rename() -> None:
+    """T-R1-3, pre-registered: 47 archived reports, 0 flips - re-stated once the gate got a name.
 
     Anchored to the stored ``verdict`` of every report written under the current rules - the ones
     carrying an ``oos_selection`` block.  Older reports are excluded because the rules they were
     judged by no longer exist (9 of them already disagree with ``decide`` today, and did before
     this change); excluding them here is not a way to hide a flip: the pre-registered measurement
     covered all 47 and found none.
+
+    2026-09-08: ``decide`` now refuses a threshold whose gate it cannot name, and no archived report
+    carries one, so judged as-is every one of them FAILs.  That flip is the point of the change and is
+    asserted separately below.  Dropping these reports from the check instead would have left the
+    pre-registered guard asserting nothing at all, so the comparison is made on the one axis the
+    change does not touch: supply the gate, and the stored verdict must still come back.
     """
     checked = 0
-    for path in sorted(ROOT.glob("reports/research/**/*-validation-*.json")):
-        report = json.loads(path.read_text(encoding="utf-8"))
-        if not (report.get("oos_selection") or {}).get("n_trials"):
-            continue
+    for name, report in _archived_reports():
         checked += 1
-        assert decide(report)[0] == report["verdict"], path.name
+        with_gate = {**report, "oos_selection": {**report["oos_selection"], "gate": SELECTION_GATE}}
+        assert decide(with_gate)[0] == report["verdict"], name
 
     assert checked >= 12
+
+
+def test_every_archived_report_is_refused_on_the_gate_it_cannot_name() -> None:
+    """The 2026-09-08 finding, kept as a test: these thresholds outlived the rule that produced them."""
+    reports = _archived_reports()
+    assert reports, "no archived report carries an oos_selection block"
+    for name, report in reports:
+        verdict, reasons = decide(report)
+        assert verdict == "FAIL", name
+        assert any("gate" in reason for reason in reasons), name

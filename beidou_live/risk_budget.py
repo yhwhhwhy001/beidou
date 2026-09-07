@@ -76,6 +76,15 @@ def _latest_ms(rows: Sequence[Mapping[str, Any]]) -> int:
     return int(rows[-1].get("bar_open_ms") or 0) if rows else 0
 
 
+def _latest_collateral_share(rows: Sequence[Mapping[str, Any]]) -> float | None:
+    """The newest cycle that recorded one; ``None`` when none did (the field is newer than the log)."""
+    for row in reversed(rows):
+        share = (row.get("collateral") or {}).get("share")
+        if isinstance(share, int | float):
+            return float(share)
+    return None
+
+
 def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
     """Drawdown from the high-water mark, with the mark reset at every re-baselined cycle.
 
@@ -117,6 +126,12 @@ def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) 
         "deescalate_at": params.deescalate_at,
         "rollback_at": params.rollback_at,
         "action": action,
+        # L1-10 measured this and the daily report printed it four blocks away from the ladder that
+        # divides by the same equity.  On 2026-09-07, 52.3% of it was non-USDT collateral, so a -35%
+        # reading here can belong to BTC rather than to the book.  Reported beside the reading, never
+        # subtracted from it: that denominator is a construction decision, not a bug fix (L1-10).
+        # `None` rather than 0.0 when no cycle recorded it - zero would read as "none of it is".
+        "collateral_share": _latest_collateral_share(rows),
     }
 
 
@@ -241,7 +256,17 @@ def guard_firings(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -
 def risk_budget_status(
     rows: Sequence[Mapping[str, Any]], trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams
 ) -> dict[str, Any]:
-    """The whole P13 monitoring block, with an ALERT only where a threshold is both breached and enforced."""
+    """The whole P13 monitoring block: ALERT where a threshold is breached, BLIND where one cannot be read.
+
+    Each metric already refuses to invent a number, but the summary used to collapse "inside the bar"
+    and "no reading at all" into the same ``OK``.  On 2026-09-07 that is exactly what it did: L1-04 had
+    just re-pointed the slippage instrument at ``decision_close``, no trade row carried one yet, and the
+    top line of the report said OK while M-Q08 - one of the demo phase's two success criteria - had zero
+    usable fills.  ``BLIND`` is not a lesser ALERT; it says the question was not answered.
+
+    A breach still outranks a blind metric, and BLIND deliberately does not page: it clears itself once
+    the readings arrive, which is the "unactionable standing fact" ``daily_alerts`` keeps as a notice.
+    """
     drawdown = drawdown_state(rows, params)
     volatility = realised_vol(rows, params)
     slippage = slippage_bps(trades, params, latest_ms=_latest_ms(rows))
@@ -254,9 +279,15 @@ def risk_budget_status(
         reasons.append(f"realised vol {volatility['value']:.1%} outside the {low:.0%}-{high:.0%} band")
     if slippage["enforced"] and not slippage["inside"]:
         reasons.append(f"slippage {slippage['value']:.1f} bps above the {slippage['limit']:.0f} bps assumption")
+    unreadable = [
+        {"metric": name, "why": str(block.get("why", ""))}
+        for name, block in (("realised_vol", volatility), ("slippage", slippage))
+        if not block["enforced"]
+    ]
     return {
-        "status": "ALERT" if reasons else "OK",
+        "status": "ALERT" if reasons else ("BLIND" if unreadable else "OK"),
         "reasons": reasons,
+        "unreadable": unreadable,
         "drawdown": drawdown,
         "realised_vol": volatility,
         "slippage": slippage,

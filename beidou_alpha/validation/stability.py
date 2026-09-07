@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -63,6 +63,27 @@ def parameter_neighborhood(
 
 def cost_stress(net_by_multiplier: Mapping[float, pd.Series], bars_per_year: float) -> dict[str, float | None]:
     return {f"x{multiplier:g}": sharpe(series, bars_per_year) for multiplier, series in net_by_multiplier.items()}
+
+
+def slippage_levels(*, taker_fee_bps: float, levels: Sequence[float]) -> dict[float, float]:
+    """``{slippage bps: total turnover bps}`` - the fee held fixed, only the uncertain half varied.
+
+    ``cost_stress`` scales the SUM of the two, which doubles a contract constant on its way to asking a
+    question about execution.  The fee is not in doubt; the slippage assumption is the thing the live
+    loop measures, so the stress is anchored on declared slippage values (``costs.yaml``'s
+    ``slippage_stress_bps``, each with its provenance beside it) rather than on a multiplier.
+
+    ``cost_stress`` is deliberately left alone: ``verdict.decide`` reads its ``x2`` cell and every
+    archived report carries it, so changing what x2 means would move a gate without moving a threshold.
+    """
+    if any(level < 0 for level in levels):
+        raise ValueError("slippage levels must be non-negative bps")
+    return {level: taker_fee_bps + level for level in sorted({float(v) for v in levels})}
+
+
+def slippage_stress(net_by_slippage: Mapping[float, pd.Series], bars_per_year: float) -> dict[str, float | None]:
+    """Sharpe per declared slippage level, keyed by the bps it was priced at rather than by a multiplier."""
+    return {f"slip{level:g}": sharpe(series, bars_per_year) for level, series in sorted(net_by_slippage.items())}
 
 
 def regime_split_sharpes(

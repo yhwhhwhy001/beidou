@@ -153,7 +153,9 @@ def test_guard_firings_are_counted_but_never_alert() -> None:
     ]
     counts = guard_firings(rows, params)
     assert counts["daily_loss_pause_bars"] == 2 and counts["gross_capped_bars"] == 1
-    assert risk_budget_status(rows, [], params)["status"] == "OK"
+    # Not `== "OK"`: three cycles and no fills leave the other two criteria unreadable, which is BLIND
+    # since 2026-09-08.  What this test is about is that a guard firing never contributes a reason.
+    assert risk_budget_status(rows, [], params)["reasons"] == []
 
 
 def test_status_collects_every_breached_reason() -> None:

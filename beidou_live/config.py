@@ -151,6 +151,25 @@ def universe_sink(data_root: str | Path) -> Callable[[UniverseUpdate], None]:
     return write
 
 
+def live_overlay_blocks(profile: Mapping[str, Any]) -> dict[str, dict[str, Any] | None]:
+    """The two post-model layers as the report records them, so the gate compares like with like.
+
+    ``None`` means the loop applies no such layer, which is a different statement from "the report does
+    not say" - `construction_problems` treats them differently and this is where the distinction is made.
+    """
+    bars_per_day = max(1, 86_400 // interval_seconds(str((profile.get("market_data") or {}).get("interval", "1h"))))
+    exits = ExitParams.from_mapping({**(profile.get("exits") or {}), "bars_per_day": bars_per_day})
+    portfolio = profile.get("portfolio") or {}
+    return {
+        "book_guards": {
+            "max_weight": float(portfolio.get("max_weight", 0.15)),
+            "max_gross": float(portfolio.get("max_gross", 2.0)),
+            "daily_loss_pause": float((profile.get("guards") or {}).get("daily_loss_pause", -0.05)),
+        },
+        "exits": dict(vars(exits)) if exits.enabled else None,
+    }
+
+
 def registry_evidence_problems(registry: Registry, profile: dict[str, Any] | None = None) -> list[str]:
     """KILL-015 at startup: report exists, digest matches, params match, and the construction matches too.
 
@@ -175,6 +194,7 @@ def registry_evidence_problems(registry: Registry, profile: dict[str, Any] | Non
         return get_signal(strategy_id).canonical_params(params)
 
     live_portfolio = portfolio_params(profile).__dict__ if profile is not None else None
+    live_overlays = live_overlay_blocks(profile) if profile is not None else None
     problems: list[str] = []
     for entry in registry.enabled:
         fraction = registry.books[entry.book].fraction if entry.book in registry.books else None
@@ -187,6 +207,7 @@ def registry_evidence_problems(registry: Registry, profile: dict[str, Any] | Non
                 book_fraction=fraction,
                 canonical_params=canonical,
                 live_portfolio=live_portfolio,
+                live_overlays=live_overlays,
             )
         )
     return problems

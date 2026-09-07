@@ -13,6 +13,14 @@ from beidou_alpha.validation.metrics import normal_cdf, normal_ppf
 
 EULER_GAMMA = 0.5772156649015329
 
+# The gate `oos_selection_threshold` currently applies, carried in every report it writes and checked
+# by `verdict.decide`.  A threshold is a number produced by a rule; when the rule changes, reports
+# already on disk keep the old number and nothing in them says so.  That happened on 2026-09-06:
+# KILL-Q3 replaced `expected_max_sharpe` with `max_sharpe_quantile` three hours after the report the
+# registry cites was written, and its stored 1.1446 is the retired gate's answer (the current one
+# gives 1.4684 on the same inputs).  The name travels with the number so the comparison can refuse.
+SELECTION_GATE = "max_sharpe_quantile"
+
 
 def benjamini_hochberg(p_values: list[float]) -> list[float]:
     """BH-adjusted p-values (monotone)."""
@@ -272,6 +280,7 @@ def oos_selection_threshold(
             "n_obs": n_obs,
             "n_trials": trials,
             "alpha": alpha,
+            "gate": SELECTION_GATE,
             "variance": 0.0,
             "threshold_annual": None,
             "expected_max_annual": None,
@@ -284,6 +293,9 @@ def oos_selection_threshold(
         "n_obs": n_obs,
         "n_trials": trials,
         "alpha": alpha,
+        # WHICH rule produced `threshold_annual`.  Without it a stored number outlives the rule that
+        # made it and `decide` compares against a gate nobody can name (KILL-Q3's leftover).
+        "gate": SELECTION_GATE,
         "variance": variance,
         "threshold_annual": max_sharpe_quantile(trials, variance, alpha) * scale,
         # reported beside the gate so the change from E[max] to the quantile stays visible in the artefact

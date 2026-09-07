@@ -143,6 +143,20 @@ strategies:
     # cost x2 1.55.  DSR p 0.28 at 91 trials, reported not a veto (D-020); OOS clears the D-028 threshold 1.10.
     # The ledger was charged one trial for this run.  What DID move is what the report now records: its
     # `portfolio` block reads vol_target 0.30, so from here the gate compares a construction that is real.
+    # 2026-09-08 audit - what the stress testing covers, declared rather than left to be assumed.
+    # The hourly archive starts 2021-01-01 and the first scored decision bar is 2021-01-31 01:00Z, so the
+    # book has been replayed through 2021-05 (leverage flush), 2022-05 (LUNA/UST), 2022-06 (3AC/Celsius),
+    # 2022-11 (FTX) and 2024-08 (yen carry unwind) - four positive, one small negative (FTX -3.3%), every
+    # one of them far better than the equal-weight long benchmark, which is the crisis-alpha shape the
+    # edge statement in signals/tsmom.py predicts.  It has NOT been replayed through 2020-03: that data
+    # does not exist for this universe and the 2020 perpetual roster barely overlaps today's, so the gap
+    # is declared rather than filled.  It matters because 2020-03 is the one event whose timescale was
+    # minutes, and all three of this book's protections are per-bar - `daily_loss_pause` acts on the next
+    # cycle, `max_participation` shrinks with the same volume curve that dries up, and the exit overlay
+    # only evaluates at a close.  Measurements: scratchpad/audit20260908_stress_windows.py.
+    # Return shape over the whole sample, for the "is this short volatility wearing a hat" question:
+    # hourly skew +1.08 / daily +0.83 (positive, i.e. the opposite sign), hit rate 51%/53%, payoff ratio
+    # 1.02/1.16, worst UTC day -6.22%.  The hypothesis is refuted by measurement, not by argument.
     # 2026-09-06 P1-01/DL-Q1: re-validated under the corrected CROSS-SECTIONAL REFERENCE POPULATION.
     # The crowding modifier ranks trailing funding across symbols, and until now "across symbols" meant
     # whichever columns the caller had loaded: research ranked a name against the whole point-in-time
