@@ -117,8 +117,20 @@ def test_slippage_is_notional_weighted_and_signed_by_side() -> None:
     params = RiskBudgetParams(min_slippage_fills=2)
     trades = [
         # buying above the reference is adverse; selling below it is too
-        {"bar_open_ms": 1_700_000_000_000, "side": "BUY", "price": 100.0, "avg_price": 100.1, "executed_qty": "1"},
-        {"bar_open_ms": 1_700_000_000_000, "side": "SELL", "price": 100.0, "avg_price": 99.9, "executed_qty": "1"},
+        {
+            "bar_open_ms": 1_700_000_000_000,
+            "side": "BUY",
+            "decision_close": 100.0,
+            "avg_price": 100.1,
+            "executed_qty": "1",
+        },
+        {
+            "bar_open_ms": 1_700_000_000_000,
+            "side": "SELL",
+            "decision_close": 100.0,
+            "avg_price": 99.9,
+            "executed_qty": "1",
+        },
     ]
     out = slippage_bps(trades, params, latest_ms=1_700_000_000_000)
     assert out["enforced"] and out["value"] == pytest.approx(10.0, abs=0.05)
@@ -151,7 +163,13 @@ def test_status_collects_every_breached_reason() -> None:
         equity *= 1.02 if i % 2 else 0.94  # violent, and ends deep below the peak
         rows.append(_cycle(i, equity))
     trades = [
-        {"bar_open_ms": rows[-1]["bar_open_ms"], "side": "BUY", "price": 100.0, "avg_price": 101.0, "executed_qty": "1"}
+        {
+            "bar_open_ms": rows[-1]["bar_open_ms"],
+            "side": "BUY",
+            "decision_close": 100.0,
+            "avg_price": 101.0,
+            "executed_qty": "1",
+        }
     ]
     out = risk_budget_status(rows, trades, params)
     assert out["status"] == "ALERT"

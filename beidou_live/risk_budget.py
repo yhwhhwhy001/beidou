@@ -32,7 +32,14 @@ class RiskBudgetParams:
     vol_band: tuple[float, float] = (0.26, 0.38)
     vol_window_days: int = 30
     min_vol_bars: int = 240  # ten days of hourly cycles before the vol estimate says anything
-    max_slippage_bps: float = 10.0
+    # M-Q08 states the bar as "slippage <= 2x model", so it is expressed that way rather than as a
+    # standalone number: a constant drifts away from the model it is supposed to track.  The old
+    # `max_slippage_bps: 10.0` was set "against the cost model's 7 bps" - but 7 is `turnover_bps`,
+    # which bundles the 5 bps taker fee with 2 bps of slippage, while this instrument measures price
+    # slippage alone.  A fee-inclusive budget judging a fee-exclusive measurement, at 2.5x the stated
+    # bar, could not fail: the measured +4.3 bps sat outside M-Q08's 4 and well inside the gate's 10.
+    model_slippage_bps: float = 2.0  # what the backtest's cost model charges for slippage
+    slippage_multiple: float = 2.0  # M-Q08's "2x"
     slippage_window_days: int = 30
     min_slippage_fills: int = 30
     guard_window_days: int = 90
@@ -46,11 +53,21 @@ class RiskBudgetParams:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> RiskBudgetParams:
+        if "max_slippage_bps" in payload:
+            raise ValueError(
+                "max_slippage_bps is retired: the bar is M-Q08's '<= 2x model', so set model_slippage_bps "
+                "and slippage_multiple instead.  Left as a plain key it would be dropped here without a "
+                "word, and a threshold that silently does nothing is worse than no threshold (L1-04)"
+            )
         known = {key: payload[key] for key in cls.__dataclass_fields__ if key in payload}
         if "vol_band" in known:
             low, high = known["vol_band"]
             known["vol_band"] = (float(low), float(high))
         return cls(**known)
+
+    @property
+    def max_slippage_bps(self) -> float:
+        return self.model_slippage_bps * self.slippage_multiple
 
 
 def _latest_ms(rows: Sequence[Mapping[str, Any]]) -> int:
@@ -138,14 +155,26 @@ def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) ->
 
 
 def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, *, latest_ms: int) -> dict[str, Any]:
-    """Notional-weighted adverse fill vs the decision-time reference price, against the model's assumption."""
+    """Notional-weighted adverse fill vs the DECISION BAR CLOSE, against M-Q08's "2x model" bar.
+
+    The reference is the decision bar's close because that is what the backtest enters at: weights
+    decided on bar t are executed over bar t+1 at its open (`decided.shift(1)` with `open_to_close`),
+    and in a continuous market that open is bar t's close.  The venue mark this used to read is an
+    index price sampled when the cycle woke; comparing to it answers a question M-Q08 did not ask.
+
+    Rows without `decision_close` - every row written before this field existed - are counted in
+    `without_reference` and excluded.  Falling back to the mark is exactly how the wrong number
+    would come back, and history is not backfilled."""
     cutoff = latest_ms - params.slippage_window_days * DAY_MS
     weighted = notional = 0.0
-    fills = 0
+    fills = without_reference = 0
     for row in trades:
         if int(row.get("bar_open_ms") or 0) < cutoff or row.get("flatten"):
             continue
-        reference, filled = row.get("price"), row.get("avg_price")
+        reference, filled = row.get("decision_close"), row.get("avg_price")
+        if reference is None and filled and row.get("executed_qty"):
+            without_reference += 1
+            continue
         quantity = row.get("executed_qty")
         if not reference or not filled or not quantity:
             continue
@@ -166,14 +195,17 @@ def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, 
             "value": None,
             "limit": params.max_slippage_bps,
             "fills": fills,
+            "without_reference": without_reference,
             "enforced": False,
-            "why": f"{fills} fills, needs {params.min_slippage_fills}",
+            "why": f"{fills} fills, needs {params.min_slippage_fills}"
+            + (f"; {without_reference} carry no decision_close" if without_reference else ""),
         }
     value = weighted / notional
     return {
         "value": value,
         "limit": params.max_slippage_bps,
         "fills": fills,
+        "without_reference": without_reference,
         "notional": notional,
         "enforced": True,
         "inside": value <= params.max_slippage_bps,

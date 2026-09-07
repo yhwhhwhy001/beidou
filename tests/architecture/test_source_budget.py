@@ -892,9 +892,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # Merged 2026-09-07: two branches raised this dict in parallel and the resolution is neither side's
 # numbers nor the larger of each - it is the merged tree re-measured, because a ceiling copied across a
 # merge asserts a count nobody took.  Both raises above stand as written; only the dict below is new.
+# Raise 2026-09-07, with the sentence the rule requires: +40 in beidou_live for L1-04.  M-Q08 is one of
+# the two criteria the demo phase is judged by, and its slippage clause was measured by an instrument
+# pointed at the venue mark - an index price sampled when the cycle woke - rather than at the price the
+# backtest enters at, then compared against a 10 bps gate whose own comment sourced it from the 7 bps
+# turnover cost (5 fee + 2 slippage) while the instrument excludes commission.  Fee-inclusive budget,
+# fee-exclusive measurement, 2.5x the stated bar: the measured +4.3 bps was outside M-Q08's 4 and
+# comfortably inside 10, so the gate reported green and could not have done otherwise.  Most of the 40
+# lines are the docstrings and the config comment recording those two disagreements, and the refusal of
+# the retired `max_slippage_bps` key - the parts that stop a later reader from "simplifying" the
+# reference back to the mark or re-adding a standalone threshold.
 CEILING = {
     "beidou_alpha": 5_838,
-    "beidou_live": 5_544,
+    "beidou_live": 5_584,
     "beidou_cli": 3_447,
     "beidou_data": 1_805,
     "beidou_exchange": 603,

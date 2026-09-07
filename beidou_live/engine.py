@@ -625,6 +625,7 @@ class LiveEngine:
             self._finish_cycle(record, targets.contributions)
             return record
         liquidity = self._liquidity(usable) if config.rebalance.max_participation > 0 else None
+        decision_closes = latest_closes(usable)
         orders, skipped = plan_rebalance(
             decision.targets,
             managed_symbols=managed,
@@ -667,6 +668,13 @@ class LiveEngine:
                     # M-Q03 reads this: how late an entry was, per fill, so the metric can be "bar-hours
                     # held by a late entry" rather than "share of fills that were late" (KILL-R6).
                     "late_seconds": late_seconds(bar_open_ms, self.config.interval_ms, at_ms=self.clock.now_ms()),
+                    # L1-04 / M-Q08: the price the BACKTEST would have entered at, recorded per fill so
+                    # slippage can be measured against it.  The instrument used to read the venue mark
+                    # from the cycle's snapshot, which is an index price sampled when the loop woke; the
+                    # backtest enters at the execution bar's open, and in a continuous market that is the
+                    # decision bar's close.  Measuring against the mark answered a question M-Q08 does
+                    # not ask, and the 10 bps gate it was compared to was a fee-inclusive budget.
+                    "decision_close": decision_closes.get(order.symbol),
                     **report.to_dict(),
                 }
             )

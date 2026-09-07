@@ -203,7 +203,13 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   vol_band: [0.26, 0.38]      # 30-day realised annualised vol; 0.30 target +/- 20%
   vol_window_days: 30
   min_vol_bars: 240           # ten days of hourly cycles before this estimate is allowed to say anything
-  max_slippage_bps: 10.0      # against the cost model's 7 bps; above this, the impact model owed before
+  # L1-04, fixed 2026-09-07.  The bar is M-Q08's "slippage <= 2x model", so it is written that way
+  # rather than as a standalone number.  The retired `max_slippage_bps: 10.0` said "against the cost
+  # model's 7 bps", but 7 is turnover_bps - the 5 bps taker fee plus 2 bps slippage - while the
+  # instrument measures price slippage alone.  A fee-inclusive budget judging a fee-exclusive number,
+  # at 2.5x the stated bar, could not fail: the measured +4.3 bps was outside M-Q08's 4 and inside 10.
+  model_slippage_bps: 2.0     # what the backtest's cost model charges for slippage
+  slippage_multiple: 2.0      # -> 4.0 bps.  Setting max_slippage_bps here is now refused, not ignored
   slippage_window_days: 30    # real capital (KILL-A) is owed sooner
   min_slippage_fills: 30
   # M-Q06 (DL-X1): alert when the nearest REACHABLE liquidation price comes inside this many daily-vol
