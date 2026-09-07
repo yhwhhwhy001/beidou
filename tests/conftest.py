@@ -8,6 +8,13 @@ import pytest
 
 from beidou_alpha.panel import Panel
 
+# M-003's second threshold, wired here because a hook only fires from a conftest.  Imported rather
+# than re-declared so there is exactly one copy of the arithmetic, and it is the one under test.
+from tests.architecture.suite_duration import (  # noqa: F401 - pytest collects these by name
+    pytest_configure,
+    pytest_sessionfinish,
+)
+
 FIXTURES = Path(__file__).parent / "fixtures"
 AUGUST_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
 
