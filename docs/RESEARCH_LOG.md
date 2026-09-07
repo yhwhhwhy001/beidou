@@ -2651,3 +2651,18 @@ RISK-P2 **假设**每次部署重启带来迟到成交和 7bps 代价；这一�
 ## 2026-09-07 · 规则：短窗描述性实盘重放不计费（K-EX07 的处置，操作者裁定）
 
 定义：在实盘记录（`cycles.jsonl` 的目标权重 × 公开收盘价）上、窗口 ≤ 100 根 bar、且不用于选择任何参数的重放，记为"描述性重放"，不计入 `trials.jsonl`。条件：(1) 报告里必须标 E5 并写明 n；(2) 不得据此改任何配置；(3) 超过 100 bar 或用于选择即按诊断试验计费。首例：`2026-09-07-exits-adaptive-tp-sl-deep-analysis.md` 的 E-EX14（7 配置 × 60 bar）。
+
+## 2026-09-07 · P22 裁决：止盈 3σ/4σ 与当前波动单位三个新候选全部 REFUTED，现行 TP6σ/6σ-entry 维持
+
+预登记：`ec5f618`（2026-09-07T16:07:15+08:00）；运行：`overlay-20260907T085119Z`（时点·entry）、`overlay-20260907T085155Z`（时点·current）、`overlay-20260907T085209Z`（静态·entry）、`overlay-20260907T085218Z`（静态·current），四份报告 `generated_at`（08:51:19Z 起）均晚于预登记提交（08:07:15Z）。`portfolio.vol_target` 四份报告均为 `0.30`（已核对，非 0.15）。账本 tsmom +10 / flow +10（预期 10/10；与 `trials.jsonl` 新增的 20 行逐一核对，两策略各 10 条，无出入，不需援引"11–12 可接受"条款）。静态 universe 现为存活池 18 个 symbol（P11 系列报告为 15 个）；D-017 按各报告自身 baseline 判定，规则不受影响，但本报告数字与 P11 系列不可横向比较。
+
+| 候选 | 时点 OOS / MDD | 静态 OOS / MDD | D-017 双通过 | 对 TP6-entry | 退出次数比 | 判定 |
+| --- | --- | --- | --- | --- | --- | --- |
+| TP3-entry | 1.7151 / −0.2328 | 1.2152 / −0.2377 | 否（静态 Sharpe 损失 0.174 > 0.10） | fail（双 universe Sharpe 均 < TP6-entry − 0.02） | 2.39 | REFUTED |
+| TP4-entry | 1.7136 / −0.2513 | 1.2958 / −0.3024 | 否（静态 MDD 未改善：−0.3024 差于基线 −0.3011） | fail（双 universe Sharpe 均 < TP6-entry − 0.02） | 1.70 | REFUTED |
+| TP6-entry（现行，0.30 重跑） | 1.8483 / −0.2421 | 1.3337 / −0.2821 | 对 baseline：时点通过、静态通过 | — | 1.00 | 关闭 K-EX03 的采纳前提 |
+| TP6-current | 1.7137 / −0.2537 | 1.3209 / −0.3013 | 否（双 universe MDD 均未改善） | fail（双 universe MDD 均差于 TP6-entry） | 1.14 | REFUTED |
+
+节流 0.05/0.20/0.25 在 0.30 上：时点 1.3731/−0.2023 vs baseline 1.7737/−0.2534 → fails D-017；静态 0.9078/−0.2118 vs baseline 1.3888/−0.3011 → fails D-017（informational，保持关闭）。
+
+Claim 更新：C-EX02a-TP → REFUTED（3σ 因静态 Sharpe 损失超限、4σ 因静态 MDD 未改善，均未双通过 D-017，且都够不到 TP6-entry − 0.02 的 Sharpe 门槛）；C-EX02c → REFUTED（current 单位在时点与静态上 MDD 都没有改善，反而略差于各自 baseline，也差于 TP6-entry）。三档判定与预登记先验一致（止盈更紧为负；current 方向本不确定，落地为负）。下一步：记负结果，Task 7 是否进入由 Q1 决定。
