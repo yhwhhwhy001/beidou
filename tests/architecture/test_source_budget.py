@@ -785,10 +785,14 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # DL-L5's last clause asks that a non-empty `foreign_positions` at startup 告警而非静默.  It logged.
 # Those are open positions on the venue the loop has decided not to manage, and a line in a file
 # nobody reads is exactly what "silent" means to an operator - L1-06's whole family.
+# (+4 cli: the paragraph on why `alert-test` deliberately does NOT join that shared dedup file - a
+# drill run twice in an hour must send twice, or the instrument reports a failure the second time
+# and teaches the operator to distrust it.  Added after the ceiling above was measured, which is
+# how a red tree reached main for one commit; the ratchet caught it on the next run.)
 CEILING = {
     "beidou_alpha": 5_808,
     "beidou_live": 5_261,
-    "beidou_cli": 3_402,
+    "beidou_cli": 3_406,
     "beidou_data": 1_375,
     "beidou_exchange": 603,
     "beidou_shared": 284,
