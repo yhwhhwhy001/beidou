@@ -186,6 +186,28 @@ def income_drift(
     return {"status": status, "by_strategy": rows}
 
 
+def collateral_share(*, equity: float, usdt_equity: float | None) -> dict[str, float | None]:
+    """L1-10: the part of `equity` that is collateral rather than the book's own currency.
+
+    The demo account is on multi-assets margin, so `totalMarginBalance` - what `drawdown_state` and the
+    vol sizing divide by - carries non-USDT assets valued at mark.  BTC moves and measured equity moves
+    with it on a bar where the book did nothing, so a drawdown reading that trips the ladder can belong
+    to BTC rather than to the strategy.
+
+    Reported, never enforced, and deliberately NOT subtracted from the equity the book sizes on: changing
+    that denominator changes every position size, which is a construction change - it resets M-010's
+    window and is the operator's decision on its own merits, not a bug fix. What was missing is that the
+    divergence was invisible, and that is what this closes.
+
+    `None` rather than 0.0 when the venue did not report a USDT balance: zero would read as "all of it is
+    collateral", which is the opposite of "we do not know" - the `metrics_parity` lesson again.
+    """
+    if usdt_equity is None or equity <= 0:
+        return {"equity": equity, "usdt_equity": usdt_equity, "collateral": None, "share": None}
+    collateral = equity - usdt_equity
+    return {"equity": equity, "usdt_equity": usdt_equity, "collateral": collateral, "share": collateral / equity}
+
+
 def _has_dispersion(values: np.ndarray, *, minimum: int = 48) -> bool:
     """Enough bars, and a spread wider than floating-point noise.
 
@@ -836,6 +858,12 @@ def daily_payload(
         "equity_start": equities[0] if equities else None,
         "equity_end": equities[-1] if equities else None,
         "equity_change_pct": (equities[-1] / equities[0] - 1.0) if len(equities) >= 2 and equities[0] else None,
+        # L1-10: the last cycle's split of that equity into USDT and collateral.  Rows written before the
+        # engine recorded it carry nothing, and nothing is what gets reported - not a zero.
+        "collateral": next(
+            (row["collateral"] for row in reversed(cycles) if isinstance(row.get("collateral"), dict)),
+            None,
+        ),
         "orders": statuses,
         "traded_notional": traded,
         "realized_pnl": realized,
@@ -1177,6 +1205,13 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     k: payload[k]
                     for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
                 },
+            ),
+            (
+                # L1-10: the ladder and the vol sizing divide by the line above, and on multi-assets
+                # margin that line carries BTC.  Printing the split is what lets a reader tell a
+                # drawdown the strategy caused from one the collateral did.  Reported, never enforced.
+                "Collateral in equity (L1-10)",
+                dict(payload.get("collateral") or {"share": None, "why": "no cycle recorded it yet"}),
             ),
             (
                 # AC-L4: the same sentence as the line below it, one restart over.  RISK-P2 assumed a

@@ -216,7 +216,7 @@ def live_run(
     if paper:
         store = StateStore(Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live")).with_name("paper"))
     else:
-        store = build_store(payload)
+        store = build_store(payload, dry_run=dry_run)
     market = build_market_data(payload)
     venue: Any
     if paper:
@@ -420,7 +420,7 @@ def live_status(
 def _store_for(payload: dict[str, Any], paper: bool) -> StateStore:
     if paper:
         return StateStore(Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live")).with_name("paper"))
-    return build_store(payload)
+    return build_store(payload, dry_run=False)  # status/report read what the LIVE loop wrote
 
 
 @live.command("verify")
@@ -501,7 +501,7 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
         market=build_market_data(payload),
         venue=venue,
         clock=SystemClock(),
-        store=build_store(payload),
+        store=build_store(payload, dry_run=False),  # flatten is a real action, never a rehearsal
     )
 
     async def main() -> None:

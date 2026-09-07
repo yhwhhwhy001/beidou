@@ -246,6 +246,20 @@ def build_venue(profile: dict[str, Any], kill_switch_path: Path | Sequence[Path]
     return BinanceUsdmVenue(client)
 
 
-def build_store(profile: dict[str, Any]) -> StateStore:
+def build_store(profile: dict[str, Any], *, dry_run: bool) -> StateStore:
+    """The loop's state directory, with rehearsals sent somewhere else (L1-13).
+
+    A dry run used to share `paths.state_dir` with the real loop, so rehearsing appended to the live
+    `cycles.jsonl` and rewrote `heartbeat.json` and `state.json`.  `live status --check` reads that
+    heartbeat to decide whether the loop is alive and the daily report counts those cycle rows, so a
+    rehearsal could make a dead loop look fresh, or put bars into a metric meant to describe what the
+    book actually did.
+
+    The suffix is derived rather than configured: a separate key would have to be remembered exactly
+    when someone is in a hurry, which is when rehearsals happen, and the live profile sets `state_dir`
+    explicitly - so honouring an explicit setting would have kept the bug for the one profile anybody
+    actually rehearses.
+    """
     paths = profile.get("paths", {}) or {}
-    return StateStore(paths.get("state_dir", ".beidou/live"))
+    directory = Path(paths.get("state_dir", ".beidou/live"))
+    return StateStore(directory.with_name(directory.name + "-dry-run") if dry_run else directory)

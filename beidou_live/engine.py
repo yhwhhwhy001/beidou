@@ -38,6 +38,7 @@ from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, 
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, is_own_order, startup_reconcile, take_snapshot
+from beidou_live.reports import collateral_share
 from beidou_live.scheduler import (
     last_closed_bar_open_ms,
     late_seconds,
@@ -569,6 +570,10 @@ class LiveEngine:
             "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
             "as_of_ms": latest_bar_ms,
             "equity": snapshot.equity,
+            # L1-10: how much of that equity is collateral rather than USDT.  Recorded, not subtracted:
+            # the ladder and the vol sizing still divide by `equity`, and changing that denominator is a
+            # construction decision.  What this buys is telling a BTC-driven drawdown from a real one.
+            "collateral": collateral_share(equity=snapshot.equity, usdt_equity=snapshot.account.usdt_equity),
             "gross_before": snapshot.gross_notional(),
             # M-007 is about the standing book, not about what one cycle's orders ask for: record the
             # initial margin the positions already consume so the daily report can read a real series.

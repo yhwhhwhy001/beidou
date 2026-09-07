@@ -124,6 +124,13 @@ class BinanceUsdmVenue:
         # risk-adding order while the account is in fact 95% free.  Maintenance margin and margin balance stay
         # sane, so the corruption is detectable: initial margin can never exceed the margin balance.
         reliable = equity <= 0 or initial_margin <= equity
+        # L1-10: keep the per-asset breakdown instead of discarding it.  `assets` is already in this
+        # payload; without it nobody could tell how much of a drawdown reading was BTC collateral.
+        usdt_equity: float | None = None
+        for asset in payload.get("assets") or []:
+            if str(asset.get("asset", "")).upper() == "USDT":
+                usdt_equity = _float(asset.get("marginBalance"))
+                break
         return AccountState(
             wallet_balance=_float(payload.get("totalWalletBalance")),
             available_balance=_float(payload.get("availableBalance")),
@@ -132,6 +139,7 @@ class BinanceUsdmVenue:
             hedge_mode=False,
             can_trade=bool(payload.get("canTrade", True)),
             margin_fields_reliable=reliable,
+            usdt_equity=usdt_equity,
         )
 
     async def positions(self) -> dict[str, Position]:

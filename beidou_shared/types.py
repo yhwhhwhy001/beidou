@@ -98,6 +98,11 @@ class AccountState:
     # False when the venue's margin arithmetic is self-inconsistent, so ``available_balance`` cannot be
     # trusted and a caller holding the real positions must compute the margin headroom itself.
     margin_fields_reliable: bool = True
+    # L1-10: the USDT slice of `equity`.  On multi-assets margin the rest is collateral valued at mark,
+    # so it moves with BTC on bars the book did nothing.  Reported, never subtracted from what the book
+    # sizes on - that denominator is a construction decision, not a parsing one.  ``None`` when the venue
+    # did not report a per-asset breakdown, because 0.0 would read as "all of it is collateral".
+    usdt_equity: float | None = None
 
     def gross_notional(self) -> float:
         return sum(abs(position.notional) for position in self.positions.values())

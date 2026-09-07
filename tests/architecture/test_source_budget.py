@@ -902,13 +902,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # lines are the docstrings and the config comment recording those two disagreements, and the refusal of
 # the retired `max_slippage_bps` key - the parts that stop a later reader from "simplifying" the
 # reference back to the mark or re-adding a standalone threshold.
+# Raise 2026-09-07 (second today), with the sentence the rule requires: +54 beidou_live, +8
+# beidou_exchange, +5 beidou_shared, for L1-13 and L1-10 - two findings the quality report recorded and
+# nobody had contracted.  L1-13: `--dry-run` shared `paths.state_dir` with the real loop, so a rehearsal
+# appended to the live cycles.jsonl and rewrote heartbeat.json, which `live status --check` reads to
+# decide whether the loop is alive - a rehearsal could make a dead loop look fresh.  The directory is now
+# derived (`<state_dir>-dry-run`) and `build_store`'s `dry_run` is REQUIRED, so a caller cannot forget it
+# the way one had.  L1-10: `/fapi/v2/account` carries a per-asset breakdown that was parsed away, so on
+# multi-assets margin nobody could tell how much of a drawdown reading was BTC collateral rather than the
+# book.  It is recorded and printed, NOT subtracted from what the book sizes on - that denominator is a
+# construction decision that would reset M-010's window, and it belongs to the operator, not to a fix.
 CEILING = {
     "beidou_alpha": 5_838,
-    "beidou_live": 5_584,
+    "beidou_live": 5_638,
     "beidou_cli": 3_447,
     "beidou_data": 1_805,
-    "beidou_exchange": 603,
-    "beidou_shared": 284,
+    "beidou_exchange": 611,
+    "beidou_shared": 289,
 }
 
 
