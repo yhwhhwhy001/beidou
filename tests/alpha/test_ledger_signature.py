@@ -254,3 +254,17 @@ def test_outside_a_checkout_it_falls_back_to_the_relative_default(tmp_path: Path
     monkeypatch.delenv("BEIDOU_TRIALS_LEDGER", raising=False)
 
     assert resolve_ledger_path(root=None, start=tmp_path) == Path("reports/research/trials.jsonl")
+
+
+def test_a_mined_sleeve_in_a_book_pays_for_its_search_too() -> None:
+    """DL-K2 reached `validate` and stopped there; `research book` scores the same sleeve.
+
+    A candidate promoted through `book` rather than through `validate` would have been charged the
+    search on one path and not the other - the accounting depending on which command an operator
+    happened to run, which is the class of hole this whole batch is about.
+    """
+    from beidou_alpha.validation.ledger import ledger_scope
+
+    assert ledger_scope("mined_abc") == ("mined_abc", "mined")
+    assert ledger_scope("tsmom") == ("tsmom",)
+    assert ledger_scope("xsmom") == ("xsmom",)

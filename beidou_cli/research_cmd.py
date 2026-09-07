@@ -1308,7 +1308,9 @@ def _standalone_block(
         run_id="",
     )
     records = (
-        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), strategy) if ledger_path.exists() else []
+        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), ledger_scope(strategy))
+        if ledger_path.exists()
+        else []
     )
     # an exact replay of a recorded configuration on the same data is one trial, not two
     prior_records = [r for r in records if _trial_signature(r) != _trial_signature(record)]
