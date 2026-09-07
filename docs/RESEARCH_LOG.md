@@ -2624,3 +2624,64 @@ RISK-P2 **假设**每次部署重启带来迟到成交和 7bps 代价；这一�
 这不是「还没跑演练」，是**前置条件从来没满足过**。RISK-P1 的人类确认点写的是「**重启 #1 前**操作者确认第二通道已收到演练告警」——重启 #1 和 #2 都已经发生了。
 
 后果具体：DL-L2 的熔断「先说话再退出」现在整个压在**一个 webhook** 上。那个 URL 挂掉时，`breaker_stop` 会重抛原异常 → 非零退出 → launchd 每 60 秒把它拉起来撞同一堵墙（L1-03 的形状）。**代码是对的（B1 就是这么写的），缺的是运维前提。** 这是操作者的动作，不是我能补的。
+
+## 2026-09-07 · 告警通道从配置那天起就是哑的——而且它长得像在工作
+
+操作者裁定只做一条通道（飞书），不配第二通道。**这条裁定把 `send()` 的返回值从 RISK-P1 的一半变成了全部**，于是「它到底送出去过没有」从悬念变成了必须回答的问题。
+
+答案是：**没有。一条都没有。**
+
+### 一、实测，不是推断
+
+同一个机器人，两种 body：
+
+| payload | HTTP | 响应体 |
+| --- | --- | --- |
+| 旧的扁平 `{"text": ...}` | **200** | `{"code": 19002, "msg": "params error, msg_type need"}` |
+| 新的 `msg_type`/`content` | 200 | `{"code": 0, "msg": "success"}` |
+
+再补一刀：**把 token 换成完全无效的串，飞书照样回 HTTP 200**（`{"code": 19001, "msg": "param invalid: incoming webhook access token invalid"}`）。
+
+也就是说，旧的判定 `status_code < 300` 之下：**payload 写错是成功，token 写错也是成功。** 唯一会被判成失败的是网络层面的连不上。
+
+### 二、后果的形状
+
+熔断（DL-L2）被允许安静退出的**唯一条件**是「至少一个通道接受了它的最后一句话」。在这个 bug 下，`breaker_stop` 会拿到 `True`、抛 `BreakerTripped`、exit 0，launchd 按 `SuccessfulExit=false` 不再拉起——
+
+**书停了，仓位留在场上，而没有任何人被告知。**
+
+这正是 KILL-P1 与 RISK-P1 写下来要防的那件事，而它一直是活的。代码的逻辑是对的（B1 写得没问题），错的是它据以判断的那个布尔。
+
+日志里没有一条 `alert rejected` —— 因为在旧判定下，永远不会有。**一个从不报错的通道和一个从不工作的通道，长得一模一样。**
+
+### 三、两条路径，同一个 bug
+
+1. **`beidou_live/alerts.py`**（循环 + `report daily`）——已修。
+2. **`deploy/run_check.sh` 的 `notify()`**——第二份拷贝，也是同一个扁平 payload。更糟：它用 `curl -fsS ... || echo "webhook delivery failed"`，而 `-f` 只看状态码，HTTP 200 下 curl **成功**，所以连它自己那句失败提示都不会打印。
+
+**而第 2 条才是「循环死了」时唯一会通知你的路径**——`live status --check` 失败意味着心跳过期，也就是进程没了。这条告警从来不可送达。
+
+（并行会话记的「com.beidou.check 三天红信号」是同一段时间的事：那三天的 FAIL 通知，一条也没发出去。）
+
+修法是复用同一份实现而不是写第三份拷贝：`run_check.sh` 现在调 `WebhookAlerts`，一份「这个 provider 读哪种形状」和一份「它到底收没收」。
+
+### 四、三处改动
+
+- **`payload_for(url, text)`**：按 URL 主机选形状。
+- **`accepted(response)`**：provider 自己报结果时信 provider（`code` / `StatusCode`），不报时仍信状态码。**规则故意窄——它只能把假的成功变成失败，反过来不行。**
+- **`beidou live alert-test`**：AC-L3 要「触发一次演练告警」，而此前触发告警的唯一路径是真出故障。**熔断所依赖的那个信号，不先弄坏点什么就没法演练——这正是它从来没被演练过的原因。**
+
+### 五、AC-L3 验收（实跑，带证据）
+
+```
+$ beidou live alert-test --repeat 10
+channel: https://open.larksuite.com/...(85 chars)
+delivered 1 message(s); 9 suppressed as duplicates (dedup window)
+EXIT=0
+```
+
+1 条送达、9 条被去重窗口压掉——AC-L3 的两半都过。**RISK-P1 那个从没满足过的人类确认点，现在补上了，而且是带证据地补上。**
+
+### 六、一条方法论
+
+我在提交信息里写下「这条通道**可能**自配置起就是哑的」，那是个未经验证的断言。第 §十 条教训说的就是这个：带「可能/待/拟」的备注会变成后来者眼里的事实。所以我用同一类演练 POST 把它了结了——**一句可能错的断言留在永久记录里，比多发一条测试消息坏得多。**

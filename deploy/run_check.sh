@@ -16,12 +16,23 @@ elif [ -f "$HOME/.zshrc" ]; then
 fi
 cd "$REPO" || exit 78
 stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
+# This is the path that tells the operator the LOOP IS DOWN, and it was the second copy of a bug that
+# made both alert paths silent.  It posted Slack's flat {"text": ...} to a Lark bot, which answers
+# HTTP 200 with {"code": 19002, "msg": "params error, msg_type need"} and drops the message - so
+# `curl -f` succeeded, the `|| echo` never fired, and the script reported nothing wrong while nothing
+# was delivered.  Measured 2026-09-07 against the real bot, not inferred.
+#
+# It now calls the same `WebhookAlerts` the loop uses rather than hand-rolling a third copy: one
+# implementation of "which shape does this provider read" and "did it actually take the message".
 notify() {
   echo "[$(stamp)] FAIL $1: $2"
   if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}" ]; then
-    curl -fsS -X POST -H 'Content-Type: application/json' \
-      --data "$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1]}))' "beidou check FAILED ($1): $2")" \
-      "$BEIDOU_ALERTS_WEBHOOK_URL" >/dev/null 2>&1 || echo "[$(stamp)] webhook delivery failed"
+    "$REPO/.venv/bin/python" -c '
+import asyncio, sys
+from beidou_live.alerts import WebhookAlerts
+sys.exit(0 if asyncio.run(WebhookAlerts(sys.argv[1]).send(sys.argv[2], force=True)) else 1)
+' "$BEIDOU_ALERTS_WEBHOOK_URL" "beidou check FAILED ($1): $2" \
+      || echo "[$(stamp)] webhook did NOT deliver the line above"
   fi
 }
 failed=0
