@@ -117,9 +117,18 @@ def main() -> None:
         help="override tsmom's; P11-b ran at 0, the registry has said 72 since 2026-09-05",
     )
     parser.add_argument("--symbols", default="", help="comma-separated; P11-b's static run was 15 names, today 18")
+    parser.add_argument(
+        "--symbols-file",
+        default="",
+        help="file holding the comma- or newline-separated list; the pit run pins 205 names, "
+        "which is past what a command line should carry",
+    )
     parser.add_argument("--from", dest="start", default=None, help="YYYY-MM-DD inclusive")
     parser.add_argument("--to", dest="end", default=None, help="YYYY-MM-DD exclusive")
     args = parser.parse_args()
+    if args.symbols_file:
+        raw = Path(args.symbols_file).read_text(encoding="utf-8")
+        args.symbols = ",".join(part for part in raw.replace("\n", ",").split(",") if part.strip())
 
     profile = load_yaml(args.profile)
     model, _ = build_model_from_profile(profile)
