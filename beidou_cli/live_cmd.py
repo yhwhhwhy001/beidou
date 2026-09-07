@@ -22,7 +22,7 @@ from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, 
 from beidou_cli import live, report
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_live.alerts import WebhookAlerts
-from beidou_live.composition import build_model, load_registry
+from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
     account_kill_switches,
     build_market_data,
@@ -554,6 +554,8 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         probes_from_registry(registry),
         RiskBudgetParams.from_mapping(payload.get("risk_budget", {}) or {}),
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
+        vol_target=portfolio_params(payload).vol_target,
+        data_root=data_root,
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")

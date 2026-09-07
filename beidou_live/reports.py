@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
+from beidou_alpha.panel import interval_seconds
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import max_drawdown, sharpe
 from beidou_data.store import KlineStore
@@ -338,6 +340,125 @@ def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
     }
 
 
+BACKTEST_EXITS_PER_WEEK = 562.0 / 49_735.0 * 24.0 * 7.0  # P11: 544 take-profits + 18 stops over 49,735 hourly bars
+COUNTERFACTUAL_N_FOR_DECISION = 16  # a half-sigma per-event effect at t = 2; about two months at the rate above
+TURNOVER_BPS = 7.0
+
+
+def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dict[str, Any]:
+    """DL-EX0: the size of a normal day, so a giveback can be read as a multiple of it instead of as a feeling.
+
+    ``design`` is vol_target / sqrt(365) of the day's last equity; ``realised`` is the std of hourly equity
+    changes over the trailing 30 days of traded cycles (bars re-baselined by an external transfer are
+    skipped), scaled by sqrt(24); ``peak_giveback`` is the largest drop from the running equity high inside
+    the day.  The expected exit count pro-rates the P11 backtest rate for the whole book to the cycles seen
+    so far in the current construction.
+    """
+    trailing = _cycles(store, window_days=30)
+    today = [row for row in trailing if _day_of(row) == day]
+    equities = [float(row["equity"]) for row in today]
+    last = equities[-1] if equities else None
+    design = (float(vol_target) / math.sqrt(365.0) * last) if (vol_target and last) else None
+    steps = [
+        float(b["equity"]) - float(a["equity"])
+        for a, b in pairwise(trailing)
+        if not (b.get("external_flows") or {}).get("rebaselined")
+    ]
+    realised = float(np.std(steps, ddof=1) * math.sqrt(24.0)) if len(steps) >= 24 else None
+    peak = giveback = None
+    for value in equities:
+        peak = value if peak is None else max(peak, value)
+        giveback = (peak - value) if giveback is None else max(giveback, peak - value)
+    window = evidence_window(store)
+    bars = int(window.get("bars") or 0)
+    exits = sum(len(row.get("exit_events") or []) for row in trailing if int(row.get("bar_open_ms") or 0) >= int(window.get("since_ms") or 0))
+    return {
+        "design_daily_sigma_u": design,
+        "realised_daily_sigma_u": realised,
+        "peak_giveback_u": giveback,
+        "giveback_in_design_sigma": (giveback / design) if (giveback is not None and design) else None,
+        "expected_exits_so_far": BACKTEST_EXITS_PER_WEEK / 7.0 * (bars / 24.0),
+        "exits_so_far": exits,
+    }
+
+
+def _store_closes(root: str | Path, interval: str) -> Callable[[str], pd.Series]:
+    def loader(symbol: str) -> pd.Series:
+        frame = KlineStore(root).load(symbol, interval)
+        return pd.Series(frame["close"].astype(float).to_numpy(), index=frame["open_time"].astype(int).to_numpy())
+
+    return loader
+
+
+def exit_counterfactuals(
+    store: StateStore,
+    *,
+    closes: Callable[[str], pd.Series] | None = None,
+    root: str | Path = ".beidou/data",
+    interval: str = "1h",
+    horizons: Sequence[int] = (24, 72),
+) -> dict[str, Any]:
+    """M-005 as monitoring (K-EX12): for every exit the loop ever made, what the position would have earned had it stayed.
+
+    Counterfactual P&L at horizon h = target x equity x (close_{t+h} / close_t - 1), with close_t the price the
+    event recorded and close_{t+h} the mainnet close h bars later; the cost the exit paid is 2 x 7 bps x
+    |target| x equity (out and back in).  Events younger than the longest horizon are ``pending``.  About 16
+    priced events are needed before the mean says anything (a half-sigma effect at t = 2), which at the
+    backtest's 1.9 exits per week is roughly two months - the reason this monitors and D-017 keeps the verdict.
+    """
+    loader = closes or _store_closes(root, interval)
+    span_ms = int(interval_seconds(interval) * 1000)
+    rows: list[dict[str, Any]] = []
+    pending = 0
+    cost_saved = 0.0
+    cache: dict[str, pd.Series] = {}
+    for record in store.read_jsonl(store.cycles_path):
+        events = record.get("exit_events") or []
+        if not events or record.get("equity") is None:
+            continue
+        equity = float(record["equity"])
+        bar = int(record.get("bar_open_ms") or 0)
+        for event in events:
+            if event.get("rule") == "COOLDOWN" or not event.get("price"):
+                continue
+            symbol = str(event.get("symbol"))
+            notional = float(event.get("target") or 0.0) * equity
+            cost_saved += 2.0 * TURNOVER_BPS / 10_000.0 * abs(notional)
+            if symbol not in cache:
+                try:
+                    cache[symbol] = loader(symbol)
+                except FileNotFoundError:
+                    cache[symbol] = pd.Series(dtype=float)
+            series = cache[symbol]
+            row = {"symbol": symbol, "rule": event.get("rule"), "bar_open_ms": bar, "price": float(event["price"])}
+            complete = True
+            for horizon in horizons:
+                future = bar + horizon * span_ms
+                if future in series.index:
+                    row[str(horizon)] = notional * (float(series.loc[future]) / float(event["price"]) - 1.0)
+                else:
+                    row[str(horizon)] = None
+                    complete = False
+            pending += 0 if complete else 1
+            rows.append(row)
+    by_horizon: dict[str, dict[str, Any]] = {}
+    for horizon in horizons:
+        values = [float(row[str(horizon)]) for row in rows if row.get(str(horizon)) is not None]
+        by_horizon[str(horizon)] = {
+            "n": len(values),
+            "mean_counterfactual_u": float(np.mean(values)) if values else None,
+            "share_where_staying_paid": float(np.mean([v > 0 for v in values])) if values else None,
+        }
+    return {
+        "events": len(rows),
+        "pending": pending,
+        "cost_saved_u": cost_saved,
+        "by_horizon": by_horizon,
+        "n_needed_for_decision": COUNTERFACTUAL_N_FOR_DECISION,
+        "rows": rows[-20:],
+    }
+
+
 def plan_gaps(store: StateStore, day: str) -> dict[str, Any]:
     """Symbols the planner could not act on, and why - including the band's own live falsifier.
 
@@ -636,6 +757,10 @@ def daily_payload(
     probes: Sequence[ProbeParams] = (),
     risk_budget: RiskBudgetParams | None = None,
     dataset: Mapping[str, Any] | None = None,
+    *,
+    vol_target: float | None = None,
+    data_root: str | Path = ".beidou/data",
+    closes: Callable[[str], pd.Series] | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -716,6 +841,8 @@ def daily_payload(
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
+        "noise_scale": noise_scale(store, day, vol_target=vol_target),
+        "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
         "data_coverage": data_coverage(store),
@@ -1155,6 +1282,28 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "pool_entered": json_dumps((payload.get("events") or {}).get("pool_entered") or []),
                     "pool_left": json_dumps((payload.get("events") or {}).get("pool_left") or []),
                     "pool_quarantined": json_dumps((payload.get("events") or {}).get("pool_quarantined") or []),
+                },
+            ),
+            (
+                "Noise scale (DL-EX0)",
+                {
+                    "design_daily_sigma_u": _fmt_num((payload.get("noise_scale") or {}).get("design_daily_sigma_u")),
+                    "realised_daily_sigma_u": _fmt_num((payload.get("noise_scale") or {}).get("realised_daily_sigma_u")),
+                    "peak_giveback_u": _fmt_num((payload.get("noise_scale") or {}).get("peak_giveback_u")),
+                    "giveback_in_design_sigma": _fmt_num((payload.get("noise_scale") or {}).get("giveback_in_design_sigma")),
+                    "expected_exits_so_far": _fmt_num((payload.get("noise_scale") or {}).get("expected_exits_so_far")),
+                    "exits_so_far": (payload.get("noise_scale") or {}).get("exits_so_far"),
+                },
+            ),
+            (
+                "Exit counterfactuals (M-005, monitoring only)",
+                {
+                    "events": (payload.get("exit_counterfactual") or {}).get("events"),
+                    "pending": (payload.get("exit_counterfactual") or {}).get("pending"),
+                    "mean_24h_u": _fmt_num(((payload.get("exit_counterfactual") or {}).get("by_horizon") or {}).get("24", {}).get("mean_counterfactual_u")),
+                    "mean_72h_u": _fmt_num(((payload.get("exit_counterfactual") or {}).get("by_horizon") or {}).get("72", {}).get("mean_counterfactual_u")),
+                    "cost_saved_u": _fmt_num((payload.get("exit_counterfactual") or {}).get("cost_saved_u")),
+                    "n_needed_for_decision": (payload.get("exit_counterfactual") or {}).get("n_needed_for_decision"),
                 },
             ),
             (

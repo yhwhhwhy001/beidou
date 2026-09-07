@@ -745,10 +745,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # beyond the plan's draft, stating why the denominator is always `entry_price` and never the current price,
 # so a later reader cannot "simplify" the two reference points back together.  The live delta lands exactly
 # on the plan's +1.
+# Raise 2026-09-07, with the sentence the rule requires: +77 in beidou_live and +2 in beidou_cli for two
+# observations the exits analysis found missing - a noise scale (design daily sigma in USDT, so a 65 U
+# giveback reads as 0.4 sigma rather than as a feeling) and M-005's promised 24/72h counterfactual, shipped
+# as monitoring with its own n-for-decision, because at 1.9 exits a week it cannot adjudicate in 30 days.
+# Measured rather than estimated, the beidou_live delta is +149, not +77: `noise_scale`, `exit_counterfactuals`
+# and their three module constants alone are 119 lines, the two new `daily_markdown` sections add another 22,
+# and the `daily_payload` signature, its two new dict keys and the three import lines the fix needs are the
+# remaining 8 - the brief's own shown implementation already summed to this much once copied through, so +77
+# undercounted the code it specified rather than describing scope added during implementation.  The
+# beidou_cli delta lands exactly on the brief's +2.
 CEILING = {
     "beidou_alpha": 5_832,
-    "beidou_live": 5_178,
-    "beidou_cli": 3_313,
+    "beidou_live": 5_327,
+    "beidou_cli": 3_315,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
     "beidou_shared": 284,

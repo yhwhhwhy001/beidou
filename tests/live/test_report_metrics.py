@@ -40,6 +40,12 @@ def _cycle(i: int, *, construction: str = "aaa", equity: float = 10_000.0, **ext
     return {"bar_open_ms": BASE + i * HOUR, "bar": f"bar-{i}", "equity": equity, "construction": construction, **extra}
 
 
+def _aligned(i: int, equity: float, **extra: object) -> dict:
+    """Like `_cycle`, but starting at a UTC midnight so a three-bar giveback cannot straddle a day boundary."""
+    start = BASE - BASE % (24 * HOUR) + 24 * HOUR
+    return {"bar_open_ms": start + i * HOUR, "bar": f"bar-{i}", "equity": equity, "construction": "aaa", **extra}
+
+
 def test_evidence_window_starts_at_the_current_construction(tmp_path: Path) -> None:
     """Changing the band or a signal parameter resets what the live record is evidence of."""
     cycles = [_cycle(i, construction="old") for i in range(5)] + [_cycle(i, construction="new") for i in range(5, 9)]
@@ -146,6 +152,53 @@ def _day_of_bar(bar_ms: int) -> str:
     return datetime.fromtimestamp(bar_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
 
 
+def test_noise_scale_reads_a_giveback_in_design_sigma(tmp_path: Path) -> None:
+    """DL-EX0: a 65 U giveback on a 10,949 U book at vol_target 0.30 is 0.38 design daily sigma, not an event."""
+    from beidou_live.reports import BACKTEST_EXITS_PER_WEEK, noise_scale
+
+    path = [10_704.0 + 5.0 * i for i in range(60)] + [11_014.0, 10_979.0, 10_949.0]
+    cycles = [_aligned(i, value) for i, value in enumerate(path)]  # bars 48-62 share the third UTC day
+    day = _day_of_bar(cycles[60]["bar_open_ms"])
+    result = noise_scale(_store(tmp_path, cycles), day, vol_target=0.30)
+    assert abs(result["design_daily_sigma_u"] - 10_949.0 * 0.30 / math.sqrt(365.0)) < 1e-6
+    assert result["peak_giveback_u"] == pytest.approx(65.0)
+    assert result["giveback_in_design_sigma"] == pytest.approx(65.0 / (10_949.0 * 0.30 / math.sqrt(365.0)))
+    assert result["realised_daily_sigma_u"] is not None
+    assert result["expected_exits_so_far"] == pytest.approx(BACKTEST_EXITS_PER_WEEK / 7 * (63 / 24))
+    assert result["exits_so_far"] == 0
+
+
+def test_noise_scale_without_vol_target_or_cycles_does_not_crash(tmp_path: Path) -> None:
+    from beidou_live.reports import noise_scale
+
+    empty = noise_scale(_store(tmp_path, []), "2026-09-07", vol_target=None)
+    assert empty["design_daily_sigma_u"] is None and empty["peak_giveback_u"] is None
+
+
+def test_exit_counterfactuals_mark_young_events_pending_and_price_old_ones(tmp_path: Path) -> None:
+    """M-005 as monitoring (K-EX12): what the exited position would have earned had it stayed in."""
+    import pandas as pd
+
+    from beidou_live.reports import exit_counterfactuals
+
+    event = {"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "target": 0.05, "price": 100.0, "entry_price": 90.0, "unit": 0.02}
+    cycles = [_cycle(0, equity=10_000.0, exit_events=[event])] + [_cycle(i, equity=10_000.0) for i in range(1, 100)]
+    young = [_cycle(i, equity=10_000.0) for i in range(0, 10)]
+    young[5] = _cycle(5, equity=10_000.0, exit_events=[event])
+    close_series = {
+        "AAAUSDT": pd.Series([100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE + i * HOUR for i in range(200)])
+    }
+    priced = exit_counterfactuals(_store(tmp_path / "a", cycles), closes=lambda symbol: close_series[symbol])
+    assert priced["events"] == 1 and priced["pending"] == 0
+    # stayed in: 0.05 x 10,000 x (close_{t+24}/close_t - 1) = 500 x 0.024 = 12.0 U; the exit paid 2 x 7 bps x 500 = 0.7 U
+    assert priced["by_horizon"]["24"]["mean_counterfactual_u"] == pytest.approx(12.0)
+    assert priced["by_horizon"]["72"]["mean_counterfactual_u"] == pytest.approx(36.0)
+    assert priced["by_horizon"]["24"]["n"] == 1 and priced["cost_saved_u"] == pytest.approx(0.7)
+    pending = exit_counterfactuals(_store(tmp_path / "b", young), closes=lambda symbol: close_series[symbol].iloc[:8])
+    assert pending["events"] == 1 and pending["pending"] == 1 and pending["by_horizon"]["24"]["n"] == 0
+    assert priced["n_needed_for_decision"] == 16
+
+
 def test_drift_check_skips_bars_whose_clock_jumped(tmp_path: Path) -> None:
     """M-012 promised it; the bars were recorded but still counted as returns."""
     clean = [_cycle(i, equity=10_000.0 + i) for i in range(60)]
@@ -179,6 +232,7 @@ def test_daily_payload_carries_every_new_section(tmp_path: Path) -> None:
     payload = daily_payload(_store(tmp_path, cycles, attributions), day, {"tsmom": {"oos_sharpe": 1.6}})
     for key in ("evidence_window", "income_drift", "legs", "probe_correlation", "events"):
         assert key in payload, key
+    assert "noise_scale" in payload and "exit_counterfactual" in payload
     assert payload["legs"]["pnl"]["long"] == pytest.approx(3.0)
     assert json.dumps(payload, default=str)
     assert math.isfinite(payload["legs"]["pnl"]["long"])
