@@ -32,6 +32,10 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 
 重启是幂等的（clientOrderId 按 bar 派生，先查后下）。重启后看 `.beidou/live/heartbeat.json` 的 `phase`、`universe_size`、`leverage`。
 
+### 采纳退出层 / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
+
+M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何退出层或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：P13 阶梯触发（回撤 −35% / −50%），那是预登记的降档，不是采纳。当前窗口起点：2026-09-06T10:19Z（P18 重启），最早采纳日 2026-10-06。每次采纳都是构造变更，窗口重新计数。
+
 ## Profile 关键字段（`config/live.demo.yaml`）
 
 - `portfolio.leverage: auto` —— 每个币的交易所杠杆按 `max_gross / margin_cap` 与档位上限推导（当前 5x）；写死整数则固定。
