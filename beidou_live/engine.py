@@ -115,6 +115,9 @@ class LiveConfig:
     rebalance: RebalanceParams
     guards: GuardParams
     kill_switch_path: Path
+    # L1-07: the configured path resolves against the working directory, so it is one of possibly
+    # several files meaning "stop".  The account-scoped one goes here; the guard reads the union.
+    kill_switch_paths: tuple[Path, ...] = ()
     strategy_weights: dict[str, float] = field(default_factory=dict)
     poll_attempts: int = 5
     poll_interval_seconds: float = 1.0
@@ -478,7 +481,7 @@ class LiveEngine:
         decision = evaluate_guards(
             adjusted,
             current_weights=snapshot.weights(),
-            kill_switch=config.kill_switch_path.exists(),
+            kill_switch=kill_switch_engaged((config.kill_switch_path, *config.kill_switch_paths)),
             equity=snapshot.equity,
             day_start_equity=self.state.day_start_equity,
             latest_bar_ms=latest_bar_ms,
@@ -1029,6 +1032,36 @@ class LiveEngine:
         if self.state.day != day or self.state.day_start_equity is None:
             self.state.day = day
             self.state.day_start_equity = equity
+
+
+def kill_switch_engaged(paths: Sequence[Path]) -> bool:
+    """Engaged if ANY of them exists.  A kill switch fails toward stopping.
+
+    Two paths, because one of them is wherever the operator's habit points: the account-scoped file
+    (L1-07) and whatever the profile configured.  Reading only the new one would silently ignore an
+    operator who engaged the old one, which is the same defect this fixes, aimed the other way.
+    """
+    return any(path.exists() for path in paths)
+
+
+def engage_kill_switches(paths: Sequence[Path], reason: str) -> list[Path]:
+    """Write every path, returning those written.  Both, so there is no window where it is weaker."""
+    written: list[Path] = []
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(reason, encoding="utf-8")
+        written.append(path)
+    return written
+
+
+def release_kill_switches(paths: Sequence[Path]) -> list[Path]:
+    """Remove every one that exists.  Release has to clear both or the operator cannot get back in."""
+    removed: list[Path] = []
+    for path in paths:
+        if path.exists():
+            path.unlink()
+            removed.append(path)
+    return removed
 
 
 def daily_vol_from_annual(annual: Mapping[str, float]) -> dict[str, float]:

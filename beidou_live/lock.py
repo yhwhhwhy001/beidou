@@ -34,6 +34,21 @@ def account_lock_path(api_key: str, *, root: Path | None = None) -> Path:
     return ((root or APP_SUPPORT) / f"{fingerprint}.lock").resolve()
 
 
+def account_kill_switch_path(api_key: str, *, root: Path | None = None) -> Path:
+    """The kill switch, addressed by ACCOUNT rather than by working directory (L1-07).
+
+    The docstring above already names "its own invisible kill switch" as part of the risk this module
+    exists for, and then solved only the lock half.  `Path(".beidou/live/KILL_SWITCH").resolve()`
+    anchors to `os.getcwd()`, so engaging the switch from a worktree writes a file the loop - running
+    from the repository root - never reads, prints success, and stops nothing (measured against the
+    running loop on 2026-09-07).
+
+    Same fingerprint as the lock, same directory, so the two facts about an account live together.
+    """
+    fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    return ((root or APP_SUPPORT) / f"{fingerprint}.KILL_SWITCH").resolve()
+
+
 def describe_holder() -> str:
     return f"pid={os.getpid()} repo={Path.cwd()}"
 

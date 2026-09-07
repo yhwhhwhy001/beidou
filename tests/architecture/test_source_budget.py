@@ -714,10 +714,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # because `beidou_cli` goes DOWN across the merge: 3,298 before either change, -20 for the
 # relocation above, +13 for the coverage fix, 3,291.  Neither side bought headroom, which is what
 # the relocation note asks for and what re-measuring the merged tree is the only way to confirm.
+#
+# 2026-09-07, L1-07 for real this time, +~35 in beidou_live and +~20 in beidou_cli.  DL-L5 fixed the
+# half that lived inside one process - two call sites each building the path from the raw profile
+# string - and its own docstring named the half it did not fix: `Path(relative).resolve()` anchors
+# to `os.getcwd()`, so `beidou live kill-switch` from a worktree wrote a file the loop never reads,
+# printed "kill switch engaged" and exited 0.  Measured against the running loop, not inferred:
+# the loop reads <repo>/.beidou/live/KILL_SWITCH and the worktree CLI resolved to
+# <worktree>/.beidou/live/KILL_SWITCH.
+#
+# The fix is DL-L1's sentence a second time: what must be unique per ACCOUNT cannot be addressed by
+# a path relative to a working directory.  The switch now sits beside the instance lock under the
+# same account fingerprint.  Both files are written on engage and both cleared on release, and the
+# guard reads their union - an emergency stop may never get weaker, not even for the one restart it
+# takes a running loop to learn the new path.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_065,
-    "beidou_cli": 3_291,
+    "beidou_live": 5_129,
+    "beidou_cli": 3_313,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
     "beidou_shared": 284,

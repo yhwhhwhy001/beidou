@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from beidou_exchange.guard import WriteGuard
 from beidou_live.composition import build_model, load_registry, portfolio_params, read_universe, write_universe
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GuardParams
+from beidou_live.lock import account_kill_switch_path
 from beidou_live.ports import UniverseUpdate
 from beidou_live.probe import probes_from_registry
 from beidou_live.rebalancer import RebalanceParams
@@ -46,6 +48,18 @@ def resolve_universe(
         return selected
     universe_cfg = load_yaml(profile.get("universe", "config/universe.yaml"))
     return [str(symbol) for symbol in universe_cfg.get("always_include", [])]
+
+
+def account_kill_switches(profile: dict[str, Any]) -> tuple[Path, ...]:
+    """The account-scoped kill switch, when the profile names an API key env var (L1-07).
+
+    Empty when the credential is not available - paper and offline runs have no account to scope to,
+    and an absent switch is correctly "not engaged" rather than an error.
+    """
+    venue = profile.get("venue", {}) or {}
+    name = str(venue.get("api_key_env", ""))
+    key = os.environ.get(name, "") if name else ""
+    return (account_kill_switch_path(key),) if key else ()
 
 
 def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Registry, *, dry_run: bool) -> LiveConfig:
@@ -82,6 +96,8 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         # CLI run from a worktree engaged a switch the loop could not see - the same two-processes,
         # two-directories, one-account shape as DL-L1.
         kill_switch_path=Path(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH")).resolve(),
+        # L1-07: and the one that does not move when the working directory does.
+        kill_switch_paths=account_kill_switches(profile),
         # a book's fraction enters attribution here; contributions stay unscaled targets (D-019)
         strategy_weights={entry.id: entry.weight * registry.fraction(entry.book) for entry in registry.enabled},
         dry_run=dry_run,

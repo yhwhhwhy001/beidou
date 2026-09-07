@@ -24,6 +24,7 @@ from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.composition import build_model, load_registry
 from beidou_live.config import (
+    account_kill_switches,
     build_market_data,
     build_model_from_profile,
     build_pool,
@@ -36,7 +37,14 @@ from beidou_live.config import (
     resolve_universe,
     universe_sink,
 )
-from beidou_live.engine import BreakerTripped, LiveEngine, StopRequested, registry_digest
+from beidou_live.engine import (
+    BreakerTripped,
+    LiveEngine,
+    StopRequested,
+    engage_kill_switches,
+    registry_digest,
+    release_kill_switches,
+)
 from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.lock import LockBusy, SingleInstanceLock, account_lock_path
@@ -100,14 +108,26 @@ def _logging(verbose: bool) -> None:
 
 
 def kill_switch_path(payload: dict[str, Any]) -> Path:
-    """The kill switch, resolved (L1-07).
+    """The configured kill switch, resolved.
 
-    Both this module and ``live_config`` used to build it from the raw profile string, which is
-    relative by default - so a CLI invocation from a worktree engaged a file the loop, running with
-    a different working directory, never looked at.  One helper, resolved once.
+    One helper so this module and ``live_config`` cannot disagree inside one process.  It does NOT
+    make the path stable across working directories - `.resolve()` anchors a relative path to
+    `os.getcwd()` - which is what `kill_switch_targets` is for.
     """
     guards = payload.get("guards", {}) or {}
     return Path(str(guards.get("kill_switch_path", ".beidou/live/KILL_SWITCH"))).resolve()
+
+
+def kill_switch_targets(payload: dict[str, Any]) -> tuple[Path, ...]:
+    """Every file that means "stop" for this account (L1-07).
+
+    The configured path AND the account-scoped one.  Measured against the running loop on 2026-09-07:
+    engaging from a worktree wrote `<worktree>/.beidou/live/KILL_SWITCH` while the loop read
+    `<repo>/.beidou/live/KILL_SWITCH`, printed success and stopped nothing.  Both are written and both
+    are cleared, so an operator's existing habit keeps working and there is no window in which the
+    emergency stop is weaker than it was.
+    """
+    return (kill_switch_path(payload), *account_kill_switches(payload))
 
 
 def engage_kill_switch(payload: dict[str, Any], reason: str) -> Path:
@@ -485,14 +505,16 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
 def live_kill_switch(profile: str, engage: bool) -> None:
     """Engage/release the kill-switch file: while engaged, only risk-reducing orders are sent."""
     payload = load_profile(profile)
-    path = kill_switch_path(payload)
+    targets = kill_switch_targets(payload)
     if engage:
-        engage_kill_switch(payload, f"engaged {datetime.now(UTC).isoformat()}\n")
-        click.echo(f"kill switch engaged: {path}")
+        for written in engage_kill_switches(targets, f"engaged {datetime.now(UTC).isoformat()}\n"):
+            click.echo(f"kill switch engaged: {written}")
     else:
-        if path.exists():
-            path.unlink()
-        click.echo(f"kill switch released: {path}")
+        removed = release_kill_switches(targets)
+        for cleared in removed:
+            click.echo(f"kill switch released: {cleared}")
+        if not removed:
+            click.echo(f"kill switch was not engaged (checked {len(targets)} path(s))")
 
 
 def _interval(profile: dict[str, Any]) -> str:
