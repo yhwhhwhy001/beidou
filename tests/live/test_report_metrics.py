@@ -211,10 +211,11 @@ def test_exit_counterfactuals_mark_young_events_pending_and_price_old_ones(tmp_p
 def test_exit_counterfactuals_ignore_dry_run_cycles(tmp_path: Path) -> None:
     """A --dry-run cycle's exits never happened, and must not be priced against real closes.
 
-    `_cycles`, `drift_check` and `risk_adaptation` all drop `dry_run` rows; this one walked `cycles.jsonl`
-    raw.  A dry run pointed at the live `state_dir` - the cross-worktree path collision DL-L1's lock guards
-    against elsewhere - would have folded simulated exits into the one count M-005 keeps honest before a
-    verdict is drawn, which is what `n_needed_for_decision` is counting toward.
+    `_cycles` and `drift_check` filter `dry_run` rows; `risk_adaptation` does not, leaving the same gap
+    open elsewhere.  This test walked `cycles.jsonl` raw.  A dry run pointed at the live `state_dir` - the
+    cross-worktree path collision DL-L1's lock guards against elsewhere - would have folded simulated exits
+    into the one count M-005 keeps honest before a verdict is drawn, which is what `n_needed_for_decision`
+    is counting toward.
     """
     import pandas as pd
 
