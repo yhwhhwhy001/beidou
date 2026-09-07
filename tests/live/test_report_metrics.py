@@ -181,12 +181,21 @@ def test_exit_counterfactuals_mark_young_events_pending_and_price_old_ones(tmp_p
 
     from beidou_live.reports import exit_counterfactuals
 
-    event = {"symbol": "AAAUSDT", "rule": "TAKE_PROFIT", "target": 0.05, "price": 100.0, "entry_price": 90.0, "unit": 0.02}
+    event = {
+        "symbol": "AAAUSDT",
+        "rule": "TAKE_PROFIT",
+        "target": 0.05,
+        "price": 100.0,
+        "entry_price": 90.0,
+        "unit": 0.02,
+    }
     cycles = [_cycle(0, equity=10_000.0, exit_events=[event])] + [_cycle(i, equity=10_000.0) for i in range(1, 100)]
     young = [_cycle(i, equity=10_000.0) for i in range(0, 10)]
     young[5] = _cycle(5, equity=10_000.0, exit_events=[event])
     close_series = {
-        "AAAUSDT": pd.Series([100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE + i * HOUR for i in range(200)])
+        "AAAUSDT": pd.Series(
+            [100.0 * (1.0 + 0.001 * i) for i in range(200)], index=[BASE + i * HOUR for i in range(200)]
+        )
     }
     priced = exit_counterfactuals(_store(tmp_path / "a", cycles), closes=lambda symbol: close_series[symbol])
     assert priced["events"] == 1 and priced["pending"] == 0

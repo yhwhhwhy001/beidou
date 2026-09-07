@@ -371,7 +371,11 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         giveback = (peak - value) if giveback is None else max(giveback, peak - value)
     window = evidence_window(store)
     bars = int(window.get("bars") or 0)
-    exits = sum(len(row.get("exit_events") or []) for row in trailing if int(row.get("bar_open_ms") or 0) >= int(window.get("since_ms") or 0))
+    exits = sum(
+        len(row.get("exit_events") or [])
+        for row in trailing
+        if int(row.get("bar_open_ms") or 0) >= int(window.get("since_ms") or 0)
+    )
     return {
         "design_daily_sigma_u": design,
         "realised_daily_sigma_u": realised,
@@ -1290,9 +1294,13 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 "Noise scale (DL-EX0)",
                 {
                     "design_daily_sigma_u": _fmt_num((payload.get("noise_scale") or {}).get("design_daily_sigma_u")),
-                    "realised_daily_sigma_u": _fmt_num((payload.get("noise_scale") or {}).get("realised_daily_sigma_u")),
+                    "realised_daily_sigma_u": _fmt_num(
+                        (payload.get("noise_scale") or {}).get("realised_daily_sigma_u")
+                    ),
                     "peak_giveback_u": _fmt_num((payload.get("noise_scale") or {}).get("peak_giveback_u")),
-                    "giveback_in_design_sigma": _fmt_num((payload.get("noise_scale") or {}).get("giveback_in_design_sigma")),
+                    "giveback_in_design_sigma": _fmt_num(
+                        (payload.get("noise_scale") or {}).get("giveback_in_design_sigma")
+                    ),
                     "expected_exits_so_far": _fmt_num((payload.get("noise_scale") or {}).get("expected_exits_so_far")),
                     "exits_so_far": (payload.get("noise_scale") or {}).get("exits_so_far"),
                 },
@@ -1302,8 +1310,16 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 {
                     "events": (payload.get("exit_counterfactual") or {}).get("events"),
                     "pending": (payload.get("exit_counterfactual") or {}).get("pending"),
-                    "mean_24h_u": _fmt_num(((payload.get("exit_counterfactual") or {}).get("by_horizon") or {}).get("24", {}).get("mean_counterfactual_u")),
-                    "mean_72h_u": _fmt_num(((payload.get("exit_counterfactual") or {}).get("by_horizon") or {}).get("72", {}).get("mean_counterfactual_u")),
+                    "mean_24h_u": _fmt_num(
+                        ((payload.get("exit_counterfactual") or {}).get("by_horizon") or {})
+                        .get("24", {})
+                        .get("mean_counterfactual_u")
+                    ),
+                    "mean_72h_u": _fmt_num(
+                        ((payload.get("exit_counterfactual") or {}).get("by_horizon") or {})
+                        .get("72", {})
+                        .get("mean_counterfactual_u")
+                    ),
                     "cost_saved_u": _fmt_num((payload.get("exit_counterfactual") or {}).get("cost_saved_u")),
                     "n_needed_for_decision": (payload.get("exit_counterfactual") or {}).get("n_needed_for_decision"),
                 },

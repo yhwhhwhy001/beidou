@@ -764,9 +764,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # The fix review that commissioned this raise asked for the reasoning at the call site as well, in this
 # file's own convention of explaining WHY rather than leaving it to a test alone; this adds that comment
 # without touching the already-shipped, already-tested filter condition itself.
+#
+# Raise 2026-09-07, third one the same day, with the sentence the rule requires: +16 in beidou_live, every
+# line of it `ruff format` wrapping and none of it behaviour.  The DL-EX0/0b commit landed four over-long
+# expressions unformatted - `noise_scale`'s exits sum, and three `_fmt_num` calls in the two new
+# `daily_markdown` sections - and `ruff check` never said so, because the lint config ignores E501 and
+# leaves line length to the formatter, which nothing had run over that commit.  Recorded rather than
+# absorbed: the ceiling counts lines, not capability, so formatting the tree back to the config's own
+# style has to cost a sentence like anything else, and the honest sentence is that these 16 lines bought
+# consistency and nothing more.  The number is read off `_lines`, not computed as 5,329 + 16: both raises
+# above estimated and both came in short (+77 measured +149, +12 measured +24).
 CEILING = {
     "beidou_alpha": 5_832,
-    "beidou_live": 5_329,
+    "beidou_live": 5_345,
     "beidou_cli": 3_315,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
