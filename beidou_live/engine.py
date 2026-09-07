@@ -37,7 +37,7 @@ from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
-from beidou_live.reconciler import Snapshot, startup_reconcile, take_snapshot
+from beidou_live.reconciler import Snapshot, is_own_order, startup_reconcile, take_snapshot
 from beidou_live.scheduler import (
     last_closed_bar_open_ms,
     late_seconds,
@@ -306,6 +306,21 @@ class LiveEngine:
             )
         else:
             self.alerts.clear("foreign-positions")
+        # AC-L5: the FILTER has been right since DL-L5 and is verified against the real venue (a
+        # hand-placed `manual-…` order survived a real reconcile on 2026-09-07).  Telling anyone was
+        # the missing half.  A resting order the loop did not place is either the operator's or the
+        # leftover of something that crashed, and both are better heard at startup than discovered in
+        # a fill.
+        foreign_orders = [o.client_order_id for o in snapshot.open_orders if not is_own_order(o.client_order_id)]
+        if foreign_orders:
+            logger.warning("open orders this loop did not place are left alone: %s", sorted(foreign_orders))
+            await self.alerts.send(
+                f"beidou startup: {len(foreign_orders)} open order(s) this loop did not place are left "
+                f"alone: {', '.join(sorted(foreign_orders))}",
+                key="foreign-orders",
+            )
+        else:
+            self.alerts.clear("foreign-orders")
         # DL-L4: what the rebalance window is built from - measured, not assumed.
         self.startup_seconds = max(0.0, (self.clock.now_ms() - started_ms) / 1000.0)
         return snapshot

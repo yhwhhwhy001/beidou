@@ -130,3 +130,28 @@ def test_the_check_script_uses_the_shared_dedup_state() -> None:
 
     assert "state_path" in script
     assert "force=True" not in script
+
+
+async def test_a_foreign_open_order_at_startup_alerts() -> None:
+    """AC-L5's other half, and the same shape as DL-L5's foreign positions.
+
+    The FILTER is right and verified against the real venue (2026-09-07: a hand-placed
+    `manual-acl5-…` order survived a real `startup_reconcile` with `cancel_stale_orders=True`).  What
+    is missing is telling anyone.  A resting order the loop did not place is either the operator's or
+    a leftover from something that crashed, and both are things you want to hear about at startup
+    rather than discover in a fill.
+    """
+    from tests.live.helpers_liquidation import startup_with_foreign_order
+
+    sent = await startup_with_foreign_order("manual-acl5-1")
+
+    assert any("manual-acl5-1" in m and "order" in m.lower() for m in sent), sent
+
+
+async def test_our_own_resting_order_is_not_announced_as_foreign() -> None:
+    """`bd-` orders are cancelled by the reconcile; announcing them would be noise every restart."""
+    from tests.live.helpers_liquidation import startup_with_foreign_order
+
+    sent = await startup_with_foreign_order("bd-BTCUSDT-123")
+
+    assert not any("foreign" in m.lower() and "order" in m.lower() for m in sent), sent

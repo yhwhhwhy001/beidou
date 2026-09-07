@@ -789,9 +789,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # drill run twice in an hour must send twice, or the instrument reports a failure the second time
 # and teaches the operator to distrust it.  Added after the ceiling above was measured, which is
 # how a red tree reached main for one commit; the ratchet caught it on the next run.)
+#
+# 2026-09-07 AC-L5, +~15 live.  The FILTER has been right since DL-L5 and is now verified against
+# the real venue: a hand-placed `manual-acl5-…` limit order survived a real `startup_reconcile`
+# with cancel_stale_orders=True, and was cancelled cleanly afterwards.  Telling anyone was the
+# missing half - the same shape as the foreign-POSITIONS clause fixed hours earlier, and found
+# the same way.  A resting order the loop did not place is either the operator's or the leftover
+# of something that crashed, and both are better heard at startup than discovered in a fill.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_261,
+    "beidou_live": 5_276,
     "beidou_cli": 3_406,
     "beidou_data": 1_375,
     "beidou_exchange": 603,

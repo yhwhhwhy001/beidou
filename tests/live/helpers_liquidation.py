@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from beidou_exchange.binance_usdm.venue import BinanceUsdmVenue
 from beidou_live.engine import LiveConfig, LiveEngine
@@ -334,3 +334,69 @@ def breaker_engine(
         alerts=alerts,  # type: ignore[arg-type]
     )
     return engine, alerts, venue, store
+
+
+async def startup_with_foreign_order(client_order_id: str) -> list[str]:
+    """Run `startup()` against a venue with one resting order under the given id (AC-L5)."""
+    import tempfile
+    from decimal import Decimal
+
+    from beidou_alpha.model import AlphaModel
+    from beidou_alpha.portfolio import PortfolioParams
+    from beidou_alpha.registry import StrategyEntry
+    from beidou_alpha.signals.tsmom import TsmomParams
+    from beidou_shared.types import OrderAck, Side
+
+    class _WithRestingOrder(FakeVenue):
+        """`FakeVenue.open_orders` is a stub that always returns []; the reconcile reads that method."""
+
+        resting: ClassVar[list[OrderAck]] = []
+
+        async def open_orders(self, symbol: str | None = None) -> list[OrderAck]:
+            self.calls.append("open_orders")
+            return list(self.resting)
+
+    tmp = Path(tempfile.mkdtemp())
+    venue = _WithRestingOrder()
+    venue.resting = [
+        OrderAck(
+            symbol="BTCUSDT",
+            client_order_id=client_order_id,
+            order_id="1",
+            side=Side("BUY"),
+            status="NEW",
+            executed_qty=Decimal("0"),
+            avg_price=0.0,
+            reduce_only=False,
+            raw={},
+        )
+    ]
+    alerts = _RecordingAlerts()
+    engine = LiveEngine(
+        LiveConfig(
+            interval="1h",
+            history_bars=300,
+            universe=("BTCUSDT", "ETHUSDT"),
+            leverage=2,
+            rebalance=RebalanceParams(),
+            guards=GuardParams(),
+            kill_switch_path=tmp / "KILL_SWITCH",
+            strategy_weights={"tsmom": 1.0},
+            poll_interval_seconds=0.0,
+            grace_seconds=1.0,
+            dry_run=True,
+        ),
+        model=AlphaModel(
+            entries=(StrategyEntry("tsmom", params=dict(TsmomParams().__dict__)),),
+            portfolio=PortfolioParams(),
+            interval="1h",
+            min_history_bars=0,
+        ),
+        market=None,  # type: ignore[arg-type]
+        venue=venue,
+        clock=FakeClock(1_700_000_000_000),
+        store=StateStore(tmp / "live"),
+        alerts=alerts,  # type: ignore[arg-type]
+    )
+    await engine.startup()
+    return alerts.sent
