@@ -59,7 +59,14 @@ WORST_FRACTION = 0.01
 def episodes(
     held: pd.Series, net: pd.Series, close: pd.Series, sigma: pd.Series, first_bar: int
 ) -> list[dict[str, float]]:
-    """One record per same-direction holding episode, carrying everything the four kills need."""
+    """One record per same-direction holding episode, carrying everything the four kills need.
+
+    Also carries `mfe_pnl` (the cumulative net-P&L path's own running peak, return units) and
+    `realised_pnl` (that path's value at episode close) unused by any KILL-TL check above but reused,
+    unmodified, by `scratchpad/m_ex01_retention.py` (GAP-EX01 / M-EX01) for the retention ratio
+    `realised_pnl / mfe_pnl` - so that script does not re-derive this same segmentation and cumulative
+    P&L path a second time.
+    """
     sign = np.sign(held.to_numpy(dtype=float))
     pnl = net.to_numpy(dtype=float)
     price = close.to_numpy(dtype=float)
@@ -86,6 +93,8 @@ def episodes(
                 "loss": float((cumulative - np.maximum.accumulate(cumulative)).min()),
                 "max_retrace": float(np.nanmax(retrace)) if len(retrace) else 0.0,
                 "max_mfe": float(np.nanmax(favourable)) if len(favourable) else 0.0,
+                "mfe_pnl": float(np.nanmax(cumulative)),
+                "realised_pnl": float(cumulative[-1]),
                 "entry_sigma": float(unit),
                 "bars": float(stop - start),
                 "age_days": float((start - first_bar) / 24.0),
