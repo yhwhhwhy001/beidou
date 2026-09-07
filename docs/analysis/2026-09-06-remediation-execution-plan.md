@@ -128,7 +128,7 @@
 | Kill | 角色 | 攻击命题 | 关联 | 严重度 | 状态 | 关闭条件 / 触发动作 |
 | --- | --- | --- | --- | --- | --- | --- |
 | KILL-P1 | DS | 熔断改 exit 0 而第二通道未通 → 书静默停数小时，比现在的 60 s 热循环更坏 | DL-L2, DL-L3, RISK-P1 | **P1** | MITIGATED（排序约束） | DL-L3 合并且演练告警送达 → 才允许 DL-L2 上线；AC-L2 |
-| KILL-P2 | CA | B1 净增 ≈ +210 非 alpha 行、零删除，违反报告 KILL-R12 的规则 | D-P5 | **P1** | OPEN | Q2：操作者裁定抬升（写理由）或砍项 |
+| KILL-P2 | CA | B1 净增 ≈ +210 非 alpha 行、零删除，违反报告 KILL-R12 的规则 | D-P5 | **P1** | **CLOSED 2026-09-06**（Q2 = A） | 操作者裁定抬 ceiling 并在同一提交写理由。规矩此后一直照办：2026-09-07 一天抬了五次，每次都带一句说明增长来自哪里；`PLAN_BUDGET` 一次未动 |
 | KILL-P3 | DS | 远端租约"取不到即 reduce-only"：远端一次 10 分钟抖动就把书打成只减仓 | DL-X2, RISK-P3 | P1 | MITIGATED | N=3 周期宽限；演练路径 B（封远端出口）**不得触发**；M-P4 |
 | KILL-P4 | DS | 两次重启各自 `--immediate` 重建整本书；DL-L4 若不在重启 #1 同批，第二次重启还要付一次 | DL-L4, RISK-P2 | P2 | MITIGATED | DL-L4 进 B1；重启 #2 是第一次享受两步启动的重启 |
 | KILL-P5 | CA | KILL-Q5 签名扩展改变 `unique_trials` 的去重语义，旧行缺新字段 | DL-K1, C-P6 | P2 | MITIGATED | 旧行按"legacy"digest 去重（缺失字段 = 空串），新旧不互相折叠；测试 T-K1-3 |
