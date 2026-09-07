@@ -1362,6 +1362,10 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "cooldown_bars": config.exits.cooldown_bars,
             "vol_halflife": config.exits.vol_halflife,
             "unit_mode": config.exits.unit_mode,
+            "regime_window": config.exits.regime_window,
+            "regime_er_cut": config.exits.regime_er_cut,
+            "regime_tp_scale": config.exits.regime_tp_scale,
+            "regime_side": config.exits.regime_side,
         },
         "throttle": {
             "enabled": config.throttle.enabled,

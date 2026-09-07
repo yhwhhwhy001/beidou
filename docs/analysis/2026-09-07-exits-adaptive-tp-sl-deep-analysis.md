@@ -26,8 +26,10 @@
 | 最大价值 / 最大风险 | 价值：避免用一次盘整的观感去动一个经三轮验证"无害"的层，保住唯一的样本外记录。风险：RISK-EX06——E-EX14 的重放里 TP2/TP3 在这 3 天"多赚 20 U"，很诱人；它是 1–3 个事件，E5。 |
 | Strategic Fit / Relative Value / Economic | High（O-EX1 是 alpha 侧工作，符合 90% alpha 投入）/ Adequate（No-Build 已拿到全部"保险"价值；实验的相对价值 Unproven，故只以实验形式进入）/ N/A（单人项目） |
 | 被接受的损失与补偿 | 操作者"马上换一套自适应止盈止损"的即时诉求被延后为实验；补偿 = 日报噪声尺度行 + M-005 实装 + 两个实验的明确规则与命令。 |
-| 开放项（全部是操作者的决定，见 §12） | Q1 退出层的角色：主动 P&L 机制还是灾难后备；Q2 想要的权益日波动是多少 U（决定的是 `vol_target`，不是退出层）；Q3 是否花 tsmom + flow 各 6 个账本名额跑第一个实验；Q4 E-EX14 的 7 个配置补记账本还是书面豁免（K-EX07）；Q5 KILL-R12 ceiling（O-EX0 + M-005 ≈70 行 live）；Q6 是否接受"M-010 满 30 天前不采纳"的规则。GAP-EX01：M-EX01 基线需一次当前构造回测。 |
-| G0–G7 一行 | G0 PASS · G1 PASS · G2 PASS（C-EX02a-TP / 02b / 02c / 03 UNKNOWN）· G3 PASS · G4 PASS · G5 PASS · **G6 PARTIAL**（P0 0 / P1 9，见 §8）· G7 PASS（契约齐，Delivery Gate 等操作者批准） |
+| 开放项（全部是操作者的决定，见 §12） | **【结项】全部已回答，见 §12 与下方结项更新。** Q1 退出层的角色：主动 P&L 机制还是灾难后备；Q2 想要的权益日波动是多少 U（决定的是 `vol_target`，不是退出层）；Q3 是否花 tsmom + flow 各 6 个账本名额跑第一个实验；Q4 E-EX14 的 7 个配置补记账本还是书面豁免（K-EX07）；Q5 KILL-R12 ceiling（O-EX0 + M-005 ≈70 行 live）；Q6 是否接受"M-010 满 30 天前不采纳"的规则。~~GAP-EX01：M-EX01 基线需一次当前构造回测。~~ **已关闭，见 §4.4 M-EX01 与 `scratchpad/m_ex01_retention.py`。** |
+| G0–G7 一行 | G0 PASS · G1 PASS · G2 PASS（C-EX02a-TP / 02b / 02c / 03 UNKNOWN → **【结项】全部 REFUTED**，见 §3.2）· G3 PASS · G4 PASS · G5 PASS · ~~**G6 PARTIAL**（P0 0 / P1 9，见 §8）~~ **【结项】G6 PASS**（P22/P22b/P23 关闭了需新证据的 5 条 P1；K-EX08 是唯一仍 OPEN 的一条，性质是 N/A-until-adoption，见 §8.2）· G7 PASS（契约齐，Delivery Gate 等操作者批准） |
+
+> **【结项更新，2026-09-07，P22 + P22b + P23 之后】** 本文 §7.3/§11.2 预登记的四个假设已全部检验完毕并裁决：C-EX02a-TP（固定止盈 3σ/4σ）、C-EX02c（当前波动单位）——`docs/RESEARCH_LOG.md` "P22 裁决"节（2026-09-07，`d0ab2ae`/`2d905ba`）；C-EX02b（行情效率比切档止盈）——"P22b 裁决"节（`6a5688a`）；C-EX03（信号衰减退出）——"P23 裁决"节（commit `2f22ff9`）。**四个全部 REFUTED**。`config/live.demo.yaml` 的 `exits` 块一个字符未改，止损 6σ / 止盈 6σ / entry 单位仍是线上设置（新增的 `unit_mode` 键默认值使行为逐位不变，见 RESEARCH_LOG"记录：`unit_mode` 改了构造指纹，行为一个字节没变"一节）。分支实际交付的是：两个日报观测段（DL-EX0 噪声尺度、DL-EX0b M-005 反事实——降级为**监测**而非裁决者，K-EX12）；三条操作者裁定写入仓库（K-EX07 的短窗描述性重放豁免、K-EX14 的 30 天最短干净窗口规则、KILL-R12 ceiling 的抬升，均见 §8.2 与 §12）；M-EX01 基线首次测得（见 §4.4，GAP-EX01 关闭）。G6 由 PARTIAL 转 PASS（下表与 §8.2）。**Final Decision 一词不变，仍是 PIVOT**：诊断（"退出层失职"）依旧不成立，但对操作者"是否要让止盈止损随行情自适应"这个诉求，现在的答案不再是"没测过"，而是四次独立预登记实验都说"不"。
 
 ---
 
@@ -37,11 +39,11 @@
 | --- | --- | --- | --- | --- |
 | G0 Interaction / Kill | PASS | 用户、场景、损失、约束、证据齐；无 FATAL | 成功标准只有方向 → K4 WARNING，在 Phase 3 写出 Success Definition 后解除 | — |
 | G1 Problem / Axiom | PASS | 移除操作者原方案（自适应止盈止损）后，诉求"少回吐、多盈利"仍成立；但"退出层失职"的**缺陷**框定不成立 | 区分了症状（回吐）、根因（设计噪声 + 信号持有）、可干预杠杆（信号退出侧 / 风险预算） | — |
-| G2 Evidence | PASS | 19 条 E1/E2 证据，P0/P1 Claim 不依赖 E4/E5 | C-EX02a-TP / 02b / 02c / 03 UNKNOWN（止盈 <6σ、regime 切档、当前 σ 单位、信号衰减都从未测过） | 这些是 P1，不触发 H3；实验分支受 H5 |
+| G2 Evidence | PASS | 19 条 E1/E2 证据，P0/P1 Claim 不依赖 E4/E5 | C-EX02a-TP / 02b / 02c / 03 UNKNOWN（止盈 <6σ、regime 切档、当前 σ 单位、信号衰减都从未测过）——**【结项】P22/P22b/P23 之后全部 REFUTED，见 §3.2** | 这些是 P1，不触发 H3；实验分支受 H5 |
 | G3 Relative Value | PASS | 比较了 No-Build / 参数 / 信号侧 / 书级标量 / 降 vol_target / 原生单 | 实验分支的相对价值 Unproven（H5）→ 只能以实验进入 | Weak GO（实验） |
 | G4 Strategic / Economic | PASS | 90% alpha 投入；O-EX1 落在 alpha；单人项目经济性 N/A | 账本名额是真实机会成本（RISK-EX03） | — |
 | G5 System | PASS | 工程预检完成：O-EX1 落点 `scores_to_targets`；O-EX2 发现 live 请求窗口 ≤ 1,500 bar 的约束（§6） | — | — |
-| G6 Adversarial | **PARTIAL** | 独立子代理：P0 0 / P1 9 / P2 5，全部有关闭路径（§8.2） | K-EX01/02/03/07/12 需新证据才能关闭 | PIVOT（H2 已定） |
+| G6 Adversarial | ~~**PARTIAL**~~ **【结项】PASS** | 独立子代理：P0 0 / P1 9 / P2 5，全部有关闭路径（§8.2） | K-EX01/02/03/07/12 需新证据才能关闭 → **已关闭**（P22/P22b/P23）；K-EX08 仍 OPEN（N/A-until-adoption，无价格路径候选被采纳） | PIVOT（H2 已定，内容不变） |
 | G7 Delivery | PASS（分析交付物） | 四类契约与 Source Trace 齐；实验的 Delivery Gate 以操作者批准为人类确认点 | 不得在批准前运行计费实验；KILL-R12 捆绑记账（K-EX05） | — |
 
 命中硬门禁：**H2**（P0 Claim C-EX01 REFUTED → PIVOT/KILL）、**H5**（实验分支相对价值 Unproven → 上限 Weak GO，只以受控实验进入）。**[C 修订]** 未命中 H3：UNKNOWN 的 C-EX02a-TP / 02b / 02c / 03 都是 P1，H3 只对 P0 生效——作者初稿误引了 H3。未命中 H1（无 OPEN P0）、H4（P0/P1 主要靠 E1）、H7（G6 PARTIAL 非 FAIL）、H8（demo 范围、mainnet out）。
@@ -119,30 +121,30 @@ K1 否（有真实用户、场景、可观察损失）；K2 否（核心结论�
 | --- | --- | --- | --- | --- | --- | --- |
 | C-EX01 | 当前退出层在盘整中未保护浮盈是需修复的缺陷 | **P0** | A1/A2 | 若回吐在设计噪声内且更紧的退出历史上都毁值，则不是缺陷 | E-EX02/02b/05（噪声内）、E-EX07/08（更紧毁值） | **REFUTED** |
 | C-EX02a-SL | 更紧的**固定止损 / 移动止损**能在 Sharpe 损失 ≤ 0.10 下改善 OOS MDD | P1 | A2/A6 | 网格里任一更紧的止损 / 移动止损双通过 D-017 | E-EX07（止损 2.5/4σ、移动止损 4σ 全否） | **REFUTED**（在 0.15 构造上；方向对 vol_target 稳健，K-EX03） |
-| C-EX02a-TP **[C 修订]** | 更紧的**固定止盈**（3σ / 4σ）能双通过 D-017 | P1 | A2/A6 | EXP-EX1b 两格双通过 | **从未测过**（网格 TP ∈ {0, 6}）；先验为负（趋势系统利润在右尾；E-EX09 对止盈侧方向模糊） | **UNKNOWN** |
-| C-EX02b | **按行情状态切档**的止盈 / 止损能双通过 D-017 且优于同档固定止盈 | P1 | A2/A6 | EXP-EX2 的 2×2：regime 臂双通过、优于固定臂、镜像臂不过 | 从未测；先验 E-EX09/11 为负 | **UNKNOWN** |
-| C-EX02c **[冻结后追加]** | 以**当前** σ 为单位的退出优于以入场 σ 为单位 | P1 | A2 | EXP-EX3 双通过且 MDD 不差于现行 | 从未测；方向不确定 | **UNKNOWN** |
-| C-EX03 | 对本书，退出应响应的"市场状态"是周级信号自身的衰减，不是价格相对入场 / 极值的路径 | P1 | A2/A5 | 描述统计 + EXP-EX1 | E-EX09/12 结构一致；**E-EX10（幅度不携带收益信息）反向**；E-EX13 不含收益 | **UNKNOWN**（**[C 修订，K-EX02]** 由 PARTIAL 降级） |
+| C-EX02a-TP **[C 修订]** | 更紧的**固定止盈**（3σ / 4σ）能双通过 D-017 | P1 | A2/A6 | EXP-EX1b 两格双通过 | ~~**从未测过**（网格 TP ∈ {0, 6}）；先验为负（趋势系统利润在右尾；E-EX09 对止盈侧方向模糊）~~ **【结项，P22】** 现已测：TP3-entry 静态 Sharpe 损失 0.1736 > 0.10 门槛（不通过 D-017）；TP4-entry 静态 MDD 未改善（−0.3024 差于基线 −0.3011，不通过 D-017）；两档双 universe Sharpe 也都够不到 TP6-entry−0.02 的门槛。`docs/RESEARCH_LOG.md`"P22 裁决"节 | **REFUTED** |
+| C-EX02b | **按行情状态切档**的止盈 / 止损能双通过 D-017 且优于同档固定止盈 | P1 | A2/A6 | EXP-EX2 的 2×2：regime 臂双通过、优于固定臂、镜像臂不过 | ~~从未测；先验 E-EX09/11 为负~~ **【结项，P22b】** 现已测：2×2 里哪个臂通过 D-017 本身跨 universe 不稳定——低 ER（chop）臂在静态通过、时点不通过（MDD 未改善约 0.09pp）；镜像（trend 收紧）臂正好相反，时点通过、静态不通过（Sharpe 损失 0.173）。两臂从未同时双通过，落在预登记规则的"其余情况"分支。`docs/RESEARCH_LOG.md`"P22b 裁决"节 | **REFUTED** |
+| C-EX02c **[冻结后追加]** | 以**当前** σ 为单位的退出优于以入场 σ 为单位 | P1 | A2 | EXP-EX3 双通过且 MDD 不差于现行 | ~~从未测；方向不确定~~ **【结项，P22】** 现已测：TP6-current 双 universe MDD 均未改善（时点 −0.2537 vs 基线 −0.2534；静态 −0.3013 vs 基线 −0.3011），均差于 TP6-entry，不通过 D-017。`docs/RESEARCH_LOG.md`"P22 裁决"节 | **REFUTED** |
+| C-EX03 | 对本书，退出应响应的"市场状态"是周级信号自身的衰减，不是价格相对入场 / 极值的路径 | P1 | A2/A5 | 描述统计 + EXP-EX1 | E-EX09/12 结构一致；**E-EX10（幅度不携带收益信息）反向**；E-EX13 不含收益。**【结项，P23 第 0 步】** 现已测（描述统计，`scratchpad/p23_subthreshold_forward.py`）：次阈值持有段的前瞻收益不显著低于可执行段，h=72 时 diff t=+0.92（两段同号同向为正，次阈值段更小但不显著），< 预登记停止门槛 t<2.0。停止条件触发，`exit_threshold`/`exit_dwell_bars` 未实现。`docs/RESEARCH_LOG.md`"P23 裁决"节 | 曾 PARTIAL →（**[C 修订，K-EX02]**）降级 UNKNOWN → **【结项】REFUTED** |
 | C-EX04 | 本次观察到的回吐在设计噪声之内 | P1 | A1 | 回吐 > 2 个设计日 σ（≈350 U/日）或触及 P13 阶梯 | E-EX05 | **SUPPORTED** |
-| C-EX05 | 退出层价值的实盘裁决者（M-005 反事实）不存在 | P2 | A7 | 代码里已有 | E-EX16 | **SUPPORTED** |
+| C-EX05 | 退出层价值的实盘裁决者（M-005 反事实）不存在 | P2 | A7 | 代码里已有 | E-EX16。**【结项】** 反事实已实装于 `beidou_live/reports.py`（`exit_counterfactuals`），但形态是**监测**而非裁决者（K-EX12：事件率≈2/周，30 天 n≈8 不足以裁决），携带自己的 `n_needed_for_decision`；裁决权仍留在 D-017 双 universe 回测 | 曾 SUPPORTED（缺口存在）→ **【结项】CLOSED**（缺口已补，以监测形态） |
 
 ### 3.3 Assumption Register
 
 | ID | 假设 | 影响 × 风险 | 最小验证 | 通过阈值 | 未通过动作 | Gap |
 | --- | --- | --- | --- | --- | --- | --- |
 | A-EX01 | 操作者对回吐的不适与其 50% 回撤预算一致 | **高 × 高** | 一问（Q-CRITICAL） | 回答"接受 ±1% 日内摆动" | 议题改为回撤预算 → `vol_target`（O-EX5） | GAP-EX00 |
-| A-EX02 | "震荡"可事前识别且切档能改善 | 高 × 高 | O-EX2 预登记三臂 | 低 ER 臂双通过且优于无条件臂且镜像臂不过 | O-EX2 记负结果，C-EX02b REFUTED | GAP-EX02 |
-| A-EX03 | 信号衰减早于翻转的退出能改善持仓段留存 | 高 × 高 | O-EX1 预登记两格 | §7 采纳规则 | 记负结果；C-EX03 降 REFUTED | GAP-EX01 |
+| A-EX02 | "震荡"可事前识别且切档能改善 | 高 × 高 | O-EX2 预登记三臂 | 低 ER 臂双通过且优于无条件臂且镜像臂不过 | O-EX2 记负结果，C-EX02b REFUTED | GAP-EX02 → **【结项】已发生（P22b），见 §3.2** |
+| A-EX03 | 信号衰减早于翻转的退出能改善持仓段留存 | 高 × 高 | O-EX1 预登记两格 | §7 采纳规则 | 记负结果；C-EX03 降 REFUTED | GAP-EX01 → **【结项】已发生（P23 第 0 步，未到两格网格就停），见 §3.2** |
 | A-EX04 | 退出层的 P11 判定在 0.30 构造下仍成立 | 中 × 低 | 触发是价格路径决定的（E-EX07 口径注） | — | 任何新实验都在 0.30 上跑，自动覆盖 | — |
 
 ### 3.4 Gap Plan
 
 | Gap | 影响 | 不确定性 × 决策影响 | 最小方法 | 成本 | 未完成时上限 |
 | --- | --- | --- | --- | --- | --- |
-| GAP-EX00 | A-EX01 / 整体方向 | 高 × 高 | 操作者回答 Q-CRITICAL | 0 | 本文结论以"接受"为假设成立 |
-| GAP-EX01 | C-EX03 / O-EX1；M-EX01 基线 | 高 × 高 | `beidou research validate --strategy tsmom --universe pit --grid '{"exit_threshold":[0.10],"exit_dwell_bars":[24,72]}' ...`（需先实现参数）+ 一次当前构造回测取 M-EX01 基线 | tsmom 账本 +2～3 | Need Evidence |
-| GAP-EX02 | C-EX02b / O-EX2 | 高 × 高 | `beidou research overlay --universe pit/static --exits-grid <三臂>`（需先实现 `k_scale`） | tsmom + flow 各约 +6 | Need Evidence |
-| GAP-EX03 | C-EX05 / M-005 | 低 × 中 | 实装反事实（DL-EX0） | live ≈40 行 | — |
+| GAP-EX00 | A-EX01 / 整体方向 | 高 × 高 | 操作者回答 Q-CRITICAL | 0 | ~~本文结论以"接受"为假设成立~~ **【结项】已回答**：Q1/Q2（§12）——权益日摆动 ≈±170 U（`vol_target 0.30`）被接受，退出层角色见 §12 讨论 |
+| GAP-EX01 | C-EX03 / O-EX1；M-EX01 基线 | 高 × 高 | `beidou research validate --strategy tsmom --universe pit --grid '{"exit_threshold":[0.10],"exit_dwell_bars":[24,72]}' ...`（需先实现参数）+ 一次当前构造回测取 M-EX01 基线 | tsmom 账本 +2～3 | ~~Need Evidence~~ **【结项】已关闭**——C-EX03 侧：P23 第 0 步在描述统计门停止，两格网格从未跑（不计入上面"成本"列的 tsmom +2～3）；M-EX01 基线侧：`scratchpad/m_ex01_retention.py`（不计费，见 §4.4）已测得两个 universe 的数字 |
+| GAP-EX02 | C-EX02b / O-EX2 | 高 × 高 | `beidou research overlay --universe pit/static --exits-grid <三臂>`（需先实现 `k_scale`） | tsmom + flow 各约 +6 | ~~Need Evidence~~ **【结项】已关闭**——P22b 2×2 已跑（tsmom/flow 各 +4，实际成本低于预估的各 +6），C-EX02b REFUTED |
+| GAP-EX03 | C-EX05 / M-005 | 低 × 中 | 实装反事实（DL-EX0） | live ≈40 行 | ~~—~~ **【结项】已关闭**——`exit_counterfactuals` 已实装（DL-EX0b，实测 live ≈50 行，与 DL-EX0 合计 ≈149 行，见 K-EX05），以监测形态交付 |
 
 ---
 
@@ -176,10 +178,17 @@ K1 否（有真实用户、场景、可观察损失）；K2 否（核心结论�
 
 | Metric | 类型 | 指标 | 基线来源 | 关联 | 为什么量的是问题而不是方案 |
 | --- | --- | --- | --- | --- | --- |
-| M-EX01 | 领先（问题级） | 每个已平仓持仓段的**留存比** = 平仓 P&L / 段内最大浮盈（MFE）；同时报告 MFE 中位数与段长 | 回测按持仓段计算（GAP-EX01）；实盘 `trades.jsonl` 配对 | Pre-EX1、C-EX03 | 直接量"浮盈回吐了多少"，与用什么规则退出无关 |
+| M-EX01 | 领先（问题级） | 每个已平仓持仓段的**留存比** = 平仓 P&L / 段内最大浮盈（MFE）；同时报告 MFE 中位数与段长 | 回测按持仓段计算（~~GAP-EX01~~ **【结项】已关闭**）；实盘 `trades.jsonl` 配对 | Pre-EX1、C-EX03 | 直接量"浮盈回吐了多少"，与用什么规则退出无关 |
+| **M-EX01 基线（结项测得）** | 描述性，不计费（见脚本 docstring，理由同 `exit_reachability.py`——评估零候选、不做筛选） | pit（205 币）留存比 p25 **−1.929**、中位 **−0.104**、p75 **+0.933**（MFE 中位 0.39%、p75 1.03%；段长中位 195 bar；3406 段中 529 段 MFE≤0 未转正、不计入比值）；static（18 币）留存比 p25 **−1.806**、中位 **−0.196**、p75 **+1.000**（MFE 中位 0.70%、p75 1.42%；段长中位 271 bar；1953 段中 249 段未转正） | `scratchpad/m_ex01_retention.py`，在**现行 shipped 构造**（sl6/tp6/entry 单位，`vol_target 0.30`）上复用 `exit_reachability.episodes()` 的分段/MFE 机制测得 | C-EX03、Pre-EX1 | **中位留存比为负**：典型的"曾经转正过"的持仓段，到平仓时已经不只是把浮盈吐完，还倒亏超过浮盈峰值本身——操作者原始抱怨第一次被直接量出来，与用哪条退出规则无关（GAP-EX01 关闭）。**读这个数之前先读下面一段** |
+
+> **M-EX01 怎么读，以及它为什么不与那四个 REFUTED 矛盾。** 中位留存比为负听起来像是在支持"该收紧止盈"，而同一天四次预登记实验都说不该。两者都对，原因在**同一张表的 MFE 那一列**：中位持仓段的浮盈峰值只有 **0.39%（时点）/ 0.70%（静态）**。那不是一个可收割的量——demo 与 mainnet 的成交基差中位就有 14.8 bps、p99 有 223 bps（E-EX15），来回一趟的换手成本按成本模型是 14 bps，而要在 0.39% 的峰值上择时退出，规则必须先把它与噪声分开。所以中位段的"回吐"不是被浪费的利润，是**从来就不存在的利润**。
+>
+> 这本书的收益在**右尾**：p75 的 MFE 是中位的 2.6～3 倍，段长中位 195～271 bar（8～11 天，与周级信号一致）。任何按固定或按 regime 收紧的止盈，在砍掉右尾的同时并不能救回中位段——这正是 P22 量到的形状：静态 universe 上 TP3 把回撤改善了 6.34pp（真实且很大），代价是 0.1736 的 Sharpe，两个数是同一件事的两面。
+>
+> 因此 M-EX01 的正确用途是**基线**，不是行动依据：它是任何未来退出侧改动必须超过的那条线，而且必须与 M-EX03 联读（留存比升而 Sharpe 降 = 砍赢家，不采纳）。本轮没有任何候选达到"可与基线比较"的阶段——O-EX1 停在描述统计门，其余三个被 D-017 挡下。
 | M-EX02 | 滞后 | M-010：30 天 income 归因 Sharpe vs 预期（已存在） | 日报 | 全部 | 盈利本身 |
 | M-EX03 | 护栏 | D-017：OOS Sharpe 损失 ≤ 0.10 且 OOS MDD 改善，时点 + 静态双通过；信号侧改动用 H-001 式配对规则（OOS ≥ 基线 −0.05、MDD 改善、逐 bar 差 NW t 不显著为负、静态方向一致）。**[C 修订，K-EX06]** 换手条款：任何退出规则按构造增换手，所以这里**不**沿用 H-001 的"换手必须下降"，改为"换手上升 ≤ 25% 且成本占毛利 ≤ 15%（现 9.7%）" | overlay / validate 报告 | C-EX02a-TP/02b/02c/03 | 防止"留存比"靠砍掉赢家来改善 |
-| M-005 | 领先（层级，已有 ID） | 退出触发/周 + 触发后 24/72h 反事实收益（**需实装**） | `cycles.jsonl` | C-EX05 | 退出层"有没有帮到"的唯一实盘证据 |
+| M-005 | 领先（层级，已有 ID） | 退出触发/周 + 触发后 24/72h 反事实收益（~~**需实装**~~ **【结项】已实装**，`beidou_live/reports.py` `exit_counterfactuals`，K-EX12：监测而非裁决，携带 `n_needed_for_decision`） | `cycles.jsonl` | C-EX05 | 退出层"有没有帮到"的唯一实盘证据 |
 
 ### 4.5 Stakeholder（含受损方）
 
@@ -210,8 +219,8 @@ K1 否（有真实用户、场景、可观察损失）；K2 否（核心结论�
 | 现状（6/6 + 信号翻转） | 在跑 | 已拿到全部"保险"价值；三轮证据说无更好固定设置 | 0 | 0 | — |
 | 操作者绕行（手动平仓） | 随时 | 一次性锁定，但重置留出、且历史上手动介入平均为负期望 | 污染样本外 | 高 | 本方案避免它 |
 | 固定收紧 / 移动止损 | 一行配置 | **负**（E-EX07） | 0 | 确定毁值 | — |
-| O-EX1 信号侧滞回 | 需 ≈60 行 alpha + 预登记 | 未知；先验中 | tsmom 账本 +2～3 | 鞭打税（E-EX13） | 若通过：更早离开衰减趋势 |
-| O-EX2 行情切档（原意） | 需 ≈170 行 + 预登记 | 未知；先验低 | tsmom + flow 各 +6 | 移动止损的翻版 | 若通过：C-EX02b 翻正，F1 重开 |
+| O-EX1 信号侧滞回 | 从未写完整实现——第 0 步描述统计（0 行 alpha）即停 | ~~未知；先验中~~ **【结项】REFUTED（P23 第 0 步，先验降为低–中后仍不显著，t=0.92<2.0）** | tsmom 账本 +1（诊断，非 +2～3——两格网格从未跑） | 鞭打税（E-EX13） | 未通过：`exit_threshold`/`exit_dwell_bars` 未实现 |
+| O-EX2 行情切档（原意） | 需 ≈170 行 + 预登记（实测 alpha+47/live+16） | ~~未知；先验低~~ **【结项】REFUTED（P22b 2×2，哪个臂过 D-017 跨 universe 不稳定）** | tsmom + flow 各 +4（实际，预估各 +6） | 移动止损的翻版 | 未通过：C-EX02b REFUTED，F1 不重开 |
 | O-EX5 降 vol_target | 一行 | 确定平滑权益，但等价于改 50% 预算 | 0 | 与 P13 决策矛盾 | 只在 A-EX01 不成立时正确 |
 | 不行动 | — | 与现状同 | 0 | 操作者继续不安 → 手动干预 | O-EX0 的日报行就是"不行动 + 给尺度" |
 
@@ -254,9 +263,9 @@ R0 信号→目标函数（纯函数，+2 参数）；R1 实盘每周期同一�
 | Risk | 事件 | 概率 / 影响 | 预警 | 缓解 / 失败动作 |
 | --- | --- | --- | --- | --- |
 | RISK-EX01 | 更多退出 → 鞭打税（次阈值段中位 3 bar） | 高 / 中 | 换手、成本占比 > 15% | dwell 参数；采纳规则含成本占比 |
-| RISK-EX02 | demo/mainnet 基差吞掉紧退出距离：中位 14.8 bps，**尾部 p99 223 / 最大 271 bps**（[C 修订] 按尾部而非中位评估，K-EX08） | 高 / 中 | 实盘触发率 ≫ 回测 1.9/周 | 任何 ≤1σ 距离的价格路径规则不进 demo；价格路径实验（O-EX1b/O-EX7/O-EX2）的实盘触发率与回测对比列为 falsifier；信号侧 O-EX1 免疫 |
-| RISK-EX03 | 账本膨胀逼近 WEAK_PASS（tsmom 89 → ≤98） | 中 / 中 | FWER 余量 0.02–0.04 | 网格最小化；O-EX2 需操作者明确同意 |
-| RISK-EX04 | 非 alpha 行数超规则。**[C 修订，K-EX05]** 六个包全部顶在 CEILING；捆绑 O-EX0 ≈20 + M-005 ≈50 + O-EX2 live/cli ≈90 = 160 ≥ 100 | 高 / 中 | `tests/architecture/test_source_budget.py` | 分批记账：O-EX0 + M-005 ≈70 行先行并请操作者裁定 ceiling；O-EX2 的 live 接线只在研究通过后再记 |
+| RISK-EX02 | demo/mainnet 基差吞掉紧退出距离：中位 14.8 bps，**尾部 p99 223 / 最大 271 bps**（[C 修订] 按尾部而非中位评估，K-EX08） | 高 / 中 | 实盘触发率 ≫ 回测 1.9/周 | 任何 ≤1σ 距离的价格路径规则不进 demo；价格路径实验（O-EX1b/O-EX7/O-EX2）的实盘触发率与回测对比列为 falsifier；信号侧 O-EX1 免疫。**【结项】falsifier 从未被挂上**：TP3/4/current/regime 全部在回测阶段（D-017）就被 REFUTED，没有价格路径候选进入 live，K-EX08 因此维持 OPEN（N/A-until-adoption） |
+| RISK-EX03 | 账本膨胀逼近 WEAK_PASS（tsmom 89 → ≤98） | 中 / 中 | FWER 余量 0.02–0.04 | 网格最小化；O-EX2 需操作者明确同意 | **【结项】实际落点**（`reports/research/trials.jsonl` 实测）：tsmom 89 → 99（P22，+10）→ 100（P23 第 0 步，+1 诊断）→ **104**（P22b，+4）；flow 14 → 24（P22）→ 28（P22b）。104 已超过本行写下时的"≤98"上限，是已知、已记录的代价（RISK-P4：下次 tsmom 复验更接近 WEAK_PASS），未触发额外裁定 |
+| RISK-EX04 | 非 alpha 行数超规则。**[C 修订，K-EX05]** 六个包全部顶在 CEILING；捆绑 O-EX0 ≈20 + M-005 ≈50 + O-EX2 live/cli ≈90 = 160 ≥ 100 | 高 / 中 | `tests/architecture/test_source_budget.py` | 分批记账：O-EX0 + M-005 ≈70 行先行并请操作者裁定 ceiling；O-EX2 的 live 接线只在研究通过后再记 | **【结项】已按分批记账执行**：DL-EX0/0b 先行（Q5=A，抬 ceiling，实测 +149 live）；O-EX2 的 live/cli 接线在 P22b（研究）通过账本记账后才写（Task 7 提交单独抬 ceiling，+47 alpha/+16 live），两次抬升都带各自的理由句，见 K-EX05 终态 |
 | RISK-EX05 | 改 registry 不重启 → 分叉（D-042） | 低 / 高 | `live status --check` | 采纳即重启并记构造变更 |
 | RISK-EX06 | E-EX14 的 "+20 U" 诱使直接采纳 TP2/TP3 | 中 / 高 | — | 本文写明 n=1–3、E5；采纳只走 D-017 |
 | RISK-EX07 | 操作者在实验期间手动干预 | 中 / 高 | 外部成交（D-032 foreign fills） | 日报噪声尺度行 + 本文 §12 的"什么才算异常" |
@@ -272,9 +281,9 @@ R0 信号→目标函数（纯函数，+2 参数）；R1 实盘每周期同一�
 | --- | --- | --- | --- | --- | --- |
 | O-EX0 No-Build + 尺度 | 保持 6/6；日报加"设计日 σ（U）、今日峰值回吐及其 σ 倍数、退出触发期望 vs 实际" | — | ≈20 行 live | 高 | **Must** |
 | O-EX0b M-005 实装 | 每次退出事件记 +24/+72 bar 的反事实收益（若不退出该仓位会赚/亏多少，含省下的成本） | — | ≈40 行 live | 高 | **Must** |
-| O-EX1b 固定止盈扩格 **[C 修订，K-EX01]** | 预登记网格加 `take_profit ∈ {3, 4}`（止损 6 不变）；纯 CLI 网格参数，**零新代码路径** | 低（趋势系统利润在右尾），但这是操作者字面问题里唯一从未测过的档，且是 O-EX2 的必要对照 | 0 行代码；tsmom + flow 各 +4（两档 × 两 universe） | 高 | **Should，第一个实验** |
-| O-EX1 信号侧退出滞回 | `exit_threshold`（默认 **None = 关闭**）、`exit_dwell_bars`（默认 **0 = 关闭**）：\|score\| < exit_threshold 连续 ≥ dwell bar → 平仓；翻转仍即时。**[C 修订，K-EX04]** 现状是次阈值**无限期**持有，任何有限 dwell 都不是现状，所以默认必须 off，并配位同测试 | 低–中（**[C 修订，K-EX02]** E-EX10 说幅度不携带收益信息，先验下调）；优点：对 demo/mainnet 基差**免疫**（K-EX08）；E-EX13：无 dwell 必鞭打 | alpha ≈60 行 + 重验 + 指针 + 重启；先做 1 项描述统计（计 1 trial），再决定是否花 validate 名额 +2 | 高（参数关闭即现状） | **Could（描述统计之后再定）** |
-| O-EX2 行情切档退出（原意） | `exit_step` 接受 `k_scale`；regime = ER_168（\|净变动\| / 路径长度）与**预登记固定阈值 0.05** 比较（不用滚动中位，K-EX13）；**2×2 判定**：基线 6/6、固定 TP3（来自 O-EX1b）、低 ER 才 TP3、高 ER 才 TP3（镜像） | 低（65–75% 不通过）：低 ER 收紧 ≈ 盘整中的移动止损 | alpha ≈80 + live ≈60 + cli ≈30（live/cli 部分只在研究通过后再写，K-EX05）；tsmom + flow 各 +4（两个 regime 臂 × 两 universe；固定臂已在 O-EX1b 计过） | 高 | **Could（O-EX1b 之后、操作者点头才跑）** |
+| O-EX1b 固定止盈扩格 **[C 修订，K-EX01]** | 预登记网格加 `take_profit ∈ {3, 4}`（止损 6 不变）；纯 CLI 网格参数，**零新代码路径** | 低（趋势系统利润在右尾），但这是操作者字面问题里唯一从未测过的档，且是 O-EX2 的必要对照 | 0 行代码；tsmom + flow 各 +4（两档 × 两 universe） | 高 | ~~**Should，第一个实验**~~ **【结项】已跑（P22），TP3/TP4 均 REFUTED，见 §3.2** |
+| O-EX1 信号侧退出滞回 | `exit_threshold`（默认 **None = 关闭**）、`exit_dwell_bars`（默认 **0 = 关闭**）：\|score\| < exit_threshold 连续 ≥ dwell bar → 平仓；翻转仍即时。**[C 修订，K-EX04]** 现状是次阈值**无限期**持有，任何有限 dwell 都不是现状，所以默认必须 off，并配位同测试 | 低–中（**[C 修订，K-EX02]** E-EX10 说幅度不携带收益信息，先验下调）；优点：对 demo/mainnet 基差**免疫**（K-EX08）；E-EX13：无 dwell 必鞭打 | alpha ≈60 行 + 重验 + 指针 + 重启；先做 1 项描述统计（计 1 trial），再决定是否花 validate 名额 +2 | 高（参数关闭即现状） | ~~**Could（描述统计之后再定）**~~ **【结项】描述统计已做（P23 第 0 步），不显著（t=0.92），未花 validate 名额，`exit_threshold`/`exit_dwell_bars` 未实现** |
+| O-EX2 行情切档退出（原意） | `exit_step` 接受 `k_scale`；regime = ER_168（\|净变动\| / 路径长度）与**预登记固定阈值 0.05** 比较（不用滚动中位，K-EX13）；**2×2 判定**：基线 6/6、固定 TP3（来自 O-EX1b）、低 ER 才 TP3、高 ER 才 TP3（镜像） | 低（65–75% 不通过）：低 ER 收紧 ≈ 盘整中的移动止损 | alpha ≈80 + live ≈60 + cli ≈30（live/cli 部分只在研究通过后再写，K-EX05）；tsmom + flow 各 +4（两个 regime 臂 × 两 universe；固定臂已在 O-EX1b 计过） | 高 | ~~**Could（O-EX1b 之后、操作者点头才跑）**~~ **【结项】已跑（P22b），2×2 里哪个臂过 D-017 本身跨 universe 不稳定，C-EX02b REFUTED** |
 | O-EX3 书级 regime 敞口标量 | 一个标量乘整行（D-015 形状） | 低（E-EX10/11；mining 里 vol-regime 门 +0.002） | 中 | 高 | Won't（重开条件：O-EX2 显示 regime 效应） |
 | O-EX4 滚动入场锚 | 同向加减仓重锚 / 每 N bar 重锚 | 低（= 慢速移动止损） | 低 | 高 | Won't |
 | O-EX5 降 vol_target | 更平滑的权益曲线 | 确定有效但不是退出问题；等于改 50% 预算 | 一行 | 高 | 只在 A-EX01 不成立时 |
@@ -296,7 +305,7 @@ R0 信号→目标函数（纯函数，+2 参数）；R1 实盘每周期同一�
 
 | 字段 | 内容 |
 | --- | --- |
-| 推荐（**[C 修订]**） | **PIVOT**：O-EX0 + O-EX0b 现在做；第一个实验 = 一次 overlay 运行含 O-EX1b（固定 TP 3/4）+ O-EX7（当前 σ 单位）；之后视结果与操作者意愿：O-EX2 的 2×2、O-EX1 的描述统计→validate；更紧止损 / 移动止损 / 滚动锚 / 书级标量 / 部分止盈 / 原生单 Won't |
+| 推荐（**[C 修订]**） | **PIVOT**：O-EX0 + O-EX0b 现在做；第一个实验 = 一次 overlay 运行含 O-EX1b（固定 TP 3/4）+ O-EX7（当前 σ 单位）；之后视结果与操作者意愿：O-EX2 的 2×2、O-EX1 的描述统计→validate；更紧止损 / 移动止损 / 滚动锚 / 书级标量 / 部分止盈 / 原生单 Won't。**【结项】全部已执行**：O-EX0/O-EX0b 已交付（DL-EX0/0b）；第一个实验已跑（P22，TP3/4/current 全 REFUTED）；O-EX2 的 2×2 已跑（P22b，REFUTED）；O-EX1 的描述统计已做（P23 第 0 步，未到 validate 就停）。四个假设全部 REFUTED，Won't 列表原样维持 |
 | 胜出理由 | 唯一同时满足"不推翻三轮证据、不污染留出、回应诉求、可证伪"的组合 |
 | 放弃 | 直接改配置（无证据）；按 E-EX14 调参（n=1–3）；O-EX5（前提是 A-EX01 不成立，尚未知） |
 | 关键成立条件 | A-EX01 成立（操作者接受设计内摆动）；账本名额可接受 |
@@ -317,24 +326,24 @@ R0 信号→目标函数（纯函数，+2 参数）；R1 实盘每周期同一�
 
 作者回应：**接受。** §0 Memo、§3.2 Claim、§7 Option Set、§11.2 实验与 §12 已按此改写（改动处标 **[C 修订]**）。
 
-### 8.2 Kill Register（14 条：P0 0 / P1 9 / P2 5；全部 OPEN，逐条给出关闭路径）
+### 8.2 Kill Register（14 条：P0 0 / P1 9 / P2 5；写下时全部 OPEN，逐条给出关闭路径——**【结项，2026-09-07】13/14 已关闭或缓解，终态见末列**）
 
-| Kill | 攻击命题（压缩） | P | 作者回应与关闭路径 |
-| --- | --- | --- | --- |
-| K-EX01 | C-EX02a 的 REFUTED 覆盖了从未测过的止盈 <6σ；Option Set 缺最便宜的实验（固定 TP 扩格）；O-EX2 用 TP3 却无固定 TP3 对照 | P1 | 接受。C-EX02a 拆为 02a-SL/trail（REFUTED）与 02a-TP（UNKNOWN）；新增 O-EX1b「固定 TP ∈ {3, 4} 预登记扩格」为**第一个实验**兼 O-EX2 的对照臂。关闭需新证据：EXP-EX1b 运行 |
-| K-EX02 | C-EX03 PARTIAL 与 O-EX1 先验"中"无证据；E-EX10（幅度不携带收益信息）反向 | P1 | 接受。C-EX03 → UNKNOWN；O-EX1 先验降为低–中；花 validate 名额前先做一项描述统计（次阈值持有段 vs 可执行段的前瞻收益，计 1 个 prior trial）；O-EX1 不再排在扩格之前 |
-| K-EX03 | E-EX07/E-EX11 在 `vol_target 0.15` 上算、实盘 0.30，冻结文件未披露；边界项（SL6+TP6 静态 0.0892 vs 0.10；节流）敏感 | P1 | 接受。触发事件对 vol_target 不变（价格路径），否定项裕度 0.03–0.20，REFUTED 方向不翻；任何采纳前在 0.30 上重跑 D-017；E-EX11 降为 E3 先验 |
-| K-EX04 | O-EX1"默认 = entry 0.20 即现状"错误：现状是次阈值**无限期**持有，有限 dwell 不是现状；"一个参数、高可逆"失真 | P1 | 接受。默认必须 off（`exit_dwell_bars=0` 或 `exit_threshold=None`）；位同测试；成本列改写（两参数 + dwell 逻辑 + 重验 + 指针 + 重启） |
-| K-EX05 | KILL-R12 对**捆绑**生效：O-EX0 ≈20 + M-005 反事实（未估行）+ O-EX2 live/cli ≈90 → 非 alpha ≥ 100；六个包全部顶在 CEILING（`test_source_budget.py:704-711`） | P1 | 接受。每个 DL 标包别行数；M-005 估 live ≈50 行；O-EX0 + M-005 ≈70 行先行，O-EX2 的 live 接线只在研究通过后再记账；ceiling 抬升由操作者裁定 |
-| K-EX06 | M-EX03 信号侧规则删掉 H-001 的"换手下降"腿而 RISK-EX01 说"含换手"；M-EX01 无基线无失败动作、机械偏向早退出 | P2 | 接受。M-EX03 明写"换手允许上升 ≤ 25%、成本占毛利 ≤ 15%"并说明偏离 H-001 的理由（退出规则按构造增换手）；M-EX01 基线 = GAP-EX01，失败动作 = 留存比升而 Sharpe 降 → 不采纳 |
-| K-EX07 | E-EX14 的 7 个配置在实盘 60 bar 上重放**未入账本**，违反"每个诊断配置计入 prior-trials"；分析自己做了它警告的事的第一步 | P1 | 接受为治理问题。作者不擅自写共享账本：交操作者二选一——补记（tsmom + flow 各 7 行，param_key 含 exits 设置，range = 实盘窗）或书面豁免"≤ N bar 的描述性实盘重放不计费"写入 RESEARCH_LOG。E-EX14 已改 E5 |
-| K-EX08 | 基差风险应看尾部而非中位；O-EX1 对基差免疫未作为优点写入 | P2 | 接受。RISK-EX02 改用 p99/最大值；O-EX1 加"免基差" |
-| K-EX09 | 受损方补偿不对症（操作者三天内两次要求保护性退出，两次被"证据"顶回）；Q-CRITICAL 诱导且与 50% 预算重复；输出缺明确否定句 | P1 | 接受。§12 加 (a) 明确否定句与原因；(b) 结构事实；(c) 中性二选一（退出层是主动 P&L 机制还是灾难后备）；(d) 风险偏好问题改为不预设答案的表述 |
-| K-EX10 | §3 把 09-04 全平记为"绕行"；RESEARCH_LOG:856 记录为"手动平掉全部仓位后重启做检验" | P2 | 接受，已核对原文。改写为"操作者具备随时手动平仓的绕行能力，本次未使用" |
-| K-EX11 | E-EX13 幸存者 18 币标 E1；"三轮一致"是同一数据三次重分析；E-EX02 与 E-EX02b 快照不一致（−35 vs −65 U） | P2 | 接受。标注修正；两个快照并列并注明时间 |
-| K-EX12 | M-005 反事实作为"实盘裁决者"不可用：事件率 ≈ 2/周，30 天 n≈8；三次承诺未实现 | P1 | 接受。M-005 降为**监测**；裁决权留在 D-017 双 universe 回测；实装时写明预期事件率与 time-to-decision（0.5σ 效应、t=2 需 n≈16 ≈ 2 个月） |
-| K-EX13 | O-EX2 用 90 日中位切 regime → 按构造约一半时间"低 ER"；"两臂都过即噪声"混淆"regime 无关"与"TP3 处处有效"；ER 参数无先验 | P1 | 接受。固定 ER 阈值（§6.3 已改）；加固定 TP3 臂；判定改 2×2（基线 / 固定 / regime 臂 / 镜像臂） |
-| K-EX14 | 任何采纳 = 构造变更 = M-010 清零（当前 4.6 天）；无"最短干净窗口"规则 | P2 → 人类确认点 | 接受为建议规则：M-010 未满 30 天连续构造前不采纳任何退出/信号改动，除非 P13 阶梯触发；由操作者确认 |
+| Kill | 攻击命题（压缩） | P | 作者回应与关闭路径 | **终态（结项）** |
+| --- | --- | --- | --- | --- |
+| K-EX01 | C-EX02a 的 REFUTED 覆盖了从未测过的止盈 <6σ；Option Set 缺最便宜的实验（固定 TP 扩格）；O-EX2 用 TP3 却无固定 TP3 对照 | P1 | 接受。C-EX02a 拆为 02a-SL/trail（REFUTED）与 02a-TP（UNKNOWN）；新增 O-EX1b「固定 TP ∈ {3, 4} 预登记扩格」为**第一个实验**兼 O-EX2 的对照臂。关闭需新证据：EXP-EX1b 运行 | **CLOSED — 新证据**：P22 跑了 TP3/TP4-entry（`docs/RESEARCH_LOG.md`"P22 裁决"节），C-EX02a-TP → REFUTED |
+| K-EX02 | C-EX03 PARTIAL 与 O-EX1 先验"中"无证据；E-EX10（幅度不携带收益信息）反向 | P1 | 接受。C-EX03 → UNKNOWN；O-EX1 先验降为低–中；花 validate 名额前先做一项描述统计（次阈值持有段 vs 可执行段的前瞻收益，计 1 个 prior trial）；O-EX1 不再排在扩格之前 | **CLOSED — 新证据**：P23 第 0 步测了这项描述统计（`scratchpad/p23_subthreshold_forward.py`），h=72 diff t=+0.92<2.0，C-EX03 → REFUTED |
+| K-EX03 | E-EX07/E-EX11 在 `vol_target 0.15` 上算、实盘 0.30，冻结文件未披露；边界项（SL6+TP6 静态 0.0892 vs 0.10；节流）敏感 | P1 | 接受。触发事件对 vol_target 不变（价格路径），否定项裕度 0.03–0.20，REFUTED 方向不翻；任何采纳前在 0.30 上重跑 D-017；E-EX11 降为 E3 先验 | **CLOSED — 新证据**：P22 把现行 TP6-entry 与节流都在 0.30 上重跑（"控制行的意外"节 + 节流一行），方向不翻；TP6-entry 双通过 D-017 |
+| K-EX04 | O-EX1"默认 = entry 0.20 即现状"错误：现状是次阈值**无限期**持有，有限 dwell 不是现状；"一个参数、高可逆"失真 | P1 | 接受。默认必须 off（`exit_dwell_bars=0` 或 `exit_threshold=None`）；位同测试；成本列改写（两参数 + dwell 逻辑 + 重验 + 指针 + 重启） | **CLOSED — 已成过去式（moot）**：P23 在描述统计门停止，`exit_threshold`/`exit_dwell_bars` 从未写进 `scores_to_targets`，默认值该是什么不再是需要裁定的问题 |
+| K-EX05 | KILL-R12 对**捆绑**生效：O-EX0 ≈20 + M-005 反事实（未估行）+ O-EX2 live/cli ≈90 → 非 alpha ≥ 100；六个包全部顶在 CEILING（`test_source_budget.py:704-711`） | P1 | 接受。每个 DL 标包别行数；M-005 估 live ≈50 行；O-EX0 + M-005 ≈70 行先行，O-EX2 的 live 接线只在研究通过后再记账；ceiling 抬升由操作者裁定 | **MITIGATED**：Q5=A，ceiling 逐笔抬升且每次都带"规则要求的句子"（`test_source_budget.py` CEILING 注释历史，含 DL-EX0/0b 的 +77/+149、Task 7 的 +47/+16）；两条并行分支合并时**重新测量整棵树**而非相加（"Merged 2026-09-07: 两分支并行抬升本表…是重新测量的合并树"），防止 ceiling 被复制而非实测 |
+| K-EX06 | M-EX03 信号侧规则删掉 H-001 的"换手下降"腿而 RISK-EX01 说"含换手"；M-EX01 无基线无失败动作、机械偏向早退出 | P2 | 接受。M-EX03 明写"换手允许上升 ≤ 25%、成本占毛利 ≤ 15%"并说明偏离 H-001 的理由（退出规则按构造增换手）；M-EX01 基线 = GAP-EX01，失败动作 = 留存比升而 Sharpe 降 → 不采纳 | **CLOSED — 已成过去式（moot）+ 另一半已交付**：换手条款是为 O-EX1 的 dwell 参数写的，该参数从未实现，条款无对象可用；M-EX01 基线那一半已在本次结项测得（§4.4），GAP-EX01 关闭 |
+| K-EX07 | E-EX14 的 7 个配置在实盘 60 bar 上重放**未入账本**，违反"每个诊断配置计入 prior-trials"；分析自己做了它警告的事的第一步 | P1 | 接受为治理问题。作者不擅自写共享账本：交操作者二选一——补记（tsmom + flow 各 7 行，param_key 含 exits 设置，range = 实盘窗）或书面豁免"≤ N bar 的描述性实盘重放不计费"写入 RESEARCH_LOG。E-EX14 已改 E5 | **CLOSED — 操作者裁定**：Q4=B，`docs/RESEARCH_LOG.md`"规则：短窗描述性实盘重放不计费"一节写入豁免条款（窗口 ≤100 bar、标 E5、不得用于选参数） |
+| K-EX08 | 基差风险应看尾部而非中位；O-EX1 对基差免疫未作为优点写入 | P2 | 接受。RISK-EX02 改用 p99/最大值；O-EX1 加"免基差" | **仍 OPEN — N/A-until-adoption**：\|基差\| p99 223bps / 最大 271bps 是给"被采纳的价格路径候选"用的实盘触发率 falsifier；P22/P22b 里没有任何价格路径候选被采纳（TP3/4/current/regime 全 REFUTED），falsifier 没有对象可挂，留 OPEN 到下次有候选被采纳为止 |
+| K-EX09 | 受损方补偿不对症（操作者三天内两次要求保护性退出，两次被"证据"顶回）；Q-CRITICAL 诱导且与 50% 预算重复；输出缺明确否定句 | P1 | 接受。§12 加 (a) 明确否定句与原因；(b) 结构事实；(c) 中性二选一（退出层是主动 P&L 机制还是灾难后备）；(d) 风险偏好问题改为不预设答案的表述 | **CLOSED — 文档已改**：§12 现有明确否定句（"这次不上线"段）与中性 Q1 措辞，写下时即已生效 |
+| K-EX10 | §3 把 09-04 全平记为"绕行"；RESEARCH_LOG:856 记录为"手动平掉全部仓位后重启做检验" | P2 | 接受，已核对原文。改写为"操作者具备随时手动平仓的绕行能力，本次未使用" | **CLOSED — 文档已改**：§2.1 现文本即为改写后版本，写下时即已生效 |
+| K-EX11 | E-EX13 幸存者 18 币标 E1；"三轮一致"是同一数据三次重分析；E-EX02 与 E-EX02b 快照不一致（−35 vs −65 U） | P2 | 接受。标注修正；两个快照并列并注明时间 | **CLOSED — 文档已改**：§3.1 E-EX02/E-EX02b 并列且各标时间戳，写下时即已生效 |
+| K-EX12 | M-005 反事实作为"实盘裁决者"不可用：事件率 ≈ 2/周，30 天 n≈8；三次承诺未实现 | P1 | 接受。M-005 降为**监测**；裁决权留在 D-017 双 universe 回测；实装时写明预期事件率与 time-to-decision（0.5σ 效应、t=2 需 n≈16 ≈ 2 个月） | **CLOSED — 已交付**：`exit_counterfactuals`（`beidou_live/reports.py`）以监测形态实装，携带 `n_needed_for_decision`；日报段 "Exit counterfactuals (M-005, monitoring only)" |
+| K-EX13 | O-EX2 用 90 日中位切 regime → 按构造约一半时间"低 ER"；"两臂都过即噪声"混淆"regime 无关"与"TP3 处处有效"；ER 参数无先验 | P1 | 接受。固定 ER 阈值（§6.3 已改）；加固定 TP3 臂；判定改 2×2（基线 / 固定 / regime 臂 / 镜像臂） | **CLOSED — 新证据**：P22b 用固定常数（168 bar、0.05）执行了 2×2（低 ER 臂 + 镜像臂 + 已有的固定 TP3 臂），C-EX02b → REFUTED |
+| K-EX14 | 任何采纳 = 构造变更 = M-010 清零（当前 4.6 天）；无"最短干净窗口"规则 | P2 → 人类确认点 | 接受为建议规则：M-010 未满 30 天连续构造前不采纳任何退出/信号改动，除非 P13 阶梯触发；由操作者确认 | **CLOSED — 操作者裁定**：Q6=A，`docs/RUNBOOK.md`"采纳退出层/信号改动的最短干净窗口"一节写入该规则 |
 
 ### 8.3 Pre-Mortem 与 Inversion（审查者产出，压缩）
 
@@ -342,11 +351,11 @@ R0 信号→目标函数（纯函数，+2 参数）；R1 实盘每周期同一�
 
 ### 8.4 G6 与 Final Kill Decision
 
-**G6：PARTIAL**（无 OPEN P0；9 个 P1 各有明确触发动作，其中 K-EX04/05/09/13 与全部 P2 可通过改写产物关闭——本文已改写；K-EX01/02/03/07/12 需要新证据——运行扩格、描述统计、0.30 重跑、账本处置、事件率估算）。
+**G6：**~~PARTIAL~~（无 OPEN P0；9 个 P1 各有明确触发动作，其中 K-EX04/05/09/13 与全部 P2 可通过改写产物关闭——本文已改写；K-EX01/02/03/07/12 需要新证据——运行扩格、描述统计、0.30 重跑、账本处置、事件率估算）。**【结项】PASS**——P22（K-EX01/03）、P23 第 0 步（K-EX02）、P22b（K-EX13）、DL-EX0b（K-EX12）四条需新证据的 P1 均已关闭（§8.2 终态列）；K-EX07/K-EX14 由操作者裁定关闭；K-EX04/K-EX06 因 O-EX1 的信号侧参数从未实现而成过去式；K-EX05 缓解；K-EX09/10/11 的文档改写写下时即已生效。**唯一仍 OPEN 的是 K-EX08**（P2，N/A-until-adoption：无价格路径候选被采纳，尾部 falsifier 没有对象可挂）——不构成 P0/P1 OPEN，G6 判 PASS。
 
-**Final Kill Decision：PIVOT**，与作者用词一致但内容不同：作者的 PIVOT 是"转向信号侧优先"；审查后的 PIVOT 是"**先用最少名额把操作者的字面问题（止盈 <6σ 固定档）测掉并作为 regime 实验的对照，再决定信号侧**"。KILL 不适用（目标与感知→干预风险真实存在）；Need Evidence 不适用（UNKNOWN 的是 P1 Claim，H2 先于 H3）。命中 H2；未命中 H1/H3/H4/H7/H8。
+**Final Kill Decision：PIVOT**，与作者用词一致但内容不同：作者的 PIVOT 是"转向信号侧优先"；审查后的 PIVOT 是"**先用最少名额把操作者的字面问题（止盈 <6σ 固定档）测掉并作为 regime 实验的对照，再决定信号侧**"。KILL 不适用（目标与感知→干预风险真实存在）；Need Evidence 不适用（UNKNOWN 的是 P1 Claim，H2 先于 H3）。命中 H2；未命中 H1/H3/H4/H7/H8。**【结项】这条 PIVOT 已执行完毕**：字面问题测掉了（P22，REFUTED），regime 实验的对照也用上了（P22b，REFUTED），信号侧也测了（P23 第 0 步，REFUTED）。三侧都测完之后，落点不是"转向某一侧"，而是三侧都不动、退出层维持现状——PIVOT 一词的最终含义收敛为"诊断被推翻、诉求被验证性地否定"。
 
-人类确认点（D.8）：① 每个实验的账本名额；② 任何进 live 的改动（registry/config + 重启 + M-010 清零；启动演练必须换 `state_dir`）；③ E-EX14 补记或豁免；④ KILL-R12 ceiling；⑤ 风险偏好（按 K-EX09 中性表述）。
+人类确认点（D.8）：① 每个实验的账本名额；② 任何进 live 的改动（registry/config + 重启 + M-010 清零；启动演练必须换 `state_dir`）；③ E-EX14 补记或豁免；④ KILL-R12 ceiling；⑤ 风险偏好（按 K-EX09 中性表述）。**【结项】五项均已过**：①③④⑤见 §12 对应 Q3/Q4/Q5/Q1 的回答；②本分支未采纳任何退出/信号候选，故没有"采纳"意义上的 live 改动——只有 `unit_mode` 这一只读参数的默认值上线，逐位不变行为，但按 D-026 规则构造指纹仍记录了变化（见 RESEARCH_LOG"记录：`unit_mode` 改了构造指纹"一节），M-010 窗口按规则清零。
 
 ---
 
@@ -355,13 +364,13 @@ R0 信号→目标函数（纯函数，+2 参数）；R1 实盘每周期同一�
 | 分类 | 内容 | 理由 |
 | --- | --- | --- |
 | Must | O-EX0（日报噪声尺度行）、O-EX0b（M-005 反事实）；本文入库 | 零交易影响；补上裁决者 |
-| Should | O-EX1 预登记 + 实现 + 一次 validate | 先验最高、成本最低、在 alpha 侧 |
-| Could | O-EX2 三臂（操作者点头） | 回应原意；先验低 |
+| Should | O-EX1 预登记 + 实现 + 一次 validate | 先验最高、成本最低、在 alpha 侧 →**【结项】预登记 + 描述统计已做（P23 第 0 步），不显著，停在此步，"实现 + validate" 从未发生** |
+| Could | O-EX2 三臂（操作者点头） | 回应原意；先验低 →**【结项】已跑（P22b），REFUTED**。**来源更正**：不是 Q1 改判为 A——操作者对 Q1 的回答始终是 B（灾难后备）。本项与 O-EX1 是在其后一条独立指令下解锁的：「与执行优化方案进行对比……完善所有的任务，不要有遗漏」。即在 Q1=B 的前提下仍把两个条件任务跑完，以消除「没测过」这个状态本身 |
 | Won't | 固定收紧 / 移动止损；滚动锚；书级 regime 标量；原生单；按 E-EX14 调参；在批准前跑任何计费实验 | 见 D-EX00/D-EX01 与 E-EX17 |
 
 Scope Firewall：Out-of-Scope 项加入后挤出的是账本余量与实盘证据窗口——两者都是不可再生的。
 
-Decision Compression：一句话问题 = "盘整期浮盈回吐、退出层零触发，是否该让止盈止损随行情自适应"；核心用户 = 单一操作者；推荐 = 不动退出层 + 给尺度 + 两个先写后跑的实验；In = 上表 Must/Should；Out = Won't；关键 Claim = C-EX01 REFUTED、C-EX02b UNKNOWN、C-EX03 PARTIAL；关键 Risk = RISK-EX06；成功 Metric = M-EX01/M-EX03/M-005。
+Decision Compression：一句话问题 = "盘整期浮盈回吐、退出层零触发，是否该让止盈止损随行情自适应"；核心用户 = 单一操作者；推荐 = 不动退出层 + 给尺度 + 两个先写后跑的实验；In = 上表 Must/Should；Out = Won't；关键 Claim = ~~C-EX01 REFUTED、C-EX02b UNKNOWN、C-EX03 PARTIAL~~ **【结项】C-EX01 REFUTED（不变）、C-EX02a-TP/02b/02c/03 全部 REFUTED（见 §3.2）**；关键 Risk = RISK-EX06；成功 Metric = M-EX01/M-EX03/M-005。
 
 ---
 
@@ -373,11 +382,11 @@ Decision Compression：一句话问题 = "盘整期浮盈回吐、退出层零�
 
 | DL | 内容 | 文件 | 测试 | 验收 | Metric |
 | --- | --- | --- | --- | --- | --- |
-| DL-EX0 | 日报新增 "Noise scale" 段：设计日 σ = `vol_target/√365 × equity`（U）；今日峰值回吐（U）及 /σ；退出触发期望（1.9/周 × 天数）vs 实际 | `beidou_live/reports.py` | T-EX0-1 用 cycles 夹具算出 σ 与回吐；T-EX0-2 无周期时不崩 | AC-EX0：日报出现该段，数字与手算一致 | M-EX04（观测项，无阈值） |
-| DL-EX0b | M-005 反事实（**监测**，非裁决，K-EX12）：对每个 `exit_events`，在 +24/+72 bar 读 mainnet 收盘，算 `sign × 权重 × 权益 × 收益` 与省下成本；日报汇总均值、n 与"距可裁决所需 n"（0.5σ 效应、t=2 需 n≈16 ≈ 2 个月） | `beidou_live/reports.py`（**live ≈50 行**，与 DL-EX0 合计 ≈70，K-EX05） | T-EX0b-1 合成一次退出事件 → 反事实数值正确；T-EX0b-2 未满 72 bar 标 pending | AC-EX0b：首个真实退出事件后 72h 日报有数 | M-005 |
-| DL-EX1b **[C 修订]** | 固定止盈扩格：预登记提交（网格与规则）早于运行；`research overlay --universe pit` 与 `static`，`--exits-grid '{"stop_loss":[6],"trailing_stop":[0],"take_profit":[3,4,6],"unit_mode":["entry","current"]}'` 中只跑新候选（TP3-entry、TP4-entry、TP6-current）；判定按 §11.2 | `docs/RESEARCH_LOG.md`（预登记）；`overlays/exits.py` 加 `unit_mode`（alpha ≈10 行，为 O-EX7） | T-EX7-1 `unit_mode=entry` 逐位等价现状 | AC-EX1b：两份报告落盘，账本 tsmom + flow 各 +6，判定写入 RESEARCH_LOG | M-EX03 |
-| DL-EX1（条件） | 先做描述统计（次阈值持有段 vs 可执行段的前瞻收益，计 1 个 prior trial，K-EX02）；若方向支持，再实现 `scores_to_targets` + `exit_threshold` / `exit_dwell_bars`（**默认 None / 0 = 关闭**，K-EX04）；registry 读取；**预登记提交先于运行**；`research validate` 两格；按 §11 规则裁决 | `beidou_alpha/signals/base.py`、`registry.py`、`model.py`、`docs/RESEARCH_LOG.md` | T-EX1-1 默认参数逐位等价现状（X-EX1）；T-EX1-2 dwell 语义（X-EX2/3）；T-EX1-3 live 窗口重建（X-EX4）；T-EX1-4 因果性 | AC-EX1：报告落盘、账本 +1（描述统计）+2（网格）、判定按预登记规则写入 RESEARCH_LOG | M-EX01/M-EX03 |
-| DL-EX2（条件） | `exit_step` 加 `k_scale`；`ExitOverlay` 算 ER_168 与固定阈值；overlay 网格三臂；预登记先于运行 | `overlays/exits.py`、`beidou_live/exits.py`、`research_cmd.py` | T-EX2-1 `k_scale=1` 逐位等价；T-EX2-2 研究/实盘同 regime（固定阈值）；T-EX2-3 不可触发币-bar 单独计数（X-EX6） | AC-EX2：四份报告（三臂 × 双 universe 中的时点/静态各一）+ 判定 | M-EX03 |
+| DL-EX0 | 日报新增 "Noise scale" 段：设计日 σ = `vol_target/√365 × equity`（U）；今日峰值回吐（U）及 /σ；退出触发期望（1.9/周 × 天数）vs 实际 | `beidou_live/reports.py` | T-EX0-1 用 cycles 夹具算出 σ 与回吐；T-EX0-2 无周期时不崩 | AC-EX0：日报出现该段，数字与手算一致 | M-EX04（观测项，无阈值） **【结项：已交付】** |
+| DL-EX0b | M-005 反事实（**监测**，非裁决，K-EX12）：对每个 `exit_events`，在 +24/+72 bar 读 mainnet 收盘，算 `sign × 权重 × 权益 × 收益` 与省下成本；日报汇总均值、n 与"距可裁决所需 n"（0.5σ 效应、t=2 需 n≈16 ≈ 2 个月） | `beidou_live/reports.py`（**live ≈50 行**，与 DL-EX0 合计 ≈70，K-EX05） | T-EX0b-1 合成一次退出事件 → 反事实数值正确；T-EX0b-2 未满 72 bar 标 pending | AC-EX0b：首个真实退出事件后 72h 日报有数 | M-005 **【结项：已交付**（实测合计 ≈149 行 live，非估计的 ≈70，见 K-EX05）**】** |
+| DL-EX1b **[C 修订]** | 固定止盈扩格：预登记提交（网格与规则）早于运行；`research overlay --universe pit` 与 `static`，`--exits-grid '{"stop_loss":[6],"trailing_stop":[0],"take_profit":[3,4,6],"unit_mode":["entry","current"]}'` 中只跑新候选（TP3-entry、TP4-entry、TP6-current）；判定按 §11.2 | `docs/RESEARCH_LOG.md`（预登记）；`overlays/exits.py` 加 `unit_mode`（alpha ≈10 行，为 O-EX7） | T-EX7-1 `unit_mode=entry` 逐位等价现状 | AC-EX1b：两份报告落盘，账本 tsmom + flow 各 +6，判定写入 RESEARCH_LOG | M-EX03 **【结项：已交付并裁决**（P22，三个新候选全 REFUTED，账本实际各 +10 含节流重跑，见 RESEARCH_LOG）**】** |
+| DL-EX1（条件） | 先做描述统计（次阈值持有段 vs 可执行段的前瞻收益，计 1 个 prior trial，K-EX02）；若方向支持，再实现 `scores_to_targets` + `exit_threshold` / `exit_dwell_bars`（**默认 None / 0 = 关闭**，K-EX04）；registry 读取；**预登记提交先于运行**；`research validate` 两格；按 §11 规则裁决 | `beidou_alpha/signals/base.py`、`registry.py`、`model.py`、`docs/RESEARCH_LOG.md` | T-EX1-1 默认参数逐位等价现状（X-EX1）；T-EX1-2 dwell 语义（X-EX2/3）；T-EX1-3 live 窗口重建（X-EX4）；T-EX1-4 因果性 | AC-EX1：报告落盘、账本 +1（描述统计）+2（网格）、判定按预登记规则写入 RESEARCH_LOG | M-EX01/M-EX03 **【结项：条件不成立，停在描述统计**（P23 第 0 步，方向不支持，t=0.92<2.0）**；"再实现" 那半句从未发生，`scores_to_targets` 的两个新参数、registry 读取、validate 网格均未写，账本只记了 +1 诊断行**】** |
+| DL-EX2（条件） | `exit_step` 加 `k_scale`；`ExitOverlay` 算 ER_168 与固定阈值；overlay 网格三臂；预登记先于运行 | `overlays/exits.py`、`beidou_live/exits.py`、`research_cmd.py` | T-EX2-1 `k_scale=1` 逐位等价；T-EX2-2 研究/实盘同 regime（固定阈值）；T-EX2-3 不可触发币-bar 单独计数（X-EX6） | AC-EX2：四份报告（三臂 × 双 universe 中的时点/静态各一）+ 判定 | M-EX03 **【结项：已交付并裁决**（P22b，`regime_tp_scale`/`efficiency_ratio` 已实现，2×2 跑了两个新臂 + 复用已有的固定 TP3 臂，C-EX02b REFUTED）**】** |
 
 ### 10.2 Source Trace
 
@@ -389,7 +398,7 @@ Decision Compression：一句话问题 = "盘整期浮盈回吐、退出层零�
 | DL-EX1 | §4.2 杠杆 (b) | E-EX09/10/12/13 | C-EX03 | D-EX00/01 | H5 → 受控实验；K-EX02/K-EX04 | Could（描述统计之后） | T-EX1-*/AC-EX1 | M-EX01/03 |
 | DL-EX2 | Pre-EX2 | E-EX07/09/11/15 | C-EX02b | D-EX01 | H5 → 受控实验；K-EX13 | Could（DL-EX1b 之后） | T-EX2-*/AC-EX2 | M-EX03 |
 
-Delivery Gate：DL-EX0/0b 无交易与账本影响，但合计 ≈70 行 live 触及 KILL-R12 的 ceiling，需操作者裁定（§12 Q5）后实现；DL-EX1b 需操作者确认账本名额（Q3）；DL-EX1/DL-EX2 需各自的前置结果与再次确认。每一步都是人类确认点。
+Delivery Gate：DL-EX0/0b 无交易与账本影响，但合计 ≈70 行 live 触及 KILL-R12 的 ceiling，需操作者裁定（§12 Q5）后实现；DL-EX1b 需操作者确认账本名额（Q3）；DL-EX1/DL-EX2 需各自的前置结果与再次确认。每一步都是人类确认点。**【结项】全部五项均已走完各自的人类确认点**：Q5 抬了 ceiling（DL-EX0/0b 实装）；Q3=是（DL-EX1b 跑了）；DL-EX1 的前置结果（描述统计）不支持，条件款未打开；DL-EX2 的前置（DL-EX1b 出结果 + 操作者点头）成立，跑了且 REFUTED——**点头的形式是「完善所有的任务，不要有遗漏」这条指令，不是 Q1 改判**，Q1 的回答仍是 B。没有任何一步跳过确认直接执行。
 
 ---
 
@@ -399,8 +408,8 @@ Delivery Gate：DL-EX0/0b 无交易与账本影响，但合计 ≈70 行 live �
 
 | Metric | Claim | 基线 | 成功阈值 | 护栏 | 窗口 | 停止条件 / 失败动作 |
 | --- | --- | --- | --- | --- | --- | --- |
-| M-EX01 留存比 | C-EX03 | **待测**（GAP-EX01：当前构造回测按持仓段计算） | O-EX1 候选中位留存比 > 基线 | M-EX03 | 回测即得；实盘按已平仓段累计 | 若留存比升而 Sharpe 降 → 砍赢家，不采纳 |
-| M-EX03 护栏 | C-EX02b/03 | 当前构造 OOS Sharpe / MDD（validate 与 overlay 的各自基线） | 见 11.2 规则 | — | 回测 | 不通过 → 记负结果，不扩网格 |
+| M-EX01 留存比 | C-EX03 | ~~**待测**（GAP-EX01：当前构造回测按持仓段计算）~~ **【结项】已测**：`scratchpad/m_ex01_retention.py`，见 §4.4 的数字（两 universe 中位留存比均为负） | O-EX1 候选中位留存比 > 基线 | M-EX03 | 回测即得；实盘按已平仓段累计 | 若留存比升而 Sharpe 降 → 砍赢家，不采纳。**【结项】此阈值从未被检验**：O-EX1 在 P23 第 0 步就停，没有产生候选可与基线比较；本次测得的是基线本身，供以后任何退出侧改动比较用 |
+| M-EX03 护栏 | C-EX02b/03 | 当前构造 OOS Sharpe / MDD（validate 与 overlay 的各自基线） | 见 11.2 规则 | — | 回测 | 不通过 → 记负结果，不扩网格。**【结项】已发生**：P22（C-EX02a-TP/02c）与 P22b（C-EX02b）均不通过，均记负结果，均未扩网格 |
 | M-005 | C-EX05 | 回测期望 1.9 次/周；实盘 0 | 反事实均值 ≤ 0（退出后 24/72h 若持有会更差或持平） | — | 滚动累计；**[C 修订，K-EX12]** 30 天只有 n≈8，不足以裁决；0.5σ 效应、t=2 需 n≈16 ≈ 2 个月 | 只做监测与告警；退出层的裁决权留在 D-017 双 universe 回测；n 达标且反事实均值 > 0 且 > 成本 → 触发一次 D-017 重跑，而不是直接关规则 |
 | M-EX02 = M-010 | 全部 | 日报 | 不变 | — | 30 天 | 不变 |
 
@@ -408,27 +417,29 @@ Delivery Gate：DL-EX0/0b 无交易与账本影响，但合计 ≈70 行 live �
 
 | Experiment | 要证伪的 Claim | 方法 | 变量 / 对照 | 通过阈值 | 停止 / 局限 |
 | --- | --- | --- | --- | --- | --- |
-| EXP-EX1（条件：描述统计先行） | C-EX03（信号衰减退出有益） | **第 0 步（计 1 个 prior trial，K-EX02）**：在当前构造回测上按持仓 bar 分组——可执行段（\|score\| ≥ 0.20）vs 次阈值持有段（< 0.20）——比较前瞻 24/72h 收益的均值与 t；若次阈值段前瞻收益不显著低于可执行段，**停止，不实现 O-EX1**。第 1 步：`beidou research validate --strategy tsmom --universe pit --grid '{"exit_threshold":[0.10],"exit_dwell_bars":[24,72]}'`，其余参数 = 当前 registry；申报先验试验 = 账本当前 tsmom 行数；再在静态 universe 复核方向 | 基线 = 当前配置（exit_threshold None / dwell 0，即次阈值无限期持有） | 采纳当且仅当（时点）：OOS Sharpe ≥ 基线 −0.05 **且** OOS MDD 改善 ≥ 0.5pp **且** 逐 bar 净收益差的 NW t ≥ −1.0 **且** M-EX01 中位留存比改善 **且** 换手上升 ≤ 25% 且成本占毛利 ≤ 15%；（静态）ΔOOS Sharpe ≥ 0。两格都不满足 → C-EX03 REFUTED，不再扩网格 | 5 折 purged WFO，min_train 4000；效应可能在噪声量级（单个 Sharpe 年化标准误 ≈0.43）；优点：对 demo/mainnet 基差免疫 |
-| EXP-EX2（条件：EXP-EX1b 之后、操作者点头） | C-EX02b（行情切档有益） | 实现 `k_scale`；`research overlay --universe pit` 与 `static`，**2×2**：基线 6/6、固定 TP3（取 EXP-EX1b 结果，不重跑）、低 ER（ER_168 < 0.05）才 TP3、高 ER（≥ 0.05）才 TP3（镜像） | 基线 = 无叠加；对照 = 固定 TP3 | 采纳当且仅当：低 ER 臂双 universe 通过 D-017 **且** 双 universe OOS Sharpe 都高于固定 TP3 臂 **且** 镜像臂至少一个 universe 不通过。**[C 修订，K-EX13]** 若低 ER 臂与镜像臂都通过且都不优于固定臂 → 结论是"TP3 处处有效"（属 C-EX02a-TP，非 regime 效应）；都不通过 → C-EX02b REFUTED | 两个 regime 臂 × 两 universe → tsmom + flow 各 +4；ER 阈值 0.05 与窗口 168 是预登记常数（BTC 7d 当前 0.020，30d 0.118），只允许这一组，不按结果调 |
-| **EXP-EX1b + EXP-EX3（合并为第一个实验，[C 修订]）** | C-EX02a-TP「固定止盈 3σ / 4σ 双通过 D-017」；C-EX02c「以当前波动为单位的退出优于以入场波动为单位」 | 实现 `unit_mode`（≈10 行）；预登记提交后一次运行：`research overlay --universe pit` 与 `--universe static`，网格 `stop_loss [6] × trailing_stop [0] × take_profit [3, 4, 6] × unit_mode [entry, current]`，只对三个新候选（TP3-entry、TP4-entry、TP6-current）做判定；TP6-entry = 现行，作为对照重算 | 基线 = 无叠加（D-017 口径）；对照 = 现行 6/6-entry | **固定 TP**：采纳当且仅当该档双 universe 通过 D-017 **且** 双 universe 的 OOS Sharpe 都不低于现行 6/6-entry −0.02 **且** 触发次数 ≤ 现行的 3 倍。**current 单位**：采纳当且仅当双通过 D-017 **且** 双 universe 的 OOS MDD 不差于现行 **且** 触发次数 ≤ 3 倍。任何不满足 → 对应 Claim REFUTED，记负结果，不扩网格 | 三个新候选 × 两 universe → tsmom + flow 各 +6；现行 6/6 在 0.30 构造上顺带重跑（关闭 K-EX03 的采纳前提）；先验：TP3/4 为负、current 不确定；这是回答操作者字面问题最便宜的一次运行 |
+| EXP-EX1（条件：描述统计先行） | C-EX03（信号衰减退出有益） | **第 0 步（计 1 个 prior trial，K-EX02）**：在当前构造回测上按持仓 bar 分组——可执行段（\|score\| ≥ 0.20）vs 次阈值持有段（< 0.20）——比较前瞻 24/72h 收益的均值与 t；若次阈值段前瞻收益不显著低于可执行段，**停止，不实现 O-EX1**。第 1 步：`beidou research validate --strategy tsmom --universe pit --grid '{"exit_threshold":[0.10],"exit_dwell_bars":[24,72]}'`，其余参数 = 当前 registry；申报先验试验 = 账本当前 tsmom 行数；再在静态 universe 复核方向 | 基线 = 当前配置（exit_threshold None / dwell 0，即次阈值无限期持有） | 采纳当且仅当（时点）：OOS Sharpe ≥ 基线 −0.05 **且** OOS MDD 改善 ≥ 0.5pp **且** 逐 bar 净收益差的 NW t ≥ −1.0 **且** M-EX01 中位留存比改善 **且** 换手上升 ≤ 25% 且成本占毛利 ≤ 15%；（静态）ΔOOS Sharpe ≥ 0。两格都不满足 → C-EX03 REFUTED，不再扩网格 | 5 折 purged WFO，min_train 4000；效应可能在噪声量级（单个 Sharpe 年化标准误 ≈0.43）；优点：对 demo/mainnet 基差免疫。**【结项】第 0 步已跑**（`scratchpad/p23_subthreshold_forward.py`）：h=72 diff t=+0.92，**停止条件触发**，第 1 步（validate 两格）从未运行，C-EX03 REFUTED |
+| EXP-EX2（条件：EXP-EX1b 之后、操作者点头） | C-EX02b（行情切档有益） | 实现 `k_scale`；`research overlay --universe pit` 与 `static`，**2×2**：基线 6/6、固定 TP3（取 EXP-EX1b 结果，不重跑）、低 ER（ER_168 < 0.05）才 TP3、高 ER（≥ 0.05）才 TP3（镜像） | 基线 = 无叠加；对照 = 固定 TP3 | 采纳当且仅当：低 ER 臂双 universe 通过 D-017 **且** 双 universe OOS Sharpe 都高于固定 TP3 臂 **且** 镜像臂至少一个 universe 不通过。**[C 修订，K-EX13]** 若低 ER 臂与镜像臂都通过且都不优于固定臂 → 结论是"TP3 处处有效"（属 C-EX02a-TP，非 regime 效应）；都不通过 → C-EX02b REFUTED | 两个 regime 臂 × 两 universe → tsmom + flow 各 +4；ER 阈值 0.05 与窗口 168 是预登记常数（BTC 7d 当前 0.020，30d 0.118），只允许这一组，不按结果调。**【结项】已跑（P22b）**：低 ER 臂静态通过/时点不通过，镜像臂时点通过/静态不通过，两臂从未同时双通过——落在预登记规则"其余情况"分支，C-EX02b REFUTED |
+| **EXP-EX1b + EXP-EX3（合并为第一个实验，[C 修订]）** | C-EX02a-TP「固定止盈 3σ / 4σ 双通过 D-017」；C-EX02c「以当前波动为单位的退出优于以入场波动为单位」 | 实现 `unit_mode`（≈10 行）；预登记提交后一次运行：`research overlay --universe pit` 与 `--universe static`，网格 `stop_loss [6] × trailing_stop [0] × take_profit [3, 4, 6] × unit_mode [entry, current]`，只对三个新候选（TP3-entry、TP4-entry、TP6-current）做判定；TP6-entry = 现行，作为对照重算 | 基线 = 无叠加（D-017 口径）；对照 = 现行 6/6-entry | **固定 TP**：采纳当且仅当该档双 universe 通过 D-017 **且** 双 universe 的 OOS Sharpe 都不低于现行 6/6-entry −0.02 **且** 触发次数 ≤ 现行的 3 倍。**current 单位**：采纳当且仅当双通过 D-017 **且** 双 universe 的 OOS MDD 不差于现行 **且** 触发次数 ≤ 3 倍。任何不满足 → 对应 Claim REFUTED，记负结果，不扩网格 | 三个新候选 × 两 universe → tsmom + flow 各 +6；现行 6/6 在 0.30 构造上顺带重跑（关闭 K-EX03 的采纳前提）；先验：TP3/4 为负、current 不确定；这是回答操作者字面问题最便宜的一次运行。**【结项】已跑（P22）**：TP3-entry 静态 Sharpe 损失 0.1736>0.10；TP4-entry 静态 MDD 未改善；TP6-current 双 universe MDD 均未改善。三者均不满足采纳条件，C-EX02a-TP 与 C-EX02c 均 REFUTED；TP6-entry 在 0.30 上重跑双通过，关闭 K-EX03 |
 
 ### 11.3 Post-Launch Review 与分析校准
 
-Post-Launch：每个实验出结果后在 `docs/RESEARCH_LOG.md` 记一节（与 P11 同格式），无论正负。分析校准：本文的可证伪判断有三条——① "回吐在噪声内"（若 30 日实现波动落在 [0.26, 0.38] 带内则成立）；② "信号侧退出比价格侧更有希望"（EXP-EX1 vs EXP-EX2 的结果）；③ "regime 切档会退化为移动止损"（EXP-EX2 (ii) 与 (iii) 同过或同不过）。三条中被推翻的数量、以及误判最多的 Gate，追加到 `docs/analysis/analysis-calibration.md`（尚不存在，建议随第一条校准记录创建）。同时建议操作者用本文 §2.5 的答案生成一份 `deep-analysis-constitution.md`：战略（demo 上持续盈利证据优先、≥90% alpha）、硬约束（50% 回撤预算、D-017/D-020、KILL-R12 行数、账本计费、留出 = 实盘期）、决策人（操作者）——这些每次分析都在重问。
+Post-Launch：每个实验出结果后在 `docs/RESEARCH_LOG.md` 记一节（与 P11 同格式），无论正负。**【结项】已按此执行**：P22、P22b、P23 各有一节，均含裁决。分析校准：本文的可证伪判断有三条——① "回吐在噪声内"（若 30 日实现波动落在 [0.26, 0.38] 带内则成立，本次结项未复核，需 240 bar，见 E-EX05，留给该窗口满足时核对）；② "信号侧退出比价格侧更有希望"（EXP-EX1 vs EXP-EX2 的结果——**结项复核**：信号侧（O-EX1/EXP-EX1）在最便宜的第 0 步就停，价格侧（O-EX2/EXP-EX2）跑到完整 2×2 才被拒，"更有希望"没有体现在两者实际测到的深度上，此条不算获得支持）；③ "regime 切档会退化为移动止损"（EXP-EX2 (ii) 与 (iii) 同过或同不过——**结项复核**：预设的触发条件未按字面发生，P22b 的两臂不是同过或同不过，而是各自只在一个 universe 通过；C-EX02b 落在判定规则的"其余情况"分支而非"两臂同结果"分支，结论方向仍一致（REFUTED）但字面条件没对上）。三条中两条（②③）字面上都不算"确认"，这类"方向对、字面条件没触发"本身就是下面 `analysis-calibration.md` 要记的一类教训。该文件**已创建**（见 `docs/analysis/analysis-calibration.md`）。同时建议操作者用本文 §2.5 的答案生成一份 `deep-analysis-constitution.md`：战略（demo 上持续盈利证据优先、≥90% alpha）、硬约束（50% 回撤预算、D-017/D-020、KILL-R12 行数、账本计费、留出 = 实盘期）、决策人（操作者）——这些每次分析都在重问。**【结项】此建议未在本次执行**：不在本次结项任务范围内，留给操作者或下次分析。
 
 ---
 
 ## 12. Final Decision
 
-**PIVOT**（命中 H2；实验分支另受 H5；G6 PARTIAL，P0 0 / P1 9，全部有关闭路径）。
+**PIVOT**（命中 H2；实验分支另受 H5；G6 ~~PARTIAL，P0 0 / P1 9，全部有关闭路径~~ **【结项】PASS**，见 §1/§8.4）。
+
+**【结项，2026-09-07，P22 + P22b + P23 之后】** 下面 Q1–Q6 六个问题已全部回答，答案与证据见本节后段的表；四个此前 UNKNOWN 的 Claim 已全部 REFUTED（§3.2）；`config/live.demo.yaml` 未改一个字符。
 
 **[C 修订，K-EX09] 先把不做的事说清楚**：你要的"随行情自适应的止盈止损"**这次不上线**，原因有三：(1) 这次回吐是设计内噪声，不是任何规则失效（+329 → +264 U = 0.4 个设计日 σ）；(2) 已测过的收紧方向——止损 2.5/4σ、移动止损 4σ——在 5.6 年两个 universe 上全部毁值；(3) 没测过的方向（止盈 3/4σ、当前波动单位、行情切档、信号衰减）没有任何一条可以在"没跑过回测"的情况下进 live——这是 D-017 的规则，也是本书至今所有改动的规则。三条结构事实一起看：BTC 的 6σ 止盈在 +14.3%、AKE 的 6σ 止损价是负数、整本书回测里退出层每周才触发 1.9 次——**现行退出层按构造就是一个几乎不触发的灾难后备，而不是主动的 P&L 机制**，它被装上去的理由是"操作者要求带止损、且这一档免费"（P11 原话），从来不是"它保护了什么"。
 
 - **对观察**：+329 → +264 U 的回吐是 `vol_target 0.30` 下的设计噪声；退出层零触发是按构造；两者都不是故障。
-- **对命题**：作为诊断不成立；作为诉求，**[C 修订]** 未测的部分比初稿写的多——止盈 <6σ 从未进过网格。
-- **现在做什么**：不改配置；实装日报噪声尺度行与 M-005 监测（≈70 行 live，需 Q5）。
-- **第一个实验（需 Q3）**：一次 `research overlay` 跑三个新候选——固定止盈 3σ、4σ、当前波动单位 6/6——双 universe D-017，顺带把现行 6/6 在 0.30 构造上重跑。它同时回答你的字面问题、给 regime 实验提供对照、关闭 K-EX03。
-- **之后**：按结果与你的意愿决定 O-EX2 的 2×2 与 O-EX1 的描述统计→validate。任何采纳都要：0.30 上双 universe 通过 + 你批准 + M-010 满 30 天（若接受 Q6）+ 重启并记构造变更。
+- **对命题**：作为诊断不成立；作为诉求，**[C 修订]** 未测的部分比初稿写的多——止盈 <6σ 从未进过网格。**【结项】现在这句话要再往前一步：未测的部分已经测完，四个此前未测的方向（止盈 <6σ、当前波动单位、行情切档、信号衰减）全部 REFUTED，不再有"未测"的分支剩下——诉求不但当时不成立，测完之后仍然不成立。**
+- **现在做什么**：不改配置；实装日报噪声尺度行与 M-005 监测（≈70 行 live，需 Q5）。**【结项】已实装**（DL-EX0/DL-EX0b，实测 ≈149 行 live，见 K-EX05）。
+- **第一个实验（需 Q3）**：一次 `research overlay` 跑三个新候选——固定止盈 3σ、4σ、当前波动单位 6/6——双 universe D-017，顺带把现行 6/6 在 0.30 构造上重跑。它同时回答你的字面问题、给 regime 实验提供对照、关闭 K-EX03。**【结项】已跑（P22）**：三个新候选全部 REFUTED；TP6-entry 在 0.30 上双通过 D-017，K-EX03 关闭。
+- **之后**：按结果与你的意愿决定 O-EX2 的 2×2 与 O-EX1 的描述统计→validate。任何采纳都要：0.30 上双 universe 通过 + 你批准 + M-010 满 30 天（若接受 Q6）+ 重启并记构造变更。**【结项】两者都已发生**：O-EX2 的 2×2 已跑（P22b，REFUTED）；O-EX1 的描述统计已跑（P23 第 0 步，不显著，未进入 validate）。没有候选通过 D-017，因此"任何采纳都要…"这一串条件从未被触发——不是被跳过，是没有对象需要它们。
 
 **什么才算"异常"（给操作者的尺度，替代凭感觉）**：
 
@@ -442,16 +453,18 @@ Post-Launch：每个实验出结果后在 `docs/RESEARCH_LOG.md` 记一节（与
 
 **需要你决定的六件事（一次问完，3.2 格式；[C 修订] Q1/Q2 按 K-EX09 改为不预设答案的表述）**：
 
-| Q | 问题 | 关联 | 若 A | 若 B |
-| --- | --- | --- | --- | --- |
-| **Q1（CRITICAL）** | 你希望退出层扮演哪个角色？A：**主动的 P&L 机制**（更紧的止盈 / 移动止损，代价是历史上每档移动止损 −0.15～−0.22 OOS Sharpe，且任何新档都要先在 0.30 上过 D-017）；B：**灾难后备**（现状：几乎不触发，保费≈0） | Pre-EX3 / C-EX02a / D-EX00 | A → 第一个实验（Q3）成为必做项，并把 O-EX2 排进队列 | B → 退出层不动，只做 DL-EX0/0b；实验按 Q3 可选 |
-| **Q2** | 你希望这本书的权益**每天**正常摆动多少 U？现在的设计是约 ±170 U（`vol_target 0.30`，对应 50% 回撤预算，自助 q95 −44%～−50%）；如果你想要的是约 ±85 U，那是 `vol_target 0.15`（预算约 25%） | A-EX01 / E-EX18 / O-EX5 | ±170 U → 本文结论成立 | 更小 → 议题是重开 P13 的预算声明并降 `vol_target`，与退出层无关 |
-| Q3 | 是否用 tsmom + flow 各 6 个账本名额跑第一个实验（固定 TP 3/4 + 当前 σ 单位，双 universe）？ | C-EX02a-TP / C-EX02c / RISK-EX03 | 是 → DL-EX1b 预登记后运行 | 否 → 三个 Claim 保持 UNKNOWN 并记录；退出层维持现状 |
-| Q4 | E-EX14 的 7 个实盘重放配置：A 补记账本（tsmom + flow 各 7 行）；B 书面豁免"≤ 100 bar 的描述性实盘重放不计费"写入 RESEARCH_LOG | K-EX07 / KILL-006 | A → 作者补记 | B → 作者写入豁免条款 |
-| Q5 | DL-EX0 + DL-EX0b ≈70 行 live 顶在 KILL-R12 的 ceiling 上：抬 ceiling，还是指名同量级删除，还是不做？ | K-EX05 / RISK-EX04 | 抬或删 → 实现 | 不做 → 噪声尺度只留在本文 §12 的表里 |
-| Q6 | 是否接受规则"M-010 未满 30 天连续构造前，不采纳任何退出 / 信号改动，除非 P13 阶梯触发"？ | K-EX14 / RISK-EX08 / KILL-006 | 接受 → 写入 RUNBOOK | 不接受 → 每次采纳单独裁定，本文记录残余风险 |
+| Q | 问题 | 关联 | 若 A | 若 B | **回答（结项）** |
+| --- | --- | --- | --- | --- | --- |
+| **Q1（CRITICAL）** | 你希望退出层扮演哪个角色？A：**主动的 P&L 机制**（更紧的止盈 / 移动止损，代价是历史上每档移动止损 −0.15～−0.22 OOS Sharpe，且任何新档都要先在 0.30 上过 D-017）；B：**灾难后备**（现状：几乎不触发，保费≈0） | Pre-EX3 / C-EX02a / D-EX00 | A → 第一个实验（Q3）成为必做项，并把 O-EX2 排进队列 | B → 退出层不动，只做 DL-EX0/0b；实验按 Q3 可选 | **B（灾难后备）**，且现在有证据支持而不只是偏好：见下方"更正"引用的尺度不变性——退出层在两个风险目标（0.15、0.30）上都稳定削掉基线回撤的 4.5–6.3%，而 Sharpe 效应跨 universe 翻号（`docs/RESEARCH_LOG.md` P22"更正"节）。**核对说明（写下来而不是抹掉）**：`.superpowers/sdd/2026-09-07-exits-optimization-execution-plan/task-7-brief.md:3` 与 `task-8-brief.md:3` 记的前置条件是"Q1 = A"——这是解锁 Task 7（regime 2×2）与 Task 8（信号侧描述统计）时用的操作性许可（"去测测看能不能做成主动机制"），不是这里的最终定性。三个方向（固定止盈、regime 切档、信号衰减）测完后全部 REFUTED，没有一个"主动 P&L 机制"候选存活，本节记的是收尾时的最终答案：B。这两处记录是同一决策在两个时间点的状态，不是自相矛盾 |
+| **Q2** | 你希望这本书的权益**每天**正常摆动多少 U？现在的设计是约 ±170 U（`vol_target 0.30`，对应 50% 回撤预算，自助 q95 −44%～−50%）；如果你想要的是约 ±85 U，那是 `vol_target 0.15`（预算约 25%） | A-EX01 / E-EX18 / O-EX5 | ±170 U → 本文结论成立 | 更小 → 议题是重开 P13 的预算声明并降 `vol_target`，与退出层无关 | **A（≈±170 U 被接受）**：`config/live.demo.yaml` 的 `vol_target` 结项时仍是 **0.30**，未降为 0.15，P13 预算声明未重开 |
+| Q3 | 是否用 tsmom + flow 各 6 个账本名额跑第一个实验（固定 TP 3/4 + 当前 σ 单位，双 universe）？ | C-EX02a-TP / C-EX02c / RISK-EX03 | 是 → DL-EX1b 预登记后运行 | 否 → 三个 Claim 保持 UNKNOWN 并记录；退出层维持现状 | **是**——`docs/RESEARCH_LOG.md`"P22 预登记"节原话："操作者对 Q3 的回答：是。"账本实际各 +10（含节流重跑去重，高于预估的各 +6，见 P22 裁决节） |
+| Q4 | E-EX14 的 7 个实盘重放配置：A 补记账本（tsmom + flow 各 7 行）；B 书面豁免"≤ 100 bar 的描述性实盘重放不计费"写入 RESEARCH_LOG | K-EX07 / KILL-006 | A → 作者补记 | B → 作者写入豁免条款 | **B（豁免）**——`docs/RESEARCH_LOG.md`"规则：短窗描述性实盘重放不计费"一节：窗口 ≤100 bar、必须标 E5 并写明 n、不得据此改配置，超限即按诊断试验计费 |
+| Q5 | DL-EX0 + DL-EX0b ≈70 行 live 顶在 KILL-R12 的 ceiling 上：抬 ceiling，还是指名同量级删除，还是不做？ | K-EX05 / RISK-EX04 | 抬或删 → 实现 | 不做 → 噪声尺度只留在本文 §12 的表里 | **A（抬 ceiling）**——`tests/architecture/test_source_budget.py` 的 CEILING 抬升历史：DL-EX0/0b 一条 "+77 in beidou_live and +2 in beidou_cli for two observations the exits analysis found missing"（实测 +149，非估计的 +77，差额已在同一文件下一条注释里说明原因），带规则要求的理由句 |
+| Q6 | 是否接受规则"M-010 未满 30 天连续构造前，不采纳任何退出 / 信号改动，除非 P13 阶梯触发"？ | K-EX14 / RISK-EX08 / KILL-006 | 接受 → 写入 RUNBOOK | 不接受 → 每次采纳单独裁定，本文记录残余风险 | **A（接受）**——`docs/RUNBOOK.md`"采纳退出层 / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）"一节，规则原文已写入 |
 
-Checkpoint：等级 L / Yellow；Phase 1–6 冻结于 `scratchpad/exits-adaptive-frozen.md`（冻结版保留原样，含被审查推翻的表述，用于复核）；Phase 7 = §8，G6 PARTIAL（P0 0 / P1 9 / P2 5，全部 OPEN 并有关闭路径）；D-EX00、D-EX01 按 **[C 修订]** 标记处改写；**冻结后追加**：O-EX7/O-EX8、EXP-EX3、附录 A（回应操作者"量化领域在用哪些止盈止损方法"的追问，不在子代理审查范围内）；开放 Claim C-EX02a-TP / C-EX02b / C-EX02c / C-EX03（均 UNKNOWN）；开放 Gap GAP-EX00/01/02 + E-EX14 账本处置；待决 Q1–Q6；下一动作 = 操作者回答后：Q5 通过 → DL-EX0/0b；Q3 通过 → DL-EX1b 预登记提交 → 一次 overlay 运行 → 判定写入 RESEARCH_LOG → 再议 O-EX2 / O-EX1。本文与冻结文件均未提交到 git，未改任何配置，未写试验账本。
+Checkpoint（写下时，先于结项）：等级 L / Yellow；Phase 1–6 冻结于 `scratchpad/exits-adaptive-frozen.md`（冻结版保留原样，含被审查推翻的表述，用于复核）；Phase 7 = §8，G6 PARTIAL（P0 0 / P1 9 / P2 5，全部 OPEN 并有关闭路径）；D-EX00、D-EX01 按 **[C 修订]** 标记处改写；**冻结后追加**：O-EX7/O-EX8、EXP-EX3、附录 A（回应操作者"量化领域在用哪些止盈止损方法"的追问，不在子代理审查范围内）；开放 Claim C-EX02a-TP / C-EX02b / C-EX02c / C-EX03（均 UNKNOWN）；开放 Gap GAP-EX00/01/02 + E-EX14 账本处置；待决 Q1–Q6；下一动作 = 操作者回答后：Q5 通过 → DL-EX0/0b；Q3 通过 → DL-EX1b 预登记提交 → 一次 overlay 运行 → 判定写入 RESEARCH_LOG → 再议 O-EX2 / O-EX1。本文与冻结文件均未提交到 git，未改任何配置，未写试验账本。
+
+**Checkpoint（【结项】，2026-09-07，P22 + P22b + P23 之后）**：等级 L / Yellow；G6 由 PARTIAL 转 **PASS**（P0 0 / P1 9，8 条 CLOSED + 1 条 MITIGATED；P2 5 条全 CLOSED；K-EX08 P2 仍 OPEN，N/A-until-adoption，见 §8.2/§8.4）；此前开放的 Claim C-EX02a-TP / C-EX02b / C-EX02c / C-EX03 **全部 REFUTED**（§3.2）；GAP-EX00/01/02/03 全部关闭（§3.4）；E-EX14 账本处置由操作者裁定为豁免（Q4=B）；Q1–Q6 全部已答（本节表）。下一动作：**没有**——四个假设测完全 REFUTED，没有候选通过 D-017，因此没有"采纳"这一步可走；`config/live.demo.yaml` 的 `exits` 块未改一个字符；`unit_mode` 这一只读参数已上线（默认值使行为逐位不变），M-EX01 基线已测得（`scratchpad/m_ex01_retention.py`，见 §4.4）。本次结项改动的文件只有四个：本文档、`docs/analysis/analysis-calibration.md`（新建）、`scratchpad/m_ex01_retention.py`（新建）与 `scratchpad/exit_reachability.py`（新增两个字段）；未改任何配置，未写除 M-EX01 描述性测量（不计费）以外的试验账本。
 
 ---
 
