@@ -49,7 +49,7 @@ from beidou_live.engine import (
 )
 from beidou_live.health import cycle_health
 from beidou_live.inputs import required_history
-from beidou_live.lock import LockBusy, SingleInstanceLock, account_lock_path
+from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
 from beidou_live.reports import (
@@ -227,6 +227,10 @@ def live_run(
         str(alert_config.get("webhook_url", "")),
         secondary_url=str(alert_config.get("webhook_url_2", "")),
         dedup_window_seconds=float(alert_config.get("dedup_window_seconds", 3600.0)),
+        # One dedup window across every process that can alert (DL-L3): the loop, `report daily` and
+        # `run_check.sh` share the file, so a standing problem announces itself once an hour rather
+        # than once per process per hour.
+        state_path=ALERT_DEDUP_STATE,
     )
     pool = build_pool(payload, market)
     engine = LiveEngine(
@@ -506,6 +510,10 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
     asyncio.run(main())
 
 
+# DL-L3: shared by every process that can alert, beside the lock and the kill switch.
+ALERT_DEDUP_STATE = APP_SUPPORT / "alert-dedup.json"
+
+
 def alert_transport() -> httpx.AsyncBaseTransport | None:
     """Seam for the drill's tests; None means a real network client."""
     return None
@@ -528,6 +536,10 @@ def live_alert_test(profile: str, repeat: int) -> None:
     never had been.  With a single channel (operator ruling 2026-09-07) this is the whole verification
     instrument, so it exits non-zero whenever nothing was delivered, including the case the hardened
     `accepted()` exists for: HTTP 200 and the message quietly gone.
+
+    Deliberately NOT joined to the shared dedup file the loop and the check job use: a drill run twice
+    in an hour must send twice, or the instrument would report a failure the second time and teach the
+    operator to distrust it.  `--repeat` still demonstrates the window, in this process.
     """
     payload = load_profile(profile)
     config = payload.get("alerts", {}) or {}
@@ -637,7 +649,9 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         # so a channel added for redundancy would have covered the loop and not the daily check.
         alert_config = payload.get("alerts", {}) or {}
         daily = WebhookAlerts(
-            str(alert_config.get("webhook_url", "")), secondary_url=str(alert_config.get("webhook_url_2", ""))
+            str(alert_config.get("webhook_url", "")),
+            secondary_url=str(alert_config.get("webhook_url_2", "")),
+            state_path=ALERT_DEDUP_STATE,
         )
         if daily.enabled and not asyncio.run(daily.send(message)):
             click.echo(f"notice {chosen}: the alert above was NOT delivered to any channel", err=True)

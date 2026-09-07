@@ -770,10 +770,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # ledger is for", and left `reports/research/trials.jsonl` - the same contract, and the more
 # consequential file, because it IS the DSR denominator.  A row lost to a crash makes N smaller,
 # and a smaller N flatters every verdict computed after it.
+#
+# 2026-09-07, two clauses of the plan that had never been delivered, found by reading §6.1 against
+# the code rather than by anything failing.  +~40 live, +~15 cli.
+#
+# DL-L3 asks for dedup AND `run_check.sh` 同源去重.  KILL-R7's evidence was 36 identical FAIL lines
+# over 36 hours, and those came from the HOURLY CHECK JOB - a fresh process each hour, whose
+# in-memory dedup dict is empty every time and can suppress nothing.  The dedup shipped in B1 was
+# therefore aimed away from the case that produced the finding.  There is now one dedup file beside
+# the lock and the kill switch, shared by the loop, `report daily` and the check job.  It is a cache
+# and never a ledger: every read and write of it may fail quietly and cost at most one duplicate,
+# because it must never be the reason a message does not go out.
+#
+# DL-L5's last clause asks that a non-empty `foreign_positions` at startup 告警而非静默.  It logged.
+# Those are open positions on the venue the loop has decided not to manage, and a line in a file
+# nobody reads is exactly what "silent" means to an operator - L1-06's whole family.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_219,
-    "beidou_cli": 3_392,
+    "beidou_live": 5_261,
+    "beidou_cli": 3_402,
     "beidou_data": 1_375,
     "beidou_exchange": 603,
     "beidou_shared": 284,

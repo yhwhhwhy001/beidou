@@ -195,3 +195,50 @@ async def cycle_with_liquidation_price(panel: Any, tmp_path: Any, *, liquidation
     await engine.run_cycle(market.bar_open_ms(cursor))
     await engine.run_cycle(market.bar_open_ms(cursor))
     return alerts.sent
+
+
+async def startup_with_foreign_position(foreign: list[str]) -> list[str]:
+    """Run `startup()` against a venue holding positions outside the managed universe (DL-L5)."""
+    import tempfile
+
+    from beidou_alpha.model import AlphaModel
+    from beidou_alpha.portfolio import PortfolioParams
+    from beidou_alpha.registry import StrategyEntry
+    from beidou_alpha.signals.tsmom import TsmomParams
+
+    tmp = Path(tempfile.mkdtemp())
+    venue = FakeVenue()
+    for symbol in foreign:
+        venue.qty[symbol] = 100.0
+        venue.entry[symbol] = 1.0
+        venue.prices.setdefault(symbol, 1.0)
+        venue._rules.setdefault(symbol, next(iter(venue._rules.values())))
+    alerts = _RecordingAlerts()
+    engine = LiveEngine(
+        LiveConfig(
+            interval="1h",
+            history_bars=300,
+            universe=("BTCUSDT", "ETHUSDT"),
+            leverage=2,
+            rebalance=RebalanceParams(),
+            guards=GuardParams(),
+            kill_switch_path=tmp / "KILL_SWITCH",
+            strategy_weights={"tsmom": 1.0},
+            poll_interval_seconds=0.0,
+            grace_seconds=1.0,
+            dry_run=True,
+        ),
+        model=AlphaModel(
+            entries=(StrategyEntry("tsmom", params=dict(TsmomParams().__dict__)),),
+            portfolio=PortfolioParams(),
+            interval="1h",
+            min_history_bars=0,
+        ),
+        market=None,  # type: ignore[arg-type]
+        venue=venue,
+        clock=FakeClock(1_700_000_000_000),
+        store=StateStore(tmp / "live"),
+        alerts=alerts,  # type: ignore[arg-type]
+    )
+    await engine.startup()
+    return alerts.sent

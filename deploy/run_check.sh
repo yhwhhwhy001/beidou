@@ -29,10 +29,16 @@ notify() {
   if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}" ]; then
     "$REPO/.venv/bin/python" -c '
 import asyncio, sys
+from pathlib import Path
 from beidou_live.alerts import WebhookAlerts
-sys.exit(0 if asyncio.run(WebhookAlerts(sys.argv[1]).send(sys.argv[2], force=True)) else 1)
-' "$BEIDOU_ALERTS_WEBHOOK_URL" "beidou check FAILED ($1): $2" \
-      || echo "[$(stamp)] webhook did NOT deliver the line above"
+# DL-L3 same-source dedup.  KILL-R7 counted 36 identical FAIL lines over 36 hours and they came from
+# THIS job: a fresh process every hour, so the in-memory dedup dict is empty every time.  The state
+# file is what makes the window mean anything here; the key is the check name, so a standing problem
+# re-announces itself once an hour instead of once a run.
+alerts = WebhookAlerts(sys.argv[1], state_path=Path(sys.argv[4]))
+sys.exit(0 if asyncio.run(alerts.send(sys.argv[2], key=sys.argv[3])) else 1)
+' "$BEIDOU_ALERTS_WEBHOOK_URL" "beidou check FAILED ($1): $2" "check-$1" "$SUPPORT/alert-dedup.json" \
+      || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }
 failed=0

@@ -15,9 +15,11 @@ and the return value is what lets the caller refuse to exit quietly.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -76,6 +78,7 @@ class WebhookAlerts:
         dedup_window_seconds: float = 3600.0,
         clock: Callable[[], float] = time.monotonic,
         transport: httpx.AsyncBaseTransport | None = None,
+        state_path: Path | None = None,
     ) -> None:
         self.url = url.strip()
         self.secondary_url = secondary_url.strip()
@@ -83,7 +86,35 @@ class WebhookAlerts:
         self._window = float(dedup_window_seconds)
         self._clock = clock
         self._transport = transport
-        self._last_sent: dict[str, float] = {}
+        # DL-L3's other half.  KILL-R7's evidence was 36 identical FAIL lines over 36 hours, and those
+        # came from the HOURLY CHECK JOB - a fresh process every hour, whose in-memory dedup dict is
+        # empty every time and can suppress nothing.  Dedup that only works inside one long-lived
+        # process is dedup aimed away from the case that produced the finding.
+        #
+        # A cache, not a ledger: it may never be the reason a message does not go out, so every read
+        # and write of it is allowed to fail quietly and cost at most one duplicate.
+        self._state_path = Path(state_path) if state_path is not None else None
+        self._last_sent: dict[str, float] = self._load_state()
+
+    def _load_state(self) -> dict[str, float]:
+        if self._state_path is None or not self._state_path.exists():
+            return {}
+        try:
+            payload = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {str(k): float(v) for k, v in payload.items() if isinstance(v, (int, float))}
+
+    def _save_state(self) -> None:
+        if self._state_path is None:
+            return
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(json.dumps(self._last_sent, sort_keys=True), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("could not persist the alert dedup state (%s): a duplicate may follow", exc)
 
     @property
     def enabled(self) -> bool:
@@ -95,7 +126,8 @@ class WebhookAlerts:
 
     def clear(self, key: str) -> None:
         """Forget a key so the next alert under it fires: the condition it described has cleared."""
-        self._last_sent.pop(key, None)
+        if self._last_sent.pop(key, None) is not None:
+            self._save_state()
 
     def _suppressed(self, key: str) -> bool:
         last = self._last_sent.get(key)
@@ -127,4 +159,5 @@ class WebhookAlerts:
                     logger.warning("alert rejected by %s: HTTP %s %s", url, response.status_code, response.text[:200])
         if delivered:
             self._last_sent[fingerprint] = self._clock()
+            self._save_state()
         return delivered

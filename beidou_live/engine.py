@@ -294,9 +294,18 @@ class LiveEngine:
             }
         )
         if snapshot.foreign_positions:
-            logger.warning(
-                "positions outside the managed universe are left untouched: %s", sorted(snapshot.foreign_positions)
+            # DL-L5's last clause: alert, not only log.  These are open positions on the venue that the
+            # loop has decided not to manage, and a line in a file nobody reads is exactly what
+            # "silent" means to an operator (L1-06's family).
+            names = sorted(snapshot.foreign_positions)
+            logger.warning("positions outside the managed universe are left untouched: %s", names)
+            await self.alerts.send(
+                f"beidou startup: {len(names)} foreign position(s) outside the managed universe are left "
+                f"untouched: {', '.join(names)}",
+                key="foreign-positions",
             )
+        else:
+            self.alerts.clear("foreign-positions")
         # DL-L4: what the rebalance window is built from - measured, not assumed.
         self.startup_seconds = max(0.0, (self.clock.now_ms() - started_ms) / 1000.0)
         return snapshot
