@@ -25,7 +25,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import ewm_vol
+from beidou_alpha.features import apply_numpy, ewm_vol
 
 STOP_LOSS = "STOP_LOSS"
 TRAILING_STOP = "TRAILING_STOP"
@@ -43,6 +43,12 @@ class ExitParams:
     bars_per_day: int = 24
     min_unit: float = 0.005  # floor on sigma_1d (fraction) so a dead-quiet series cannot make a 1-tick stop
     unit_mode: str = "entry"  # entry | current: which sigma_1d the k-units are measured in (EXP-EX3)
+    regime_window: int = 0  # bars of Kaufman efficiency ratio; 0 disables the regime scaling (EXP-EX2)
+    regime_er_cut: float = (
+        0.05  # pre-registered constant: BTC's 7-day ER read 0.020 in the 2026-09 consolidation, 0.118 over 30 days
+    )
+    regime_tp_scale: float = 0.5  # take_profit multiplier inside the regime (6 -> 3)
+    regime_side: str = "low"  # low: tighten when ER < cut (the operator's hypothesis); high: the mirror control arm
 
     def __post_init__(self) -> None:
         if min(self.stop_loss, self.trailing_stop, self.take_profit) < 0:
@@ -51,6 +57,10 @@ class ExitParams:
             raise ValueError("invalid exit parameters")
         if self.unit_mode not in {"entry", "current"}:
             raise ValueError("unit_mode must be 'entry' or 'current'")
+        if self.regime_window < 0 or not 0 < self.regime_tp_scale <= 1 or not 0 <= self.regime_er_cut <= 1:
+            raise ValueError("invalid regime parameters")
+        if self.regime_side not in {"low", "high"}:
+            raise ValueError("regime_side must be 'low' or 'high'")
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> ExitParams:
@@ -137,12 +147,15 @@ def exit_step(
     params: ExitParams,
     *,
     bar_step: int = 1,
+    tp_scale: float = 1.0,
 ) -> tuple[ExitState, float, str]:
     """One symbol, one closed bar: (new state, weight to hold from here, reason).
 
     ``target`` is the model's weight (already vol-targeted), ``price`` the bar
     close, ``sigma_1d`` the current daily vol (fraction).  ``bar_step`` is the
     increment of ``bar`` per bar (1 for indices, interval_ms for timestamps).
+    ``tp_scale`` multiplies ``params.take_profit`` for this bar only (EXP-EX2's
+    regime scaling); it defaults to 1.0, i.e. no scaling.
     """
     if not params.enabled:
         return replace(state, direction=_sign(target)), target, ""
@@ -163,7 +176,7 @@ def exit_step(
             reason = STOP_LOSS
         elif params.trailing_stop > 0 and retrace >= params.trailing_stop:
             reason = TRAILING_STOP
-        elif params.take_profit > 0 and favourable >= params.take_profit:
+        elif params.take_profit > 0 and favourable >= params.take_profit * tp_scale:
             reason = TAKE_PROFIT
         if reason:
             cooled = ExitState(
@@ -200,6 +213,32 @@ def daily_vol(close: pd.DataFrame, params: ExitParams) -> pd.DataFrame:
     return (ewm_vol(close, halflife=params.vol_halflife) * math.sqrt(params.bars_per_day)).clip(lower=params.min_unit)
 
 
+def efficiency_ratio(close: pd.DataFrame, window: int) -> pd.DataFrame:
+    """Kaufman's efficiency ratio over ``window`` bars: |net log move| / sum of |bar log moves|, in [0, 1]; NaN in the warmup."""
+    logp = apply_numpy(close.astype(float), np.log)
+    net = (logp - logp.shift(window)).abs()
+    path = logp.diff().abs().rolling(window, min_periods=window).sum()
+    return (net / path.where(path > 0)).clip(0.0, 1.0)
+
+
+def regime_tp_scale(close: pd.DataFrame, params: ExitParams) -> pd.DataFrame | None:
+    """Per symbol-bar multiplier on ``take_profit`` (EXP-EX2): ``regime_tp_scale`` inside the chosen regime, 1 elsewhere.
+
+    ``regime_side="low"`` tightens the take-profit when the market is inefficient (the operator's "chop"
+    hypothesis); ``"high"`` is the mirror control arm.  The cut is a pre-registered constant, never a rolling
+    reference: the live loop only holds ~1,442 bars and a rolling median would make research and live
+    disagree about the regime (KILL-027's shape).  Warmup bars scale nothing.
+    """
+    if params.regime_window <= 0:
+        return None
+    er = efficiency_ratio(close, params.regime_window)
+    inside = (er < params.regime_er_cut) if params.regime_side == "low" else (er >= params.regime_er_cut)
+    scale = pd.DataFrame(
+        np.where(inside.to_numpy(), params.regime_tp_scale, 1.0), index=close.index, columns=close.columns
+    )
+    return scale.where(er.notna(), 1.0)
+
+
 @dataclass
 class ExitResult:
     weights: pd.DataFrame
@@ -224,6 +263,12 @@ def apply_exits(
     values = weights.to_numpy(dtype=float)
     prices = aligned_close.to_numpy(dtype=float)
     vols = vol.to_numpy(dtype=float)
+    scale_frame = regime_tp_scale(close, params)
+    scales = (
+        scale_frame.reindex(index=weights.index, columns=weights.columns).fillna(1.0).to_numpy(dtype=float)
+        if scale_frame is not None
+        else np.ones_like(values)
+    )
     out = np.full_like(values, np.nan)
     states = [ExitState() for _ in weights.columns]
     events: list[dict[str, Any]] = []
@@ -233,7 +278,9 @@ def apply_exits(
             continue
         for j, state in enumerate(states):
             before = state
-            new_state, weight, reason = exit_step(state, row[j], prices[t, j], vols[t, j], t, params)
+            new_state, weight, reason = exit_step(
+                state, row[j], prices[t, j], vols[t, j], t, params, tp_scale=float(scales[t, j])
+            )
             states[j] = new_state
             out[t, j] = weight
             if reason and reason != COOLDOWN:

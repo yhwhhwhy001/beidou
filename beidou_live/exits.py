@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from beidou_alpha.overlays.exits import COOLDOWN, ExitParams, ExitState, daily_vol, exit_step
+from beidou_alpha.overlays.exits import COOLDOWN, ExitParams, ExitState, daily_vol, exit_step, regime_tp_scale
 from beidou_shared.types import Position
 
 
@@ -43,10 +43,22 @@ class ExitOverlay:
                 continue
             close = float(frame["close"].iloc[-1])
             sigma = self._sigma(frame)
+            tp_scale = 1.0
+            if self.params.regime_window > 0:
+                closes = pd.DataFrame({"x": frame["close"].astype(float).to_numpy()})
+                scale = regime_tp_scale(closes, self.params)
+                tp_scale = float(scale["x"].iloc[-1]) if scale is not None else 1.0
             state = self._reconcile(ExitState.from_dict(states.get(symbol, {})), positions.get(symbol), close, sigma)
             before = state
             state, weight, reason = exit_step(
-                state, float(target), close, sigma, bar_open_ms, self.params, bar_step=self.interval_ms
+                state,
+                float(target),
+                close,
+                sigma,
+                bar_open_ms,
+                self.params,
+                bar_step=self.interval_ms,
+                tp_scale=tp_scale,
             )
             adjusted[symbol] = weight
             new_states[symbol] = state.to_dict()

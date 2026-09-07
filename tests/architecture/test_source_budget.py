@@ -892,9 +892,33 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # Merged 2026-09-07: two branches raised this dict in parallel and the resolution is neither side's
 # numbers nor the larger of each - it is the merged tree re-measured, because a ceiling copied across a
 # merge asserts a count nobody took.  Both raises above stand as written; only the dict below is new.
+#
+# Raise 2026-09-07, with the sentence the rule requires: +47 in beidou_alpha and +16 in beidou_live for
+# Task 7 / EXP-EX2, the regime-switched take-profit 2x2 (pre-registered as P22b).  `ExitParams` gains four
+# fields (`regime_window`, `regime_er_cut`, `regime_tp_scale`, `regime_side`) and their `__post_init__`
+# guard, plus two module functions: `efficiency_ratio` (Kaufman's net-move-over-path-length, the standard
+# choppy-vs-trending measure) and `regime_tp_scale`, which turns that ratio into a per symbol-bar
+# multiplier on `take_profit`; `exit_step` and `apply_exits` thread the multiplier through.  The reason
+# this earns its own instrument rather than folding into an existing one: the 2x2 asks whether tightening
+# take-profit ONLY when the market is inefficient beats tightening it always, and answering that requires
+# research and the live loop to agree, bar for bar, on what "inefficient" means from the exact same
+# efficiency ratio - so the cut is a pre-registered CONSTANT (168 bars, 0.05), never a rolling reference.
+# A rolling median would make research (millions of historical bars) and live (~1,442 held bars) compute
+# different regimes off the same configuration, which is KILL-027's shape; `regime_window: 0` stays the
+# default for exactly that reason.  `beidou_live` carries the mirrored per-bar scale in `ExitOverlay.apply`
+# (one `regime_tp_scale` call over the bar's own closes) and the four fingerprint keys
+# `construction_fingerprint` now records, so a cycle can state which ER regime it ran under instead of
+# leaving it implicit.  Measured with `_lines`, not the brief's drafted +45/+12: beidou_live lands 4 over
+# the brief's own shown diff, all of it `construction_fingerprint`'s four new keys, which the brief's shown
+# live diff did not total separately from the per-bar scale in `exits.py`.  beidou_alpha needed a second
+# measurement after the first: `ruff format` wrapped the over-long `regime_er_cut` field comment and the
+# `np.where(...)` call in `regime_tp_scale` onto extra lines the brief's inline draft did not show, which
+# is the gap between the first reading (+43, 2 under the draft) and the number below (+47, 2 over it) -
+# the same shape a raise above already recorded once (the one whose whole delta was "every line of it
+# `ruff format` wrapping and none of it behaviour"): format before measuring the ratchet, not after.
 CEILING = {
-    "beidou_alpha": 5_838,
-    "beidou_live": 5_544,
+    "beidou_alpha": 5_885,
+    "beidou_live": 5_560,
     "beidou_cli": 3_447,
     "beidou_data": 1_805,
     "beidou_exchange": 603,
