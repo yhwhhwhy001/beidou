@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from beidou_live.engine import BreakerTripped
+from tests.live.fakes import UNREACHABLE, paper_venue_from
 
 
 async def _run_until_breaker(
@@ -87,6 +88,11 @@ def test_the_cli_exits_zero_when_the_breaker_trips(tmp_path: Path, monkeypatch: 
     The engine is the real class with only `run` replaced: a bare stub would need every attribute the
     CLI touches bolted on one AttributeError at a time, and each one bolted on is a place the test
     stops resembling the thing it is testing.
+
+    The venue is the real `PaperVenue` with only the `exchangeInfo` FETCH replaced, for the same
+    reason and to the same depth.  `live run --paper` builds it at `live_cmd.py:223`, before the
+    engine exists, so this branch could not be reached without the public internet - the one
+    dependency a test about an exit code has no business having.
     """
     import yaml
     from click.testing import CliRunner
@@ -102,10 +108,12 @@ def test_the_cli_exits_zero_when_the_breaker_trips(tmp_path: Path, monkeypatch: 
     profile = yaml.safe_load(Path("config/live.demo.yaml").read_text(encoding="utf-8"))
     profile["paths"] = {"state_dir": str(tmp_path / "live"), "reports_dir": str(tmp_path / "reports")}
     profile["guards"]["kill_switch_path"] = str(tmp_path / "KILL_SWITCH")
+    profile["market_data"]["rest_url"] = UNREACHABLE
     profile_path = tmp_path / "profile.yaml"
     profile_path.write_text(yaml.safe_dump(profile), encoding="utf-8")
 
     monkeypatch.setattr(live_cmd, "LiveEngine", _Engine)
+    monkeypatch.setattr(live_cmd, "_paper_venue", paper_venue_from())
     result = CliRunner().invoke(
         main,
         ["live", "run", "--paper", "--dry-run", "--allow-unvalidated", "--cycles", "1", "--profile", str(profile_path)],
