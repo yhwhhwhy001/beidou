@@ -774,9 +774,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # style has to cost a sentence like anything else, and the honest sentence is that these 16 lines bought
 # consistency and nothing more.  The number is read off `_lines`, not computed as 5,329 + 16: both raises
 # above estimated and both came in short (+77 measured +149, +12 measured +24).
+#
+# Raise 2026-09-07, fourth one the same day, with the sentence the rule requires: +19 in beidou_live and +2
+# in beidou_alpha for this branch's one fix wave, and nearly every line of it is a comment or a docstring.
+# The behaviour changes underneath are edits to expressions that already existed: `noise_scale` counts real
+# exits over the evidence window instead of every `exit_events` row over a 720-bar tail, `exit_counterfactuals`
+# walks its horizon from `as_of_ms`, `exit_and_pool_events` drops dry-run rows, and one `except` widens.  What
+# costs the lines is the reasoning that stops each of them being "simplified" back: why COOLDOWN is not an
+# exit (`exit_step` returns it once per *blocked* cycle, so at `cooldown_bars: 24` one take-profit reported as
+# 25 against a rate built from take-profits and stops), why the two exit counts have to share one window (they
+# agree only until the evidence window outgrows 30 days, which is the state K-EX14 is working toward), why the
+# counterfactual anchors on the bar the price came from rather than the host clock D-025 caught an hour behind
+# the venue, and why a truncated parquet must not stop a monitor that runs unattended.  The beidou_alpha +2 is
+# one clause in the exit overlay's module docstring, which still called the k-unit the volatility "at entry"
+# unconditionally after `unit_mode="current"` existed - in the docstring of the single source of truth that
+# backtest and live share.  Measured with `_lines`, not estimated: alpha 5,834, live 5,364, and the other four
+# packages did not move.  The two raises above this one on this branch both estimated and both came in short;
+# this one asked the function.
 CEILING = {
-    "beidou_alpha": 5_832,
-    "beidou_live": 5_345,
+    "beidou_alpha": 5_834,
+    "beidou_live": 5_364,
     "beidou_cli": 3_315,
     "beidou_data": 1_375,
     "beidou_exchange": 582,

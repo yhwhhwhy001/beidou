@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import max_drawdown, sharpe
@@ -315,7 +316,9 @@ def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[st
 
 def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
     """M-005 and M-006: the two things that change the book without a signal changing its mind."""
-    rows = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
+    # a dry run submits no order (engine.py: DRY_RUN), so its exits and its pool moves never reached the
+    # venue; left in, they pad the same M-005 exit list `exit_counterfactuals` excludes them from below
+    rows = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day and not row.get("dry_run")]
     exits = [
         {"symbol": event.get("symbol"), "rule": event.get("rule"), "bar": row.get("bar")}
         for row in rows
@@ -352,7 +355,9 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     changes over the trailing 30 days of traded cycles (bars re-baselined by an external transfer are
     skipped), scaled by sqrt(24); ``peak_giveback`` is the largest drop from the running equity high inside
     the day.  The expected exit count pro-rates the P11 backtest rate for the whole book to the cycles seen
-    so far in the current construction.
+    so far in the current construction, and ``exits_so_far`` counts the exits that actually happened over
+    that same evidence window - not over ``realised``'s 30 days, which is a different span, and not counting
+    COOLDOWN, which records a cycle an earlier exit blocked rather than an exit of its own.
     """
     trailing = _cycles(store, window_days=30)
     today = [row for row in trailing if _day_of(row) == day]
@@ -371,10 +376,16 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         giveback = (peak - value) if giveback is None else max(giveback, peak - value)
     window = evidence_window(store)
     bars = int(window.get("bars") or 0)
+    since = int(window.get("since_ms") or 0)
+    # Both exit counts have to be on one window or their ratio means nothing: the expectation is scaled by
+    # `bars`, which is every cycle in the evidence window, so the actual count reads that window too and not
+    # `trailing`'s 720-bar tail (they agree only until the window outgrows 30 days).  COOLDOWN is excluded
+    # because it is not an exit: `exit_step` returns it once per *blocked* cycle, so one take-profit trails
+    # `cooldown_bars` more events behind it, while the backtest rate above counts take-profits and stops.
     exits = sum(
-        len(row.get("exit_events") or [])
-        for row in trailing
-        if int(row.get("bar_open_ms") or 0) >= int(window.get("since_ms") or 0)
+        sum(1 for event in (row.get("exit_events") or []) if event.get("rule") != COOLDOWN)
+        for row in _cycles(store)
+        if int(row.get("bar_open_ms") or 0) >= since
     )
     return {
         "design_daily_sigma_u": design,
@@ -423,9 +434,13 @@ def exit_counterfactuals(
         if not events or record.get("equity") is None or record.get("dry_run"):
             continue
         equity = float(record["equity"])
-        bar = int(record.get("bar_open_ms") or 0)
+        # the horizon is walked from the bar the *price* came from.  `event["price"]` is the close of the bar
+        # at `as_of_ms` (engine.py, via `ExitOverlay.apply`), while `bar_open_ms` is the host clock's, and
+        # D-025 has the host a whole bar from the venue's - on 2026-09-04 a full hour behind.  Anchoring on
+        # the host would price a 23-bar hold as a 24-bar one; `_day_of` prefers `as_of_ms` for this reason.
+        anchor = int(record.get("as_of_ms") or record.get("bar_open_ms") or 0)
         for event in events:
-            if event.get("rule") == "COOLDOWN" or not event.get("price"):
+            if event.get("rule") == COOLDOWN or not event.get("price"):
                 continue
             symbol = str(event.get("symbol"))
             notional = float(event.get("target") or 0.0) * equity
@@ -433,13 +448,17 @@ def exit_counterfactuals(
             if symbol not in cache:
                 try:
                     cache[symbol] = loader(symbol)
-                except FileNotFoundError:
+                # `data_coverage` below catches broad for the same reason: a store that cannot be read is a
+                # research problem, never a reporting failure.  A zero-byte or half-written parquet raises
+                # `ArrowInvalid`, not `FileNotFoundError`, and one of those must not stop `report daily` -
+                # this monitor runs unattended, so the report is how a broken archive gets noticed at all.
+                except Exception:
                     cache[symbol] = pd.Series(dtype=float)
             series = cache[symbol]
-            row = {"symbol": symbol, "rule": event.get("rule"), "bar_open_ms": bar, "price": float(event["price"])}
+            row = {"symbol": symbol, "rule": event.get("rule"), "as_of_ms": anchor, "price": float(event["price"])}
             complete = True
             for horizon in horizons:
-                future = bar + horizon * span_ms
+                future = anchor + horizon * span_ms
                 if future in series.index:
                     row[str(horizon)] = notional * (float(series.loc[future]) / float(event["price"]) - 1.0)
                 else:

@@ -1,8 +1,10 @@
-"""Exit overlay: stop-loss, trailing stop and take-profit in units of entry-time daily volatility.
+"""Exit overlay: stop-loss, trailing stop and take-profit in units of daily volatility.
 
 Evaluated at bar close on closed bars only (never intra-bar; D-012).  Every
 threshold is ``k`` daily standard deviations, where the unit is the symbol's
-EWMA volatility *at entry* scaled to one day, so the same ``k`` means the
+EWMA volatility scaled to one day - fixed at entry by default, or re-read
+from the current bar under ``unit_mode="current"`` (EXP-EX3), which is the
+only difference between the two modes - so the same ``k`` means the
 same statistical distance on BTC and on a meme coin.  After an exit the same
 direction is suppressed for ``cooldown_bars``; the opposite direction may
 enter immediately.  Same-direction resizes keep the original entry.
