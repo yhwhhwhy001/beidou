@@ -119,3 +119,62 @@ def test_engaging_writes_both_so_there_is_no_transition_gap(tmp_path: Path) -> N
     assert sorted(p.name for p in written) == ["KILL_SWITCH", "abc.KILL_SWITCH"]
     assert a.read_text(encoding="utf-8") == "engaged at T\n"
     assert b.read_text(encoding="utf-8") == "engaged at T\n"
+
+
+# --- the two read points the first fix missed -----------------------------------------------------
+
+
+def test_the_write_guard_reads_every_path_too(tmp_path: Path) -> None:
+    """The last line of defence, and it was still reading one file.
+
+    Three places ask "is the switch engaged": the engine's guard, `WriteGuard` at the HTTP layer, and
+    the CLI.  The first fix changed one of them.  `WriteGuard` is the one that refuses a risk-adding
+    order at the wire, so a switch the engine honours and the guard does not is the worst of the three
+    to leave inconsistent.
+    """
+    from beidou_exchange.guard import WriteGuard
+
+    legacy = tmp_path / "legacy" / "KILL_SWITCH"
+    account = tmp_path / "support" / "abc.KILL_SWITCH"
+    legacy.parent.mkdir()
+    account.parent.mkdir()
+    guard = WriteGuard("https://demo-fapi.binance.com", (legacy, account))
+
+    assert guard.kill_switch_engaged() is False
+    account.write_text("engaged", encoding="utf-8")
+    assert guard.kill_switch_engaged() is True
+
+
+def test_the_write_guard_still_takes_a_single_path(tmp_path: Path) -> None:
+    """Callers that pass one path keep working; this is a widening, not a break."""
+    from beidou_exchange.guard import WriteGuard
+
+    one = tmp_path / "KILL_SWITCH"
+    guard = WriteGuard("https://demo-fapi.binance.com", one)
+
+    assert guard.kill_switch_engaged() is False
+    one.write_text("engaged", encoding="utf-8")
+    assert guard.kill_switch_engaged() is True
+
+
+def test_flatten_engages_every_path(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """`live flatten` engaged the switch through the single-path helper.
+
+    Flatten is the one command whose whole purpose is to stop, so it engaging a switch two of the
+    three readers cannot see would be the defect at its least funny.
+    """
+    from beidou_cli.live_cmd import engage_kill_switch
+
+    monkeypatch.setenv("BEIDOU_TEST_KEY", "some-key")
+    profile = {
+        "guards": {"kill_switch_path": str(tmp_path / "repo" / "KILL_SWITCH")},
+        "venue": {"api_key_env": "BEIDOU_TEST_KEY"},
+    }
+
+    engage_kill_switch(profile, "engaged\n")
+
+    from beidou_cli.live_cmd import kill_switch_targets
+
+    targets = kill_switch_targets(profile)
+    assert len(targets) == 2
+    assert all(path.exists() for path in targets)

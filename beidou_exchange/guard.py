@@ -8,7 +8,7 @@ reduce-only orders, leverage/session control) are allowed.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -49,13 +49,34 @@ def is_risk_reducing(method: str, path: str, params: Mapping[str, Any]) -> bool:
     return path not in ORDER_PATHS  # leverage / margin type / listen-key style session control
 
 
+def _as_paths(value: str | Path | Sequence[str | Path] | None) -> tuple[Path, ...]:
+    """One path, several, or none - callers predate the plural and must keep working."""
+    if value is None:
+        return ()
+    if isinstance(value, (str, Path)):
+        return (Path(value),)
+    return tuple(Path(item) for item in value)
+
+
 class WriteGuard:
-    def __init__(self, rest_url: str, kill_switch_path: str | Path | None = None) -> None:
+    def __init__(self, rest_url: str, kill_switch_path: str | Path | Sequence[str | Path] | None = None) -> None:
         self.host = normalize_host(rest_url)
-        self.kill_switch_path = None if kill_switch_path is None else Path(kill_switch_path)
+        self.kill_switch_paths = _as_paths(kill_switch_path)
+
+    @property
+    def kill_switch_path(self) -> Path | None:
+        """The first configured path, kept for callers and logs that name a single file."""
+        return self.kill_switch_paths[0] if self.kill_switch_paths else None
 
     def kill_switch_engaged(self) -> bool:
-        return self.kill_switch_path is not None and self.kill_switch_path.exists()
+        """Engaged if ANY configured file exists (L1-07).
+
+        Three places ask this question - the engine's guard, this one at the HTTP layer, and the CLI -
+        and the account-scoped path was added to only the first.  This is the one that refuses a
+        risk-adding order at the wire, so a switch the engine honours and the guard does not would be
+        the worst of the three to leave disagreeing.
+        """
+        return any(path.exists() for path in self.kill_switch_paths)
 
     def engage_kill_switch(self, reason: str = "") -> Path:
         if self.kill_switch_path is None:

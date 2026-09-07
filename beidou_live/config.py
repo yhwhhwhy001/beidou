@@ -232,7 +232,7 @@ def build_market_data(profile: dict[str, Any]) -> PublicMarketData:
     return PublicMarketData(str(market.get("rest_url", "https://fapi.binance.com")))
 
 
-def build_venue(profile: dict[str, Any], kill_switch_path: Path) -> BinanceUsdmVenue:
+def build_venue(profile: dict[str, Any], kill_switch_path: Path | Sequence[Path]) -> BinanceUsdmVenue:
     venue_cfg = profile.get("venue", {}) or {}
     rest_url = str(venue_cfg.get("rest_url", "https://demo-fapi.binance.com"))
     guard = WriteGuard(rest_url, kill_switch_path)

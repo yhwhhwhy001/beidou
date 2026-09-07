@@ -751,12 +751,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # only path to the channel was a real failure, so the signal the breaker's clean exit depends on
 # could not be exercised without first breaking something.  The drill redacts the URL to its host,
 # because a webhook URL is a credential - whoever holds it posts as the bot.
+#
+# 2026-09-07, the L1-07 fix was itself incomplete, found by scanning the repo for a third copy of
+# the alert bug rather than by anything failing.  THREE places ask "is the kill switch engaged":
+# the engine's guard, `WriteGuard` at the HTTP layer, and the CLI.  The first fix changed one.
+# `WriteGuard` is the one that refuses a risk-adding order at the wire, and `live flatten` - the
+# command whose entire purpose is to stop - engaged through the single-path helper.  Widened all
+# three, and the startup banner now names every path it reads, because that banner naming ONE file
+# is what exposed the original defect.
+#
+# The scan itself is the lesson worth keeping: two of this repository's three "did it work?"
+# judgements were already right (the venue client reads Binance's body `code` even on a 2xx; the
+# archive verifies a checksum, not a status).  The wrong one was the newest.  Finding the third
+# copy cost one grep; not finding it would have cost a stopped book nobody was told about.
 CEILING = {
     "beidou_alpha": 5_808,
     "beidou_live": 5_219,
-    "beidou_cli": 3_372,
+    "beidou_cli": 3_377,
     "beidou_data": 1_375,
-    "beidou_exchange": 582,
+    "beidou_exchange": 603,
     "beidou_shared": 284,
 }
 

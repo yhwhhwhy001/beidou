@@ -133,10 +133,14 @@ def kill_switch_targets(payload: dict[str, Any]) -> tuple[Path, ...]:
 
 
 def engage_kill_switch(payload: dict[str, Any], reason: str) -> Path:
-    path = kill_switch_path(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(reason, encoding="utf-8")
-    return path
+    """Engage EVERY path that means stop for this account, and return the configured one.
+
+    `live flatten` engages the switch through here, and flatten is the one command whose entire
+    purpose is to stop - so it writing a file two of the three readers cannot see would be the L1-07
+    defect at its least funny.
+    """
+    written = engage_kill_switches(kill_switch_targets(payload), reason)
+    return written[0] if written else kill_switch_path(payload)
 
 
 def refuse_second_instance(busy: LockBusy) -> tuple[int, str]:
@@ -217,7 +221,7 @@ def live_run(
     if paper:
         venue = _paper_venue(market.base_url, paper_balance, store.directory / "paper_venue.json")
     else:
-        venue = build_venue(payload, config.kill_switch_path)
+        venue = build_venue(payload, (config.kill_switch_path, *config.kill_switch_paths))
     alert_config = payload.get("alerts", {}) or {}
     alerts = WebhookAlerts(
         str(alert_config.get("webhook_url", "")),
@@ -240,7 +244,8 @@ def live_run(
     click.echo(
         f"universe={engine.universe} interval={config.interval} leverage={leverage} pool_refresh={pool is not None} "
         f"exits={config.exits.enabled} throttle={config.throttle.enabled} dry_run={dry_run} paper={paper} "
-        f"kill_switch={config.kill_switch_path} state={store.directory}"
+        f"kill_switch={','.join(str(p) for p in (config.kill_switch_path, *config.kill_switch_paths))} "
+        f"state={store.directory}"
     )
 
     # DL-L6: `launchctl unload` sends SIGTERM and SIGKILLs after ExitTimeOut (30s in the plist).
@@ -473,7 +478,7 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
     model, registry = build_model_from_profile(payload)
     universe = resolve_universe(payload, None, data_root)
     config = live_config(payload, universe, registry, dry_run=False)
-    venue = build_venue(payload, config.kill_switch_path)
+    venue = build_venue(payload, (config.kill_switch_path, *config.kill_switch_paths))
     # L1-06: take the trading rights away BEFORE closing anything.  `flatten` used to leave the loop
     # running, so the next cycle rebuilt every position it had just closed - the 2026-09-04 incident
     # path, and the root KILL-R2 identified under the watchdog problem.  The switch is durable, so
