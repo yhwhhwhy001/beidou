@@ -3080,3 +3080,17 @@ Claim 更新：C-EX03（"对本书，退出应响应的市场状态是周级信�
 账本：`P23-step0` 记诊断 trial，`_record_trial` 返回 `charged=1`，tsmom 账本行数 99 → 100（`reports/research/trials.jsonl`），`overlay_digest` 标注 `{"kind": "diagnostic", "what": "subthreshold_forward_returns"}` 以区别于回测/validate 行，`sharpe_annual` 记 `null`（这不是一次回测）。
 
 **没做的事，明写。** `exit_threshold` / `exit_dwell_bars` 没有加进 `scores_to_targets` / `TsmomParams` / `StrategyEntry` / `AlphaModel`；`research validate` 的两格网格没有跑；`tests/alpha/test_exit_threshold.py` 没有新建；`beidou_alpha` 的行数预算没有变。这是预登记规则本身的产物，不是省事——第 0 步存在的目的就是在花掉 `validate` 名额之前问一次"这个假设有没有希望"，答案是没有，于是不再往下走。O-EX1 到此关闭。
+
+## 2026-09-07 · P22b 预登记：行情效率比切档止盈的 2×2（先写后跑）
+
+来源：`.superpowers/sdd/2026-09-07-exits-optimization-execution-plan/task-7-brief.md`（Task 7；前置 Task 3 已裁决 Q1 = A；操作者明确要测行情切档并接受 tsmom + flow 各 +4 账本）。操作者的原始假设是"行情低效（震荡）时应收紧止盈"——P22 已经测过并 REFUTED 的是"始终收紧止盈"（TP3-entry/TP4-entry），从未测过条件版本。这次连镜像臂（行情高效时收紧）一起测，是把"regime 效应"和"止盈更紧本身有效/无效"分开的手段：单独一档"低 ER 收紧"如果通过，看起来会和"始终收紧"很像，只有镜像臂同时不通过，才能说明分界点是行情效率而不是噪声。
+
+**网格（两 universe 各一次调用）：** `stop_loss [6.0] × trailing_stop [0.0] × take_profit [6.0] × regime_window [168] × regime_er_cut [0.05] × regime_tp_scale [0.5] × regime_side ["low","high"]` → 低 ER 臂、镜像臂各一。固定 TP3 臂 = P22 的 TP3-entry（`reports/research/overlay-20260907T085119Z.json` 时点、`overlay-20260907T085209Z.json` 静态，`params.take_profit == 3.0` 那一行），不重跑。
+
+**账本预期：** tsmom +4、flow +4（节流网格用默认参数，此前已在 P22 记过，去重为 0）。运行后核对每份报告的 `ledger.charged`。
+
+**判定规则（写在跑之前，跑完不改）：** 低 ER 臂双 universe 通过 D-017（对各自报告的 baseline：OOS MDD 改善且 OOS Sharpe 损失 ≤ 0.10）**且** 双 universe 的 OOS Sharpe 都高于 TP3-entry **且** 镜像臂至少一个 universe 不通过 D-017 → C-EX02b SUPPORTED（候选进入 Task 9）。低 ER 臂与镜像臂都通过 D-017 但都不优于 TP3-entry → 结论是"TP3 处处有效"，这属于 C-EX02a-TP（P22 已 REFUTED 的那个 Claim 的范畴），C-EX02b 不成立。其余情况（含低 ER 臂本身不通过 D-017 的任何一种）→ C-EX02b REFUTED。regime 常数 168 / 0.05 只允许这一组，不因结果调整重跑。
+
+**先验（写在结果之前）：** 操作者的原始假设本身估计约 65–75% 会失败；一个干净的负结果是预期且成功的结果。
+
+**不做：** `regime_window`/`regime_er_cut` 不做网格扫描——它们是 brief 给定的固定预注册常数，扫描它们等于在结果之后调整判据；如果这一轮 SUPPORTED，常数本身的稳健性是 Task 9 的问题，不是这一轮的。
