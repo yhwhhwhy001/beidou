@@ -591,6 +591,44 @@ def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"blocking": list(block.get("blocking", [])), "advisory": list(block.get("advisory", []))}
 
 
+def restart_cost(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """AC-L4 / RISK-P2: what the day's restarts actually cost, counted rather than assumed.
+
+    DL-L4 wrote both facts into every cycle row - how late the wake-up was relative to the bar close,
+    and whether that lateness cost a rebalance - and nothing read them.  The plan assumed every
+    deployment restart costs late fills and 7bps of gross; this is the number that would show whether
+    the assumption is generous or mean.
+
+    ``missed_rebalances`` is a RUNNING TOTAL held on the engine, so summing the column double-counts
+    every row after the first miss.  It is also per process: a value that drops means a new process
+    started, and the day owes both stretches.  Hence max-per-stretch, summed across stretches.
+    """
+    missed = 0
+    running = 0
+    skipped = 0
+    late: list[float] = []
+    for row in rows:
+        if row.get("phase") == "SKIPPED" or row.get("reason") == "restart outside the rebalance window":
+            skipped += 1
+        seen = row.get("missed_rebalances")
+        if isinstance(seen, int):
+            if seen < running:  # the counter reset: a new process
+                missed += running
+                running = seen
+            else:
+                running = seen
+        value = row.get("late_seconds")
+        if isinstance(value, (int, float)):
+            late.append(float(value))
+    missed += running
+    return {
+        "missed_rebalances": missed,
+        "skipped_bars": skipped,
+        "worst_late_seconds": max(late) if late else None,
+        "late_bars": len(late),
+    }
+
+
 def daily_payload(
     store: StateStore,
     day: str,
@@ -662,6 +700,9 @@ def daily_payload(
             "unreconciled_cycles": unreconciled,
         },
         "guard_events": {event: guard_events.count(event) for event in set(guard_events)},
+        # AC-L4 / RISK-P2: what the day's restarts cost.  DL-L4 wrote these into the cycle rows and
+        # nothing read them; a cost that only exists in a JSONL is an assumption, not a measurement.
+        "restarts": restart_cost(cycles),
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "risk_budget": risk_budget_status(
@@ -984,6 +1025,13 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     k: payload[k]
                     for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
                 },
+            ),
+            (
+                # AC-L4: the same sentence as the line below it, one restart over.  RISK-P2 assumed a
+                # deployment restart costs late fills and a rebalance; this is where that stops being
+                # an assumption.
+                "Restart cost (DL-L4 / RISK-P2)",
+                dict(payload.get("restarts") or {"missed_rebalances": 0}),
             ),
             (
                 # D-041: the manifest was written into every report and read by nothing.  It is read now,

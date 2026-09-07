@@ -728,9 +728,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # same account fingerprint.  Both files are written on engage and both cleared on release, and the
 # guard reads their union - an emergency stop may never get weaker, not even for the one restart it
 # takes a running loop to learn the new path.
+#
+# 2026-09-07 AC-L4's other half, +~45 in beidou_live.  DL-L4 gave every restart two facts - how
+# late the wake-up was relative to the bar close, and whether that cost a rebalance - wrote both
+# into the cycle row, and the acceptance criterion asks for them in the DAILY REPORT, where an
+# operator would see them.  Checked against the real report: neither key was in it.  RISK-P2
+# ASSUMED a deployment restart costs late fills and a rebalance; these lines are what turn that
+# assumption into a number.  The counter is a running total held on the engine and resets per
+# process, so summing the column double-counts - max per stretch, summed across stretches, which
+# is the part a later reader is most likely to "simplify" back into a sum.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_129,
+    "beidou_live": 5_177,
     "beidou_cli": 3_313,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
