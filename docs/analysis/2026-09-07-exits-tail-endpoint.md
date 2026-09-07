@@ -165,4 +165,8 @@ D-017 的允许量是 **OOS Sharpe 损失 ≤ 0.10**。但现行 `sl6 + tp6` 在
 
 - **GAP-TL04**：`reports/research/trials.jsonl` 中 `overlay_digest` 非空的行数 = **0**。overlay 计费在 `ac0eb87`（B3）才机械化，此前 18 次 overlay 运行的约 200 次候选评估一行都没入账。任何基于「tsmom 已试过 N 个配置」的多重性叙述都少算了退出层这一整块。
 - **GAP-TL05**：兄弟分析的冻结件 `scratchpad/exits-adaptive-frozen.md` 与本轮之前的 `scratchpad/stop_tail.py` 都不在树里。`.gitignore:22` 的规则在实践中没有被执行；这是第二次发现同一类缺口。
+- **本文引用的「兄弟分析」的准确出处**：`docs/analysis/2026-09-07-exits-adaptive-tp-sl-deep-analysis.md`，在分支 **`feat/exits-p22`**（提交 `aca1f91`），**不在 main 上**。作者在冻结件里误记为「已提交 main」，已在审查存档的文首更正。它是 E2 级的同行工作，不是仓库既定结论。
+- **GAP-TL06（活的冲突）**：同一分支上还有一份 1364 行的执行方案，其第一步网格是
+  `stop_loss [6.0] × trailing_stop [0.0] × take_profit [3.0, 4.0, 6.0] × unit_mode ["entry"]`。
+  **其中 tp3 / tp4 两格正是本文第 1 节测出在 static 上超 D-017 预算 7.5 / 5.1 倍的那两格**，零成本即可预测，跑它只是确认。其第二步 `unit_mode ["current"]` 是新代码，**不在本文的预测范围内**——当前波动率单位会改变触发次数，本文没有测过它。
 - **A-TL01**：锚定偏差已证实。作者提出移动止损方案、又负责评估它，把「未测」当成「先验中性」，而 16 次已有观测给出的是一条近似线性的负斜率（每次触发损伤 −1.2e-4 ~ −1.65e-4，四个基座上近似恒定，无梯度）。独立子代理审查是抓住这一点的机制。
