@@ -685,6 +685,51 @@ def daily_payload(
     }
 
 
+def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
+    """Split a daily payload's findings into (alerts, notices): what pages, and what only gets read.
+
+    An alert says the running book has moved and the operator can do something about it now.  A
+    notice is true and worth seeing at review, but nothing can be done with it in the next hour -
+    a construction-cadence count is the case that forced the distinction: two promotions landed on
+    2026-09-04, a promotion cannot be un-done, and the hourly check paged on it for three days,
+    twice an hour, because `dedup_window_seconds` equals the job's period.  That is precisely the
+    repeated alert `alerts.py` says buries the one that matters, so notices leave the paging path
+    entirely; they stay in the report's Evidence window block.  Making a notice loud again is a
+    matter of moving one append, not of finding a suppression to undo.
+    """
+    alerts: list[str] = []
+    for name, key in (("equity", "drift"), ("income", "income_drift")):
+        block = payload.get(key) or {}
+        if str(block.get("status")) == "ALERT":
+            detail = block.get("reasons") or [
+                f"{strategy}: z={row.get('z'):.1f}"
+                for strategy, row in (block.get("by_strategy") or {}).items()
+                if row.get("z") is not None and row["z"] < -2.0
+            ]
+            alerts.append(f"{name} drift ALERT: {'; '.join(str(d) for d in detail)}")
+    budget = payload.get("risk_budget") or {}
+    if str(budget.get("status")) == "ALERT":
+        # P13's ladder: the thresholds were fixed before the change went live, so this says what to do
+        # rather than that something looks off.  It alerts; a human still runs the one-line change.
+        alerts.append("risk budget ALERT: " + "; ".join(str(r) for r in budget.get("reasons") or []))
+    adaptation = payload.get("risk_adaptation") or {}
+    if str(adaptation.get("status")) == "ALERT":
+        # M-015: the weights stopped taking each symbol's volatility back out.  Loud rather than
+        # quiet because this is the layer D-037 pointed at when it ruled the leverage layer inert.
+        alerts.append(
+            f"risk adaptation ALERT: compression {adaptation.get('compression'):.2f} > "
+            f"{adaptation.get('limit'):.2f}; per-symbol sizing is no longer vol-scaled"
+        )
+    notices: list[str] = []
+    window = payload.get("evidence_window") or {}
+    if int(window.get("changes_7d") or 0) > 1:
+        # the plan allowed one promotion per week and nothing ever counted them
+        notices.append(
+            f"{window['changes_7d']} construction changes in the last 7 days; the plan allows one promotion per week"
+        )
+    return alerts, notices
+
+
 ALPHA_EFFORT_TARGET = 0.90  # operator decision 2026-09-04; see docs/RESEARCH_LOG.md
 
 
