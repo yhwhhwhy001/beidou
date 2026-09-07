@@ -44,6 +44,7 @@ from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
 from beidou_live.reports import (
     PREREGISTRATION_EFFECTIVE_FROM,
+    daily_alerts,
     daily_markdown,
     daily_payload,
     expectations_from_evidence,
@@ -541,35 +542,14 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
     )
     click.echo(markdown)
     click.echo(f"written {directory / f'{chosen}.md'}")
-    # The drift status was computed and then thrown away: nothing ever sent it anywhere.
-    alerts: list[str] = []
-    for name, block in (("equity", data.get("drift") or {}), ("income", data.get("income_drift") or {})):
-        if str(block.get("status")) == "ALERT":
-            detail = block.get("reasons") or [
-                f"{strategy}: z={row.get('z'):.1f}"
-                for strategy, row in (block.get("by_strategy") or {}).items()
-                if row.get("z") is not None and row["z"] < -2.0
-            ]
-            alerts.append(f"{name} drift ALERT: {'; '.join(str(d) for d in detail)}")
-    budget = data.get("risk_budget") or {}
-    if str(budget.get("status")) == "ALERT":
-        # P13's ladder: the thresholds were fixed before the change went live, so this says what to do
-        # rather than that something looks off.  It alerts; a human still runs the one-line change.
-        alerts.append("risk budget ALERT: " + "; ".join(str(r) for r in budget.get("reasons") or []))
-    adaptation = data.get("risk_adaptation") or {}
-    if str(adaptation.get("status")) == "ALERT":
-        # M-015: the weights stopped taking each symbol's volatility back out.  Loud rather than
-        # quiet because this is the layer D-037 pointed at when it ruled the leverage layer inert.
-        alerts.append(
-            f"risk adaptation ALERT: compression {adaptation.get('compression'):.2f} > "
-            f"{adaptation.get('limit'):.2f}; per-symbol sizing is no longer vol-scaled"
-        )
-    window = data.get("evidence_window") or {}
-    if int(window.get("changes_7d") or 0) > 1:
-        # the plan allowed one promotion per week and nothing ever counted them
-        alerts.append(
-            f"{window['changes_7d']} construction changes in the last 7 days; the plan allows one promotion per week"
-        )
+    # The drift status was computed and then thrown away: nothing ever sent it anywhere.  Which
+    # findings page and which are only read is `daily_alerts`' decision and its docstring carries the
+    # reasoning; this function does the routing.  Notices go to stdout beside the report and touch
+    # neither the webhook nor the exit code, so an unactionable standing fact cannot hold the hourly
+    # health check red - which is what a construction-cadence count did for three days.
+    alerts, notices = daily_alerts(data)
+    for notice in notices:
+        click.echo(f"notice {chosen}: {notice}")
     if alerts:
         message = f"beidou {chosen}: " + " | ".join(alerts)
         click.echo(message, err=True)

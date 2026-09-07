@@ -704,10 +704,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # Both are the same sentence: a protocol whose coverage depends on which command an operator happened
 # to run is not a protocol.  Cheap to fix, and worth the lines because neither would have announced
 # itself - the accounting would simply have been lighter down one path.
+# `daily_alerts` moved the daily report's alert assembly out of the CLI and into `reports.py`, so the
+# two ceilings move together: +45 on `beidou_live`, -20 on `beidou_cli`.  A relocation must not buy
+# headroom - lowering the origin is what keeps the ratchet from drifting up one move at a time.  The
+# net +25 is the docstring that now carries WHY a construction-cadence count no longer pages, which is
+# the part of this change most likely to be undone by someone who only sees the code.
+#
+# Merged 2026-09-07 from two sessions working in parallel, and the arithmetic is worth one line
+# because `beidou_cli` goes DOWN across the merge: 3,298 before either change, -20 for the
+# relocation above, +13 for the coverage fix, 3,291.  Neither side bought headroom, which is what
+# the relocation note asks for and what re-measuring the merged tree is the only way to confirm.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_020,
-    "beidou_cli": 3_311,
+    "beidou_live": 5_065,
+    "beidou_cli": 3_291,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
     "beidou_shared": 284,
