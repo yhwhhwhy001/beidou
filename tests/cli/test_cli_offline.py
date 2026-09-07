@@ -37,7 +37,7 @@ def test_help_has_all_groups() -> None:
 # `crowding_window: 0` in the `--params` below is not decoration.  These runs pass `--no-funding`, and
 # tsmom's registry params turn the funding-reading crowding modifier on, so before E-040 was closed they
 # were quietly exercising an inert modifier.  Pinning it off says what they have always actually tested.
-def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path) -> None:
+def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path) -> None:
     root = tmp_path / "data"
     _store_from_fixtures(august_dir, root)
     out = tmp_path / "reports"
@@ -105,7 +105,9 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
     # D-024: the report is reproducible from itself and records every trial it charged
     assert validation["folds"] == 3 and validation["min_train"] == 300 and validation["purge"] == 5
     assert validation["grid"] == {"vol_window": [100, 200], "entry_threshold": [0.2, 0.3]}
-    assert len(validation["trial_sharpes"]) == 4 and validation["ledger"]["ledger_rows"] == 0
+    # DL-K1: the backtest above is now a trial of its own, so the ledger is not empty by the time
+    # validate reads it.  That one row is the whole point - it used to be free.
+    assert len(validation["trial_sharpes"]) == 4 and validation["ledger"]["ledger_rows"] == 1
     # D-024: the report says which portfolio construction produced these numbers, so a later band or
     # half-life change in the profile is detectable rather than silent
     assert validation["portfolio"]["no_trade_rel_band"] is not None
@@ -144,7 +146,9 @@ def test_research_backtest_and_validate_offline(tmp_path: Path, august_dir: Path
     )
     assert result.exit_code == 0, result.output
     replay = json.loads(sorted(out.glob("tsmom-validation-*.json"))[-1].read_text())
-    assert replay["ledger"]["ledger_rows"] == 4 and replay["ledger"]["ledger_trials"] == 0
+    # 5 rows: the backtest's one plus this grid's four.  One trial survives dedup - the backtest, whose
+    # parameters are not in this grid; the four are the current grid re-run on the same data (D-024).
+    assert replay["ledger"]["ledger_rows"] == 5 and replay["ledger"]["ledger_trials"] == 1
     assert replay["multiple_testing"]["n_trials"] == validation["multiple_testing"]["n_trials"]
     result = runner.invoke(
         main,
@@ -281,7 +285,7 @@ def test_research_pit_universe_and_overlay_offline(tmp_path: Path, august_dir: P
     assert "recommendation:" in result.output
 
 
-def test_research_book_offline(tmp_path: Path, august_dir: Path) -> None:
+def test_research_book_offline(tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path) -> None:
     """research book writes the D-018 evidence report and charges the sleeve's standalone trial once."""
     root = tmp_path / "data"
     _store_from_fixtures(august_dir, root)
@@ -339,13 +343,16 @@ def test_research_book_offline(tmp_path: Path, august_dir: Path) -> None:
     assert decision["sleeve_standalone"]["multiple_testing"]["n_trials"] == 4  # 3 declared + this one
     assert decision["sleeve_standalone"]["verdict"] in {"PASS", "WEAK_PASS", "FAIL"}
     assert "BOOK VERDICT" in result.output and "robustness universe not evaluated" in result.output
-    ledger = (out / "trials.jsonl").read_text().splitlines()
+    # DL-K1: the ledger no longer lives under `--out`; pointing the reports elsewhere used to point
+    # the accounting elsewhere with them.
+    assert not (out / "trials.jsonl").exists()
+    ledger = isolated_trials_ledger.read_text().splitlines()
     assert len(ledger) == 1 and json.loads(ledger[0])["strategy"] == "xsmom"
     # an exact replay is not a second trial
     result = runner.invoke(main, args)
     assert result.exit_code == 0, result.output
     assert "exact replay" in result.output
-    assert len((out / "trials.jsonl").read_text().splitlines()) == 1
+    assert len(isolated_trials_ledger.read_text().splitlines()) == 1
     replay = json.loads(sorted(out.glob("book-tsmom-xsmom-*.json"))[-1].read_text())
     assert replay["universes"]["static"]["sleeve_standalone"]["multiple_testing"]["n_trials"] == 4
 

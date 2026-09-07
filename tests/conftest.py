@@ -35,3 +35,18 @@ def august_panel(august_dir: Path) -> Panel:
 @pytest.fixture(scope="session")
 def august_baseline(august_dir: Path) -> dict:
     return json.loads((august_dir / "baseline-report.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_trials_ledger(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the one ledger at a throwaway file for every test, without anyone having to remember.
+
+    DL-K1 fixed the ledger's address so `--out` can no longer move it.  That is the right production
+    behaviour and a live hazard for the test suite: a CLI test that runs `research book` would append
+    real trials to `reports/research/trials.jsonl` and raise the DSR denominator for every strategy in
+    the repository.  Autouse rather than opt-in, because the failure mode of forgetting is silent and
+    permanent - the ledger is append-only by design, so a bad row cannot be taken back out.
+    """
+    path = tmp_path_factory.mktemp("trials-ledger") / "trials.jsonl"
+    monkeypatch.setenv("BEIDOU_TRIALS_LEDGER", str(path))
+    return path

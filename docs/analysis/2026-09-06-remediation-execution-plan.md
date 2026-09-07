@@ -383,11 +383,12 @@ Quality Score（1–5）：问题真实性 5 · 证据充分度 5（全部 E1 �
 | 项 | 值 |
 | --- | --- |
 | 项目 / 等级 / Interaction | 北斗 V5 剩余问题执行方案 / L / Yellow |
-| 当前 Phase | 8–10 COMPLETE（本文件）；Phase 1–7 继承报告；**执行中：B0 ✔ B1 ✔ B2 ✔（均在 worktree `expr-nodes`），重启 #1 ✔（2026-09-07 01:16 本地）** |
+| 当前 Phase | 8–10 COMPLETE（本文件）；Phase 1–7 继承报告；**执行中：B0 ✔ B1 ✔ B2 ✔ B3 ✔ B4 ✔（DL-X2 由 Q1=B 取消），重启 #1 ✔（2026-09-07 01:16 本地）；剩 B5** |
 | 已完成结论 | D-P1..D-P7；G7 由报告的 PARTIAL 补为 PASS（测试矩阵在 §6.2） |
 | 待决 | ~~Q1、Q2、Q3~~ 已答（B / A / A）；~~A-P2~~ 已探（`liquidationPrice` 0 = 不可达，14/14 多头为 0、4/4 空头非 0）；~~A-P4~~ 已测（DL-L4 窗口 71.8 s）；**B2 合并 main 待操作者**；**DL-X1 余下四件待裁（见下）** |
 | 开放 Kill | KILL-P2（P1）已由 Q2 裁定（抬 ceiling 并写理由，随 B1 提交）；报告层 KILL-Q4/Q5/Q6/Q7/Q8/Q9/Q11/Q16 状态不变，各自绑定到本文件的 DL |
 | 证据缺口 | 远端介质（Q1=B，DL-X2 取消）；demo `forceOrders`（未探，DL-X1 余项）；实盘真实成交成本（P20 阳性候选的 ×2 压力靠它才从假设变测量） |
+| **B3 实际交付** | ✔ DL-K1（签名 +4 字段、旧行不折叠、账本地址固定并锚定 checkout、`backtest`/`overlay` 开始计费）、DL-K2（mine 每轮把保留候选记进同一本账本，`--prior-trials` 不再手抄）、DL-K3（预登记顺序检查，带 C-P6 边界）。**代价明写**：N 从此涨得更快，下次 tsmom 复验更接近 WEAK_PASS（RISK-P4 预登记过）。历史 146 行未动 |
 | **DL-X1 实际交付** | ✔ **已补齐（2026-09-07）**。B1 只交付了算法（三个函数 + 单测），生产代码里**零调用点**。本次补上四个调用点：引擎每周期落盘 `min_liq_distance`（含 foreign 持仓）、`startup()` 里紧挨 hedge-mode 的保证金模式拒绝、`force_orders()`、`attribution.py` 的 `INSURANCE_CLEAR` 桶；另加 M-Q06 的告警。接线过程发现三件算法测不出来的事：`marginType` 是小写 `cross`（`== "CROSSED"` 会一个都不匹配）、「没有波动率估计」曾被算成「没有可达强平价」（新增 `unmeasurable` 桶）、positionRisk 回 736 行而universe 只有 18（拒绝须按可交易符号收窄）。构造 digest 未变（`0dcd044d0158`），**重启 #2 不会清零 M-010 窗口** |
 | P20 / DL-A1 裁决 | **阳性**（预登记预期为阴性）。`cs_rank(ret(336)/semi(ret(1),168))` OOS 1.7862 vs 门槛 1.6453 @ N=575，`p_family` 0.0135，VERDICT PASS。五个新族里三个干净阴性。**建议记阳性、不晋级**：成本 ×2 时跌到 1.011（tsmom 1.682）。详见 `docs/RESEARCH_LOG.md` 2026-09-06 P20 裁决节 |
-| 下一动作 | (a) ~~B2 合并 main~~ 已并（`0101bf8`）；(b) ~~DL-X1 接线~~ 已完成，**待操作者执行重启 #2**（账户已核：0 个 isolated、`multiAssetsMargin` true，新断言不会拒绝启动）；(c) 待裁：P20 阳性候选是否跑 `research book` 取 D-018 边际；(d) 待做：B3（DL-K1..K3）、B5（DL-D1..D3） |
+| 下一动作 | (a) **待操作者执行重启 #2**（账户已核：0 个 isolated、`multiAssetsMargin` true，构造 digest 不变，不会拒绝启动、不清零 M-010）；(b) 待裁：P20 阳性候选是否跑 `research book` 取 D-018 边际；(c) 待做：B5（DL-D1 退市日历、DL-D2 KILL-Q11 三核查、DL-D3） |

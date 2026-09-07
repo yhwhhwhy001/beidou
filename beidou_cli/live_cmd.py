@@ -8,6 +8,7 @@ import logging
 import signal
 import subprocess
 import time
+from collections.abc import Iterable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ import click
 
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry
+from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, resolve_ledger_path
 from beidou_cli import live, report
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_live.alerts import WebhookAlerts
@@ -41,9 +43,12 @@ from beidou_live.lock import LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
 from beidou_live.reports import (
+    PREREGISTRATION_EFFECTIVE_FROM,
     daily_markdown,
     daily_payload,
     expectations_from_evidence,
+    preregistration_problems,
+    preregistration_skipped,
     weekly_markdown,
     weekly_payload,
 )
@@ -597,6 +602,61 @@ def _changed_lines(commits: int) -> dict[str, int] | None:
     return totals or None
 
 
+def _log_first_mentions(strategies: Iterable[str]) -> dict[str, str | None]:
+    """The earliest commit that introduced a mention of each strategy into `docs/RESEARCH_LOG.md`.
+
+    `-S` matches commits where the number of occurrences of the string CHANGED, which is what "first
+    mentioned" means; `git log` walks newest first, so the last line is the earliest such commit.
+    """
+    out: dict[str, str | None] = {}
+    for strategy in strategies:
+        try:
+            raw = subprocess.run(
+                ["git", "log", "--format=%aI", f"-S{strategy}", "--", "docs/RESEARCH_LOG.md"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError):
+            out[strategy] = None
+            continue
+        stamps = [line.strip() for line in raw.splitlines() if line.strip()]
+        out[strategy] = stamps[-1] if stamps else None
+    return out
+
+
+def _search_charged() -> dict[str, str]:
+    """When each mined candidate was first charged to the one ledger (DL-K2)."""
+    path = resolve_ledger_path()
+    if not path.exists():
+        return {}
+    charged: dict[str, str] = {}
+    for record in parse_ledger(path.read_text(encoding="utf-8").splitlines(), MINED_SEARCH_STRATEGY):
+        seen = charged.get(record.param_key)
+        if seen is None or record.recorded_at < seen:
+            charged[record.param_key] = record.recorded_at
+    return charged
+
+
+def _validations_since(directory: Path, since_ms: int) -> list[dict[str, str]]:
+    """Validation reports produced inside the window, as {path, strategy, generated_at}."""
+    reports: list[dict[str, str]] = []
+    for candidate in sorted(directory.glob("*-validation-*.json")):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        stamp = str(payload.get("generated_at", ""))
+        try:
+            produced = datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        if produced.timestamp() * 1000 < since_ms:
+            continue
+        reports.append({"path": str(candidate), "strategy": str(payload.get("strategy", "")), "generated_at": stamp})
+    return reports
+
+
 @report.command("weekly")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
@@ -604,7 +664,10 @@ def _changed_lines(commits: int) -> dict[str, int] | None:
 @click.option("--out", default=None, help="directory for the report (default: profile paths.reports_dir/weekly)")
 @click.option("--commits", default=40, show_default=True, help="commits to measure the alpha effort share over")
 @click.option("--data-root", default=".beidou/data", show_default=True)
-def report_weekly(profile: str, paper: bool, day: str | None, out: str | None, commits: int, data_root: str) -> None:
+@click.option("--research-dir", "research_dir", default="reports/research", show_default=True)
+def report_weekly(
+    profile: str, paper: bool, day: str | None, out: str | None, commits: int, data_root: str, research_dir: str
+) -> None:
     """The plan's weekly research report: the week's decisions next to the week's evidence."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
@@ -617,6 +680,21 @@ def report_weekly(profile: str, paper: bool, day: str | None, out: str | None, c
         changed_lines=_changed_lines(commits),
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
     )
+    # DL-K3: the week's validations, checked for the one ordering the protocol depends on and nothing
+    # verified - that the hypothesis was written down before the result was seen (KILL-R9).
+    validations = _validations_since(Path(research_dir), int(data["since_ms"]))
+    skipped = preregistration_skipped(validations, effective_from=PREREGISTRATION_EFFECTIVE_FROM)
+    data["preregistration"] = {
+        "checked": len(validations) - skipped,
+        "skipped_as_predating_the_check": skipped,
+        "effective_from": PREREGISTRATION_EFFECTIVE_FROM,
+        "problems": preregistration_problems(
+            validations,
+            first_mentioned=_log_first_mentions({row["strategy"] for row in validations}),
+            search_charged=_search_charged(),
+            effective_from=PREREGISTRATION_EFFECTIVE_FROM,
+        ),
+    }
     markdown = weekly_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "weekly")
     directory.mkdir(parents=True, exist_ok=True)

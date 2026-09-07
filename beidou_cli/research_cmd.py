@@ -32,7 +32,14 @@ from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.decompose import decompose_book
 from beidou_alpha.validation.labels import forward_returns
-from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, parse_ledger
+from beidou_alpha.validation.ledger import (
+    MINED_SEARCH_STRATEGY,
+    TrialRecord,
+    dsr_inputs,
+    ledger_scope,
+    parse_ledger,
+    resolve_ledger_path,
+)
 from beidou_alpha.validation.metrics import (
     compound,
     information_coefficient,
@@ -373,6 +380,28 @@ def research_backtest(
         "yearly": yearly_breakdown(result.portfolio_net, panel.bars_per_year),
         "generated_at": datetime.now(UTC).isoformat(),
     }
+    # DL-K1 / E-15: a backtest evaluates a configuration, so it is a trial.  It was not charged, which
+    # made the exploratory arm of every search free - try five vol windows by hand, report the best,
+    # and the DSR denominator never hears about the four.  The protocol (report 7.1.4) says every
+    # configuration EVALUATED, not every configuration validated, and this is where that starts being
+    # true.  Dedup is D-024's, unchanged: an exact replay on the same data is one trial.
+    ledger_path = resolve_ledger_path(out=out)
+    trial = TrialRecord(
+        strategy=strategy,
+        param_key=param_key(dict(entry.params)),
+        sharpe_annual=summary.get("annualized_sharpe"),
+        bars_per_year=panel.bars_per_year,
+        recorded_at=datetime.now(UTC).isoformat(),
+        range_start=str(result.weights.index[0]),
+        range_end=str(result.weights.index[-1]),
+        symbols=len(panel.symbols),
+        run_id="",
+        construction_digest=_construction_digest(report["portfolio"], cost, execution),
+        symbol_set_hash=_symbol_set_hash(panel.symbols),
+        overlay_digest=_overlay_digest(book_guards),
+    )
+    charged = _record_trial(ledger_path, trial)
+    report["ledger"] = {"path": str(ledger_path), "charged": charged}
     markdown = render_markdown(
         f"Backtest: {strategy}",
         [
@@ -546,9 +575,16 @@ def research_validate(
     }
     best_key = max(full_sharpes, key=lambda k: full_sharpes[k])
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
-    ledger_path = Path(out) / "trials.jsonl"
+    # D-024: the construction the numbers were produced by, named once and used by both the report and
+    # the ledger signature, so the two can never describe different books.
+    _run_portfolio = _model(
+        StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
+    ).portfolio.__dict__
+    ledger_path = resolve_ledger_path(out=out)
     prior_records = (
-        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), strategy) if ledger_path.exists() else []
+        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), ledger_scope(strategy))
+        if ledger_path.exists()
+        else []
     )
     period_sharpes = {
         key: (None if value is None else value / math.sqrt(bpy)) for key, value in full_sharpes_raw.items()
@@ -559,6 +595,15 @@ def research_validate(
         bpy,
         manual_prior_trials=prior_trials,
         current_range=(str(common_index[0]), str(common_index[-1]), len(panel.symbols)),
+        # The other half of the signature.  Built here rather than defaulted: an exclusion set shorter
+        # than a signature matches nothing, which turns D-024's "a replay is one trial" into silent
+        # double charging.
+        current_context=(
+            _construction_digest(_run_portfolio, cost, execution),
+            "",
+            _symbol_set_hash(panel.symbols),
+            _search_space_version(strategy, grids),
+        ),
     )
     mt = multiple_testing_report(
         nets[best_key].to_numpy(dtype=float),
@@ -608,9 +653,7 @@ def research_validate(
         # D-024: a strategy's numbers are produced by a portfolio construction, so the report has to say which
         # one.  Without this a band or half-life change in the profile silently detaches the live book from its
         # cited evidence, and the startup gate cannot see it because it compares signal params only.
-        "portfolio": _model(
-            StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
-        ).portfolio.__dict__,
+        "portfolio": _run_portfolio,
         # The data this verdict was computed from.  Everything else here already names itself - the report
         # has a digest, the registry a fingerprint, the construction another - but the dataset did not, and
         # on 2026-09-04 the membership table was rebuilt monthly -> daily while the profile still described
@@ -701,6 +744,9 @@ def research_validate(
                     range_end=str(common_index[-1]),
                     symbols=len(panel.symbols),
                     run_id=path.stem,
+                    construction_digest=_construction_digest(_run_portfolio, cost, execution),
+                    symbol_set_hash=_symbol_set_hash(panel.symbols),
+                    search_space_version=_search_space_version(strategy, grids),
                 ).to_json()
                 + "\n"
             )
@@ -1052,6 +1098,37 @@ def research_overlay(
         "recommendation": recommendation,
         "generated_at": datetime.now(UTC).isoformat(),
     }
+    # DL-K1 / E-15: an overlay grid is a search over the PORTFOLIO layer, and it was free.  Each
+    # candidate is charged to every strategy in the book it was chosen on top of - the overlay was
+    # selected by looking at the returns those signals produce, so the selection pressure lands on
+    # them.  This is also the case that makes the signature extension load-bearing: every row here
+    # shares one param_key, one range, one symbol set and one construction, and differs ONLY in the
+    # overlay.  Under the old four-field signature all twelve folded into a single trial.
+    ledger_path = resolve_ledger_path(out=out)
+    stamp = datetime.now(UTC).isoformat()
+    charged = 0
+    construction = _construction_digest(report["portfolio"], cost, execution="open_to_close")
+    symbol_hash = _symbol_set_hash(panel.symbols)
+    for entry in model.entries:
+        for row in rows:
+            charged += _record_trial(
+                ledger_path,
+                TrialRecord(
+                    strategy=entry.id,
+                    param_key=param_key(dict(entry.params)),
+                    sharpe_annual=row["full_sharpe"],
+                    bars_per_year=bpy,
+                    recorded_at=stamp,
+                    range_start=str(base.weights.index[0]),
+                    range_end=str(base.weights.index[-1]),
+                    symbols=len(panel.symbols),
+                    run_id="",
+                    construction_digest=construction,
+                    symbol_set_hash=symbol_hash,
+                    overlay_digest=_short_digest({"kind": row["kind"], "params": row["params"]}),
+                ),
+            )
+    report["ledger"] = {"path": str(ledger_path), "charged": charged, "candidates": len(rows)}
     lines = [
         f"{row['kind']} {json.dumps(row['params'])}: oos_sharpe={_fmt(row['oos_sharpe'])} "
         f"oos_mdd={row['oos_mdd']:.3f} full_sharpe={_fmt(row['full_sharpe'])} full_mdd={row['full_mdd']:.3f} "
@@ -1151,8 +1228,48 @@ def _netting(main: pd.DataFrame, sleeve: pd.DataFrame) -> dict[str, float]:
     }
 
 
-def _trial_signature(record: TrialRecord) -> tuple[str, str, str, int]:
-    return (record.param_key, record.range_start, record.range_end, record.symbols)
+def _trial_signature(record: TrialRecord) -> tuple[Any, ...]:
+    return record.signature
+
+
+def _short_digest(payload: Any) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def _construction_digest(portfolio: Mapping[str, Any], cost: Any, execution: str) -> str:
+    """DL-K1: what turned a signal into weights, and what it cost to hold them.
+
+    The research twin of D-026's live ``construction_fingerprint``, for the same reason it exists
+    there: the same parameters under a different vol target, a different band or a different cost
+    model are different trials, and the old signature could not tell them apart - so P10 cell B moving
+    the band from 0.25 to 0.40 re-priced every weight in the book while the ledger recorded a replay.
+    """
+    return _short_digest({"portfolio": dict(portfolio), "costs": dict(vars(cost)), "execution": execution})
+
+
+def _symbol_set_hash(symbols: Sequence[str]) -> str:
+    """WHICH symbols.  The ledger's ``symbols`` is a count, and two disjoint 146-name universes
+    were the same trial to it - which is exactly the pit/static comparison this repository runs."""
+    return _short_digest(sorted(str(symbol) for symbol in symbols))
+
+
+def _search_space_version(strategy: str, grids: str = "") -> str:
+    """For a mined id, how wide the search that produced it was.  Empty for hand-written strategies.
+
+    B2 took the default space 267 -> 514 without changing a single expression's canonical hash - the
+    property the frozen-hash regression exists to guarantee.  That stability is exactly what makes this
+    field necessary rather than redundant: the id is the same and the cost of finding it is not, so the
+    same hash validated before and after B2 is two trials at two prices.
+    """
+    if not strategy.startswith("mined_"):
+        return ""
+    return str(enumerate_candidates(**(json.loads(grids) if grids else {})).evaluated)
+
+
+def _overlay_digest(*parts: Any) -> str:
+    """Exits and throttle, when a run applied any.  Empty means "none", not "unknown"."""
+    payload = [dict(vars(part)) for part in parts if part is not None]
+    return _short_digest(payload) if payload else ""
 
 
 def _standalone_block(
@@ -1350,6 +1467,35 @@ def _evaluate_book(
     return payload, record
 
 
+def _record_trials(ledger_path: Path, records: Sequence[TrialRecord]) -> int:
+    """Append every record whose signature is not already in the ledger, reading the file once.
+
+    `_record_trial` re-parses the whole ledger per row, which is fine for the one or two a validation
+    writes and quadratic for the 514 a mine writes.  Same dedup rule, one pass.
+    """
+    if not records:
+        return 0
+    strategies = {record.strategy for record in records}
+    existing = (
+        {r.signature for r in parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), strategies)}
+        if ledger_path.exists()
+        else set()
+    )
+    fresh = []
+    for record in records:
+        if record.signature in existing:
+            continue
+        existing.add(record.signature)
+        fresh.append(record)
+    if not fresh:
+        return 0
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        for record in fresh:
+            handle.write(record.to_json() + "\n")
+    return len(fresh)
+
+
 def _record_trial(ledger_path: Path, record: TrialRecord) -> bool:
     """Append a trial unless the identical configuration on the identical data is already in the ledger."""
     existing = (
@@ -1457,7 +1603,7 @@ def research_book(
     main_entry = _entry(main_id, registry_path, "")
     sleeve_entry = _entry(sleeve_id, registry_path, sleeve_params)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
-    ledger_path = Path(out) / "trials.jsonl"
+    ledger_path = resolve_ledger_path(out=out)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([main_entry, sleeve_entry], panel)
@@ -2013,8 +2159,9 @@ def research_mine(
             }
         ),
         "not_evidence": (
-            "full-sample ranking over a search; promote a candidate only through `research validate "
-            f"--prior-trials {search.declared_trials}` on the point-in-time universe (D-013/D-020)"
+            "full-sample ranking over a search; promote a candidate only through `research validate` "
+            "on the point-in-time universe (D-013/D-020).  Every kept candidate is charged to the one "
+            "ledger by this run (DL-K2), so --prior-trials covers only trials outside it."
         ),
     }
     lines = [
@@ -2032,7 +2179,51 @@ def research_mine(
     )
     # Stamped, because `mine` was the only unstamped name here: once the payload records the flags, two
     # runs differing only in them would overwrite each other's evidence at one path.
-    path, digest = _write(out, f"mine-shortlist-{_stamp()}", payload, markdown)
+    # DL-K2: the search pays for itself.  Until now `declared_trials` was printed on the last line and
+    # carried by hand into `research validate --prior-trials` - which is how P20's 514 got there, and
+    # a number that is retyped is a number that can be mistyped, forgotten, or quietly rounded down.
+    #
+    # `search_space_version` is deliberately left empty on these rows.  A candidate examined in a
+    # 267-wide search and again in a 514-wide one is one hypothesis looked at twice, not two; stamping
+    # the width on would charge 267 + 514 for a family of 514, inflating N in the direction that looks
+    # rigorous and is simply wrong.  On a mined id's VALIDATION row it is set, because validating the
+    # same expression after the space widened really is a second, more expensive selection.
+    ledger_path = resolve_ledger_path(out=out)
+    stamp = datetime.now(UTC).isoformat()
+    run_id = f"mine-shortlist-{_stamp()}"
+    scored_by_hash = {row["hash"]: row for row in rows}
+    construction = _construction_digest(portfolio.__dict__, cost, execution)
+    symbol_hash = _symbol_set_hash(panel.symbols)
+    charged = _record_trials(
+        ledger_path,
+        [
+            TrialRecord(
+                strategy=MINED_SEARCH_STRATEGY,
+                param_key=candidate.hash,
+                sharpe_annual=scored_by_hash.get(candidate.hash, {}).get("sharpe"),
+                bars_per_year=panel.bars_per_year,
+                recorded_at=stamp,
+                range_start=str(panel.index[0]),
+                range_end=str(panel.index[-1]),
+                symbols=len(panel.symbols),
+                run_id=run_id,
+                construction_digest=construction,
+                symbol_set_hash=symbol_hash,
+            )
+            for candidate in search.candidates
+        ],
+    )
+    # `evaluated` counts expressions the enumerator looked at, including those the caps rejected before
+    # any data was touched; only the kept ones have a hash to charge.  The remainder is stated rather
+    # than absorbed, so nobody has to rediscover that the two numbers differ.
+    remainder = search.declared_trials - len(search.candidates)
+    payload["ledger"] = {
+        "path": str(ledger_path),
+        "charged": charged,
+        "candidates": len(search.candidates),
+        "declared_remainder": remainder,
+    }
+    path, digest = _write(out, run_id, payload, markdown)
     for row in scored[:top]:
         click.echo(
             f"  {row['hash']}  sharpe={row['sharpe']:6.3f}  mdd={row['max_drawdown']:7.3f}  "
@@ -2045,5 +2236,13 @@ def research_mine(
             f"{len(never_traded)} candidate(s) enumerated but never traded (zero-variance net, so no Sharpe): "
             "charged to --prior-trials, absent from the table"
         )
-    click.echo(f"declare --prior-trials {search.declared_trials} when validating any of these")
+    click.echo(
+        f"trials ledger: {ledger_path} (+{charged} of {len(search.candidates)} kept candidates; "
+        f"the rest were already in it)"
+    )
+    if remainder:
+        click.echo(
+            f"declare --prior-trials {remainder} on top: expressions the caps rejected before any data "
+            "was touched, so they have no hash to charge"
+        )
     click.echo(f"report: {path} sha256={digest}")

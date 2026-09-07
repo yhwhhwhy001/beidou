@@ -653,10 +653,53 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # daily-vol units away (TUTUSDT, 2026-09-07), 24x the 10-unit floor - which is also what makes wiring
 # the alert safe rather than a new hourly noise source.  It alerts and does not trade, the separation
 # `risk_budget` already makes.
+#
+# 2026-09-07 B3, the accounting protocol mechanised: +83 in beidou_alpha, +103 in beidou_live, +277 in
+# beidou_cli.  Three things the ledger could not do.
+#
+# DL-K1, the signature.  `(param_key, range_start, range_end, symbols)` cannot see the construction the
+# weights were built under, the overlay applied to them, WHICH symbols those were rather than how many,
+# or how wide the search a mined id came from - so P10 cell B moved the no-trade band, re-priced every
+# weight in the book, and the ledger recorded a replay.  Four optional fields, defaulting to "" so the
+# 145 archived rows still read; a legacy row never folds into a modern one, because folding would assert
+# that the old run used today's construction, and a ledger claiming knowledge it does not have is worse
+# than charging a trial twice (KILL-P5).  Extending `signature` without extending the exclusion set
+# `dsr_inputs` builds by hand silently double-charges every replay - caught by a test written for it,
+# which is the only reason it is not in the shipped code.
+#
+# DL-K1 also moved the ledger's address.  It was `Path(--out) / "trials.jsonl"`, and `--out` is a flag
+# passed for ordinary reasons, so pointing the reports at a scratch directory charged the run to a fresh
+# empty book.  Fixed now; moving it takes an environment variable whose only possible purpose is to not
+# be charged, and the test suite sets that variable autouse - the failure mode of forgetting is silent
+# and permanent, since an append-only ledger cannot have a bad row taken back out.  `backtest` and
+# `overlay` join `validate` and `book` in paying: they evaluate configurations exactly as much, and a
+# search whose exploratory arm is free is a search whose denominator is wrong in the flattering
+# direction (E-15).
+#
+# DL-K2, the search pays for itself.  Every candidate a `mine` round keeps is charged under one key, so
+# `--prior-trials 514` stops being a number retyped off a terminal - which is how P20's got there.  The
+# space version is deliberately NOT stamped on those rows: a candidate examined in a 267-wide search and
+# again in a 514-wide one is one hypothesis looked at twice, and stamping the width would charge 781 for
+# a family of 514, inflating N in the direction that looks rigorous and is wrong.
+#
+# DL-K3, the ordering.  A pre-registration written after the result is not one, and nothing checked.
+# Two orderings because there are two kinds of strategy: a hand-written one is registered by name, so
+# the earliest log commit mentioning it must predate its report; a mined one CANNOT be, since its hash
+# is derived from the search, so what must precede it is the mine that enumerated it.  Run against the
+# archive it produced nine FAILs and not one was a finding, so it carries C-P6's boundary like the rest
+# of this batch: it judges reports produced after it landed, states how many it declined to judge, and
+# never skips silently.
+#
+# One hole was found while closing the other.  `reports/research/trials.jsonl` is a RELATIVE path, so
+# fixing `--out` closed the loophole a flag opens and left the one a `cd` opens: run from
+# `beidou_alpha/` and it names a file that does not exist, so the run is charged to a fresh empty book
+# and reports `ledger_trials: 0` - KILL-Q5's exact state, reached by walking instead of typing, and the
+# harder of the two to trip over deliberately.  The address is anchored to the checkout now (a
+# worktree's `.git` is a file and still a root), which is the L1-07 fix applied one file over.
 CEILING = {
-    "beidou_alpha": 5_703,
-    "beidou_live": 4_917,
-    "beidou_cli": 3_021,
+    "beidou_alpha": 5_808,
+    "beidou_live": 5_020,
+    "beidou_cli": 3_298,
     "beidou_data": 1_375,
     "beidou_exchange": 582,
     "beidou_shared": 284,
