@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -80,3 +81,38 @@ class FakeMarketData:
             settled = series[since & (series != 0.0)]
             out[symbol] = settled.astype(float)
         return out
+
+
+# A port nothing listens on.  Set as `market_data.rest_url` so a CLI test cannot reach the public
+# internet on ANY machine.  Two tests used to fetch mainnet `exchangeInfo` for real: one asserted an
+# exit code and so was red on GitHub's runners (Binance answers them with 451) for five consecutive
+# runs while staying green locally, the other only checked for a missing word and so hid a 0.55s
+# round trip in every offline run.  With this a network call added to those paths fails everywhere.
+UNREACHABLE = "http://127.0.0.1:1"
+
+# One tradable perpetual is all those branches need; `parse_exchange_info` reads exactly these fields.
+EXCHANGE_INFO: dict[str, Any] = {
+    "symbols": [
+        {
+            "symbol": "BTCUSDT",
+            "status": "TRADING",
+            "contractType": "PERPETUAL",
+            "quoteAsset": "USDT",
+            "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": "0.10"},
+                {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
+                {"filterType": "MIN_NOTIONAL", "notional": "5"},
+            ],
+        }
+    ]
+}
+
+
+def paper_venue_from(payload: Mapping[str, Any] | None = None) -> Callable[..., Any]:
+    """A drop-in for `live_cmd._paper_venue`: the real `PaperVenue`, with only the fetch replaced."""
+    from beidou_live.paper import PaperVenue
+
+    def build(_url: str, balance: float, state_path: Any) -> Any:
+        return PaperVenue.from_exchange_info(dict(payload or EXCHANGE_INFO), balance=balance, state_path=state_path)
+
+    return build
