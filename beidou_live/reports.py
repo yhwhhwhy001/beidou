@@ -1016,6 +1016,14 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             f"{adaptation.get('limit'):.2f}; per-symbol sizing is no longer vol-scaled"
         )
     notices: list[str] = []
+    if str(budget.get("status")) == "BLIND":
+        # A criterion with no reading is not a breach and cannot be acted on in the next hour - it
+        # clears itself once the bars or fills arrive.  It is here rather than nowhere because the
+        # 2026-09-07 report said OK while M-Q08's slippage instrument had zero usable fills.
+        notices.append(
+            "risk budget BLIND: "
+            + "; ".join(f"{entry.get('metric')} ({entry.get('why')})" for entry in budget.get("unreadable") or [])
+        )
     window = payload.get("evidence_window") or {}
     if int(window.get("changes_7d") or 0) > 1:
         # the plan allowed one promotion per week and nothing ever counted them

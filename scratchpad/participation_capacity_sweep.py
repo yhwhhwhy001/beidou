@@ -6,32 +6,46 @@ is not, so this is the curve that says at what account size that identity stops 
 approximation and k has to be re-derived under an impact-aware cost model.
 
 It measures and changes nothing: ``ParticipationModel`` is an instrument, and the book it scores is
-bit-for-bit the one ``beidou research backtest`` scores (tests/alpha/test_book_guard_replay.py).
+bit-for-bit the one the loop holds.
+
+2026-09-08 audit: it used to score tsmom alone with no exit overlay, and the curve was read as the
+capacity of the shipped book.  Turnover has since roughly doubled - P13 took ``vol_target`` 0.15 -> 0.30
+and the exit overlay adds about 10% on top - and the share the cap refuses rises with target turnover,
+so the old knee sat to the right of the real one.  It now builds from the registry (main book plus the
+flow_short sleeve) and applies the profile's exits, i.e. the same four layers ``research validate``
+scores since the same audit.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from beidou_alpha.backtest import ParticipationModel, run_backtest
+from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams
-from beidou_cli.research_cmd import _entry, _load, _membership, _model, _resolve_symbols
-from beidou_live.composition import cost_model
+from beidou_alpha.panel import interval_seconds
+from beidou_cli.research_cmd import _load, _membership, _resolve_symbols
+from beidou_live.composition import build_model, cost_model, load_registry
 from beidou_shared.config import load_yaml
 
 CAPITALS = (1_000.0, 10_000.0, 100_000.0, 1_000_000.0, 10_000_000.0)
-STRATEGY = "tsmom"
 ROOT = ".beidou/data"
 INTERVAL = "1h"
 
 
 def main() -> None:
     profile = load_yaml("config/live.demo.yaml")
-    entry = _entry(STRATEGY, "config/alpha_registry.yaml", "")
+    registry = load_registry(Path("config/alpha_registry.yaml"))
     chosen = _resolve_symbols(ROOT, "", INTERVAL, "pit")
     panel = _load(ROOT, chosen, INTERVAL, None, None, True)
     membership = _membership(ROOT, "pit", panel, 0)
-    model = _model(entry, profile, INTERVAL, None)
+    model = build_model(registry, profile)
     cost = cost_model(load_yaml("config/costs.yaml"), use_funding=True)
     weights, _c, _p = model.evaluate(panel, membership)
+    bars_per_day = max(1, 86_400 // interval_seconds(INTERVAL))
+    exits = ExitParams.from_mapping({**(profile.get("exits") or {}), "bars_per_day": bars_per_day})
+    if exits.enabled:
+        weights = apply_exits(weights, panel.close, exits).weights
 
     portfolio = profile.get("portfolio", {}) or {}
     guards = BookGuardParams(
@@ -44,7 +58,9 @@ def main() -> None:
 
     baseline = run_backtest(panel, weights, cost, guards=guards)
     base = baseline.summary()["annualized_sharpe"]
-    print(f"strategy={STRATEGY}  bars={len(baseline.weights)}  max_participation={rate}  window={window}")
+    books = [f"{e.id}({e.book})" for e in model.entries]
+    print(f"book={books}  exits={'on' if exits.enabled else 'off'}  bars={len(baseline.weights)}")
+    print(f"max_participation={rate}  window={window}  turnover={baseline.summary()['turnover_units']:.1f}")
     print(f"baseline net Sharpe {base:.4f} - unchanged at every capital below, and asserted per row\n")
     print(f"{'capital (USDT)':>16} {'refused turnover':>18} {'capped bars':>13} {'share of bars':>15}")
     print("-" * 66)

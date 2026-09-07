@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from beidou_alpha.validation.multiple_testing import oos_selection_threshold, sampling_variance
+from beidou_alpha.validation.multiple_testing import SELECTION_GATE, oos_selection_threshold, sampling_variance
 from beidou_alpha.validation.verdict import VerdictThresholds, decide
 
 BPY = 8760.0
@@ -57,7 +57,9 @@ def _report(oos: float, threshold: float | None, **over: object) -> dict:
         "cost_stress": {"x2": 1.2},
     }
     if threshold is not None:
-        report["oos_selection"] = {"threshold_annual": threshold, "n_trials": 90}
+        # `gate` because a threshold without one is refused since 2026-09-08; these tests are about
+        # the comparison, so they hand `decide` the well-formed block `oos_selection_threshold` writes.
+        report["oos_selection"] = {"threshold_annual": threshold, "n_trials": 90, "gate": SELECTION_GATE}
     report.update(over)
     return report
 

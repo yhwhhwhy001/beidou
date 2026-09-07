@@ -6,3 +6,14 @@ use_actual_funding: true  # backtests charge the historical funding rate on held
 # D-034 (2026-09-04): a settlement is charged to the bar that CONTAINS it.  Until that fix the match
 # was on an exact timestamp and Binance stamps `fundingTime` 1-47 ms past the hour, so 43.7% of the
 # archive was charged as zero.  Every report produced before it under-charges funding by about half.
+
+# 2026-09-08 audit: `cost_stress` scales `turnover_bps` - fee AND slippage - by 1x/1.5x/2x, which
+# doubles a contract constant on the way to asking a question about execution.  These are the slippage
+# values the book is additionally priced at, fee held fixed at `taker_fee_bps`.  Each has a source:
+#   2.0  the model's own assumption (so this block contains its own baseline)
+#   5.5  101 filled demo orders, notional-weighted 5.52 bps, mean 5.60 (.beidou/live/trades.jsonl).
+#        Measured against the plan price - the reference L1-04 retired - so it is a sensitivity input,
+#        not a verdict; M-Q08's own ruler (`decision_close`) had no readings yet on 2026-09-08.
+#   9.2  the upper bound of that sample's 95% interval [2.01, 9.19], n=101, demo, over four days.
+# Change a number here only with the fill sample that justifies it.
+slippage_stress_bps: [2.0, 5.5, 9.2]

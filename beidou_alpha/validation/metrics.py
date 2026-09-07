@@ -23,6 +23,16 @@ def compound(returns: pd.Series | np.ndarray) -> float:
 
 
 def sharpe(returns: pd.Series | np.ndarray, bars_per_year: float, ddof: int = 1) -> float | None:
+    """mean / std * sqrt(bars_per_year).  The risk-free rate is 0 by convention, and that is a choice.
+
+    The numerator is the raw return, not an excess return.  On a USDⓈ-M perpetual book the equity sits
+    at the venue as margin, so the opportunity cost is real: at this book's ~30% annualised volatility a
+    4% rate would be worth about 0.13 of Sharpe, which is larger than several effects this repository
+    has re-run whole validations over.  It stays at 0 because every archived report and every threshold
+    in `verdict.py` was measured that way and moving it would silently reprice all of them; what it must
+    not be is unstated (2026-09-08 audit).  A report comparing against a funded benchmark has to
+    subtract the rate itself.
+    """
     values = np.asarray(returns, dtype=float)
     values = values[np.isfinite(values)]
     if values.size < 2:

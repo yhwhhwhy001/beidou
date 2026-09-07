@@ -966,10 +966,31 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the same book - in code, so the claim takes a commit that carries its proof - and the readers
 # (`evidence_window`, `realised_vol`) comparing through it.  History is never rewritten: old rows keep
 # the digest they were written with.
+# 2026-09-08, the external backtest-guard audit's remediation: +99 alpha, +60 live, +103 cli.  All of it
+# is one shape - a number that outlived the thing that produced it - and the lines are the four places
+# the identity now travels WITH the number instead of beside it in prose.
+#   cli (+103): `research validate` replays the book guards and applies the exit overlay, and records
+#     both in the report.  Every `run_backtest` call site but one ran guard-free and every one but one
+#     ran exit-free, neither of them in `validate`, so the artefact the registry cites and whose sha256
+#     the startup gate pins described the signal layer of a four-layer book.  Measured on the shipped
+#     configuration: OOS 1.7662 cited against 1.8492 held.  Also the two report blocks the same audit
+#     asked for - a slippage stress that holds the taker fee fixed, and the other execution convention
+#     priced as a comparator.
+#   alpha (+99): `oos_selection` carries the NAME of the gate that produced its threshold and `decide`
+#     refuses one it cannot name (KILL-Q3 replaced E[max] with the quantile three hours after the cited
+#     report was written, and the stored 1.1446 is the retired gate's answer against today's 1.4684);
+#     `construction_problems` compares the two overlay blocks; `slippage_levels` / `slippage_stress`;
+#     and two conventions that were correct and unwritten - `sharpe`'s zero risk-free rate and the half
+#     of "conservative" that `open_to_close` does not earn.
+#   live (+60): `risk_budget_status` reports BLIND rather than OK when a criterion has no reading (the
+#     2026-09-07 daily report said OK while M-Q08's slippage instrument had zero usable fills), the
+#     ladder's drawdown carries the share of equity that is collateral rather than the book, and
+#     `live_overlay_blocks` hands the gate the loop's own guards and exits.
+# The ratchet caught all three, which is it working: none of this was budgeted for.
 CEILING = {
-    "beidou_alpha": 5_947,
-    "beidou_live": 5_805,
-    "beidou_cli": 3_447,
+    "beidou_alpha": 6_046,
+    "beidou_live": 5_865,
+    "beidou_cli": 3_550,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,

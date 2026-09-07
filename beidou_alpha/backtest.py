@@ -3,9 +3,19 @@
 Weights are decided at bar ``t`` from information through bar ``t`` and
 executed at bar ``t+1``.  Two return conventions:
 
-* ``open_to_close`` (default, conservative, matches the frozen August 2026
-  baseline): PnL_{t+1} = w_t * (close_{t+1} / open_{t+1} - 1).  The gap from
-  close_t to open_{t+1} is excluded symmetrically for strategy and benchmark.
+* ``open_to_close`` (default, matches the frozen August 2026 baseline):
+  PnL_{t+1} = w_t * (close_{t+1} / open_{t+1} - 1).  The gap from close_t to
+  open_{t+1} is excluded symmetrically for strategy and benchmark.  This is
+  conservative about the entry price - a fill at the next open is later, and
+  therefore harder to get, than the close the decision was made on - and it is
+  **not about the holding return**, where the same exclusion silently drops a
+  real component of a position held across the boundary.  Measured on the
+  point-in-time book (2026-09-08 audit): the gap carries 2.36% of total
+  absolute price movement, and re-earning it by scoring the same weights
+  ``close_to_close`` moves OOS Sharpe by -0.029, so what is dropped is mildly
+  ADVERSE to this book rather than in its favour.  ``validate`` prices both
+  conventions and records the comparison; the default is kept for continuity,
+  not because the omission is free.
 * ``close_to_close``: PnL_{t+1} = w_t * (close_{t+1} / close_t - 1), i.e. fills
   at the decision close.
 

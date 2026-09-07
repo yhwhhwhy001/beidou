@@ -157,25 +157,58 @@ CONSTRUCTION_KEYS: tuple[str, ...] = (
 )
 
 
+OVERLAY_BLOCKS: tuple[str, ...] = ("book_guards", "exits")
+
+
 def construction_problems(
-    entry: StrategyEntry, report: Mapping[str, Any], live_portfolio: Mapping[str, Any] | None
+    entry: StrategyEntry,
+    report: Mapping[str, Any],
+    live_portfolio: Mapping[str, Any] | None,
+    live_overlays: Mapping[str, Mapping[str, Any] | None] | None = None,
 ) -> list[str]:
-    """The numbers in a strategy's evidence were produced by a portfolio construction; that must match too.
+    """The numbers in a strategy's evidence were produced by a construction; all of it must match.
 
     Adopting P10 cell B made the gap concrete: the live relative band moved 0.25 -> 0.40 while tsmom's
     cited report had been validated at 0.25, and the gate could not see it because it compares signal
     parameters only.  A report written before ``validate`` recorded its construction carries no
     ``portfolio`` block; those are skipped rather than refused, since otherwise nothing in flight today
     could start.  From the first report that carries the block, a silent divergence is refused.
+
+    ``live_overlays`` extends the same contract to the two layers the loop applies after the model
+    (2026-09-08 audit): the book guards and the exit overlay.  Until ``validate`` learned to replay
+    them, the cited evidence scored a book without either while the loop traded both, and the gate had
+    nothing to compare.  Absent blocks are skipped for the same reason as above; a block recorded as
+    ``None`` is NOT absent - it says the run applied no such layer, and if the loop applies one that is
+    the divergence this exists to catch.
     """
+    problems: list[str] = []
     recorded = report.get("portfolio")
-    if not isinstance(recorded, Mapping) or not recorded or live_portfolio is None:
-        return []
-    return [
-        f"{entry.id}: portfolio {key} is {live_portfolio.get(key)!r} live but {recorded.get(key)!r} in the cited evidence"
-        for key in CONSTRUCTION_KEYS
-        if key in recorded and not _same_param(live_portfolio.get(key), recorded.get(key))
-    ]
+    if isinstance(recorded, Mapping) and recorded and live_portfolio is not None:
+        problems += [
+            f"{entry.id}: portfolio {key} is {live_portfolio.get(key)!r} live "
+            f"but {recorded.get(key)!r} in the cited evidence"
+            for key in CONSTRUCTION_KEYS
+            if key in recorded and not _same_param(live_portfolio.get(key), recorded.get(key))
+        ]
+    for block in OVERLAY_BLOCKS:
+        if live_overlays is None or block not in report:
+            continue
+        live, cited = live_overlays.get(block), report[block]
+        if not isinstance(cited, Mapping) or not cited:
+            if live:
+                problems.append(
+                    f"{entry.id}: the cited evidence applied none, but the loop runs {block} {dict(live)!r}"
+                )
+            continue
+        if not live:
+            problems.append(f"{entry.id}: the cited evidence applied {block} {dict(cited)!r}, but the loop runs none")
+            continue
+        problems += [
+            f"{entry.id}: {block} {key} is {live.get(key)!r} live but {cited.get(key)!r} in the cited evidence"
+            for key in sorted(cited)
+            if not _same_param(live.get(key), cited.get(key))
+        ]
+    return problems
 
 
 def evidence_params(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -218,6 +251,7 @@ def evidence_problems(
     book_fraction: float | None = None,
     canonical_params: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
     live_portfolio: Mapping[str, Any] | None = None,
+    live_overlays: Mapping[str, Mapping[str, Any] | None] | None = None,
 ) -> list[str]:
     """KILL-015: an enabled strategy must cite a validation report that exists and matches its digest.
 
@@ -246,7 +280,7 @@ def evidence_problems(
         report = read_report(path)
         if canonical_params is not None:
             problems.extend(param_problems(entry, report, canonical_params))
-        problems.extend(construction_problems(entry, report, live_portfolio))
+        problems.extend(construction_problems(entry, report, live_portfolio, live_overlays))
     return problems
 
 

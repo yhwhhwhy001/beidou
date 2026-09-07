@@ -52,7 +52,13 @@ from beidou_alpha.validation.metrics import (
     yearly_breakdown,
 )
 from beidou_alpha.validation.multiple_testing import multiple_testing_report, oos_selection_threshold
-from beidou_alpha.validation.stability import cost_stress, parameter_neighborhood, time_split_sharpes
+from beidou_alpha.validation.stability import (
+    cost_stress,
+    parameter_neighborhood,
+    slippage_levels,
+    slippage_stress,
+    time_split_sharpes,
+)
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_evaluate, walk_forward_folds
 from beidou_cli import research
@@ -350,15 +356,7 @@ def research_backtest(
     # The guards are part of the construction the loop runs, not an extra: they are provably inert
     # wherever neither binds (`tests/alpha/test_book_guard_replay.py`), so leaving them on keeps a
     # report describing the book that would actually be held.  `--no-guards` reproduces older reports.
-    book_guards = (
-        BookGuardParams(
-            max_weight=float((profile_payload.get("portfolio", {}) or {}).get("max_weight", 0.15)),
-            max_gross=float((profile_payload.get("portfolio", {}) or {}).get("max_gross", 2.0)),
-            daily_loss_pause=float((profile_payload.get("guards", {}) or {}).get("daily_loss_pause", -0.05)),
-        )
-        if guards
-        else None
-    )
+    book_guards = _book_guards(profile_payload, guards)
     result = run_backtest(panel, weights, cost, execution=execution, guards=book_guards)  # type: ignore[arg-type]
     summary = result.summary()
     bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
@@ -457,6 +455,33 @@ def _echo_summary(summary: dict[str, Any], benchmark: dict[str, Any] | None = No
         click.echo(f"benchmark: gross={benchmark['gross_return']:.4f} sharpe={_fmt(benchmark['sharpe'])}")
 
 
+def _book_guards(profile: Mapping[str, Any], enabled: bool) -> BookGuardParams | None:
+    """The two book-level guards the loop applies after the model (D-004), read off the same profile."""
+    portfolio = profile.get("portfolio", {}) or {}
+    return (
+        BookGuardParams(
+            max_weight=float(portfolio.get("max_weight", 0.15)),
+            max_gross=float(portfolio.get("max_gross", 2.0)),
+            daily_loss_pause=float((profile.get("guards", {}) or {}).get("daily_loss_pause", -0.05)),
+        )
+        if enabled
+        else None
+    )
+
+
+def _exit_params(profile: Mapping[str, Any], enabled: bool, interval: str) -> ExitParams | None:
+    """The exit overlay the loop applies per symbol (D-012); ``None`` when off or when the profile disables it."""
+    if not enabled:
+        return None
+    bars_per_day = max(1, 86_400 // interval_seconds(interval))
+    params = ExitParams.from_mapping({**(profile.get("exits", {}) or {}), "bars_per_day": bars_per_day})
+    return params if params.enabled else None
+
+
+def _overlaid(weights: pd.DataFrame, close: pd.DataFrame, exits: ExitParams | None) -> pd.DataFrame:
+    return weights if exits is None else apply_exits(weights, close, exits).weights
+
+
 def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str, Any]]:
     grid = json.loads(grid_json) if grid_json else DEFAULT_GRIDS.get(strategy, {})
     if not grid:
@@ -487,6 +512,18 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     show_default=True,
     help="reserve the last N months (KILL-006), cut before folds; unused by choice, see docs/RESEARCH_LOG.md",
 )
+@click.option(
+    "--guards/--no-guards",
+    default=True,
+    show_default=True,
+    help="replay the book-level guards the live loop applies (gross cap + daily-loss pause)",
+)
+@click.option(
+    "--exits/--no-exits",
+    default=True,
+    show_default=True,
+    help="apply the profile's exit overlay, as the live loop does (D-012)",
+)
 def research_validate(
     strategy: str,
     params: str,
@@ -512,6 +549,8 @@ def research_validate(
     prior_trials: int,
     holdout_months: int,
     grids: str,
+    guards: bool,
+    exits: bool,
 ) -> None:
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
@@ -546,15 +585,21 @@ def research_validate(
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
     _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
     bpy = panel.bars_per_year
+    # The two layers the loop applies after the model, replayed here so the evidence describes the book
+    # that trades (2026-09-08 audit).  `--no-guards --no-exits` reproduces every report written before.
+    book_guards = _book_guards(profile_payload, guards)
+    exit_params = _exit_params(profile_payload, exits, interval)
     nets: dict[str, pd.Series] = {}
     params_by_key: dict[str, dict[str, Any]] = {}
     results: dict[str, BacktestResult] = {}
+    decisions: dict[str, pd.DataFrame] = {}  # post-overlay decision weights, so the re-runs below layer once
     click.echo(f"evaluating {len(combos)} parameter sets on {len(panel.symbols)} symbols x {len(panel.index)} bars")
     for combo in combos:
         key = param_key(combo)
         model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel, membership)
-        result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]
+        decisions[key] = _overlaid(weights, panel.close, exit_params)
+        result = run_backtest(panel, decisions[key], cost, execution=execution, guards=book_guards)  # type: ignore[arg-type]
         results[key] = result
         nets[key] = result.portfolio_net
         params_by_key[key] = combo
@@ -601,7 +646,10 @@ def research_validate(
         # double charging.
         current_context=(
             _construction_digest(_run_portfolio, cost, execution),
-            "",
+            # The overlay slot used to be a hardcoded "" because `validate` applied no overlays.  It does
+            # now, so the exclusion has to name the same stack the ledger rows are written with - a
+            # signature that does not match its own rows excludes nothing and charges the run twice.
+            _overlay_digest(book_guards, exit_params),
             _symbol_set_hash(panel.symbols),
             _search_space_version(strategy, grids),
         ),
@@ -619,24 +667,54 @@ def research_validate(
     def evaluate_params(candidate: Mapping[str, Any]) -> float | None:
         model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel, membership)
-        return sharpe(run_backtest(panel, weights, cost, execution=execution).portfolio_net, bpy)  # type: ignore[arg-type]
+        overlaid = _overlaid(weights, panel.close, exit_params)
+        net = run_backtest(panel, overlaid, cost, execution=execution, guards=book_guards).portfolio_net  # type: ignore[arg-type]
+        return sharpe(net, bpy)
 
     neighbourhood = parameter_neighborhood(
         evaluate_params, params_by_key[best_key], numeric_keys=tuple(sorted(DEFAULT_GRIDS.get(strategy, {})))
     )
-    best_weights = results[best_key].weights
+    # `decisions[best_key]`, not `results[best_key].weights.shift(-1)`: the executed frame is post-guard,
+    # so inverting it would re-price a book the guards had already trimmed and then trim it again.
+    best_weights = decisions[best_key]
     stress = cost_stress(
         {
             multiplier: run_backtest(
                 panel,
-                best_weights.shift(-1).reindex(panel.close.index),
+                best_weights,
                 CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
                 execution=execution,  # type: ignore[arg-type]
+                guards=book_guards,
             ).portfolio_net
             for multiplier in (1.0, 1.5, 2.0)
         },
         bpy,
     )
+    costs_payload = load_yaml(costs_path)
+    fee_bps = float(costs_payload.get("taker_fee_bps", 5.0))
+    levels = slippage_levels(
+        taker_fee_bps=fee_bps, levels=[float(v) for v in costs_payload.get("slippage_stress_bps", []) or []]
+    )
+    slippage = slippage_stress(
+        {
+            level: run_backtest(
+                panel,
+                best_weights,
+                CostModel(total, cost.carry_bps_per_bar, cost.use_funding),
+                execution=execution,  # type: ignore[arg-type]
+                guards=book_guards,
+            ).portfolio_net
+            for level, total in levels.items()
+        },
+        bpy,
+    )
+    # The convention the default drops: `open_to_close` never earns close_t -> open_{t+1}, and the loop
+    # holds through every one of those.  Measured on the pit book it is worth -0.029 OOS Sharpe, i.e. the
+    # dropped component is mildly ADVERSE to this book, so "conservative" is true of the entry price and
+    # not of the holding return.  Priced here as a comparator rather than adopted (adopting it would
+    # break comparability with every report back to the August 2026 baseline).
+    other_execution = "close_to_close" if execution == "open_to_close" else "open_to_close"
+    comparison = run_backtest(panel, best_weights, cost, execution=other_execution, guards=book_guards).summary()  # type: ignore[arg-type]
     report: dict[str, Any] = {
         "kind": "validation",
         "strategy": strategy,
@@ -655,6 +733,11 @@ def research_validate(
         # one.  Without this a band or half-life change in the profile silently detaches the live book from its
         # cited evidence, and the startup gate cannot see it because it compares signal params only.
         "portfolio": _run_portfolio,
+        # ...and by the two layers applied after it.  `null` is a statement ("this run applied none"), not an
+        # absence: `registry.construction_problems` refuses a null here against a loop that runs the layer,
+        # and skips a report that carries no key at all.
+        "book_guards": None if book_guards is None else dict(vars(book_guards)),
+        "exits": None if exit_params is None else dict(vars(exit_params)),
         # The data this verdict was computed from.  Everything else here already names itself - the report
         # has a digest, the registry a fingerprint, the construction another - but the dataset did not, and
         # on 2026-09-04 the membership table was rebuilt monthly -> daily while the profile still described
@@ -689,6 +772,10 @@ def research_validate(
             "parameter_neighborhood": neighbourhood,
         },
         "cost_stress": stress,
+        # The fee is a contract constant and the slippage assumption is the half the loop measures, so
+        # this varies only the second one at declared levels (`costs.yaml: slippage_stress_bps`).
+        "slippage_stress": slippage,
+        "execution_comparison": {"execution": other_execution, **comparison},
         "generated_at": datetime.now(UTC).isoformat(),
     }
     verdict, reasons = decide(report)
@@ -701,6 +788,10 @@ def research_validate(
             (
                 "Holdout (KILL-006)",
                 holdout or {"months": 0, "note": "no tail reserved: every bar was available to this run"},
+            ),
+            (
+                "Book guards / exits (the layers the loop applies)",
+                {"guards": report["book_guards"], "exits": report["exits"]},
             ),
             ("Best params (full sample)", params_by_key[best_key]),
             ("Full sample", report["full_sample"]),
@@ -727,6 +818,8 @@ def research_validate(
             ),
             ("Grid (full-sample Sharpe per configuration)", _grid_table(params_by_key, full_sharpes_raw)),
             ("Cost stress (Sharpe)", stress),
+            ("Slippage stress (Sharpe; fee fixed)", slippage),
+            (f"Same book under {other_execution}", {"annualized_sharpe": comparison["annualized_sharpe"]}),
             ("Verdict", {"verdict": verdict, "reasons": reasons or ["-"]}),
         ],
     )
@@ -748,6 +841,9 @@ def research_validate(
                     construction_digest=_construction_digest(_run_portfolio, cost, execution),
                     symbol_set_hash=_symbol_set_hash(panel.symbols),
                     search_space_version=_search_space_version(strategy, grids),
+                    # D-024: the same params under a different overlay stack are a different trial, not a
+                    # replay.  Without this a `--no-guards` re-run would dedupe onto the guarded row.
+                    overlay_digest=_overlay_digest(book_guards, exit_params),
                 ).to_json()
                 + "\n"
             )
