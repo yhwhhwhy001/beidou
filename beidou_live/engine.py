@@ -1152,6 +1152,30 @@ def liquidation_alert(view: Mapping[str, Any], *, threshold: float) -> str | Non
     )
 
 
+def metrics_refusal(*, needs_metrics: Sequence[str], live_coverage_bars: int, required_bars: int) -> str | None:
+    """KILL-027, made structural: a metrics signal may not trade on data live cannot see.
+
+    Research eats the T+1 daily metrics archive; live can only read the 30-day REST window.  Ingesting
+    the archive and letting a strategy use it is the purest form of "research panel strictly larger
+    than the live panel" - the defect P1-01 closed for the cross-sectional operators and KILL-027 named
+    in general - and it would arrive silently, as a signal that backtests well and trades on nothing.
+
+    So the ingestion ships with its own refusal: a strategy that declares it needs metrics does not
+    start until the LIVE source can answer for the history it needs.  Costs nothing to any strategy
+    shipping today, because none of them declare it.
+    """
+    if not needs_metrics:
+        return None
+    if live_coverage_bars >= required_bars:
+        return None
+    return (
+        f"{', '.join(sorted(needs_metrics))} need metrics, and the live metrics source covers "
+        f"{live_coverage_bars} of the {required_bars} bars they require; research reads the T+1 archive "
+        "and live cannot, so trading this would be a research panel the live loop does not have "
+        "(KILL-027)"
+    )
+
+
 def margin_mode_refusal(mode: Mapping[str, Any], *, expect_multi_assets: bool, symbols: Sequence[str]) -> str | None:
     """KILL-R19 at startup: the reason to refuse this account, or ``None`` to proceed.
 

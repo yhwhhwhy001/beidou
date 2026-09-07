@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -14,6 +15,7 @@ import pandas as pd
 from beidou_cli import data
 from beidou_data.archive import ArchiveClient, Month
 from beidou_data.binance_public import AsyncPublicClient, PublicClient
+from beidou_data.metrics_archive import MetricsArchiveClient, sync_metrics
 from beidou_data.pool import (
     MEMBERSHIP_FILE,
     LivePool,
@@ -22,7 +24,7 @@ from beidou_data.pool import (
     point_in_time_membership,
     sync_daily,
 )
-from beidou_data.store import FundingStore, KlineStore
+from beidou_data.store import FundingStore, KlineStore, MetricsStore
 from beidou_data.sync import sync_funding, sync_klines
 from beidou_data.universe import UniverseConfig, eligible_symbols
 from beidou_live.composition import read_universe, write_universe
@@ -92,6 +94,39 @@ def data_sync(
     # on 2026-09-04 it held PUMPUSDT from a manual sync while the loop traded CYSUSDT from its own
     # daily refresh, and research reads this file as "the universe".  One writer, one ranking rule.
     click.echo("selection unchanged: `beidou data pool refresh` re-ranks and writes universe.json (D-014)")
+
+
+@data.command("metrics")
+@click.option("--root", default=".beidou/data", show_default=True, help="parquet store root")
+@click.option("--symbols", required=True, help="comma-separated symbols to ingest")
+@click.option("--from", "start", required=True, help="first day YYYY-MM-DD")
+@click.option("--to", "end", required=True, help="last day YYYY-MM-DD, exclusive")
+def data_metrics(root: str, symbols: str, start: str, end: str) -> None:
+    """Ingest the daily futures-metrics archive (DL-D2), resuming from what the store already holds.
+
+    Research-side only, and deliberately so: live can read metrics from the 30-day REST window and
+    nothing else, so a strategy that declares `needs_metrics` is refused at startup until a live
+    source can answer for it (`metrics_refusal`).  Ingesting without that gate would be KILL-027 in
+    its purest form - a research panel strictly larger than the live one, arriving silently.
+
+    Measured 2026-09-07: 0.69s per symbol-day, so 20 symbols x 1 year is about 1.4 hours and 45 pool
+    symbols over the whole point-in-time range about 17.7 hours - well inside the plan's 3-day limit,
+    so the contingency of narrowing to 45 symbols is not needed.
+    """
+    wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    store = MetricsStore(root)
+    before = {s: store.last_open_time(s) for s in wanted}
+    with MetricsArchiveClient() as client:
+        totals = sync_metrics(client, store, wanted, start=start, end=end)
+    for symbol in wanted:
+        after = store.last_open_time(symbol)
+        rows = totals.get(symbol)
+        if after is None:
+            click.echo(f"{symbol}: nothing stored (the archive published no day in [{start}, {end}))")
+            continue
+        stamp = datetime.fromtimestamp(after / 1000, tz=UTC).isoformat()
+        moved = "unchanged" if before[symbol] == after else f"advanced to {stamp}"
+        click.echo(f"{symbol}: {rows if rows is not None else store.load(symbol).shape[0]} rows stored, {moved}")
 
 
 @data.command("status")

@@ -796,11 +796,30 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # missing half - the same shape as the foreign-POSITIONS clause fixed hours earlier, and found
 # the same way.  A resting order the loop did not place is either the operator's or the leftover
 # of something that crashed, and both are better heard at startup than discovered in a fill.
+#
+# 2026-09-07 DL-D2, the research half of the metrics ingestion: +~250 beidou_data, +~25 live,
+# +~35 cli.  The order is the evidence's, not a preference - the entry probe found that the daily
+# archive and the REST window carry the SAME numbers under DIFFERENT stamps (archive create_time
+# == rest timestamp - 5min, 166/166 exact at that offset and 0/165 at any other), so a join on
+# equal timestamps is a five-minute look-ahead in 100% of buckets, always favourable.  Hence
+# `beidou_data/metrics.py` before any downloader: ONE canonical stamp, and the look-ahead made
+# unrepresentable by deciding what a bar may read from the bucket's CLOSE.
+#
+# Which stamp is which was measured too, because guessing there would be the same mistake one
+# level down: re-reading the three newest REST buckets six minutes apart returned byte-identical
+# values, so the newest row is COMPLETE and its stamp is the close.  No partial-bucket hazard.
+#
+# The gate is why the ingestion is safe rather than a hazard.  Research eats the T+1 archive and
+# live can read only the 30-day REST window, so ingesting and letting a signal use it is KILL-027
+# in its purest form - a research panel strictly larger than the live one, arriving silently as a
+# strategy that backtests well and trades on nothing.  `metrics_refusal` refuses to start any
+# strategy declaring `needs_metrics` until a LIVE source covers the bars it needs.  It costs
+# nothing to everything shipping today, because nothing shipping today declares it.
 CEILING = {
     "beidou_alpha": 5_808,
-    "beidou_live": 5_276,
-    "beidou_cli": 3_406,
-    "beidou_data": 1_375,
+    "beidou_live": 5_300,
+    "beidou_cli": 3_441,
+    "beidou_data": 1_695,
     "beidou_exchange": 603,
     "beidou_shared": 284,
 }

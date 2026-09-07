@@ -145,6 +145,55 @@ class FundingStore:
         return int(column.max()) if len(column) else None
 
 
+class MetricsStore:
+    """Binance futures metrics per symbol, in the ONE stamp `beidou_data.metrics` defines (DL-D2).
+
+    Same shape as ``FundingStore`` deliberately: one parquet per symbol, append-and-dedupe, total rows
+    returned.  The column that matters is ``open_time`` - never ``create_time`` and never a REST
+    ``timestamp`` - because two names for one instant is how the five-minute look-ahead got in.
+    """
+
+    def __init__(self, root: str | Path = ".beidou/data") -> None:
+        self._root = Path(root)
+
+    @property
+    def directory(self) -> Path:
+        return self._root / "metrics"
+
+    def path(self, symbol: str) -> Path:
+        return self.directory / f"{symbol}.parquet"
+
+    def symbols(self) -> list[str]:
+        if not self.directory.exists():
+            return []
+        return sorted(p.stem for p in self.directory.glob("*.parquet"))
+
+    def append(self, symbol: str, frame: pd.DataFrame) -> int:
+        """Merge new rows (dedupe on open_time, keep last, sorted).  Returns total rows stored."""
+        path = self.path(symbol)
+        incoming = frame if not frame.empty else pd.DataFrame(columns=["open_time", "symbol"])
+        merged = pd.concat([pd.read_parquet(path), incoming], ignore_index=True) if path.exists() else incoming
+        merged = merged.drop_duplicates("open_time", keep="last").sort_values("open_time").reset_index(drop=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".parquet.tmp")
+        merged.to_parquet(tmp, index=False)
+        tmp.replace(path)
+        return len(merged)
+
+    def load(self, symbol: str) -> pd.DataFrame:
+        path = self.path(symbol)
+        if not path.exists():
+            return pd.DataFrame(columns=["open_time", "symbol"])
+        return pd.read_parquet(path)
+
+    def last_open_time(self, symbol: str) -> int | None:
+        path = self.path(symbol)
+        if not path.exists():
+            return None
+        column = pd.read_parquet(path, columns=["open_time"])["open_time"]
+        return int(column.max()) if len(column) else None
+
+
 def bar_freq(bar_index: pd.DatetimeIndex) -> str:
     """The grid a bar index defines, as a pandas offset alias.  Gaps are whole multiples, so the smallest gap is it."""
     if len(bar_index) < 2:
