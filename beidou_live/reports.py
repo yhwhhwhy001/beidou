@@ -851,7 +851,7 @@ def daily_payload(
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
-        "data_coverage": data_coverage(store),
+        "data_coverage": data_coverage(store, root=data_root),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),

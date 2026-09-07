@@ -349,3 +349,53 @@ def test_effort_share_counts_a_test_with_the_thing_it_tests() -> None:
     assert effort_share({"tests/alpha/test_x.py": 10})["alpha_share"] == 1.0
     assert effort_share({"tests/live/test_x.py": 10})["alpha_share"] == 0.0
     assert effort_share({})["alpha_share"] is None
+
+
+def _archive(root: Path, *symbols: str, interval: str = "1h") -> Path:
+    """A klines archive holding `symbols`.  `KlineStore.symbols` only globs, so empty files suffice."""
+    (root / "klines").mkdir(parents=True, exist_ok=True)  # an archive with no symbols is still an archive
+    for symbol in symbols:
+        (root / "klines" / symbol).mkdir(parents=True, exist_ok=True)
+        (root / "klines" / symbol / f"{interval}.parquet").write_bytes(b"")
+    return root
+
+
+def _store_trading(tmp_path: Path, *symbols: str) -> StateStore:
+    store = StateStore(tmp_path / "live")
+    state = store.load()
+    state.universe = list(symbols)
+    store.save(state)
+    return store
+
+
+def test_data_coverage_reads_the_data_root_the_report_was_given(tmp_path: Path, monkeypatch) -> None:
+    """`data_coverage` exists to name a symbol trading live with no research klines behind it (CYSUSDT,
+    sixteen hours).  It resolved `.beidou/data` against the process's cwd rather than `--data-root`, so
+    run from anywhere but the repo root it answered about an archive nobody was trading against.
+
+    Both directions are pinned, because the failure is silent in each: the wrong root invents missing
+    symbols, and - as this test arranges - it can equally well clear a symbol that is genuinely absent
+    from the archive actually in use.
+    """
+    cwd = tmp_path / "cwd"
+    _archive(cwd / ".beidou" / "data", "AAAUSDT")  # the default the old call resolved to
+    monkeypatch.chdir(cwd)
+    payload = daily_payload(
+        _store_trading(tmp_path, "AAAUSDT"), _day_of_bar(BASE), data_root=_archive(tmp_path / "elsewhere")
+    )
+    assert payload["data_coverage"]["missing_klines"] == ["AAAUSDT"]
+    assert payload["data_coverage"]["missing_count"] == 1
+
+
+def test_data_coverage_does_not_flag_a_symbol_present_under_the_given_data_root(tmp_path: Path, monkeypatch) -> None:
+    """The companion direction: the archive named by `--data-root` holds the symbol, so nothing is missing."""
+    cwd = tmp_path / "cwd"
+    _archive(cwd / ".beidou" / "data")  # the cwd default is empty; only the passed root has the klines
+    monkeypatch.chdir(cwd)
+    payload = daily_payload(
+        _store_trading(tmp_path, "AAAUSDT"),
+        _day_of_bar(BASE),
+        data_root=_archive(tmp_path / "archive", "AAAUSDT"),
+    )
+    assert payload["data_coverage"]["missing_klines"] == []
+    assert payload["data_coverage"]["live_symbols"] == 1

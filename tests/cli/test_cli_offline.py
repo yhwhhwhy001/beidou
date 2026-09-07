@@ -15,6 +15,7 @@ from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_cli import main
 from beidou_cli.research_cmd import _resolve_mined
 from beidou_data.store import FundingStore, KlineStore
+from beidou_live.state import StateStore
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
 
@@ -1387,3 +1388,50 @@ def test_a_mined_id_resolves_under_the_grids_it_was_mined_at(tmp_path: Path, aug
     assert gone.exit_code == 1 and f"no candidate hashes to {outside[0].hash}" in gone.output, gone.output
     result = runner.invoke(main, [*args, "--grids", grids])
     assert result.exit_code == 0, result.output
+
+
+def test_report_daily_asks_about_the_archive_its_data_root_names(tmp_path: Path) -> None:
+    """`--data-root` has to reach `data_coverage`, and only the CLI can prove it does.
+
+    The daily report resolved the klines archive against the process's cwd instead of the root it was
+    given, so run from anywhere but the repo root - a worktree, say - it named every live symbol as
+    having no research data behind it.  That is the one instrument built to catch a symbol trading
+    unseen by research (CYSUSDT, sixteen hours), and a unit test of `daily_payload` cannot see the
+    break: the parameter existed and the call site simply never passed it.
+    """
+    store = StateStore(tmp_path / "live")
+    state = store.load()
+    state.universe = ["AAAUSDT"]
+    store.save(state)
+    (tmp_path / "registry.yaml").write_text("strategies: []\n", encoding="utf-8")
+    (tmp_path / "profile.yaml").write_text(
+        f"paths:\n  state_dir: {tmp_path / 'live'}\n  reports_dir: {tmp_path / 'reports'}\n"
+        f"registry: {tmp_path / 'registry.yaml'}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "empty_archive" / "klines").mkdir(parents=True)
+    args = [
+        "report",
+        "daily",
+        "--profile",
+        str(tmp_path / "profile.yaml"),
+        "--date",
+        "2026-09-07",
+        "--out",
+        str(tmp_path / "out"),
+    ]
+
+    result = CliRunner().invoke(main, [*args, "--data-root", str(tmp_path / "empty_archive")])
+    assert result.exit_code == 0, result.output
+    coverage = json.loads((tmp_path / "out" / "2026-09-07.json").read_text(encoding="utf-8"))["data_coverage"]
+    assert coverage["missing_klines"] == ["AAAUSDT"], "the empty archive --data-root names holds nothing"
+
+    # The control half: the same run against an archive that does hold the symbol.  Without it, the
+    # assertion above is equally satisfied by a report that reads no archive at all.
+    stocked = tmp_path / "stocked_archive" / "klines" / "AAAUSDT"
+    stocked.mkdir(parents=True)
+    (stocked / "1h.parquet").write_bytes(b"")
+    result = CliRunner().invoke(main, [*args, "--data-root", str(tmp_path / "stocked_archive")])
+    assert result.exit_code == 0, result.output
+    coverage = json.loads((tmp_path / "out" / "2026-09-07.json").read_text(encoding="utf-8"))["data_coverage"]
+    assert coverage["missing_klines"] == []
