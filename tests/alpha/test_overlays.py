@@ -151,3 +151,46 @@ def test_unit_mode_current_measures_distance_in_this_bars_sigma() -> None:
     assert len(current.events) == 1 and current.events.iloc[0]["rule"] == STOP_LOSS  # 3 / (0.01 * 100) = 3 units
     assert current.events.iloc[0]["units"] <= -2.0  # reported in the unit that fired, not the entry unit
     assert current.weights["A"].iloc[3] == 0.0
+
+
+def test_efficiency_ratio_is_one_on_a_straight_line_and_near_zero_on_a_zigzag() -> None:
+    from beidou_alpha.overlays.exits import efficiency_ratio
+
+    index = pd.date_range("2024-01-01", periods=40, freq="h", tz="UTC")
+    line = pd.DataFrame({"A": [100.0 * 1.01**k for k in range(40)]}, index=index)
+    zigzag = pd.DataFrame({"A": [100.0 if k % 2 == 0 else 101.0 for k in range(40)]}, index=index)
+    assert efficiency_ratio(line, 10)["A"].iloc[-1] == pytest.approx(1.0)
+    assert efficiency_ratio(zigzag, 10)["A"].iloc[-1] < 0.05
+    assert efficiency_ratio(line, 10)["A"].iloc[:10].isna().all()  # warmup
+
+
+def test_regime_tp_scale_tightens_only_inside_the_chosen_regime_and_is_off_by_default() -> None:
+    from beidou_alpha.overlays.exits import regime_tp_scale
+
+    index = pd.date_range("2024-01-01", periods=40, freq="h", tz="UTC")
+    zigzag = pd.DataFrame({"A": [100.0 if k % 2 == 0 else 101.0 for k in range(40)]}, index=index)
+    assert regime_tp_scale(zigzag, ExitParams(take_profit=6.0)) is None
+    low = regime_tp_scale(
+        zigzag,
+        ExitParams(take_profit=6.0, regime_window=10, regime_er_cut=0.05, regime_tp_scale=0.5, regime_side="low"),
+    )
+    high = regime_tp_scale(
+        zigzag,
+        ExitParams(take_profit=6.0, regime_window=10, regime_er_cut=0.05, regime_tp_scale=0.5, regime_side="high"),
+    )
+    assert low["A"].iloc[-1] == 0.5 and high["A"].iloc[-1] == 1.0
+    assert low["A"].iloc[:10].eq(1.0).all()  # warmup bars scale nothing
+    with pytest.raises(ValueError):
+        ExitParams(regime_window=10, regime_side="sideways")
+
+
+def test_tp_scale_halves_the_take_profit_distance() -> None:
+    """A +4-unit move: no take-profit at 6 units, take-profit once the regime scales 6 to 3."""
+    path = [100.0, 102.0, 104.0, 106.0, 108.0, 108.0]  # sigma 0.02 -> one unit is 2 points
+    state = ExitState()
+    params = ExitParams(take_profit=6.0)
+    for t, price in enumerate(path[:5]):
+        state, _, reason = exit_step(state, 0.1, price, 0.02, t, params)
+        assert reason == ""
+    _, w, reason = exit_step(state, 0.1, 108.0, 0.02, 5, params, tp_scale=0.5)
+    assert reason == TAKE_PROFIT and w == 0.0
