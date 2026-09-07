@@ -32,6 +32,14 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 
 重启是幂等的（clientOrderId 按 bar 派生，先查后下）。重启后看 `.beidou/live/heartbeat.json` 的 `phase`、`universe_size`、`leverage`。
 
+### 采纳退出层 / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
+
+M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何退出层或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：P13 阶梯触发（回撤 −35% / −50%），那是预登记的降档，不是采纳。
+
+窗口起点**不写在这里**：它随每一次构造变更移动，写死在正文里的日期只会过期（这一段最初写的 2026-09-06T10:19Z / 最早采纳日 2026-10-06 就是如此，`unit_mode` 进指纹后一次重启即作废）。要当前答案，读这两处之一——`beidou report daily` 的 evidence-window 一节（`since_ms` 是起点、`bars` 是已积累的周期数），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar。最早采纳日 = 该起点 + 30 天。
+
+每次采纳都是构造变更，窗口重新计数；**只加指纹字段、不改行为也算**——2026-09-07 的 `unit_mode` 就是一例（`0dcd044d0158` → `b441ea62d021`，配置一个字符没改，见 RESEARCH_LOG 同日条目）。
+
 ## Profile 关键字段（`config/live.demo.yaml`）
 
 - `portfolio.leverage: auto` —— 每个币的交易所杠杆按 `max_gross / margin_cap` 与档位上限推导（当前 5x）；写死整数则固定。

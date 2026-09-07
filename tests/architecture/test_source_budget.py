@@ -835,10 +835,67 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # exactly while it stopped recording.  And coverage is counted from buckets HELD, not from
 # first-to-last span: a span treats an outage as covered, and for a gate that is the wrong
 # direction to be wrong in.
+# Raise 2026-09-07, with the sentence the rule requires: +12 in beidou_alpha and +1 in beidou_live for
+# `ExitParams.unit_mode` (EXP-EX3): the k-units of the exit overlay can now be measured in this bar's sigma
+# instead of the entry bar's, which is the cheapest test of "adaptive" exits the operator asked for, and the
+# construction fingerprint records which unit a cycle ran under so an adoption cannot be silent.  Measured
+# rather than estimated, the alpha delta is +24, not +12: `_unit_price` carries a second docstring paragraph,
+# beyond the plan's draft, stating why the denominator is always `entry_price` and never the current price,
+# so a later reader cannot "simplify" the two reference points back together.  The live delta lands exactly
+# on the plan's +1.
+# Raise 2026-09-07, with the sentence the rule requires: +77 in beidou_live and +2 in beidou_cli for two
+# observations the exits analysis found missing - a noise scale (design daily sigma in USDT, so a 65 U
+# giveback reads as 0.4 sigma rather than as a feeling) and M-005's promised 24/72h counterfactual, shipped
+# as monitoring with its own n-for-decision, because at 1.9 exits a week it cannot adjudicate in 30 days.
+# Measured rather than estimated, the beidou_live delta is +149, not +77: `noise_scale`, `exit_counterfactuals`
+# and their three module constants alone are 119 lines, the two new `daily_markdown` sections add another 22,
+# and the `daily_payload` signature, its two new dict keys and the three import lines the fix needs are the
+# remaining 8 - the brief's own shown implementation already summed to this much once copied through, so +77
+# undercounted the code it specified rather than describing scope added during implementation.  The
+# beidou_cli delta lands exactly on the brief's +2.
+#
+# Raise 2026-09-07, second one the same day, with the sentence the rule requires: +2 in beidou_live for
+# a two-line comment.  Commit 25af442 fixed the review's Important finding on `exit_counterfactuals` -
+# a dry-run cycle's `exit_events` were priced as real, because the function walked `cycles.jsonl` raw
+# instead of through `_cycles`'s dry-run/no-equity filter - at zero net lines, reasoning in its commit
+# message that the new regression test's docstring carries the "why" so the call site did not need to.
+# The fix review that commissioned this raise asked for the reasoning at the call site as well, in this
+# file's own convention of explaining WHY rather than leaving it to a test alone; this adds that comment
+# without touching the already-shipped, already-tested filter condition itself.
+#
+# Raise 2026-09-07, third one the same day, with the sentence the rule requires: +16 in beidou_live, every
+# line of it `ruff format` wrapping and none of it behaviour.  The DL-EX0/0b commit landed four over-long
+# expressions unformatted - `noise_scale`'s exits sum, and three `_fmt_num` calls in the two new
+# `daily_markdown` sections - and `ruff check` never said so, because the lint config ignores E501 and
+# leaves line length to the formatter, which nothing had run over that commit.  Recorded rather than
+# absorbed: the ceiling counts lines, not capability, so formatting the tree back to the config's own
+# style has to cost a sentence like anything else, and the honest sentence is that these 16 lines bought
+# consistency and nothing more.  The number is read off `_lines`, not computed as 5,329 + 16: both raises
+# above estimated and both came in short (+77 measured +149, +12 measured +24).
+#
+# Raise 2026-09-07, fourth one the same day, with the sentence the rule requires: +19 in beidou_live and +2
+# in beidou_alpha for this branch's one fix wave, and nearly every line of it is a comment or a docstring.
+# The behaviour changes underneath are edits to expressions that already existed: `noise_scale` counts real
+# exits over the evidence window instead of every `exit_events` row over a 720-bar tail, `exit_counterfactuals`
+# walks its horizon from `as_of_ms`, `exit_and_pool_events` drops dry-run rows, and one `except` widens.  What
+# costs the lines is the reasoning that stops each of them being "simplified" back: why COOLDOWN is not an
+# exit (`exit_step` returns it once per *blocked* cycle, so at `cooldown_bars: 24` one take-profit reported as
+# 25 against a rate built from take-profits and stops), why the two exit counts have to share one window (they
+# agree only until the evidence window outgrows 30 days, which is the state K-EX14 is working toward), why the
+# counterfactual anchors on the bar the price came from rather than the host clock D-025 caught an hour behind
+# the venue, and why a truncated parquet must not stop a monitor that runs unattended.  The beidou_alpha +2 is
+# one clause in the exit overlay's module docstring, which still called the k-unit the volatility "at entry"
+# unconditionally after `unit_mode="current"` existed - in the docstring of the single source of truth that
+# backtest and live share.  Measured with `_lines`, not estimated: alpha 5,834, live 5,364, and the other four
+# packages did not move.  The two raises above this one on this branch both estimated and both came in short;
+# this one asked the function.
+# Merged 2026-09-07: two branches raised this dict in parallel and the resolution is neither side's
+# numbers nor the larger of each - it is the merged tree re-measured, because a ceiling copied across a
+# merge asserts a count nobody took.  Both raises above stand as written; only the dict below is new.
 CEILING = {
-    "beidou_alpha": 5_812,
-    "beidou_live": 5_357,
-    "beidou_cli": 3_445,
+    "beidou_alpha": 5_838,
+    "beidou_live": 5_544,
+    "beidou_cli": 3_447,
     "beidou_data": 1_805,
     "beidou_exchange": 603,
     "beidou_shared": 284,
