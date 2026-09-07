@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -281,4 +282,40 @@ def yearly_breakdown(net: pd.Series, bars_per_year: float) -> dict[str, dict[str
             "sharpe": sharpe(block, bars_per_year),
             "max_drawdown": max_drawdown(block),
         }
+    return out
+
+
+# The decay rule's window, in days (report 4.2 Ⅰ, adopted 2026-09-07).  It lives here so the evidence run
+# and the live report cannot drift apart: they are the two halves of one comparison, and windows of
+# different lengths have different Sharpe dispersion.
+DECAY_WINDOW_DAYS = 30
+
+
+def _dispersed(values: np.ndarray) -> bool:
+    """A spread wider than floating-point noise.  `np.std` of identical floats is not exactly zero once
+    summed and divided, and the naive ratio to it came back as 3e17 - a ratio to a dispersion that is
+    not there is not a measurement."""
+    if values.size < 2:
+        return False
+    return float(np.std(values, ddof=1)) > 1e-9 * max(abs(float(np.mean(values))), 1e-12)
+
+
+def window_sharpes(
+    returns: Sequence[float] | pd.Series, *, bars_per_window: int, bars_per_year: float
+) -> list[float | None]:
+    """Sharpe of each whole NON-OVERLAPPING window, in order.  A partial tail is not a window.
+
+    Non-overlapping is the load-bearing word.  With a daily step, "two consecutive 30-day windows" is two
+    observations sharing 29 days of data - very nearly one observation - and the rule below would fire far
+    more often than its design intends.  Non-overlapping makes the trigger cost 60 days of evidence.
+
+    ``None`` for a window with no dispersion, for the reason `_has_dispersion` records: the standard
+    deviation of identical floats is not exactly zero once summed and divided, and the naive ratio came
+    back as 3e17.  A ratio to a dispersion that is not there is not a measurement.
+    """
+    values = np.asarray(list(returns), dtype=float)
+    out: list[float | None] = []
+    for start in range(0, values.size - bars_per_window + 1, bars_per_window):
+        chunk = values[start : start + bars_per_window]
+        out.append(sharpe(chunk, bars_per_year) if _dispersed(chunk) else None)
     return out

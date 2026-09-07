@@ -919,9 +919,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # not overlap, the comparison is to an empirical distribution rather than to oos_sharpe with a normal
 # standard error, and a missing q10 is INSUFFICIENT_DATA rather than OK.  Written before any live window
 # exists, which is the point: a decay rule authored after seeing the decay is not a rule.
+# Raise 2026-09-07 (fourth today), with the sentence the rule requires: +60 beidou_alpha, and beidou_live
+# comes DOWN 13.  `window_sharpes` moved out of beidou_live into beidou_alpha/validation/metrics.py,
+# because the import direction forbids alpha depending on live and the evidence run is the right place to
+# emit the decay rule's comparison distribution: a q10 written beside the registry by hand would go stale
+# silently at the next construction change (the D-026 failure, twice already), while one emitted from
+# `walk_forward.summary()` cannot describe a construction other than its own.  The move also puts a pure
+# statistic in the package the effort target is measured on, which is the right direction for once.
+# The window length is now a single constant, DECAY_WINDOW_DAYS: the first draft had the evidence side on
+# `bars_per_year / 12` (730 hourly bars) and the live side on 30 days (720) - ten bars that read as
+# rounding but sit on the two halves of one comparison, where windows of different lengths carry
+# different Sharpe dispersion.  Caught by a test, not by reading.
 CEILING = {
-    "beidou_alpha": 5_838,
-    "beidou_live": 5_735,
+    "beidou_alpha": 5_900,
+    "beidou_live": 5_721,
     "beidou_cli": 3_447,
     "beidou_data": 1_805,
     "beidou_exchange": 611,

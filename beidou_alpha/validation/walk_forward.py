@@ -14,7 +14,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.validation.metrics import compound, max_drawdown, newey_west_tstat, sharpe
+from beidou_alpha.validation.metrics import (
+    DECAY_WINDOW_DAYS,
+    compound,
+    max_drawdown,
+    newey_west_tstat,
+    sharpe,
+    window_sharpes,
+)
 
 
 @dataclass(frozen=True)
@@ -112,9 +119,27 @@ class WalkForwardResult:
         # 2026-09-04 was of that shape while the artefact said only "oos_sharpe".
         chosen = [param_key(outcome.chosen_params) for outcome in self.folds]
         consistent = len(set(chosen)) <= 1
+        # The distribution the adopted decay rule compares the live period against (report 4.2 Ⅰ).  It is
+        # emitted HERE, from the evidence run, rather than computed once and written beside the registry:
+        # a quantile only describes the construction it was measured under, and a hand-placed number would
+        # go stale silently at the next construction change - the D-026 failure, twice already.  A run too
+        # short to hold a whole window reports None, not a quantile of nothing.
+        # 30 DAYS, not "a month": `bars_per_year / 12` is 730 hourly bars and the live side counts 720.
+        # A ten-bar difference sounds like rounding, but the two numbers are the two halves of one
+        # comparison - the live window and the distribution it is judged against - and windows of
+        # different lengths have different Sharpe dispersion.  Same family as the archive/REST stamp:
+        # two conventions for one quantity, and the mismatch does not raise, it just biases.
+        window = round(DECAY_WINDOW_DAYS * bars_per_year / 365.0)
+        windows = [
+            v
+            for v in window_sharpes(self.oos_returns, bars_per_window=window, bars_per_year=bars_per_year)
+            if v is not None
+        ]
         return {
             "folds": len(self.folds),
             "oos_sharpe": sharpe(self.oos_returns, bars_per_year),
+            "oos_windows": len(windows),
+            "oos_window_sharpe_q10": float(np.quantile(windows, 0.10)) if windows else None,
             "oos_return": compound(self.oos_returns),
             "oos_max_drawdown": max_drawdown(self.oos_returns),
             "oos_bars": len(self.oos_returns),

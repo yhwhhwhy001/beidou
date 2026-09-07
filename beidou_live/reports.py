@@ -16,7 +16,7 @@ import pandas as pd
 from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.report import render_markdown
-from beidou_alpha.validation.metrics import max_drawdown, sharpe
+from beidou_alpha.validation.metrics import DECAY_WINDOW_DAYS, max_drawdown, sharpe, window_sharpes
 from beidou_data.store import KlineStore
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, risk_budget_status
@@ -57,6 +57,11 @@ def expectations_from_evidence(evidence_by_strategy: dict[str, dict[str, Any]]) 
             full = report.get("full_sample", {}) or {}
         out[strategy] = {
             "oos_sharpe": wf.get("oos_sharpe"),
+            # The decay rule's comparison distribution, carried from the same evidence run as the Sharpe
+            # above so the two can never describe different constructions (report 4.2 Ⅰ).  Absent from
+            # every report written before 2026-09-07, which is why `decay_watch` reads INSUFFICIENT_DATA
+            # until each strategy's evidence is next re-run.
+            "oos_window_sharpe_q10": wf.get("oos_window_sharpe_q10"),
             "full_sample_sharpe": full.get("annualized_sharpe"),
             "full_sample_max_drawdown": full.get("max_drawdown"),
             "verdict": verdict,
@@ -191,7 +196,7 @@ def decay_watch(
     expectations: dict[str, Any],
     *,
     equity: float | None,
-    window_days: int = 30,
+    window_days: int = DECAY_WINDOW_DAYS,
     bars_per_year: float = 8760.0,
 ) -> dict[str, Any]:
     """Per strategy, the adopted decay rule against the whole income history (not just today).
@@ -216,25 +221,6 @@ def decay_watch(
         verdict = decay_verdict(live_windows=windows, q10=q10)
         rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days}
     return rows
-
-
-def window_sharpes(returns: Sequence[float], *, bars_per_window: int, bars_per_year: float) -> list[float | None]:
-    """Sharpe of each whole NON-OVERLAPPING window, in order.  A partial tail is not a window.
-
-    Non-overlapping is the load-bearing word.  With a daily step, "two consecutive 30-day windows" is two
-    observations sharing 29 days of data - very nearly one observation - and the rule below would fire far
-    more often than its design intends.  Non-overlapping makes the trigger cost 60 days of evidence.
-
-    ``None`` for a window with no dispersion, for the reason `_has_dispersion` records: the standard
-    deviation of identical floats is not exactly zero once summed and divided, and the naive ratio came
-    back as 3e17.  A ratio to a dispersion that is not there is not a measurement.
-    """
-    values = np.asarray(list(returns), dtype=float)
-    out: list[float | None] = []
-    for start in range(0, values.size - bars_per_window + 1, bars_per_window):
-        chunk = values[start : start + bars_per_window]
-        out.append(sharpe(chunk, bars_per_year) if _has_dispersion(chunk, minimum=bars_per_window) else None)
-    return out
 
 
 def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, consecutive: int = 2) -> dict[str, Any]:
