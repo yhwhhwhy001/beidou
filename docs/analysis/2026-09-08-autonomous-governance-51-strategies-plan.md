@@ -14,7 +14,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | --- | --- |
 | Final Decision | **Weak GO（受控执行）**。Phase 0（回放）零风险立即开工；Phase 1–2 落治理骨架；**机器写 registry 只在 Phase 4 之后，且前两次事务由人执行 `governance apply`**（KILL-AR-18 的确认点）。真实资金 HOLD & DEFERRED 不变。 |
 | 操作者裁定 | ① 人退出运行时**决策**（观察与告警保留）；② 机器自动晋级/降级；③ 风控防死循环；④ 51 条作候选输入——**实际进 Phase 1–3 的是 32 条（+7 条块 6 有前置），块 0 的 12 条 Out，这是范围缩减，写在 §1**（KILL-AR-16）；⑤ Testnet 为主；⑥ **选项 b**：probe→main 用时间规则。 |
-| Phase 7 结果 | 独立子代理：G6 FAIL，PIVOT；2 P0 / 10 P1 / 8 P2。P0-1（家族门杀在位者）由 §4 的 N 口径决定 + 证据重出关闭；P0-2（probe→main 证据不可达）由选项 b 改写关闭。10 条 P1 处置见 §16。G6 现记 **PARTIAL**（AR-08 相对价值由操作者 ACCEPTED，AR-11 alpha 占比待裁）。 |
+| Phase 7 结果 | 独立子代理：G6 FAIL，PIVOT；2 P0 / 10 P1 / 8 P2。P0-1（家族门杀在位者）由 §4 的 N 口径决定 + 证据重出关闭；P0-2（probe→main 证据不可达）由选项 b 改写关闭。10 条 P1 处置见 §16。G6 现记 **PARTIAL**（AR-08 相对价值、AR-11 alpha 占比均由操作者 ACCEPTED）。 |
 | 三条核心设计判断（不变） | (1) 评测模块已存在，缺的是"判定→registry"的写入主体；(2) 机器担任主体的前提：分位数门的 N 口径明确、只进 probe、批次窗口、降级即时；(3) **Canary 是部署健康检查，不是 alpha 过滤器**（KILL-AR-04）——假阳性由 R3 预算 + P&L stop 兜底，不由 Canary。 |
 | 人类确认点（D.8） | 治理规则版本合并；自治开关；**Phase 4 前两次事务**；R8 首次触发前告警 + 宽限；真实资金。运行时的单次晋级/降级从第三次事务起交给机器。 |
 | 预期结果 | 分位数门在 N≈675（全库）≈1.66、按策略桶 ≈1.49–1.51；两臂协议的 tsmom 1.81 两者都过，诚实 16 点网格 1.485 全库门下不过。**51 条全喂进去，正常结果是 0–2 条进 probe；probe→main 按时间规则，预期多数存活的 probe 会到 main——这是"没被停掉"的意思，不是"被证明有 alpha"。** |
@@ -136,7 +136,7 @@ RISK-G9 时间规则把 Sharpe-0 的 probe 送进 main（概率约 0.8）——�
 | A-S51 | 缠论与 tsmom 高相关，预期阴性 | E5 | corr < 0.5 且 PASS | OPEN |
 
 ## 14. Assumptions & Open Questions
-Q-CRITICAL 真实资金；Q2 盈利判据；Q3 窗口（默认季度）；Q4 新数据源（默认进）；Q5 研究机（**KILL-AR-17：跨机契约待写，默认先单机**）；~~Q6~~ 缠论按 §7；~~Q7~~ 已裁定回退；**Q8（新）：治理代码上限与 90% alpha 目标的取舍（KILL-AR-11）——待操作者裁定，未裁前 H6 上限 GO**。
+Q-CRITICAL 真实资金；Q2 盈利判据；Q3 窗口（默认季度）；Q4 新数据源（默认进）；Q5 研究机（**KILL-AR-17：跨机契约待写，默认先单机**）；~~Q6~~ 缠论按 §7；~~Q7~~ 已裁定回退；**~~Q8~~ 已裁定（2026-09-08，操作者）：治理代码授权通过，"新增工作 90% 是 alpha"是希望不是硬要求——KILL-AR-11 ACCEPTED，H6 解除**。
 
 ## 15. 明确未做
 块 0；User Story Draft；真实资金 pre-flight；跨机契约（DL-G8 待补）。
@@ -155,7 +155,7 @@ Q-CRITICAL 真实资金；Q2 盈利判据；Q3 窗口（默认季度）；Q4 新
 | AR-08 | **ACCEPTED（操作者）**：选 L3 而非 L2；补偿 = 前两次事务人 apply | §0 |
 | AR-09 | CLOSED：M-G05 | §11 |
 | AR-10 | MITIGATED：Pre-A 收窄为 Pre-A′（决策 vs 观察） | 头部 |
-| AR-11 | **OPEN → Q8** | §14 |
+| AR-11 | **ACCEPTED（操作者，2026-09-08）**：90% 是希望不是硬要求 | §14 |
 | AR-12 | CLOSED：Phase 4a/4b 拆开 | §8 |
 | AR-13 | CLOSED：R 表标来源 | §4 |
 | AR-14 | CLOSED：R2 加重开路径 | §4 |
@@ -183,6 +183,6 @@ Q-CRITICAL 真实资金；Q2 盈利判据；Q3 窗口（默认季度）；Q4 新
 | --- | --- |
 | Phase | 7 ✔（G6 PARTIAL）；8–9 v2（本文件）；执行中：证据重出 ✔、重启 #6 排定 |
 | 已冻结 Decision | D-G1 机器主体（前两次事务人 apply）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；**D-G4′ 时间规则（选项 b）**；D-S51 |
-| G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 **ACCEPTED**（AR-08）· G4 **PARTIAL**（Q8）· G5 PARTIAL · G6 **PARTIAL** · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
-| 开放 | Q-CRITICAL / Q2 / Q3 / Q4 / Q5 / **Q8**；AR-11、AR-17 |
-| 下一动作 | (a) 确认重启 #6 首周期；(b) Phase 0 回放；(c) 裁 Q8 |
+| G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 **ACCEPTED**（AR-08）· G4 PASS（Q8 已裁）· G5 PARTIAL · G6 **PARTIAL** · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
+| 开放 | Q-CRITICAL / Q2 / Q3 / Q4 / Q5；AR-17 |
+| 下一动作 | (a) 确认重启 #6 首周期；(b) Phase 0 回放；(c) Phase 0 选型（RESEARCH_LOG 同日补记列了四个选项） |
