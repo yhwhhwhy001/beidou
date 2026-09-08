@@ -194,8 +194,8 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | DL-G6′ 时间规则 | §3 ← 选项 b | `tenure.py` | T-G6′-1 三窗口无 stop → main；T-G6′-2 main 触发 stop → 回 probe 重计；T-G6′-3 TRANSFER 周期的 stop 不计 | AC-G6′ | M-G01 | gov +≈150 |
 | DL-G7 治理 digest + 快通道 | R8 / R9 | `engine.py` 每周期落盘；回撤梯接 `throttle_scalar`（归因口径 + 告警 + 宽限） | T-G7-1 digest 变 → `live verify` 报；T-G7-2 −35% 注入 → 告警，2 周期后 scalar 0.75；T-G7-3 权益回撤（抵押品）不触发 | AC-G7 / DRILL-G3 | M-Q10, M-015 | live +≈100 |
 | DL-G8 调度器 + 研究机 | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
-| **DL-C1 冲击成本模型** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
-| **DL-G9 判据可读性** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
+| **DL-C1 冲击成本模型 ✔** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
+| **DL-G9 判据可读性 ✔** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
 | DL-S51 缠论 | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
 | DL-D4 metrics→Panel | 块 1 | `Panel.metrics` + 叶节点 + M-011 平价接日报 | T-D4-1 5 分钟桶对齐 166/166；T-D4-2 无平价证据 → queued 卡住 | AC-D4 | M-011 | alpha/data +≈150 |
 | DL-D5 现货 ingest | 块 1 | 同源 REST + 月归档 + basis 叶 | T-D5-1 对齐契约；T-D5-2 因果 | AC-D5 | M-011 | data +≈250 |
@@ -378,6 +378,29 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 **2028-03-05**。每一次改构造（含每一次晋级）把这个日期整体推后 18 个月——这是"月度窗口"这个选择的
 长期价格，写在这里以便下次有人想加快晋级节奏时能读到。
 
+## 20. Phase 1 首两项交付（2026-09-08）
+
+| DL | 结果 |
+| --- | --- |
+| **DL-G9 ✔** | `research validate --prereg <commit>` 写 `preregistration`（记 commit **自己的**提交时间）；新增 `evidence_construction_digest`，覆盖恰好 `construction_problems` 比对的三块，两侧各记一份同名字段；循环每进程落一次 `construction_full`（= 每次可能的构造改动一次）。治理侧改为按 artefact 年龄判定：字段在场就判，不在场才挂起 |
+| **DL-C1 ✔（模型与曲线）** | 平方根律，`capital=0` 精确退化为现行平模型，归档报告逐位可复现。系数 1.0 出自股票文献，对本场所记 **E5**，本系统无法校准（唯一成交是 demo 的 40–800 USDT） |
+
+**容量曲线**（系数 1.0，四层书 / 时点 universe，`scratchpad/impact_capacity_curve.py`）：
+
+| 资金 | 净 Sharpe | 对平模型的差 | 成本/毛利 | 冲击占成本 |
+| ---: | ---: | ---: | ---: | ---: |
+| 0（平） | 1.9161 | — | 7.95% | 0% |
+| 100,000 | 1.8670 | **−0.0491** | 10.30% | **22.8%** |
+| 1,000,000 | 1.7609 | −0.1552 | 15.39% | 48.4% |
+| 10,000,000 | 1.4251 | −0.4910 | 31.48% | 74.8% |
+
+`live.demo.yaml` 早就把 **10 万 USDT** 写成"k 需在冲击模型下重推"的触发点；曲线证实那个点没选错。
+**读拐点不读水平**——整条曲线随系数只按 √ 移动。
+
+**DL-C1 明写未做**：`vol_target` 的重推。那是一次产生证据、消耗账本行的研究运行，采纳它还是一次构造改动、
+属批次窗口（Phase 4a）。DL-C1 交付的是让那次重推**可以做**。另一条近似：书级护栏回放用平费率给自己的权益
+路径定价，冲击下日内止损档会比重放的略早触发；移进回放会让它路径依赖于自己正在产生的量，故记录不修。
+
 ## Checkpoint
 
 | 项 | 值 |
@@ -386,4 +409,4 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | 已冻结 Decision | D-G1 机器主体（**含第一次事务，Q9**）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
 | 开放 | Q4（默认进）/ Q5（默认单机）；**审计三问③ 抵押品分母未裁**；AR-17 |
-| 下一动作 | (a) Phase 1 从 **DL-G9** 起步——在两条判据可读之前，§3 的状态机一个候选也放不进去；(b) 并行 **DL-C1** 冲击成本模型；(c) 审计三问③（抵押品分母）待裁 |
+| 下一动作 | (a) Phase 1 余下：R0 报告口径、`search_space_version` 必填、budget/lifecycle/governance_digest；(b) `vol_target` 在冲击模型下重推（预登记 → 批次窗口 #1）；(c) 审计三问③（抵押品分母）待裁 |

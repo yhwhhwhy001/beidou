@@ -17,3 +17,20 @@ use_actual_funding: true  # backtests charge the historical funding rate on held
 #   9.2  the upper bound of that sample's 95% interval [2.01, 9.19], n=101, demo, over four days.
 # Change a number here only with the fill sample that justifies it.
 slippage_stress_bps: [2.0, 5.5, 9.2]
+
+# DL-C1 / KILL-A (2026-09-08): the impact model, off by default.
+# Everything above charges the same bps for a 40 USDT order and a 4M one, which makes the whole
+# backtest scale-free - a property of the arithmetic, not a finding about the world - and is the
+# assumption KILL-Q12 has held real capital out of scope on since 2026-09-05.
+#   impact_fraction = coefficient * sigma_daily * sqrt(order_notional / ADV)
+# `coefficient` is an ASSUMPTION and this system cannot calibrate it.  Its only fills are demo, 40-800
+# USDT against ADVs in the hundreds of millions: order/ADV around 1e-8, so the model predicts under a
+# hundredth of a basis point and the 5.52 bps measured over 101 fills is spread and fee with no impact
+# content whatsoever.  1.0 is the equities-literature value (Almgren et al., with sigma daily and
+# participation as defined above); for this venue it is E5.  Read the OUTPUT as a capacity curve -
+# where cost starts to bend with size - not as a prediction of what a fill will cost.
+# Change this number only with fills large enough for it to be measurable, which demo cannot produce.
+impact:
+  coefficient: 1.0
+  adv_window_bars: 720   # 30 days hourly
+  vol_window_bars: 720

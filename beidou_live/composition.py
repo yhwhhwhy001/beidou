@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from beidou_alpha.backtest import CostModel
+from beidou_alpha.backtest import CostModel, ImpactModel
 from beidou_alpha.model import AlphaModel
 from beidou_alpha.panel import Panel
 from beidou_alpha.portfolio import PortfolioParams
@@ -72,6 +72,17 @@ def cost_model(costs: Mapping[str, Any], *, use_funding: bool | None = None) -> 
     turnover = float(costs.get("taker_fee_bps", 5.0)) + float(costs.get("slippage_bps", 2.0))
     funding = bool(costs.get("use_actual_funding", True)) if use_funding is None else use_funding
     return CostModel(turnover_bps=turnover, carry_bps_per_bar=0.0, use_funding=funding)
+
+
+def impact_model(costs: Mapping[str, Any], *, capital: float = 0.0) -> ImpactModel:
+    """DL-C1.  ``capital`` of 0 keeps the flat, scale-free model, which is this model's own limit."""
+    block = costs.get("impact") or {}
+    return ImpactModel(
+        capital=float(capital),
+        coefficient=float(block.get("coefficient", 1.0)),
+        adv_window=int(block.get("adv_window_bars", 720)),
+        vol_window=int(block.get("vol_window_bars", 720)),
+    )
 
 
 def build_model(registry: Registry, profile: Mapping[str, Any]) -> AlphaModel:

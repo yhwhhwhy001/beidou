@@ -59,6 +59,69 @@ class CostModel:
 
 
 @dataclass(frozen=True)
+class ImpactModel:
+    """KILL-A / DL-C1: the cost of an order that is large relative to what trades.
+
+    Everything else in this module is scale-free, and that is an arithmetic property rather than a
+    finding: gross P&L, turnover cost and funding are all linear in the weights, so scaling every
+    weight by k leaves the Sharpe exactly unchanged (measured on k in {1, 1.5, 2, 2.5, 3, 4, 5}:
+    identical to the last digit).  The flat 7 bps charges the same for a 40 USDT order and a 4M one.
+    That is a good approximation at demo notional and it is the assumption that fails with real money,
+    which is why KILL-Q12 has held real capital out of scope since 2026-09-05.
+
+    The square-root law is the standard first model: the price paid moves as the square root of the
+    fraction of daily volume the order takes, scaled by the asset's own volatility.
+
+        impact_fraction = coefficient * sigma_daily * sqrt(order_notional / ADV)
+
+    **The coefficient is an assumption, not a measurement, and it cannot be calibrated here.**  The
+    only fills this system has are demo, 40-800 USDT against ADVs in the hundreds of millions, so
+    order/ADV is around 1e-8 and the model predicts well under a hundredth of a basis point - the
+    5.52 bps measured over 101 fills is spread and fee, and contains no information about impact at
+    all.  A number from the equities literature (Almgren et al.; coefficient near 1 with sigma daily
+    and participation as defined above) is therefore what ships, declared E5 for this venue, and the
+    honest output of this model is a **capacity curve** - where cost starts to bend - rather than a
+    prediction of what a fill will cost.
+
+    ``capital`` of 0 turns it off exactly: sqrt(0) is 0, so the flat model is this model's own limit
+    rather than a separate branch, which is what makes every archived report still reproducible.
+    """
+
+    capital: float = 0.0  # USDT the book runs; 0 means the flat, scale-free model
+    coefficient: float = 1.0
+    adv_window: int = 720  # bars of trailing quote volume (30 days hourly)
+    vol_window: int = 720
+
+    def __post_init__(self) -> None:
+        if self.capital < 0 or self.coefficient < 0:
+            raise ValueError("impact parameters must be non-negative")
+
+    @property
+    def enabled(self) -> bool:
+        return self.capital > 0.0 and self.coefficient > 0.0
+
+
+def impact_costs(
+    turnover: pd.DataFrame, rets: pd.DataFrame, panel: Panel, columns: list[str], model: ImpactModel
+) -> pd.DataFrame:
+    """Per-symbol impact, in book units, charged on top of the flat per-unit cost.
+
+    Both inputs are taken as of the bar BEFORE execution: the trailing volume mean and the trailing
+    return standard deviation are shifted, so nothing here reads a bar the decision could not have.
+    """
+    if not model.enabled:
+        return turnover * 0.0
+    bars_per_day = max(1.0, panel.bars_per_year / 365.0)
+    adv = (average_quote_volume(panel, columns, model.adv_window) * bars_per_day).shift(1).reindex(turnover.index)
+    sigma_daily = rets.rolling(model.vol_window, min_periods=model.vol_window // 4).std().shift(1) * np.sqrt(
+        bars_per_day
+    )
+    participation = (turnover * model.capital).div(adv).replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(lower=0.0)
+    charged = turnover * model.coefficient * sigma_daily.fillna(0.0) * np.sqrt(participation)
+    return pd.DataFrame(charged, index=turnover.index, columns=turnover.columns)
+
+
+@dataclass(frozen=True)
 class ParticipationModel:
     """The live participation cap (T-S03), measured but never applied.
 
@@ -160,6 +223,7 @@ def run_backtest(
     guards: BookGuardParams | None = None,
     maintenance_margin_rate: float = 0.005,
     participation: ParticipationModel | None = None,
+    impact: ImpactModel | None = None,
 ) -> BacktestResult:
     """``weights``: decision-time target weights (fraction of equity), index = decision bars.
 
@@ -200,6 +264,13 @@ def run_backtest(
     delta.iloc[0] = executed.iloc[0]
     turnover = delta.abs()
     costs = turnover * (cost.turnover_bps / 10_000.0) + executed.abs() * (cost.carry_bps_per_bar / 10_000.0)
+    if impact is not None and impact.enabled:
+        # Stated limit: the guard replay above priced its own equity path at the flat rate, so a
+        # daily-loss pause is decided without impact.  At demo notional impact is under 0.01 bps and the
+        # difference is unmeasurable; at the capital where this model bends, the pause would fire
+        # slightly earlier than replayed here.  Recorded rather than fixed, because moving impact inside
+        # the replay makes it path dependent on a quantity the replay is itself producing.
+        costs = costs + impact_costs(turnover, rets, panel, columns, impact)
     if funding is not None:
         costs = costs + executed * funding
     net = gross - costs

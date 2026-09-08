@@ -67,7 +67,15 @@ from beidou_cli import research
 from beidou_data.manifest import build_manifest
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import FundingStore, KlineStore
-from beidou_live.composition import build_model, cost_model, load_panel, load_registry, portfolio_params, read_universe
+from beidou_live.composition import (
+    build_model,
+    cost_model,
+    impact_model,
+    load_panel,
+    load_registry,
+    portfolio_params,
+    read_universe,
+)
 from beidou_shared.config import load_yaml
 
 DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
@@ -318,6 +326,15 @@ def research_list() -> None:
 
 
 @research.command("backtest")
+@click.option(
+    "--capital",
+    default=0.0,
+    show_default=True,
+    help=(
+        "USDT the book runs, for the DL-C1 impact model.  0 keeps the flat, scale-free cost model "
+        "every archived report was produced under; a positive value charges the square-root law on top."
+    ),
+)
 @_common_options
 @click.option(
     "--guards/--no-guards",
@@ -326,6 +343,7 @@ def research_list() -> None:
     help="replay the book-level guards the live loop applies (gross cap + daily-loss pause)",
 )
 def research_backtest(
+    capital: float,
     guards: bool,
     strategy: str,
     params: str,
@@ -354,12 +372,13 @@ def research_backtest(
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    impact = impact_model(load_yaml(costs_path), capital=capital)
     weights, _combined, _per = model.evaluate(panel, membership)
     # The guards are part of the construction the loop runs, not an extra: they are provably inert
     # wherever neither binds (`tests/alpha/test_book_guard_replay.py`), so leaving them on keeps a
     # report describing the book that would actually be held.  `--no-guards` reproduces older reports.
     book_guards = _book_guards(profile_payload, guards)
-    result = run_backtest(panel, weights, cost, execution=execution, guards=book_guards)  # type: ignore[arg-type]
+    result = run_backtest(panel, weights, cost, execution=execution, guards=book_guards, impact=impact)  # type: ignore[arg-type]
     summary = result.summary()
     bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
     report: dict[str, Any] = {
@@ -527,6 +546,15 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     help="apply the profile's exit overlay, as the live loop does (D-012)",
 )
 @click.option(
+    "--capital",
+    default=0.0,
+    show_default=True,
+    help=(
+        "USDT the book runs, for the DL-C1 impact model.  0 keeps the flat, scale-free cost model "
+        "every archived report was produced under; a positive value charges the square-root law on top."
+    ),
+)
+@click.option(
     "--prereg",
     default="",
     help=(
@@ -538,6 +566,7 @@ def research_validate(
     strategy: str,
     params: str,
     prereg: str,
+    capital: float,
     root: str,
     symbols: str,
     interval: str,
@@ -592,6 +621,7 @@ def research_validate(
         )
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    impact = impact_model(load_yaml(costs_path), capital=capital)
     combos = _grid(strategy, grid, entry.params)
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
     _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
@@ -610,7 +640,7 @@ def research_validate(
         model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel, membership)
         decisions[key] = _overlaid(weights, panel.close, exit_params)
-        result = run_backtest(panel, decisions[key], cost, execution=execution, guards=book_guards)  # type: ignore[arg-type]
+        result = run_backtest(panel, decisions[key], cost, execution=execution, guards=book_guards, impact=impact)  # type: ignore[arg-type]
         results[key] = result
         nets[key] = result.portfolio_net
         params_by_key[key] = combo

@@ -1063,10 +1063,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # construction changes it found.  `--prereg` records the commit's OWN time, not the moment it was typed.
 # Most of the alpha and live additions are the two docstrings saying why the digest is the intersection
 # rather than the fingerprint; delete either and the next reader "simplifies" them into one.
+# 2026-09-08, DL-C1 (KILL-A / KILL-Q12): +71 alpha, +11 live, +30 cli for the impact cost model.
+# The sentence the rule requires.  Every number in this repository's backtests is scale-free, and that
+# is arithmetic rather than a finding - gross P&L, turnover cost and funding are all linear in the
+# weights, so scaling every weight by k leaves the Sharpe identical to the last digit.  The flat 7 bps
+# is what makes it true, and it is the assumption real capital has been held out of scope on since
+# 2026-09-05.  `ImpactModel` charges the square-root law on top, off by default (`capital: 0`), so every
+# archived report still reproduces exactly - the flat model is this model's own limit rather than a
+# separate branch, which is asserted rather than asserted-to-be-obvious.
+# Most of the alpha addition is the docstring saying what the coefficient IS: an assumption from the
+# equities literature, E5 for this venue, which this system cannot calibrate because its only fills are
+# demo.  Delete that paragraph and the next reader reads a capacity curve as a cost forecast.
+# Measured with it (scratchpad/impact_capacity_curve.py, coefficient 1.0, the four-layer book on the
+# point-in-time universe): net Sharpe 1.9161 flat -> 1.8670 at 100k -> 1.7609 at 1M -> 1.4251 at 10M,
+# with impact at 23% / 48% / 75% of total cost.  This one grows beidou_alpha, which moves the effort
+# share the intended way.
 CEILING = {
-    "beidou_alpha": 6_083,
-    "beidou_live": 5_958,
-    "beidou_cli": 3_739,
+    "beidou_alpha": 6_154,
+    "beidou_live": 5_969,
+    "beidou_cli": 3_769,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
