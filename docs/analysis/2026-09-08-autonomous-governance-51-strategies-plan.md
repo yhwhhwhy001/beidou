@@ -194,7 +194,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | DL-G6′ 时间规则 | §3 ← 选项 b | `tenure.py` | T-G6′-1 三窗口无 stop → main；T-G6′-2 main 触发 stop → 回 probe 重计；T-G6′-3 TRANSFER 周期的 stop 不计 | AC-G6′ | M-G01 | gov +≈150 |
 | DL-G7 治理 digest + 快通道 | R8 / R9 | `engine.py` 每周期落盘；回撤梯接 `throttle_scalar`（归因口径 + 告警 + 宽限） | T-G7-1 digest 变 → `live verify` 报；T-G7-2 −35% 注入 → 告警，2 周期后 scalar 0.75；T-G7-3 权益回撤（抵押品）不触发 | AC-G7 / DRILL-G3 | M-Q10, M-015 | live +≈100 |
 | DL-G8 调度器 + 研究机 | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
-| **DL-C1 冲击成本模型 ✔** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
+| **DL-C1 冲击成本模型 ✔（含 P26 重推）** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
 | **DL-G9 判据可读性 ✔** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
 | DL-S51 缠论 | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
 | DL-D4 metrics→Panel | 块 1 | `Panel.metrics` + 叶节点 + M-011 平价接日报 | T-D4-1 5 分钟桶对齐 166/166；T-D4-2 无平价证据 → queued 卡住 | AC-D4 | M-011 | alpha/data +≈150 |
