@@ -15,9 +15,9 @@
 - book-tsmom-flow-20260906T094008Z.json：规则同意采纳（book；凭 registry 的 D-029 书面承认）
 - tsmom-validation-20260908T105259Z.json：规则同意采纳（validate）
 - book-tsmom-flow-20260908T105322Z.json：规则同意采纳（book；凭 registry 的 D-029 书面承认）
-- no-decision 正确排除：ERROR 1、SKIPPED 4、重基 1；可判周期 148（KILL-AR-20）
+- no-decision 正确排除：ERROR 1、SKIPPED 4、重基 1；可判周期 149（KILL-AR-20）
 - 探针 P&L stop 从未触发：R5 连败计数 0，晋级不冻结，与 `stopped_books` 一致
-- 构造改动共 4 次（已按 CONSTRUCTION_ALIASES 归一），覆盖 148 个可判周期（≈6.2 天）——规则允许每 30 天一次
+- 构造改动共 4 次（已按 CONSTRUCTION_ALIASES 归一），覆盖 149 个可判周期（≈6.2 天）——规则允许每 30 天一次
 - probe->main 不可达：记录覆盖约 0.21 个窗口，规则要求 9 个
 - R8 归因口径可算：27 行归因合计 -16.19 USDT（不读权益曲线）
 
@@ -25,8 +25,8 @@
 
 | 判据 | 读什么 | 为什么读不到 | 修法 |
 | --- | --- | --- | --- |
-| DL-K3 预登记早于报告 | `Facts.prereg_before_report` | 没有任何一份报告携带预登记指针；预登记记在 RESEARCH_LOG 的散文和 git 提交里 | Phase 1：`research validate` 把预登记 commit hash 写进报告，判据改读 artefact |
-| KILL-AR-07 证据构造 ≡ 实盘构造 | `Facts.evidence_construction_matches_live` | `cycles.jsonl` 与 `heartbeat.json` 只存 12 字符 digest，不存构造输入，digest 不可反解；报告存 `portfolio`/`exits` 但不算同一个 digest | Phase 1：validate 报告落 `construction_digest`，实盘构造变化时落全量而不只是 digest |
+| DL-K3 预登记早于报告 | `Facts.prereg_before_report` | 早于 DL-G9 的报告不携带预登记指针；那时预登记只记在 RESEARCH_LOG 的散文和 git 提交里。**DL-G9 已交付**：`research validate --prereg <commit>` 把 commit 与它自己的提交时间写进报告，此后的报告按 artefact 判定，更早的仍挂起 | Phase 1 ✔ DL-G9：`--prereg` + 报告的 `preregistration` 块 |
+| KILL-AR-07 证据构造 ≡ 实盘构造 | `Facts.evidence_construction_matches_live` | 早于 DL-G9 时两侧没有可比对的东西：`cycles.jsonl` 只存构造 digest 而 digest 不可反解，报告存 `portfolio`/`exits` 却算不出同一个数。**DL-G9 已交付**：两侧各落一个 `evidence_construction`（只覆盖 `construction_problems` 比对的那三块），字符串相等即可判定 | Phase 1 ✔ DL-G9：报告的 `evidence_construction` + 每周期落盘的同名字段 + 每进程一次的 `construction_full` |
 | §3 滑点压力 5.5 档 | `Facts.slippage_stress_pass` | book 报告不含 `slippage_stress`（validation 报告含） | Phase 1：book 报告补 `slippage_stress` |
 | §3 与在跑的书 corr < 0.5、换手 ≤ 3x | `Facts.max_correlation_with_running / turnover_ratio_to_main` | `research correlate` 的结果是独立报告，没有任何字段把它链回 book 报告 | Phase 1：book 报告内联相关系数与换手比 |
 | M-011 面板平价义务 | `Facts.parity_met` | 平价义务随 DL-D4 才存在，本期没有任何一列数据受它约束 | Phase 3：DL-D4 落地后自然可读 |
