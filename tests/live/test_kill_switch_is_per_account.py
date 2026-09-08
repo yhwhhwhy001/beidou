@@ -157,7 +157,7 @@ def test_the_write_guard_still_takes_a_single_path(tmp_path: Path) -> None:
     assert guard.kill_switch_engaged() is True
 
 
-def test_flatten_engages_every_path(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_flatten_engages_every_path(tmp_path: Path, isolated_app_support: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """`live flatten` engaged the switch through the single-path helper.
 
     Flatten is the one command whose whole purpose is to stop, so it engaging a switch two of the
@@ -178,3 +178,9 @@ def test_flatten_engages_every_path(tmp_path: Path, monkeypatch) -> None:  # typ
     targets = kill_switch_targets(profile)
     assert len(targets) == 2
     assert all(path.exists() for path in targets)
+    # And where it wrote them.  Until 2026-09-08 this test isolated the profile's path to `tmp_path`
+    # and used a fake env var NAME, and still left `682f6697fa93eca6.KILL_SWITCH` reading `engaged`
+    # in the operator's live Application Support - `account_kill_switches()` defaults `root=None`.
+    # The `isolated_app_support` guard in conftest is what moved it; this asserts it stayed moved.
+    assert tmp_path in targets[0].parents, targets[0]
+    assert targets[1].parent == isolated_app_support, targets[1]
