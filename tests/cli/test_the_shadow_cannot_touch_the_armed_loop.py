@@ -67,13 +67,19 @@ def test_a_shadow_does_not_re_rank_the_shared_universe() -> None:
     its next start - measured on 2026-09-08, when a shadow at 18:00Z moved the fingerprint
     d47dbc7c -> 788ade10 and an armed restart went from clean to blocked.
 
-    Asserted on the help text and the source rather than by running a loop, because running one is
-    what caused the problem in the first place.
+    This used to assert the literal text `if state_dir or registry_override:` was present, which is
+    how it passed while a bare `--paper` re-ranked the shared pool at 18:00Z that same day: the
+    string was there and the CONDITION was wrong.  A source assertion can only check that a rule is
+    wired, never that it is right.  So the rule now lives in `may_rerank_shared_pool`, its truth
+    table is asserted per-flag beside the pin it protects
+    (`tests/live/test_the_universe_is_pinned_by_the_registry.py`), and what is left here is the one
+    thing that genuinely needs the source: that `live_run` asks it at all.
     """
     import inspect
 
-    from beidou_cli.live_cmd import live_run
+    from beidou_cli.live_cmd import live_run, may_rerank_shared_pool
 
     source = inspect.getsource(live_run.callback)
-    assert "if state_dir or registry_override:" in source
-    assert "pool = None" in source, "a canary must inherit the armed loop's universe, not re-rank it"
+    assert "may_rerank_shared_pool(" in source, "the rule exists but nothing asks it"
+    assert "pool = None" in source, "a shadow must inherit the armed loop's universe, not re-rank it"
+    assert may_rerank_shared_pool(dry_run=False, paper=True, state_dir="", registry_override=None) is False

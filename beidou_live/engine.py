@@ -149,7 +149,7 @@ class LiveConfig:
     # 2026-09-09: when the registry pins a universe, the daily re-rank still RUNS and is still recorded,
     # and it no longer decides anything.  Observation kept, decision removed - the same split the
     # governance plan applies to every other construction change, applied to the population.
-    universe_proposal_only: bool = False
+    universe_pinned: bool = False
     liquidity_window: int = 24
     quarantine_after: int = 0  # D-031: rejected cycles before a symbol leaves the universe (0 = off)
     probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
@@ -212,8 +212,27 @@ class LiveEngine:
         if self.state.cycles > 0:  # M-004: this process is a restart, not a first start
             self.state.restarts = self.state.restarts + 1
             self.state.restarted_at = utc_now_iso()
-        persisted = list(self.state.universe) if config.universe_refresh else []
-        self.universe: list[str] = persisted or list(config.universe)
+        # 2026-09-09.  A pinned universe is a DECISION, moved by governance transaction; the persisted
+        # one is the last OBSERVATION of a daily re-rank, and before the pin existed that observation
+        # WAS the decision.  So the pin outranks it - and the names it drops leave the way a re-rank's
+        # leavers do, reduce-only through `leaving`, rather than being orphaned holding a position no
+        # cycle manages.
+        #
+        # Without this the pin moved `registry_digest` and nothing else: the loop would report a
+        # universe it is not trading, which is KILL-Q15 with the sign flipped and harder to see, since
+        # the file and the digest would agree with each other and only the positions would not.
+        # Measured on 2026-09-09: pinned 18 symbols, `state.universe` won, and the loop would have
+        # reported the pinned list while holding the persisted one.
+        self.universe: list[str]
+        if config.universe_pinned:
+            self.universe = list(config.universe)
+            orphans = [symbol for symbol in self.state.universe if symbol not in self.universe]
+            self.state.universe = list(self.universe)
+            if orphans:
+                self.state.leaving = list(dict.fromkeys([*self.state.leaving, *orphans]))
+        else:
+            persisted = list(self.state.universe) if config.universe_refresh else []
+            self.universe = persisted or list(config.universe)
         self.rules: dict[str, Any] = {}
         self.exits = ExitOverlay(config.exits, config.interval_ms)
         self._alignment_alerted = False
@@ -792,7 +811,7 @@ class LiveEngine:
             return {"error": "EMPTY_UNIVERSE", "universe": list(self.universe)}
         left = [symbol for symbol in self.universe if symbol not in fresh]
         entered = [symbol for symbol in fresh if symbol not in self.universe]
-        if self.config.universe_proposal_only:
+        if self.config.universe_pinned:
             # Recorded, not adopted.  `universe.json` is deliberately NOT written either: every cited
             # report records the universe fingerprint it was produced under, so writing a new one is
             # what expired restartability daily - the loop re-ranked at about 01:00Z and the dataset
