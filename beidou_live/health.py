@@ -33,7 +33,7 @@ class CycleHealth:
     last_failure: str | None
 
     def restarts_note(self) -> str:
-        return "no failure recorded" if self.last_failure is None else f"last failure {self.last_failure}"
+        return "无失败记录" if self.last_failure is None else f"最近一次失败在 {self.last_failure}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
