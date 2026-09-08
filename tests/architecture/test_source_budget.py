@@ -1219,8 +1219,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # shape of what is hashed moved.  Without the alias the next restart resets M-010's 30-day window -
 # unbroken since 2026-09-04T15:02Z - for a book that is byte-identical.
 # Two pinned field sets went red and told me exactly what to do, in their own error messages.
+# 2026-09-09, P28 - vol-matched pairs (#6): +144 in beidou_alpha.  Signal, and the sentence the rule
+# requires.  The feasibility check changed the design rather than blocking it, which is worth the lines
+# on its own: stage 1 of the portfolio is `w1 = target * vol_target / asset_vol`, so a signal emitting
+# `+1` and `-beta` has its beta divided away by the two legs' own volatilities.  Defining the spread on
+# vol-normalised returns makes that division the CORRECT normalisation - `+s` and `-s` become two legs
+# of equal risk contribution - so the hedge comes free from the construction instead of fighting it.
+# Written down because switching to an OLS beta later would need the portfolio changed, not the signal.
+# Mutual nearest neighbours, not one-sided: with a one-sided rule the market's most correlated name
+# becomes everybody's partner and the book is one leveraged bet, not a set of pairs.  And every refit
+# sees a PREFIX - selecting pairs on the full sample is the classic look-ahead of this family, held by
+# a truncation test rather than by this paragraph.
 CEILING = {
-    "beidou_alpha": 6_823,
+    "beidou_alpha": 6_967,
     "beidou_live": 6_122,
     "beidou_cli": 4_076,
     "beidou_data": 1_889,

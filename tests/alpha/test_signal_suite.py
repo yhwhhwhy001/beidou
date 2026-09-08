@@ -15,11 +15,27 @@ from beidou_alpha.signals.residual import ResidualParams, residual_scores
 from beidou_alpha.signals.xsmom import XsmomParams, xsmom_scores
 
 
-def _synthetic_panel(seed: int = 0, n_symbols: int = 6, n_bars: int = 800, with_funding: bool = True) -> Panel:
+def _synthetic_panel(
+    seed: int = 0, n_symbols: int = 6, n_bars: int = 800, with_funding: bool = True, correlated: bool = False
+) -> Panel:
+    """``correlated`` gives two symbols a common factor, and it defaults OFF on purpose.
+
+    A signal DEFINED on correlation - `pairs` needs a mutually-nearest neighbour above `min_corr` -
+    produces nothing on six independent random walks, which the causality test's emptiness assertion
+    reads as a broken signal.  So that test asks for structure.  Every OTHER caller keeps the panel it
+    already had: `test_round6_hold_and_warmup` pins a 1e-8 window-length tolerance against this
+    fixture, and a common factor makes the covariance more ill-conditioned and the EWMA scalar slower
+    to settle - measured 1.08e-7 - so turning it on for everybody would have loosened somebody else's
+    pinned number to accommodate a change of mine.  That is the wrong direction, so it is a flag.
+    """
     rng = np.random.default_rng(seed)
     index = pd.date_range("2024-01-01", periods=n_bars, freq="h", tz="UTC")
     symbols = ["BTCUSDT", *[f"S{i}USDT" for i in range(1, n_symbols)]]
     steps = rng.normal(0.0, 0.01, size=(n_bars, n_symbols))
+    if correlated and n_symbols >= 3:
+        common = rng.normal(0.0, 0.01, size=n_bars)
+        steps[:, 1] = 0.8 * common + 0.2 * steps[:, 1]
+        steps[:, 2] = 0.8 * common + 0.2 * steps[:, 2]
     close = 100.0 * np.exp(np.cumsum(steps, axis=0))
     frames = {}
     for j, symbol in enumerate(symbols):
@@ -60,7 +76,7 @@ def test_signals_are_causal_and_bounded(signal_id: str) -> None:
     """
     spec = SIGNALS[signal_id]
     warmup = spec.warmup_for(spec.default_params)
-    panel = _synthetic_panel(n_bars=warmup + 600)
+    panel = _synthetic_panel(n_bars=warmup + 600, correlated=True)
     scores = spec.compute(panel, spec.default_params)
     assert scores.shape == panel.close.shape
     assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
@@ -70,7 +86,7 @@ def test_signals_are_causal_and_bounded(signal_id: str) -> None:
         f"{signal_id}: every score before the cutoff is NaN, so the causality comparison below would "
         "be NaN against NaN - the exact way this test was vacuous before KILL-AR-15"
     )
-    shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index))
+    shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index), correlated=True)
     mixed_frames = {}
     for symbol in panel.symbols:
         mixed_frames[symbol] = pd.DataFrame(

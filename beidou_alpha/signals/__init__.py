@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from beidou_alpha.signals import breakout, carry, chanlun, flow, meanrev, residual, tsmom, xsmom
+from beidou_alpha.signals import breakout, carry, chanlun, flow, meanrev, pairs, residual, tsmom, xsmom
 from beidou_alpha.signals.base import SignalSpec, scores_to_targets
 
 SIGNALS: dict[str, SignalSpec] = {
@@ -19,6 +19,17 @@ SIGNALS: dict[str, SignalSpec] = {
         chanlun.ChanlunParams().warmup_bars,
         warmup=lambda params: chanlun.ChanlunParams.from_mapping(params).warmup_bars,
         canonical=lambda params: asdict(chanlun.ChanlunParams.from_mapping(params)),
+    ),
+    # P28 (#6).  Vol-matched rather than OLS-beta because stage 1 sizes each leg on its own vol; the
+    # formalisation was pre-registered before the module existed.
+    "pairs": SignalSpec(
+        "pairs",
+        pairs.compute,
+        asdict(pairs.PairsParams()),
+        "vol-matched pairs on mutually-nearest neighbours, refit on a prefix",
+        pairs.PairsParams().warmup_bars,
+        warmup=lambda params: pairs.PairsParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(pairs.PairsParams.from_mapping(params)),
     ),
     "tsmom": SignalSpec(
         "tsmom",
