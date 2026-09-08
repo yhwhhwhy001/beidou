@@ -32,6 +32,16 @@ def test_a_changed_search_space_does_mine() -> None:
     assert action.kind == MINE
 
 
+def test_a_mine_is_gated_on_the_mine_budget_not_the_row_budget() -> None:
+    """Policy 0.2.0.  A full row budget must not block a mine, and a spent one must not either."""
+    spent_rows = LedgerBudget(FULL.window_start, spent=170, allowed=170, mine_rounds=0, allowed_mine_rounds=1)
+    assert next_action(Context(search_space_digest="a", last_mined_space_digest="x", budget=spent_rows)).kind == MINE
+
+    used_round = LedgerBudget(FULL.window_start, spent=0, allowed=170, mine_rounds=1, allowed_mine_rounds=1)
+    action = next_action(Context(search_space_digest="a", last_mined_space_digest="x", budget=used_round))
+    assert action.kind == WAIT and "already run 1 mine round(s)" in action.reasons[0]
+
+
 def test_t_g8_2_an_exhausted_budget_stops_validate_rather_than_truncating_it() -> None:
     context = Context(search_space_digest="a", shortlist_candidates=5, budget=FULL, wanted_trials=5)
     action = next_action(context)

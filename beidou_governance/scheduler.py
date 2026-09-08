@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from beidou_governance.budget import LedgerBudget, refusals
+from beidou_governance.budget import LedgerBudget, mine_refusals, refusals
 from beidou_governance.policy import Policy
 
 MINE = "mine"
@@ -77,7 +77,9 @@ def next_action(context: Context, policy: Policy | None = None) -> Action:
         return Action(VALIDATE, (f"{context.shortlist_candidates} shortlisted candidates are unvalidated",))
 
     if not policy.mine_requires_new_search_space or context.search_space_digest != context.last_mined_space_digest:
-        stop = tuple(refusals(context.budget, context.wanted_trials)) if context.budget is not None else ()
+        # The mine BUDGET, not the row budget (policy 0.2.0).  Asking `refusals` here is what made a
+        # 514-row search impossible inside a 170-row window, in every window, forever.
+        stop = tuple(mine_refusals(context.budget)) if context.budget is not None else ()
         if stop:
             return Action(WAIT, stop)
         return Action(MINE, (f"search space {context.search_space_digest} has not been enumerated",))

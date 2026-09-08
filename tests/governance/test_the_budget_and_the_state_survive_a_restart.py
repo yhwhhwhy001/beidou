@@ -16,7 +16,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from beidou_governance.budget import refusals, window_spend
+from beidou_governance.budget import mine_refusals, refusals, window_spend
 from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 from beidou_governance.state import VERSION, dump, load, read, write
@@ -38,6 +38,52 @@ def _row(recorded_at: datetime, param_key: str) -> str:
             "run_id": "r",
         }
     )
+
+
+def _mine_row(recorded_at: datetime, param_key: str, run_id: str) -> str:
+    payload = json.loads(_row(recorded_at, param_key))
+    return json.dumps({**payload, "strategy": "mined", "run_id": run_id})
+
+
+def test_r1_charges_a_mine_round_as_one_event_not_as_its_row_count() -> None:
+    """Policy 0.2.0.  A 514-row search made a 170-row monthly budget structurally unrunnable.
+
+    R1 bounds how many SELECTIONS a window makes, and one mine round is one selection - enumerate the
+    space, take the top k - however wide the space was.  Charging by row count penalised searching more
+    thoroughly as though it were choosing more often, which is the wrong direction, and `refusals`
+    refuses whole rather than truncating (a truncated search reports a `declared_trials` counting
+    candidates nobody scored).  Together those made `research mine` impossible in any window, forever.
+    """
+    lines = [_mine_row(WINDOW_START, f"c{i}", "mine-shortlist-20260907T000000Z") for i in range(514)]
+    budget = window_spend(lines, window_start=WINDOW_START)
+    assert budget.spent == 0, "a mine round must not consume the row budget"
+    assert budget.mined_rows == 514, "...but it is still reported, because it IS the DSR denominator"
+    assert budget.mine_rounds == 1
+    assert not refusals(budget, 170), "a full row budget is still available after a mine round"
+    assert mine_refusals(budget), "and the round itself is now what a second mine is refused on"
+
+
+def test_a_second_mine_round_in_one_window_is_refused() -> None:
+    lines = [
+        _mine_row(WINDOW_START, "a", "mine-shortlist-20260907T000000Z"),
+        _mine_row(WINDOW_START, "b", "mine-shortlist-20260908T000000Z"),
+    ]
+    budget = window_spend(lines, window_start=WINDOW_START)
+    assert budget.mine_rounds == 2
+    assert "already run 2 mine round(s) of 1" in mine_refusals(budget)[0]
+
+
+def test_the_dsr_denominator_is_not_what_changed() -> None:
+    """The deflation question really is "best of how many", and that number really is 514.
+
+    `ledger_scope` still files every mined candidate into one shared bucket and
+    `oos_selection_threshold` still counts all of them.  R1 stopped charging them to a BUDGET; nothing
+    stopped counting them as trials, and conflating the two would be the actual danger here.
+    """
+    from beidou_alpha.validation.ledger import ledger_scope, parse_ledger, unique_trials
+
+    lines = [_mine_row(WINDOW_START, f"c{i}", "one-round") for i in range(514)]
+    assert len(unique_trials(parse_ledger(lines, ledger_scope("mined_abc")))) == 514
 
 
 def test_only_this_windows_rows_are_charged_to_this_window() -> None:

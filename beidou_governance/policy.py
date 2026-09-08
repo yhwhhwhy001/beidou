@@ -28,8 +28,23 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.1.0"
-"""Phase 0.  The rules are executable and replayable; nothing acts on them yet."""
+POLICY_VERSION = "0.2.0"
+"""0.2.0 (2026-09-08): R1 charges a mine ROUND as one event rather than as its row count.
+
+Why it moved.  R1's budget was anchored on "one mine round cost 514 rows" and then set to 500 a
+quarter - so under Q3's monthly window it became 170, which is a THIRD of a single round, and
+`refusals` refuses whole rather than truncating (a truncated search reports a `declared_trials`
+counting candidates nobody scored).  R1 + R2 + the scheduler therefore made `research mine`
+impossible to run at all, in any window, forever.
+
+The fix is not a bigger number.  R1 exists to bound how many SELECTIONS a window makes, and one mine
+round is one selection - enumerate the whole space, take the top k by marginal - not 514 independent
+ones.  That is exactly why `ledger_scope` files them into one shared `mined` bucket.  Charging by row
+count penalises searching MORE THOROUGHLY as though it were choosing more often, which is backwards.
+
+The DSR denominator is untouched: it still counts every row in the mined bucket, because the deflation
+question really is "best of how many", and that number really is 514.
+"""
 
 
 @dataclass(frozen=True)
@@ -47,9 +62,13 @@ class Policy:
     gate_scope: str = "per_strategy_bucket"
     report_whole_library_n: bool = True
 
-    # R1: new ledger rows per window.  ~500 a quarter, split by the shorter window; the ledger's
-    # growth rate is unchanged by Q3.  E5, anchored on one `research mine` round costing 514 rows.
+    # R1: new ledger rows per window, EXCLUDING the shared `mined` bucket.  ~500 a quarter, split by
+    # the shorter window; the ledger's growth rate is unchanged by Q3.  E5, anchored on one `research
+    # mine` round costing 514 rows - which is also why that round is no longer charged here (0.2.0).
     max_ledger_rows_per_window: int = 170
+    # ...and the mine rounds themselves, counted as events.  One selection per window: enumerating the
+    # whole space and taking the top k by marginal is ONE choice, however wide the space was.
+    max_mine_rounds_per_window: int = 1
 
     # R2: `research mine` runs only when the search space changed.  Re-running the same space and
     # keeping the rows charges the family twice for one hypothesis (the 2026-09-08 incident).

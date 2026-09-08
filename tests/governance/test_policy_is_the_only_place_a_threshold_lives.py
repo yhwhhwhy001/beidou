@@ -16,8 +16,10 @@ import pytest
 
 from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_digest
 
-# Phase 0, 2026-09-08.  Raise this in the commit that changes a rule, never to make the test pass.
-PINNED_DIGEST = "5787506aecdf"
+# Phase 0, 2026-09-08 -> 0.2.0 the same day.  Raise this in the commit that changes a rule, never to
+# make the test pass.  0.1.0 was "5787506aecdf"; it moved because R1 stopped charging a mine round by
+# its row count, which is the rule change the version bump is for.
+PINNED_DIGEST = "753638a519ac"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:

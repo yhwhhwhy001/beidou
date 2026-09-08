@@ -18,15 +18,25 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from beidou_alpha.validation.ledger import TrialRecord, all_trials, unique_trials
+from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, TrialRecord, all_trials, unique_trials
 from beidou_governance.policy import Policy
 
 
 @dataclass(frozen=True)
 class LedgerBudget:
+    """What this window has spent, in the two units R1 counts since policy 0.2.0.
+
+    Rows and mine rounds are separate because they answer different questions.  A `validate` is one
+    selection and writes a handful of rows; a `mine` is also ONE selection and writes 514, and
+    charging the second by its row count made it structurally impossible to run in a monthly window.
+    """
+
     window_start: str
-    spent: int
+    spent: int  # rows, excluding the shared `mined` bucket
     allowed: int
+    mine_rounds: int = 0
+    allowed_mine_rounds: int = 1
+    mined_rows: int = 0  # reported, never charged: it is the DSR denominator, not the budget
 
     @property
     def remaining(self) -> int:
@@ -35,6 +45,10 @@ class LedgerBudget:
     @property
     def exhausted(self) -> bool:
         return self.spent >= self.allowed
+
+    @property
+    def mine_exhausted(self) -> bool:
+        return self.mine_rounds >= self.allowed_mine_rounds
 
 
 def _recorded_at(record: TrialRecord) -> datetime | None:
@@ -57,11 +71,28 @@ def window_spend(lines: Iterable[str], *, window_start: datetime, policy: Policy
         when = _recorded_at(record)
         if when is None or when >= window_start:
             inside.append(record)
+    mined = [record for record in inside if record.strategy == MINED_SEARCH_STRATEGY]
+    charged = [record for record in inside if record.strategy != MINED_SEARCH_STRATEGY]
     return LedgerBudget(
         window_start=window_start.isoformat(),
-        spent=len(unique_trials(inside)),
+        spent=len(unique_trials(charged)),
         allowed=policy.max_ledger_rows_per_window,
+        # A round is a `run_id`: `research mine` writes every candidate of one enumeration under one.
+        mine_rounds=len({record.run_id for record in mined}),
+        allowed_mine_rounds=policy.max_mine_rounds_per_window,
+        mined_rows=len(unique_trials(mined)),
     )
+
+
+def mine_refusals(budget: LedgerBudget) -> Sequence[str]:
+    """R1 for a mine round: one selection per window, whatever the space's width.
+
+    Separate from `refusals` rather than a `wanted` of one, because the two are counted in different
+    units and folding them would restore exactly the confusion 0.2.0 exists to remove.
+    """
+    if budget.mine_exhausted:
+        return (f"R1: this window has already run {budget.mine_rounds} mine round(s) of {budget.allowed_mine_rounds}",)
+    return ()
 
 
 def refusals(budget: LedgerBudget, wanted: int) -> Sequence[str]:

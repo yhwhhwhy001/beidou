@@ -1165,6 +1165,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # The live half finally CALLS `metrics_parity`, which has existed since DL-D2 with nothing reading it:
 # M-011 now lands in the daily report, folded to the worst symbol rather than the mean, because a book
 # trades a universe.
+# 2026-09-08, policy 0.1.0 -> 0.2.0: +52 gov.  The sentence the rule requires, and it is a RULE change
+# rather than an implementation one, so R10's version bump and the re-pinned digest are the point.
+# R1's budget was anchored on "one mine round cost 514 rows" and then set to 500 a quarter, which Q3's
+# monthly window cut to 170 - a THIRD of a single round - while `refusals` refuses whole rather than
+# truncating (a truncated search reports a `declared_trials` counting candidates nobody scored).  R1 +
+# R2 + the scheduler therefore made `research mine` impossible to run in ANY window, forever, and that
+# was found by trying to run one rather than by reading the rules.
+# The fix is not a bigger number: R1 bounds how many SELECTIONS a window makes, and one mine round is
+# one selection - enumerate the space, take the top k by marginal - however wide the space was.  That
+# is exactly why `ledger_scope` files them into one shared bucket.  A test holds the part that would be
+# dangerous to get wrong: the DSR denominator still counts all 514, because "best of how many" really
+# is 514.  R1 stopped charging them to a BUDGET; nothing stopped counting them as trials.
 CEILING = {
     "beidou_alpha": 6_736,
     "beidou_live": 6_059,
@@ -1172,7 +1184,7 @@ CEILING = {
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_692,
+    "beidou_governance": 1_744,
 }
 
 
