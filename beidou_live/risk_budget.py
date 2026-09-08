@@ -155,9 +155,9 @@ def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) ->
     ]
     reason = None
     if len(returns) < params.min_vol_bars:
-        reason = f"{len(returns)} bars, needs {params.min_vol_bars}"
+        reason = f"只有 {len(returns)} 根 bar，需要 {params.min_vol_bars} 根"
     elif len(constructions) > 1:
-        reason = f"{len(constructions)} constructions in the window"
+        reason = f"窗口内有 {len(constructions)} 个构造"
     if reason is not None:
         return {"value": None, "band": list(params.vol_band), "bars": len(returns), "enforced": False, "why": reason}
     mean = sum(returns) / len(returns)
@@ -216,8 +216,8 @@ def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, 
             "fills": fills,
             "without_reference": without_reference,
             "enforced": False,
-            "why": f"{fills} fills, needs {params.min_slippage_fills}"
-            + (f"; {without_reference} carry no decision_close" if without_reference else ""),
+            "why": f"只有 {fills} 笔成交，需要 {params.min_slippage_fills} 笔"
+            + (f"；其中 {without_reference} 笔没有 decision_close" if without_reference else ""),
         }
     value = weighted / notional
     return {

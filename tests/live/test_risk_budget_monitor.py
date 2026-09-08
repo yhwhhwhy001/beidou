@@ -55,11 +55,11 @@ def test_volatility_refuses_to_answer_on_too_few_bars_or_a_mixed_construction() 
     params = RiskBudgetParams(min_vol_bars=10)
     short = [_cycle(i, 100.0 + i) for i in range(5)]
     thin = realised_vol(short, params)
-    assert thin["value"] is None and not thin["enforced"] and "needs 10" in thin["why"]
+    assert thin["value"] is None and not thin["enforced"] and "需要 10 根" in thin["why"]
 
     mixed = [_cycle(i, 100.0 + i, construction="aaa" if i < 10 else "bbb") for i in range(30)]
     straddled = realised_vol(mixed, params)
-    assert straddled["value"] is None and "2 constructions" in straddled["why"]
+    assert straddled["value"] is None and "有 2 个构造" in straddled["why"]
 
 
 def _wiggle(step: float, bars: int = 40) -> list[dict[str, Any]]:
@@ -141,7 +141,7 @@ def test_slippage_is_notional_weighted_and_signed_by_side() -> None:
 
 def test_a_thin_trade_log_reports_why_instead_of_zero_bps() -> None:
     out = slippage_bps([], RiskBudgetParams(), latest_ms=1_700_000_000_000)
-    assert out["value"] is None and not out["enforced"] and "0 fills" in out["why"]
+    assert out["value"] is None and not out["enforced"] and "只有 0 笔成交" in out["why"]
 
 
 def test_guard_firings_are_counted_but_never_alert() -> None:
