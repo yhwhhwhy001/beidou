@@ -199,7 +199,7 @@ strategies:
     # 走前 OOS 1.81（093705Z 为 1.77）、门 1.49 @ N=146（按策略桶：84 账本 + 60 申报 + 2）、p_family 0.00、
     # CPCV 1.86 / q05 1.36 / 0% 负、成本 x2 1.69、DSR p 0.31（只报不判）、PBO 0.09。VERDICT PASS。
     # DL-R4 的标注仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴，不是一次选择的样本外记录。
-    # 全库 unique 试验 675 下的分位数门约 1.66，此数亦过；诚实 16 点网格（030942Z，1.485）在该门下不过。
+    # 全库 unique 试验 677（重出后 +4 行）下的分位数门约 1.67，此数亦过；诚实 16 点网格（030942Z，1.485）在该门下不过。
     evidence:
       report: reports/research/tsmom-validation-20260908T105259Z.json
       sha256: 11f917875f5fba076184c538bbc2f78cfd6aa51c34feeda61dfc2648dfa96009
