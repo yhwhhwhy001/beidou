@@ -1230,10 +1230,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # becomes everybody's partner and the book is one leveraged bet, not a set of pairs.  And every refit
 # sees a PREFIX - selecting pairs on the full sample is the classic look-ahead of this family, held by
 # a truncation test rather than by this paragraph.
+# 2026-09-09, +5 alpha +6 cli: `impact_model` restored to the validation report.  The sentence the
+# rule requires, and it is an admission: DL-C1 claimed this field on 2026-09-08 and did not ship it.
+# It was eaten when the surrounding edit was replayed, nothing asked for it, and the next report went
+# out without saying what capital its verdict assumed - which is precisely the silence DL-C1 exists to
+# end.  `test_a_validation_report_names_the_size_it_assumed` now asks for all three of the assumption
+# fields together, because they were added for one reason: a verdict has to carry the assumptions that
+# produced it, not just its number.
 CEILING = {
-    "beidou_alpha": 6_967,
+    "beidou_alpha": 6_972,
     "beidou_live": 6_122,
-    "beidou_cli": 4_076,
+    "beidou_cli": 4_082,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

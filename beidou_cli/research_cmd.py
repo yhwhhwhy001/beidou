@@ -886,6 +886,12 @@ def research_validate(
             None if book_guards is None else dict(vars(book_guards)),
             None if exit_params is None else dict(vars(exit_params)),
         ),
+        # DL-C1: what size this verdict assumes.  `capital: 0` is the flat, scale-free cost model every
+        # archived report was produced under, and saying so is the point - it is an assumption the
+        # reports have always carried silently.  This line was claimed as delivered on 2026-09-08 and
+        # was not: it was eaten when the surrounding edit was replayed, and no test asked for it.
+        # `test_a_validation_report_names_the_size_it_assumed` now does.
+        "impact_model": dict(vars(impact)),
         "generated_at": datetime.now(UTC).isoformat(),
     }
     verdict, reasons = decide(report)

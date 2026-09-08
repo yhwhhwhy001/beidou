@@ -33,3 +33,21 @@ def test_the_execution_convention_separates_the_entry_price_from_the_holding_ret
     assert "conservative about the entry price" in doc, "the claim survives, scoped to where it holds"
     assert "not about the holding return" in doc, "and the half where it does not is stated"
     assert "-0.029" in doc, "with the size of what is dropped, measured rather than called negligible"
+
+
+def test_a_validation_report_names_the_size_it_assumed() -> None:
+    """DL-C1: `capital: 0` is an assumption, and a report that does not state it states it silently.
+
+    This exists because the field was claimed as delivered on 2026-09-08 and was not - it was eaten
+    when the surrounding edit was replayed, and nothing asked for it, so the next report went out
+    without it and said so to nobody.  The three fields are checked together because they were added
+    for one reason: a verdict has to carry the assumptions that produced it, not just its number.
+    """
+    import inspect
+
+    from beidou_cli import research_cmd
+
+    # click wraps the function in a Command; the original is on .callback
+    source = inspect.getsource(research_cmd.research_validate.callback)
+    for field in ('"impact_model"', '"preregistration"', '"evidence_construction"'):
+        assert field in source, f"the validation report no longer carries {field}"
