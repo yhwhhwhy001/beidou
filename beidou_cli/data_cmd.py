@@ -101,7 +101,16 @@ def data_sync(
 @click.option("--symbols", required=True, help="comma-separated symbols to ingest")
 @click.option("--from", "start", required=True, help="first day YYYY-MM-DD")
 @click.option("--to", "end", required=True, help="last day YYYY-MM-DD, exclusive")
-def data_metrics(root: str, symbols: str, start: str, end: str) -> None:
+@click.option(
+    "--workers",
+    default=8,
+    show_default=True,
+    help=(
+        "Fetch this many SYMBOLS at once.  Measured per symbol-day: 0.06s of CPU against 0.58s of "
+        "waiting, so this is the axis with the headroom.  Writes stay on one thread."
+    ),
+)
+def data_metrics(root: str, symbols: str, start: str, end: str, workers: int) -> None:
     """Ingest the daily futures-metrics archive (DL-D2), resuming from what the store already holds.
 
     Research-side only, and deliberately so: live can read metrics from the 30-day REST window and
@@ -109,15 +118,21 @@ def data_metrics(root: str, symbols: str, start: str, end: str) -> None:
     source can answer for it (`metrics_refusal`).  Ingesting without that gate would be KILL-027 in
     its purest form - a research panel strictly larger than the live one, arriving silently.
 
-    Measured 2026-09-07: 0.69s per symbol-day, so 20 symbols x 1 year is about 1.4 hours and 45 pool
-    symbols over the whole point-in-time range about 17.7 hours - well inside the plan's 3-day limit,
-    so the contingency of narrowing to 45 symbols is not needed.
+    Measured 2026-09-07: 0.69s per symbol-day sequentially.  That number is a LOWER BOUND and was
+    measured on a nearly empty store: until 2026-09-09 this function appended once per day, and
+    ``MetricsStore.append`` rewrites the symbol's whole parquet, so the real cost grew with the days
+    already held - a 2,077-day symbol wrote about 621 million rows to store 598 thousand.  It now
+    gathers a symbol's days and appends once, and ``--workers`` fetches several symbols at a time.
     """
     wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     store = MetricsStore(root)
     before = {s: store.last_open_time(s) for s in wanted}
+
+    def progress(symbol: str, done: int, total: int) -> None:
+        click.echo(f"[{done}/{total}] {symbol}", err=True)
+
     with MetricsArchiveClient() as client:
-        totals = sync_metrics(client, store, wanted, start=start, end=end)
+        totals = sync_metrics(client, store, wanted, start=start, end=end, workers=workers, progress=progress)
     for symbol in wanted:
         after = store.last_open_time(symbol)
         rows = totals.get(symbol)

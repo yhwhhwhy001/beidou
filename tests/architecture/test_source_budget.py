@@ -1177,11 +1177,27 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # is exactly why `ledger_scope` files them into one shared bucket.  A test holds the part that would be
 # dangerous to get wrong: the DSR denominator still counts all 514, because "best of how many" really
 # is 514.  R1 stopped charging them to a BUDGET; nothing stopped counting them as trials.
+# 2026-09-09, the metrics ingest made runnable: +84 data, +15 cli.  The sentence the rule requires,
+# and the honest one is that this is a correction rather than a feature.
+# The estimate that preceded it said 7.1 hours and was wrong twice, both times because a ten-day probe
+# hides the terms that matter.  It assumed 10 requests a second from the file size, when the path is
+# latency bound - measured 0.06s of CPU against 0.58s of waiting per symbol-day.  And it measured on a
+# near-empty store, while `sync_metrics` called `MetricsStore.append` ONCE PER DAY - and that function
+# reads the symbol's whole parquet, concatenates, sorts and writes it back, so day k rewrote k x 288
+# rows and a 2,077-day symbol would have written about 621 million rows to store 598 thousand.
+# So: gather a symbol's days and append once (linear), and fetch several SYMBOLS at a time - by symbol
+# because a symbol's days must be gathered before its single append, which also puts every write on
+# one thread so two workers can never touch one parquet.  Measured 8 symbols x 60 days in 39.1s
+# against 33.6s for one, i.e. eight times the work for sixteen percent more time.
+# The retry is in for a reason that contradicted its own premise: the operator had retired the local
+# proxy that used to answer 503 in bursts, so a 503 should not have been possible - and 16 concurrent
+# symbols produced one anyway, from the CDN, while 8 ran clean.  Concurrency-dependent throttling, so
+# backing off works; a 404 is never retried because an unpublished day is the normal case every morning.
 CEILING = {
     "beidou_alpha": 6_736,
     "beidou_live": 6_059,
-    "beidou_cli": 4_016,
-    "beidou_data": 1_805,
+    "beidou_cli": 4_031,
+    "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 1_744,
