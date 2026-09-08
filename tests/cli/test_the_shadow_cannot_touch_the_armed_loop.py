@@ -13,6 +13,8 @@ one.  Both refuse to run armed, for reasons that are different and both load-bea
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from click.testing import CliRunner
 
 from beidou_cli import main
@@ -39,3 +41,18 @@ def test_both_flags_are_offered_and_documented() -> None:
     help_text = CliRunner().invoke(main, ["live", "run", "--help"]).output
     assert "--state-dir" in help_text and "--registry" in help_text
     assert "canary" in help_text
+
+
+def test_state_dir_is_honoured_under_paper_too(tmp_path: Path) -> None:
+    """A flag whose entire purpose is isolation must not be silently discarded by one of its modes.
+
+    `--paper --state-dir X` wrote to `.beidou/paper` regardless of X, because the paper branch applied
+    `with_name("paper")` to whatever the profile said - which is right for the DEFAULT (it makes the
+    paper directory a sibling of the live one) and wrong the moment somebody names a directory.  Two
+    paper canaries would have shared one `state.json` and neither would have said so.
+    """
+    from beidou_cli.live_cmd import _paper_state_dir
+
+    profile = {"paths": {"state_dir": ".beidou/live"}}
+    assert _paper_state_dir(profile, "") == Path(".beidou/paper")
+    assert _paper_state_dir(profile, str(tmp_path / "shadow")) == tmp_path / "shadow"

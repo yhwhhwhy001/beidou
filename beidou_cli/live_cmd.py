@@ -8,7 +8,7 @@ import logging
 import signal
 import subprocess
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,6 +75,20 @@ from beidou_live.verify import (
     verify_live_targets,
 )
 from beidou_shared.config import env_secret
+
+
+def _paper_state_dir(payload: Mapping[str, Any], state_dir: str) -> Path:
+    """`--state-dir` verbatim when given, the profile's sibling `paper` directory when not.
+
+    The second branch is the historical behaviour and `with_name` is what makes the paper directory a
+    SIBLING of the live one rather than a child.  Applied to an explicit `--state-dir` it silently
+    threw the flag away - `--paper --state-dir .beidou/live-shadow` wrote to `.beidou/paper` - so a
+    flag whose entire purpose is isolation delivered none, and two paper canaries would have collided
+    on one `state.json` without either of them saying so.
+    """
+    if state_dir:
+        return Path(state_dir)
+    return Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live")).with_name("paper")
 
 
 def clock_skew_seconds(rest_url: str) -> float | None:
@@ -251,10 +265,7 @@ def live_run(
         payload.setdefault("paths", {})["state_dir"] = state_dir
     universe = resolve_universe(payload, [s for s in symbols.split(",") if s.strip()] or None, data_root)
     config = live_config(payload, universe, registry, dry_run=dry_run)
-    if paper:
-        store = StateStore(Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live")).with_name("paper"))
-    else:
-        store = build_store(payload, dry_run=dry_run)
+    store = StateStore(_paper_state_dir(payload, state_dir)) if paper else build_store(payload, dry_run=dry_run)
     market = build_market_data(payload)
     venue: Any
     if paper:

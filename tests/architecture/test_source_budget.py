@@ -1237,10 +1237,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # end.  `test_a_validation_report_names_the_size_it_assumed` now asks for all three of the assumption
 # fields together, because they were added for one reason: a verdict has to carry the assumptions that
 # produced it, not just its number.
+# 2026-09-09, +11 cli: `--state-dir` is honoured under `--paper` too.  The sentence the rule requires,
+# and it is a defect in a flag this session added two commits earlier.  The paper branch applied
+# `with_name("paper")` to whatever the profile said, which is right for the DEFAULT - it makes the
+# paper directory a SIBLING of the live one - and silently threw the flag away the moment somebody
+# named a directory: `--paper --state-dir .beidou/live-shadow` wrote to `.beidou/paper`.  A flag whose
+# entire purpose is isolation delivered none, and two paper canaries would have shared one state.json
+# without either of them saying so.  Found by running the DRILL rather than by reading the code.
 CEILING = {
     "beidou_alpha": 6_972,
     "beidou_live": 6_122,
-    "beidou_cli": 4_082,
+    "beidou_cli": 4_093,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
