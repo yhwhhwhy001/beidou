@@ -1308,6 +1308,13 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # main book, so no cycle reports a stop for a main sleeve and `main -> probe` stays unreachable.
 # Closing that changes what can halt the live main book, which is a decision, not a side effect of
 # adding a reader.
+# 2026-09-09, +10 governance: a docstring that asserted a safety property the code does not have.
+# The sentence the rule requires.  `state.load` said an empty book was safe because "every rule that
+# could act on it refuses for want of a candidate" - true only of the candidate the CALLER supplies.
+# Every rule that reads the book for CONSTRAINTS reads empty as headroom, and with no state file a
+# second 1/3 probe was ALLOWED on top of the flow probe already running live: 2/3 against a 1/3 cap,
+# with no rule anywhere saying a word.  Ten lines is what it costs to say that where the next reader
+# will be standing, and the seeded state plus its test are what actually close it.
 CEILING = {
     "beidou_alpha": 6_998,
     "beidou_live": 6_186,
@@ -1315,7 +1322,7 @@ CEILING = {
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_006,
+    "beidou_governance": 2_016,
 }
 
 
