@@ -993,9 +993,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # that changes meaning between commits is worse than a bilingual alert; the gloss is the alternative to
 # translating the codes themselves, and it lives beside them so a new code cannot be added without
 # seeing that the operator's channel needs a word for it.
+# 2026-09-08, M-015's limit re-derived with the probe book in place: +23 live, all of it prose.
+# `RISK_COMPRESSION_LIMIT` moved 0.50 -> 0.76 and the three lines that MOVE are the constant, the
+# alert's trailing clause and one docstring sentence; the rest say why, because the number they
+# replace was declared in its own comment to be "not a derived threshold" and the next reader has to
+# be able to tell a derivation from a second guess.  Deliberately NOT copied here in full: the method,
+# the counterfactual and the 88-cycle table live in `scratchpad/m015_recalibrate_with_probe.py`, whose
+# docstring was written before it ran, so a correction is made in one place.  What the prose buys that
+# a pointer would not: the two anchors (0.581 working / 1.000 deleted), the pre-registered 1.5
+# separability gate they passed, and the escalation rule - if this alerts again from the two books
+# cancelling rather than from stage 1, replace the instrument instead of raising the number, which is
+# the failure this file exists to stop.  The two raises above met in a merge, so this ceiling is the
+# merged tree measured rather than either branch's number carried over.
 CEILING = {
     "beidou_alpha": 6_046,
-    "beidou_live": 5_881,
+    "beidou_live": 5_904,
     "beidou_cli": 3_550,
     "beidou_data": 1_805,
     "beidou_exchange": 611,

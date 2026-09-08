@@ -39,7 +39,7 @@ PLAN_SECONDS = 30
 CEILING_SECONDS = 240
 
 # Below this many selected tests the run was filtered (`pytest tests/live`, `-k`, `-m`), and a filtered
-# run is not the thing the plan put a number on.  838 selected as of 2026-09-08, network markers: 0.
+# run is not the thing the plan put a number on.  847 selected as of 2026-09-08, network markers: 0.
 FULL_SUITE_MIN = 700
 
 _STARTED_AT: float | None = None

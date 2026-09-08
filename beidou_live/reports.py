@@ -23,7 +23,21 @@ from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, risk_budget_status
 from beidou_live.state import StateStore
 
-RISK_COMPRESSION_LIMIT = 0.50  # see `risk_adaptation`: a bound between "working" (0.13) and "stage 1 deleted" (1.0)
+# A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
+# "not a derived threshold", placed between 0.13 measured 2026-09-05 and 1.0 for stage 1 deleted - and
+# that 0.13 came from a book where the probe reached one of sixteen names.  It now reaches four of
+# eighteen (D-019), which is why the reading crossed at 2026-09-08T04:00Z; stage 1 was intact on all
+# fourteen other names to four decimals.  Re-derived under a rule fixed before it ran, over the 88
+# live cycles carrying `asset_vol`: working max 0.581, deleted min 1.000, ratio 1.72 against a
+# pre-registered 1.5 gate; limit = their geometric mean.  Method, counterfactual and full numbers:
+# `scratchpad/m015_recalibrate_with_probe.py` (its docstring is the pre-registration).  Kept there
+# rather than copied here, so a correction is made once.
+#
+# What it does NOT buy: `compression`'s denominator is the smallest risk contribution, which on the
+# overlaid names is a near-cancellation between two books (floor so far 0.295 of the median), so the
+# statistic is unbounded above for reasons unrelated to stage 1.  Alert again from a cancellation and
+# the answer is to measure the main book separately, NOT to raise this a second time.
+RISK_COMPRESSION_LIMIT = 0.76
 
 
 def _day_of(record: dict[str, Any]) -> str | None:
@@ -767,11 +781,16 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
 
     ``compression = risk_spread / vol_spread`` is the instrument.  It is not a display: delete
     stage 1 and weights stop depending on sigma, so risk_spread converges on vol_spread and this
-    reads 1.0.  Measured on the live book 2026-09-05 it reads 0.13 (vol 12.2x -> risk 1.6x).  The
-    0.50 limit is a wide bound placed between those two, not a derived threshold, because several
-    honest effects push it up: the no-trade band holds a stale weight while sigma moves under it,
-    ``max_weight`` binds on the calmest names, and a signal with magnitude (today's tsmom is pure
-    sign) puts conviction back into the numerator.
+    reads 1.0.  Measured on the live book 2026-09-05 it reads 0.13 (vol 12.2x -> risk 1.6x); on
+    2026-09-08, with the probe overlaying four of eighteen names, 0.58.  ``RISK_COMPRESSION_LIMIT``
+    carries the derivation and the reason it moved.
+
+    Several honest effects push it up with stage 1 untouched, which is why the limit is loose: a
+    second book summed by ``combine_books`` disagreeing with the first (the big one - it both stacks
+    and cancels), the no-trade band holding a stale weight while sigma moves under it, ``max_weight``
+    binding on the calmest names, and a signal with magnitude putting conviction back in the numerator.
+    Read an ALERT as "the risk contributions spread apart", never as "stage 1 broke" - max/min over
+    the held names cannot tell those apart.
 
     Refuses to answer rather than passing by default - a spread over one or two names is noise,
     and cycles written before ``asset_vol`` was recorded carry no sigma at all.
@@ -1011,9 +1030,13 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     if str(adaptation.get("status")) == "ALERT":
         # M-015: the weights stopped taking each symbol's volatility back out.  Loud rather than
         # quiet because this is the layer D-037 pointed at when it ruled the leverage layer inert.
+        # The clause read "per-symbol sizing is no longer vol-scaled", and the Lark translation
+        # carried it over faithfully as "不再按波动率缩放" - a conclusion the statistic cannot
+        # support, and wrong the first time it fired: `compression` is measured AFTER
+        # `combine_books` sums the books, so a second book disagreeing reads as stage 1 failing.
         alerts.append(
             f"风险自适应告警：压缩度 {adaptation.get('compression'):.2f} > "
-            f"{adaptation.get('limit'):.2f}；每个标的的仓位不再按波动率缩放"
+            f"{adaptation.get('limit'):.2f}；风险贡献相互拉开——查第一层，以及探针书与主书的重叠"
         )
     notices: list[str] = []
     if str(budget.get("status")) == "BLIND":
