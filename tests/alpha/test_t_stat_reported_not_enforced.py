@@ -104,13 +104,23 @@ def test_a_selection_reason_survives_a_report_without_p_family() -> None:
     assert any("deflated threshold" in r for r in reasons)
 
 
-def _archived_reports() -> list[tuple[str, dict[str, Any]]]:
-    """Every archived report written under the current rules - the ones carrying an ``oos_selection`` block."""
+def _archived_reports(with_gate: bool | None = None) -> list[tuple[str, dict[str, Any]]]:
+    """Every archived report written under the current rules - the ones carrying an ``oos_selection`` block.
+
+    ``with_gate`` narrows to reports that name their gate (True) or cannot (False); ``None`` keeps
+    both.  The first report to name one is tsmom-validation-20260908T105259Z, re-derived the day the
+    gate got its name, so from then on the archive holds both kinds and a test has to say which it
+    is about - a pin written for "none of them can" went vacuous-by-inversion the moment one could.
+    """
     out = []
     for path in sorted(ROOT.glob("reports/research/**/*-validation-*.json")):
         report = json.loads(path.read_text(encoding="utf-8"))
-        if (report.get("oos_selection") or {}).get("n_trials"):
-            out.append((path.name, report))
+        selection = report.get("oos_selection") or {}
+        if not selection.get("n_trials"):
+            continue
+        if with_gate is not None and bool(selection.get("gate")) != with_gate:
+            continue
+        out.append((path.name, report))
     return out
 
 
@@ -139,10 +149,25 @@ def test_no_archived_verdict_changes_for_any_reason_but_the_gate_rename() -> Non
 
 
 def test_every_archived_report_is_refused_on_the_gate_it_cannot_name() -> None:
-    """The 2026-09-08 finding, kept as a test: these thresholds outlived the rule that produced them."""
-    reports = _archived_reports()
-    assert reports, "no archived report carries an oos_selection block"
+    """The 2026-09-08 finding, kept as a test: these thresholds outlived the rule that produced them.
+
+    Scoped to the reports that cannot name their gate.  The ones re-derived the same day DO name
+    it and are judged on their numbers - asserted next, so this pin cannot go quietly vacuous once
+    the archive turns over.
+    """
+    reports = _archived_reports(with_gate=False)
+    assert reports, "no archived report lacks a gate name"
     for name, report in reports:
         verdict, reasons = decide(report)
         assert verdict == "FAIL", name
         assert any("gate" in reason for reason in reasons), name
+
+
+def test_a_report_that_names_its_gate_is_judged_on_its_numbers() -> None:
+    """The other half of the same finding: naming the gate is what lets ``decide`` read the threshold."""
+    reports = _archived_reports(with_gate=True)
+    assert reports, "no archived report names its gate yet"
+    for name, report in reports:
+        verdict, reasons = decide(report)
+        assert verdict == report["verdict"], name
+        assert not any("gate" in reason for reason in reasons), name
