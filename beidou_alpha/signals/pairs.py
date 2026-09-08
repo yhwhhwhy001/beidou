@@ -71,8 +71,13 @@ def _mutual_pairs(window: pd.DataFrame, min_corr: float) -> list[tuple[int, int]
     Mutual rather than one-sided: with a one-sided rule the market's most correlated name becomes
     everybody's partner and the book stops being pairs at all.
     """
-    usable = window.notna().sum() >= max(2, len(window) // 2)
-    columns = np.flatnonzero(usable.to_numpy())
+    # Enough observations AND some variance: `np.corrcoef` divides by the standard deviation, so a
+    # column that never moved in the formation window produces a NaN row and a divide warning, and a
+    # NaN row's argmax is meaningless rather than merely noisy.  A symbol that did not move is also not
+    # a pair candidate under any reading, so it is dropped here rather than masked afterwards.
+    observed = window.notna().sum() >= max(2, len(window) // 2)
+    varying = window.std() > 0
+    columns = np.flatnonzero((observed & varying).to_numpy())
     if len(columns) < 2:
         return []
     matrix = np.corrcoef(np.nan_to_num(window.to_numpy(dtype=float)[:, columns], nan=0.0), rowvar=False)
