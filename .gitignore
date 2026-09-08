@@ -31,3 +31,8 @@ scratchpad/*.json
 # so a `!` re-include under it never fires.  Excluding the contents instead leaves that door open.
 .claude/*
 !.claude/skills/
+
+# The autonomy switch is per-CHECKOUT runtime state, not code: `governance/ENABLED` says THIS working
+# copy may write the registry.  Committing it would turn autonomy on in every clone and every
+# worktree by checkout, which is the one decision the design insists a person takes deliberately.
+governance/

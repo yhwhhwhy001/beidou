@@ -2,6 +2,37 @@
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
 version: 1
+
+# 2026-09-09「选 3」：交易总体钉在这里，重排成为一次受治理的事务。
+# 在此之前 universe.json 是决定，而循环每天约 01:00Z 重写它——于是每一份引用的证据都在那一刻
+# 停止描述被交易的总体，数据集闸拒绝下一次 armed 启动。可干净重启每天到期一次，直到 09-08 一次
+# canary 把它提前七小时触发，才有人看见。
+# 钉在 registry 而不是把刷新节奏做成构造参数：M-010 的 30 天窗口只按 construction_fingerprint
+# 清零，而这条窗口自 2026-09-04T15:02Z 起未断，是整条治理线在等的那个时钟。
+# 循环仍然每天重排、仍然把结果记进 cycles.jsonl 的 universe_update，只是不再采纳它。
+#
+# 这份名单读自 .beidou/live/state.json——armed 循环此刻真正持有的那套。第一版读的是
+# .beidou/data/universe.json，而 09-08 18:00Z 一次裸 --paper 重排把那个文件里的 CYSUSDT
+# 换成了 PUMPUSDT；照那份钉，钉的是循环从来没持有过的币。文件是观察，而且不止一个进程在写它。
+universe:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - ZECUSDT
+  - XRPUSDT
+  - HYPEUSDT
+  - DOGEUSDT
+  - BNBUSDT
+  - TRUMPUSDT
+  - ENAUSDT
+  - TUTUSDT
+  - 1000PEPEUSDT
+  - SUIUSDT
+  - AKEUSDT
+  - UNIUSDT
+  - LINKUSDT
+  - ADAUSDT
+  - CYSUSDT
 ensemble:
   method: mean                 # weighted mean of per-strategy targets (alternative: rolling_zscore)
   turnover_penalty: 0.0
