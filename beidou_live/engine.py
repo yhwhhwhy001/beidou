@@ -1370,6 +1370,20 @@ def registry_digest(model: Any) -> str:
         "books": dict(sorted(getattr(model, "books", {}).items())),
         "ensemble_method": str(getattr(model, "ensemble_method", "mean")),
     }
+    pinned = tuple(getattr(model, "universe", ()) or ())
+    if pinned:
+        # 2026-09-09.  A pinned universe decides WHICH SYMBOLS this process may hold, so a loop running
+        # one while the file says another is KILL-Q15's exact shape - the failure this digest exists to
+        # make visible.  It was nearly missed: `registry_fingerprint` (what a research report records)
+        # and this function (what the loop reports every cycle) are two different payloads, and putting
+        # the universe only in the first would have left the running record unable to tell.
+        #
+        # Conditional, for the reason the whole `CONSTRUCTION_PAYLOAD_VERSION` apparatus exists one
+        # fingerprint over: adding the KEY unconditionally moves the digest of every registry that pins
+        # nothing, and `live verify` would then report the running loop as diverged from a file
+        # identical to the one it loaded.  The key appears exactly when a universe is pinned, and
+        # pinning one SHOULD move the digest.
+        payload["universe"] = list(pinned)
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
 
 

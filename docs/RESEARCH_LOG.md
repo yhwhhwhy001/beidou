@@ -4594,3 +4594,27 @@ DL-R4 的标注照旧要写：两臂全折同选，所以这个 OOS 是一条全
    的动作，不是我的。
 
 两步走完之后，可干净重启就不再每天到期——它会一直有效，直到下一次**有人决定**重排总体。
+
+### 更正与补完：我把两个不同的 digest 比在了一起，而那次比对差点让钉住的总体对循环隐形
+
+跑 `governance plan` 时我看到磁盘上是 `fa383fbe6a79`、循环在跑 `16671c63a12e`，并据此告诉操作者"钉上去会
+改 `registry_digest`，M-Q10 会报不一致"。**那句话是错的，因为那两个数从来就不可比**：
+
+- **`registry_digest`**（`beidou_live/engine.py`）——**循环每周期报的那个**，`live verify` 与 M-Q10 比的
+  那个。载荷是 `strategies` / `books` / `ensemble_method`。
+- **`registry_fingerprint`**（`beidou_alpha/registry.py`）——**研究报告记的那个**。载荷多一个
+  `turnover_penalty`。
+
+两者永远不相等，按设计如此。我拿一个去对另一个，然后把差异报成了分歧。
+
+**但这次错看撞出了一个真问题**：我第一版只把 `universe` 加进了 `registry_fingerprint`。于是**钉住总体不会
+动循环报的那个 digest**——一条循环握着一套总体、而文件写着另一套，**在运行记录里完全看不见**。那正是
+KILL-Q15 的形状，也正是 `registry_digest` 存在的理由。
+
+已补：两个 digest 都看得见钉住的总体，且**都是条件化的**——只有钉了才出现这个键。理由与
+`CONSTRUCTION_PAYLOAD_VERSION` 那套机制一模一样，只是换了一个指纹：**无条件加一个键会移动每一个"什么都
+没钉"的 registry 的 digest**，于是 `live verify` 会把循环报成"与它自己加载的那份文件分歧"。实测钉死：
+未钉的实盘 registry 的循环 digest 必须仍是 **`16671c63a12e`**，也就是正在跑的那个进程报的数。
+
+钉之后循环 digest 会变成 **`c0b4db59a5d7`**——**所以我先前那句话的结论碰巧是对的（M-Q10 会看见），但当时
+给出的理由是错的，而且如果不查，实现会让它看不见。**

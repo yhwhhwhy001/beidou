@@ -45,6 +45,10 @@ class AlphaModel:
     hold_on_no_action: bool = True
     min_history_bars: int = 720
     books: dict[str, float] = field(default_factory=dict)  # non-main book -> fraction of the main risk budget
+    # The pinned traded population, carried so `registry_digest` can see it: this model IS what the
+    # running process holds, and a loop holding one universe while the file names another is KILL-Q15's
+    # shape.  Empty when the registry pins none, which is every registry written before 2026-09-09.
+    universe: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name, fraction in self.books.items():
@@ -67,6 +71,7 @@ class AlphaModel:
             ensemble_method=registry.ensemble_method,
             min_history_bars=min_history_bars,
             books={name: spec.fraction for name, spec in registry.books.items()},
+            universe=registry.universe,
         )
 
     # --- books ----------------------------------------------------------------

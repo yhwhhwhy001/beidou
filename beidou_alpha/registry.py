@@ -136,12 +136,20 @@ def registry_fingerprint(
         "turnover_penalty": registry.turnover_penalty,
         "books": {name: spec.fraction for name, spec in sorted(registry.books.items())},
         "strategies": strategies,
-        # The traded population is part of "what runs".  Leaving it out would be the silence this whole
-        # change exists to end: a pinned universe that could be edited without any digest moving is a
-        # pinned universe nobody can tell has moved.  Empty for a registry that pins none, so every
-        # report written before 2026-09-09 keeps the fingerprint it was produced under.
-        "universe": list(registry.universe),
     }
+    if registry.universe:
+        # Present only when it says something.  The traded population IS part of "what runs" - a pinned
+        # universe that could be edited with no digest moving is one nobody can tell has moved - but
+        # adding the KEY unconditionally moves the digest of every registry that pins nothing, and the
+        # first draft of this did exactly that: the shipped registry went 16671c63a12e -> fa383fbe6a79
+        # while not one byte of it had changed, which would have had `live verify` report the running
+        # loop as diverged from a file identical to the one it loaded.
+        #
+        # That is the failure `CONSTRUCTION_PAYLOAD_VERSION` and `CONSTRUCTION_ALIASES` exist for one
+        # fingerprint over, and this one has no such machinery - so the field is made conditional
+        # instead, which needs none: the key appears exactly when a universe is pinned, and pinning one
+        # SHOULD move the digest.
+        payload["universe"] = list(registry.universe)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     return {"digest": digest, **payload}
 

@@ -1265,9 +1265,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # makes a re-rank a governed transaction with a log and a rollback.  Same intent, no reset.
 # The re-rank still runs and is still recorded; it stops deciding.  Observation kept, decision removed
 # - the split this plan already applies to every other construction change, applied to the population.
+# 2026-09-09, +13 alpha +14 live: the pinned universe reaches the digest the LOOP reports.  The
+# sentence the rule requires, and it is a correction of the change two commits earlier.
+# `registry_fingerprint` (what a research report records) and `registry_digest` (what the loop reports
+# every cycle, and what `live verify` / M-Q10 compare) are two DIFFERENT payloads, and the first draft
+# put the universe only in the research one - so a loop holding one universe while the file named
+# another would have been invisible in the running record, which is KILL-Q15's exact shape.
+# Both are conditional on the universe being non-empty, for the reason `CONSTRUCTION_PAYLOAD_VERSION`
+# exists one fingerprint over: adding the KEY unconditionally moves the digest of every registry that
+# pins nothing, and `live verify` would report the running loop as diverged from the file it loaded.
+# Pinned to the measurement: the shipped registry's loop digest must stay 16671c63a12e, which is what
+# the running process reports.
 CEILING = {
-    "beidou_alpha": 6_985,
-    "beidou_live": 6_153,
+    "beidou_alpha": 6_998,
+    "beidou_live": 6_167,
     "beidou_cli": 4_110,
     "beidou_data": 1_889,
     "beidou_exchange": 611,

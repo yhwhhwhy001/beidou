@@ -62,7 +62,10 @@ def test_pinning_a_universe_moves_the_registry_digest() -> None:
         registry_fingerprint(parse_registry(PINNED))["digest"]
         != registry_fingerprint(parse_registry(UNPINNED))["digest"]
     )
-    assert registry_fingerprint(parse_registry(UNPINNED))["universe"] == []
+    # ...and a registry that pins nothing must carry no such key at all.  Adding it unconditionally
+    # moves the digest of every registry that pins nothing, and `live verify` would then report the
+    # running loop as diverged from a file identical to the one it loaded.
+    assert "universe" not in registry_fingerprint(parse_registry(UNPINNED))
 
 
 @pytest.mark.parametrize("pinned", [True, False])
@@ -74,3 +77,29 @@ def test_the_engine_only_stops_adopting_when_the_registry_pins(pinned: bool) -> 
     registry = parse_registry(PINNED if pinned else UNPINNED)
     config = live_config(profile, ["BTCUSDT"], registry, dry_run=True)
     assert config.universe_proposal_only is pinned
+
+
+def test_the_digest_the_LOOP_reports_is_the_one_that_must_see_the_universe() -> None:
+    """The near-miss worth pinning, because it cost a wrong statement to the operator.
+
+    `registry_fingerprint` (what a research report records) and `registry_digest` (what the loop
+    reports every cycle, and what `live verify` / M-Q10 compare) are two DIFFERENT payloads.  Putting
+    the pinned universe only in the first would have left the running record unable to tell a loop
+    holding one universe from a file naming another - which is KILL-Q15's exact shape, and the failure
+    `registry_digest` exists for.
+
+    Both conditional, both for the reason the `CONSTRUCTION_PAYLOAD_VERSION` apparatus exists one
+    fingerprint over: adding the KEY unconditionally moves the digest of every registry that pins
+    nothing.  Measured - the shipped registry's loop digest must stay exactly what the running process
+    reports.
+    """
+    from beidou_live.composition import build_model
+    from beidou_live.engine import registry_digest
+
+    profile = yaml.safe_load(Path("config/live.demo.yaml").read_text(encoding="utf-8"))
+    shipped = parse_registry(yaml.safe_load(Path("config/alpha_registry.yaml").read_text(encoding="utf-8")))
+    unpinned = registry_digest(build_model(shipped, profile))
+    pinned = registry_digest(build_model(parse_registry({**PINNED, "books": {}}), profile))
+
+    assert unpinned == "16671c63a12e", "the shipped registry's loop digest moved; the running loop would look diverged"
+    assert pinned != unpinned, "pinning a universe must be visible in the digest the loop reports"
