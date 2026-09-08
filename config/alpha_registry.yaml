@@ -192,9 +192,17 @@ strategies:
     # N=128 or N=144 depending on which SD is used, and the ledger is at 125.  The operator ruled on
     # 2026-09-06 that this is enough to keep running under controlled execution (deep-analysis report
     # 12.6 / appendix B); real money is unaffected and stays HOLD.
+    # 2026-09-08 重出（操作者裁定）：Phase 7 对抗审查（KILL-AR-01）指出 093705Z 早于 09-08 加入的
+    # `oos_selection.gate` 字段，现行 `decide()` 对它判 "must be re-derived"。同一协议重跑——两臂网格
+    # {crowding_window: [0, 72]}、pit、5 折、min_train 4000、purge 50、cpcv 6、--prior-trials 60——但这次
+    # guards + exits 按默认开，所以它描述的是循环持有的四层书（09-08 审计高危 #1 的关闭动作）。
+    # 走前 OOS 1.81（093705Z 为 1.77）、门 1.49 @ N=146（按策略桶：84 账本 + 60 申报 + 2）、p_family 0.00、
+    # CPCV 1.86 / q05 1.36 / 0% 负、成本 x2 1.69、DSR p 0.31（只报不判）、PBO 0.09。VERDICT PASS。
+    # DL-R4 的标注仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴，不是一次选择的样本外记录。
+    # 全库 unique 试验 675 下的分位数门约 1.66，此数亦过；诚实 16 点网格（030942Z，1.485）在该门下不过。
     evidence:
-      report: reports/research/tsmom-validation-20260906T093705Z.json
-      sha256: 91800a0ce164afee1cfac993644a89a146d67f6b51089ae5c35f89cc67c3c303
+      report: reports/research/tsmom-validation-20260908T105259Z.json
+      sha256: 11f917875f5fba076184c538bbc2f78cfd6aa51c34feeda61dfc2648dfa96009
       verdict: PASS
   - id: xsmom
     enabled: false
@@ -296,9 +304,13 @@ strategies:
     # on the strength of the book verdict, its control is the P&L stop, and this is now a reproducible
     # REJECT against evidence that describes the sleeve the loop runs.  What the operator should weigh at
     # the 2026-12-02 review is that the sleeve's case is weaker than the file used to say.
+    # 2026-09-08 重出（同一协议：--main tsmom --sleeve flow、fraction 1/3、pit + robustness static、5 折、
+    # min_train 4000、purge 50、cpcv 6、--prior-trials 39）：REJECT 不变，仍是同四项；且更弱——总书 delta
+    # 0.00（094008Z 为 +0.0046）、sleeve 单独 WEAK_PASS 0.59（DSR p 0.99 @ 71）、static 上 -0.08。
+    # 2026-10-03 复审时该权衡的就是这条趋势：探针的理由每重出一次就薄一层。
     evidence:
-      report: reports/research/book-tsmom-flow-20260906T094008Z.json
-      sha256: f2bda66aeec189d6e57085eba6207de7ce0edd0735849c117b02fabe69310dbc
+      report: reports/research/book-tsmom-flow-20260908T105322Z.json
+      sha256: 385b2239cd5096856f7fb7cec2961a1971be16b99ae5af9d6cd085beb7b235cc
       verdict: REJECT           # book-level on the daily universe; runs only under the acknowledgement below
     probe:
       accepted_by: operator
