@@ -21,6 +21,7 @@ import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
 from beidou_alpha.mining import enumerate_candidates, to_signal
+from beidou_alpha.mining.search import SearchResult
 from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
@@ -37,6 +38,7 @@ from beidou_alpha.validation.labels import forward_returns
 from beidou_alpha.validation.ledger import (
     MINED_SEARCH_STRATEGY,
     TrialRecord,
+    all_trials,
     dsr_inputs,
     ledger_scope,
     parse_ledger,
@@ -668,11 +670,11 @@ def research_validate(
         StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
     ).portfolio.__dict__
     ledger_path = resolve_ledger_path(out=out)
-    prior_records = (
-        parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), ledger_scope(strategy))
-        if ledger_path.exists()
-        else []
-    )
+    ledger_lines = ledger_path.read_text(encoding="utf-8").splitlines() if ledger_path.exists() else []
+    prior_records = parse_ledger(ledger_lines, ledger_scope(strategy))
+    # R0: the other caliber, reported and never applied.  The gate is the strategy bucket; this says what
+    # the whole library would have asked for, so the choice stays arguable instead of merely stated.
+    whole_library = len(unique_trials(all_trials(ledger_lines))) or 1
     period_sharpes = {
         key: (None if value is None else value / math.sqrt(bpy)) for key, value in full_sharpes_raw.items()
     }
@@ -791,8 +793,11 @@ def research_validate(
         "prior_trials_declared": prior_trials,
         "trial_sharpes": {key: full_sharpes_raw[key] for key in nets},
         "ledger": {
-            key: pooled[key]
-            for key in ("ledger_trials", "ledger_rows", "duplicate_rows", "replayed_rows", "pooled_sharpes")
+            **{
+                key: pooled[key]
+                for key in ("ledger_trials", "ledger_rows", "duplicate_rows", "replayed_rows", "pooled_sharpes")
+            },
+            "whole_library_trials": whole_library,
         },
         "best_params": params_by_key[best_key],
         "full_sample": results[best_key].summary(),
@@ -805,6 +810,13 @@ def research_validate(
         # D-028: the OOS Sharpe a strategy must clear given how many configurations were tried on it.
         "oos_selection": oos_selection_threshold(
             wf.oos_returns.to_numpy(dtype=float), n_trials=pooled["n_trials"], bars_per_year=bpy
+        ),
+        # R0 (DL-G1): the same gate at the whole-library N, REPORTED and never enforced.  `verdict.decide`
+        # reads `oos_selection` and nothing else, and a test holds that.  Two numbers rather than one
+        # because "which N" was the single most consequential open choice in the governance rules, and an
+        # artefact that carries only the caliber that was chosen cannot be used to re-open the choice.
+        "oos_selection_whole_library": oos_selection_threshold(
+            wf.oos_returns.to_numpy(dtype=float), n_trials=whole_library, bars_per_year=bpy
         ),
         "cpcv": cpcv,
         "multiple_testing": mt,
@@ -1425,6 +1437,32 @@ def _symbol_set_hash(symbols: Sequence[str]) -> str:
     """WHICH symbols.  The ledger's ``symbols`` is a count, and two disjoint 146-name universes
     were the same trial to it - which is exactly the pit/static comparison this repository runs."""
     return _short_digest(sorted(str(symbol) for symbol in symbols))
+
+
+def _prior_search(search: SearchResult, reports_dir: Path) -> str | None:
+    """R2: has this exact space been enumerated before?
+
+    Exact when the earlier report carries `search_space_digest` - the set of canonical expression
+    hashes, which two different parameterisations of the same space share and a widened space does not.
+    Reports written before that field fall back to `evaluated`, and that comparison is WEAKER: it is a
+    count, and two different 514-wide spaces would collide.  Stated rather than silently relied on,
+    because the fallback is exactly the case the rule was written for and it will age out on its own.
+    """
+    if not reports_dir.exists():
+        return None
+    for path in sorted(reports_dir.glob("mine-shortlist-*.json"), reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        recorded = payload.get("search_space_digest")
+        if recorded == search.space_digest:
+            return path.name
+        if recorded is None and payload.get("evaluated") == search.evaluated:
+            return f"{path.name} (matched on `evaluated` only - it predates `search_space_digest`)"
+    return None
 
 
 def _search_space_version(strategy: str, grids: str = "") -> str:
@@ -2097,6 +2135,15 @@ def research_decompose(
 
 
 @research.command("mine")
+@click.option(
+    "--reauthorize",
+    default="",
+    help=(
+        "R2 override: run a search space that has already been enumerated.  Give the decision and the "
+        "reason; it is recorded in the shortlist report.  The reopen path exists because a recording "
+        "gap is a real reason to re-run - K-EX07's shape - and a rule with no reopen path gets edited."
+    ),
+)
 @_common_options
 @click.option("--top", default=12, show_default=True, help="candidates to print, ranked by full-sample Sharpe")
 @click.option("--max-complexity", default=10, show_default=True)
@@ -2110,6 +2157,7 @@ def research_decompose(
 @click.option("--baseline", default="", help="strategy id to compare each candidate against (registry params)")
 @click.option("--baseline-params", default="", help="JSON overriding the baseline's registry params")
 def research_mine(
+    reauthorize: str,
     strategy: str,
     params: str,
     root: str,
@@ -2219,8 +2267,19 @@ def research_mine(
     )
     click.echo(
         f"search: evaluated {search.evaluated} distinct expressions, kept {len(search.candidates)} "
-        f"({json.dumps(search.rejected)}) on {len(panel.symbols)} symbols x {len(panel.index)} bars"
+        f"({json.dumps(search.rejected)}) space={search.space_digest} "
+        f"on {len(panel.symbols)} symbols x {len(panel.index)} bars"
     )
+    prior_run = _prior_search(search, Path(out).parent if out else Path("reports/research"))
+    if prior_run is not None and not reauthorize:
+        raise click.ClickException(
+            f"R2: this search space was already enumerated by {prior_run}.  Re-running it charges the "
+            "family a second time for one hypothesis - which is what happened on 2026-09-08, when a "
+            "replay over 24 more bars appended 514 rows and moved the family's prior 514 -> 1,028 "
+            "(reverted by ruling Q7, on K-EX07's precedent).\n"
+            "Widen the space, or pass --reauthorize '<D-decision and reason>' to run it anyway; the "
+            "reason is recorded in the shortlist report."
+        )
     # The candidates ARE the strategies here, so the funding check belongs after enumeration rather than
     # on `--strategy` (which this command ignores).  It has to happen before the loop: a family that reads
     # funding would otherwise land in the `error` rows below and the command would still exit 0, writing a
@@ -2287,6 +2346,11 @@ def research_mine(
         )
     payload: dict[str, Any] = {
         "kind": "mine-shortlist",
+        # R2: WHICH space this was, so the next run can refuse to enumerate it again.  The set of
+        # canonical expression hashes, not the parameters - two parameterisations of the same space are
+        # the same hypothesis space.  `evaluated` beside it is a count and cannot tell two apart.
+        "search_space_digest": search.space_digest,
+        "reauthorized": reauthorize or None,
         "generated_at": datetime.now(UTC).isoformat(),
         # Everything that moves a number in this report, so the JSON alone rebuilds the command line.
         # P14's shortlist recorded none of it, and recovering what it actually ran - vol_target 0.15 with

@@ -5,7 +5,7 @@ shared     -> stdlib + pyyaml
 data       -> shared
 exchange   -> shared
 governance -> alpha, shared
-live       -> alpha, data, exchange, shared
+live       -> alpha, data, exchange, governance, shared
 cli        -> anything
 
 `governance` sits above `alpha` and below `live` on purpose.  It reads what the validation pipeline
@@ -38,7 +38,7 @@ ALLOWED_INTERNAL: dict[str, set[str]] = {
     "beidou_data": {"beidou_shared"},
     "beidou_exchange": {"beidou_shared"},
     "beidou_governance": {"beidou_alpha", "beidou_shared"},
-    "beidou_live": {"beidou_alpha", "beidou_data", "beidou_exchange", "beidou_shared"},
+    "beidou_live": {"beidou_alpha", "beidou_data", "beidou_exchange", "beidou_governance", "beidou_shared"},
     "beidou_cli": set(PACKAGES),
 }
 ALLOWED_THIRD_PARTY: dict[str, set[str]] = {

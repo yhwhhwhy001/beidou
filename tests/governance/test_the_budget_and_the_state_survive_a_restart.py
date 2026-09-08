@@ -1,0 +1,113 @@
+"""R1 and the state file: the two things `lifecycle`'s pure functions deliberately do not know.
+
+R3/R4/R5/R7 are properties of the book's state, so they live in the state machine.  R1 is a property
+of the trials ledger, which is append-only and shared between parallel sessions - a counter held in
+memory would already be wrong by the time a second session's `research validate` returned, and the
+2026-09-08 incident was exactly that shape: a search charging 514 rows with nothing saying so.
+
+The state file's job is narrower than it looks.  It does not decide anything; it lets the deciding
+survive a restart, which matters because a restart is the ONLY moment the construction can change and
+therefore the moment the machine is most likely to be asked a question it half-remembers.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from beidou_governance.budget import refusals, window_spend
+from beidou_governance.lifecycle import Book, Candidate, State
+from beidou_governance.policy import Policy
+from beidou_governance.state import VERSION, dump, load, read, write
+
+WINDOW_START = datetime(2026, 9, 1, tzinfo=UTC)
+
+
+def _row(recorded_at: datetime, param_key: str) -> str:
+    return json.dumps(
+        {
+            "strategy": "tsmom",
+            "param_key": param_key,
+            "sharpe_annual": 1.0,
+            "bars_per_year": 8760.0,
+            "recorded_at": recorded_at.isoformat(),
+            "range_start": "a",
+            "range_end": "b",
+            "symbols": 15,
+            "run_id": "r",
+        }
+    )
+
+
+def test_only_this_windows_rows_are_charged_to_this_window() -> None:
+    lines = [_row(WINDOW_START - timedelta(days=5), "old"), _row(WINDOW_START + timedelta(days=1), "new")]
+    assert window_spend(lines, window_start=WINDOW_START).spent == 1
+
+
+def test_a_replay_is_one_trial_not_two() -> None:
+    """Folded on the signature, the way the DSR denominator reads it - counting lines would over-charge."""
+    same = _row(WINDOW_START + timedelta(days=1), "k")
+    assert window_spend([same, same], window_start=WINDOW_START).spent == 1
+
+
+def test_a_row_whose_time_cannot_be_read_is_charged_to_this_window() -> None:
+    """The conservative direction: a budget that resolves its own doubt in favour of spending is not one."""
+    broken = json.loads(_row(WINDOW_START, "k"))
+    broken["recorded_at"] = "not a timestamp"
+    assert window_spend([json.dumps(broken)], window_start=WINDOW_START).spent == 1
+
+
+def test_a_run_that_would_cross_the_line_is_refused_whole() -> None:
+    """Truncating a search produces a `declared_trials` that counts candidates nobody scored."""
+    policy = Policy()
+    lines = [_row(WINDOW_START, f"k{i}") for i in range(policy.max_ledger_rows_per_window - 10)]
+    budget = window_spend(lines, window_start=WINDOW_START, policy=policy)
+    assert budget.remaining == 10
+    assert not refusals(budget, 10)
+    assert refusals(budget, 11)
+    assert "11 trials wanted, 10 left" in refusals(budget, 11)[0]
+
+
+def test_the_state_round_trips_through_the_file(tmp_path: Path) -> None:
+    book = Book(
+        window=4,
+        candidates={
+            "a": Candidate("a", State.PROBE, probe_entries=2, windows_survived=3, fraction=1 / 3),
+            "b": Candidate("b", State.RETIRED),
+        },
+        promotions_this_window=1,
+        consecutive_probe_stops=1,
+        frozen_until_window=9,
+    )
+    path = tmp_path / "governance_state.json"
+    write(path, book)
+    assert read(path) == book
+    assert json.loads(path.read_text())["version"] == VERSION
+
+
+def test_an_unreadable_state_is_an_empty_book_rather_than_an_exception(tmp_path: Path) -> None:
+    """An empty book has no probes, so every rule refuses for want of a candidate instead of guessing."""
+    path = tmp_path / "governance_state.json"
+    path.write_text("{ this is not json")
+    assert read(path) == Book()
+    assert read(tmp_path / "missing.json") == Book()
+    assert load(["not", "a", "dict"]) == Book()
+
+
+def test_an_unknown_field_is_dropped_and_a_missing_one_takes_its_default() -> None:
+    """DL-K1's compatibility rule, applied here for the same reason it exists there."""
+    payload = dump(Book(window=2, candidates={"a": Candidate("a", State.MAIN)}))
+    payload["candidates"]["a"]["invented_later"] = 7
+    del payload["candidates"]["a"]["fraction"]
+    del payload["consecutive_probe_stops"]
+    restored = load(payload)
+    assert restored.candidates["a"].state is State.MAIN
+    assert restored.candidates["a"].fraction == 0.0
+    assert restored.consecutive_probe_stops == 0
+
+
+def test_a_candidate_in_a_state_this_version_does_not_know_is_skipped() -> None:
+    payload = dump(Book(candidates={"a": Candidate("a", State.PROBE)}))
+    payload["candidates"]["a"]["state"] = "a-state-from-the-future"
+    assert load(payload).candidates == {}

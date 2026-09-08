@@ -27,6 +27,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
+from beidou_governance.policy import policy_digest
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
@@ -606,6 +607,11 @@ class LiveEngine:
             **({} if self._construction_recorded else {"construction_full": construction_fingerprint(config)}),
             # DL-Q0: which registry this PROCESS is running, not which one is on disk (KILL-Q15).
             "registry": registry_digest(self.model),
+            # R9, the same instrument pointed at the rules: which governance thresholds this process is
+            # running under.  KILL-Q15 was a registry edited on disk while the loop held the old model for
+            # 96 cycles; a policy edited on disk would be the same failure with promotions attached, and
+            # the only difference is that nobody would be looking.  Recorded, never read by the loop.
+            "governance": policy_digest(),
             "clock": clock,
             "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},

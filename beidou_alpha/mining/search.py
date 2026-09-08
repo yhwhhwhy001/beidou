@@ -16,6 +16,7 @@ Validating a mined candidate without it is not a shortcut; it is a different, wr
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations, product
@@ -84,6 +85,20 @@ class SearchResult:
     def declared_trials(self) -> int:
         """What ``research validate --prior-trials`` must receive for any candidate from this search."""
         return self.evaluated
+
+    @property
+    def space_digest(self) -> str:
+        """R2: WHICH space this was, so a second enumeration of it can be refused rather than charged.
+
+        The identity is the set of canonical expression hashes, not the parameters that produced it.
+        Two different parameterisations that enumerate the same set are the same hypothesis space and
+        must compare equal; the same parameters against a widened node table are not, and do not.
+
+        Not the same thing as ``evaluated``, which is a count and cannot tell two 514-wide spaces apart,
+        and deliberately not written into ``TrialRecord.search_space_version`` - see the note in
+        ``research mine``, where changing that field would re-price every existing mined row.
+        """
+        return hashlib.sha256("|".join(sorted(c.hash for c in self.candidates)).encode("utf-8")).hexdigest()[:16]
 
     def to_dict(self) -> dict[str, Any]:
         return {

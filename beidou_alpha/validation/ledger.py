@@ -156,6 +156,23 @@ def parse_ledger(lines: Iterable[str], strategy: str | Iterable[str]) -> list[Tr
     return records
 
 
+def all_trials(lines: Iterable[str]) -> list[TrialRecord]:
+    """Every readable row, whatever strategy it is filed under.
+
+    R0 reports the whole-library trial count beside the per-strategy one and gates on neither of the
+    two by accident: the gate stays the strategy bucket (`ledger_scope`), and this exists so the
+    artefact can show what the other caliber would have asked for.  Deriving the gate from it would
+    FAIL the incumbent on an honest grid, which is the measurement that settled R0 (KILL-AR-01) - a
+    number nobody can see is a number nobody can argue with.
+    """
+    records: list[TrialRecord] = []
+    for line in lines:
+        record = TrialRecord.from_json(line)
+        if record is not None:
+            records.append(record)
+    return records
+
+
 def unique_trials(records: Iterable[TrialRecord], *, exclude: Iterable[tuple[Any, ...]] = ()) -> list[TrialRecord]:
     """First record per signature; signatures in ``exclude`` (the current run's own grid) are dropped."""
     skip = set(exclude)

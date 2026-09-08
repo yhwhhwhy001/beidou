@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from beidou_alpha.panel import Panel
+from beidou_governance.policy import policy_digest
 from beidou_live.engine import LiveEngine
 from beidou_live.state import StateStore
 from tests.fakes.fake_venue import FakeVenue
@@ -99,3 +100,41 @@ async def test_the_digest_changes_when_the_running_parameters_change(august_pane
 
     assert registry_digest(base) != registry_digest(switched)
     assert registry_digest(base) == registry_digest(base)
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_records_which_governance_thresholds_it_is_running(august_panel: Panel, tmp_path: Path) -> None:
+    """R9: KILL-Q15's instrument, pointed at the rules instead of at the registry.
+
+    KILL-Q15 was a registry edited on disk while the loop held the old model for 96 cycles.  A policy
+    edited on disk would be the same failure with promotions attached, and the difference is that
+    nobody would be looking - so the digest goes in the record before anything acts on the policy,
+    not after.  Recorded, never read by the loop.
+    """
+    engine, market, _store = _engine(august_panel, tmp_path)
+    await engine.startup()
+
+    record = await engine.run_cycle(market.bar_open_ms(399))
+
+    assert record["governance"] == policy_digest()
+    assert record["governance"] != record["registry"], "two different instruments must not print one number"
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_records_the_construction_a_report_could_describe(august_panel: Panel, tmp_path: Path) -> None:
+    """DL-G9: the evidence-side digest every cycle, and the full construction once per process.
+
+    Once per process is once per possible change - a construction can only move at startup - and it is
+    what the Phase 0 replay was missing when it found six construction changes and could attribute none.
+    """
+    engine, market, _store = _engine(august_panel, tmp_path)
+    await engine.startup()
+
+    first = await engine.run_cycle(market.bar_open_ms(399))
+    second = await engine.run_cycle(market.bar_open_ms(400))
+
+    assert isinstance(first["evidence_construction"], str) and len(first["evidence_construction"]) == 16
+    assert second["evidence_construction"] == first["evidence_construction"]
+    assert "construction_full" in first, "the payload has to be written at least once, or it is unrecoverable"
+    assert "construction_full" not in second, "writing it every cycle would bloat the record for no gain"
+    assert first["construction_full"]["digest"] == first["construction"]

@@ -1078,14 +1078,34 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # point-in-time universe): net Sharpe 1.9161 flat -> 1.8670 at 100k -> 1.7609 at 1M -> 1.4251 at 10M,
 # with impact at 23% / 48% / 75% of total cost.  This one grows beidou_alpha, which moves the effort
 # share the intended way.
+# 2026-09-08, Phase 1's remaining four items: +32 alpha, +6 live, +64 cli, +178 gov.
+# The sentence the rule requires, item by item.
+# R0/DL-G1: the report carries BOTH trial calibers - the strategy bucket that gates, and the whole
+# library that does not.  "Which N" was the most consequential open choice in the governance rules and
+# an artefact carrying only the chosen one cannot be used to re-open it.  A test injects a hostile
+# whole-library block into all 48 archived reports and asserts not one verdict moves.
+# R2: `research mine` refuses a search space it has already enumerated, with `--reauthorize` as the
+# named reopen path.  Explicitly NOT what the plan asked for - it said make `search_space_version`
+# mandatory, and that field is deliberately empty on the `mined` bucket's rows because a candidate seen
+# in a 267-wide search and again in a 514-wide one is one hypothesis looked at twice; stamping the
+# width on would charge 267 + 514 for a family of 514.  The rule's intent needs the space recorded
+# where the NEXT run can read it, so `SearchResult.space_digest` (the set of canonical hashes, not the
+# count) goes in the shortlist report and the refusal happens before the scoring starts.
+# R1/budget.py: the window's trial budget, read off the ledger rather than remembered - a counter in
+# memory is already wrong once a parallel session's `validate` returns, which is the 2026-09-08 shape.
+# state.py: `governance_state.json`, kept out of `lifecycle` so the state machine stays a pure function
+# of state and event and the replay cannot accidentally read today's disk.
+# R9: the loop records `policy_digest()` every cycle.  KILL-Q15 was a registry edited on disk while the
+# loop held the old model for 96 cycles; a policy edited on disk is the same failure with promotions
+# attached, and the difference is that nobody would be looking.
 CEILING = {
-    "beidou_alpha": 6_154,
-    "beidou_live": 5_969,
-    "beidou_cli": 3_769,
+    "beidou_alpha": 6_186,
+    "beidou_live": 5_975,
+    "beidou_cli": 3_833,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_095,
+    "beidou_governance": 1_273,
 }
 
 

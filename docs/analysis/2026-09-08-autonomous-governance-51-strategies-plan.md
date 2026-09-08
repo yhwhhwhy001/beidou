@@ -97,7 +97,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | --- | --- | --- | --- |
 | **R0** | 分位数门的 N 口径：**保持按策略桶**（`ledger_scope`），mined 候选加共享 `mined` 桶；全库 N 与 N_eff **只报告**。理由：全库 N 会让诚实网格的在位者 FAIL（KILL-AR-01），N_eff 只降门（`multiple_testing.py:207`）。家族级风险改由 R3/R4/R5 在暴露侧控制 | — | 推导 |
 | R1 | **每窗口**新增账本行 ≤ B | B = 170（≈ 500 / 季，Q3 改月度后按窗口切分，账本增速不变） | **E5**（09-08 一次 mine 的 514） |
-| R2 | mine 只在 `search_space_version` 变化时跑；同版本重跑拒绝；"记录缺口"重开路径：操作者以 D-决策显式授权一次 | 版本 = hash(节点+列+网格) | 先例（K-EX07 / Q7） |
+| R2 | mine 只在搜索空间变化时跑；同空间重跑拒绝；重开路径：`--reauthorize '<D-决策与理由>'`，理由写进 shortlist 报告 | 版本 = `SearchResult.space_digest`（**规范表达式哈希的集合**）。**修正**：v2.1 写的"`search_space_version` 由空串改为必填"是错的——那个字段在 `mined` 桶的行上刻意留空，改必填会为一个 514 的家族收 267 + 514（见 09-08 日志） | 先例（K-EX07 / Q7） |
 | R3 | probe 并发 ≤ 2；probe 总分数 ≤ 1/3 主账本 | — | 先例（D-018；flow 已占 1） |
 | R4 | 每窗口 ≤ 1 queued→probe、≤ 1 probe→main | — | **E5** |
 | R5 | 连续 2 个 probe 被 stop → 冻结 **6 窗口**（= 6 个月，与季度口径下的 2 季等长）；no-decision：stop 发生在 TRANSFER 重基或 ERROR 相的周期不计 | k=2, n=6 | **E5**（假停率进 EXP-G6′） |
@@ -187,8 +187,8 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | --- | --- | --- | --- | --- | --- | --- |
 | DL-G0 回放 | Pre-A′ ← Phase 7 AR-03/AR-10 | `replay.py`：读账本 / 报告 / 日志裁定，重放 §3/§4，输出结论 + 例外清单 + 差异归因 | T-G0-1 例外清单含 D-019 / D-029 / K-EX07 / Q7 / P10 cell B / P11 / P13；T-G0-2 每条差异带规则 ID | AC-G0 | M-G02 | gov +≈300 |
 | DL-G1 报告口径 | R0 ← KILL-AR-01 | `multiple_testing.py` 报告全库 N 与 N_eff（不作门） | T-G1-1 现有报告重算判定不变；T-G1-2 报告含两个口径 | AC-G1 | M-Q04 | alpha +≈40 |
-| DL-G2 版本必填 | R2 ← 09-08 账本事故 | `ledger.py` 空串拒绝；mine 计算并写入 | T-G2-1 同版本重跑被拒；T-G2-2 版本变化 → 新行；T-G2-3 D-决策授权路径 | AC-G2 | M-G04 | alpha +≈20，cli +≈30 |
-| DL-G3 状态机 + 预算 | §3 / §4 | `lifecycle.py`、`budget.py`、`governance_state.json` | T-G3-1 非法转移拒绝；T-G3-2 R1/R3/R4/R5/R7 属性测试（hypothesis）；T-G3-3 重启后状态持久 | AC-G3 | M-G01 | gov +≈500 |
+| **DL-G2 同空间不重跑 ✔** | R2 ← 09-08 账本事故 | `SearchResult.space_digest` 进 shortlist 报告；`research mine` 在打分前拒绝已枚举过的空间；`--reauthorize` 记进报告 | T-G2-1 同空间被拒 ✔；T-G2-2 更宽的空间放行 ✔；T-G2-3 早于字段的报告按 `evaluated` 退化并标注 ✔ | AC-G2 | M-G04 | alpha +≈15，cli +≈64 |
+| **DL-G3 状态机 + 预算 ✔** | §3 / §4 | `lifecycle.py`（Phase 0）、`budget.py`（R1 从账本读）、`state.py`/`governance_state.json` | T-G3-1 非法转移拒绝；T-G3-2 R1/R3/R4/R5/R7 属性测试（hypothesis）；T-G3-3 重启后状态持久 | AC-G3 | M-G01 | gov +≈500 |
 | DL-G4 事务 + 回滚 | R6 | `promote.py` | T-G4-1 闸拒绝 → 回滚 → digest 等于回滚前；T-G4-2 幂等 | AC-G4 / DRILL-G1 | M-Q10 | gov +≈250 |
 | DL-G5 Canary | §5 L4 | `canary.py` + `run_shadow.sh` + `.beidou/live-shadow` + `live run --state-dir` | T-G5-1 健康指标计算；T-G5-2 失败 → 回队列 + R5 计数 | AC-G5 / DRILL-G4 | M-G03 | gov +≈300，cli +≈20，deploy |
 | DL-G6′ 时间规则 | §3 ← 选项 b | `tenure.py` | T-G6′-1 三窗口无 stop → main；T-G6′-2 main 触发 stop → 回 probe 重计；T-G6′-3 TRANSFER 周期的 stop 不计 | AC-G6′ | M-G01 | gov +≈150 |
