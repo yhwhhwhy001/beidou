@@ -40,6 +40,7 @@ from beidou_alpha.validation.ledger import (
     ledger_scope,
     parse_ledger,
     resolve_ledger_path,
+    unique_trials,
 )
 from beidou_alpha.validation.metrics import (
     compound,
@@ -2059,12 +2060,19 @@ def research_mine(
 ) -> None:
     """Enumerate candidate expressions and rank them full-sample.  This produces a SHORTLIST, not evidence.
 
-    Nothing here touches the trials ledger, because nothing here is a verdict: ranking hundreds of
-    expressions on the full sample *is* selection, and filing the winner as a result would be the mistake
-    D-020 exists to prevent.  What it prints instead is how many distinct expressions the search
-    evaluated - pass that to ``research validate --prior-trials`` when promoting one, or the DSR
-    denominator will never learn the search happened.  ``--strategy`` is inherited from the shared
-    options and ignored here; the candidates are the strategies.
+    Nothing here is a verdict: ranking hundreds of expressions on the full sample *is* selection, and
+    filing the winner as a result would be the mistake D-020 exists to prevent.  It does write the
+    trials ledger, though - every candidate the search kept goes in as a ``mined`` row (DL-K2) - because
+    a search that costs nothing is a DSR denominator that is wrong in the one direction that flatters
+    it; before DL-K2 the count was printed on the last line and retyped into ``--prior-trials`` by
+    hand.  Rows fold only on the full signature, data range included, so re-running the same space
+    after the range has moved is recorded as a new trial per candidate: conservative charging, KILL-Q5.
+    Measured 2026-09-08: P20's 514-wide space re-run over 24 more bars appended 514 rows and the
+    family's prior went 514 -> 1,028; the operator then ruled those rows back out, which is a
+    governance call this command does not make.  The last lines say what this run charged and what
+    the family now costs, so the number is seen where it is incurred rather than discovered at the
+    next validation.  ``--strategy`` is inherited from the shared options and ignored here; the
+    candidates are the strategies.
     """
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
@@ -2326,6 +2334,17 @@ def research_mine(
             for candidate in search.candidates
         ],
     )
+    # What the family now costs, read back off the file through the fold `research validate` applies
+    # (`ledger_scope` sends every mined id to this key) rather than derived from `charged`.  The two
+    # part ways exactly when it matters: rows fold on the full signature, data range included, so a
+    # replay after the range has moved charges every candidate again - conservative by design (KILL-Q5),
+    # and +514 rows on 2026-09-08 with nothing on the terminal saying so.  `before` is the difference,
+    # exact because `_record_trials` appends only signatures the file did not already hold.
+    family_prior = (
+        len(unique_trials(parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), MINED_SEARCH_STRATEGY)))
+        if ledger_path.exists()
+        else 0
+    )
     # `evaluated` counts expressions the enumerator looked at, including those the caps rejected before
     # any data was touched; only the kept ones have a hash to charge.  The remainder is stated rather
     # than absorbed, so nobody has to rediscover that the two numbers differ.
@@ -2352,6 +2371,10 @@ def research_mine(
     click.echo(
         f"trials ledger: {ledger_path} (+{charged} of {len(search.candidates)} kept candidates; "
         f"the rest were already in it)"
+    )
+    click.echo(
+        f"mined family prior: {family_prior} distinct trials in the ledger ({family_prior - charged} before this run, "
+        f"+{charged} charged now); the search cost `research validate` charges every mined id"
     )
     if remainder:
         click.echo(
