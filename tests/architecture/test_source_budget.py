@@ -1315,14 +1315,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # second 1/3 probe was ALLOWED on top of the flow probe already running live: 2/3 against a 1/3 cap,
 # with no rule anywhere saying a word.  Ten lines is what it costs to say that where the next reader
 # will be standing, and the seeded state plus its test are what actually close it.
+# 2026-09-09, +10 governance +4 cli: DL-G6′ shipped with its tests UNCOMMITTED, and the fix.
+# The sentence the rule requires.  `git add -A ':!.venv'` staged three files and silently left the
+# new test file out; the commit passed CI because CI ran the tests that were there.  Restored, and
+# with it two cases the reconstruction surfaced that the first version did not have: a window the
+# loop spent DOWN is not a window the sleeve survived, and a sleeve that entered mid-window does not
+# get that window.  The +10/+4 is `Tenure.strategy` and the lookup that uses it: the record keys
+# probes on the BOOK ("flow_short") and `governance_state.json` on the entry id ("flow"), so the
+# "state holds N" line - the only thing that would show the derivation disagreeing with the stored
+# count - was keyed on the wrong name and never printed.
 CEILING = {
     "beidou_alpha": 6_998,
     "beidou_live": 6_186,
-    "beidou_cli": 4_193,
+    "beidou_cli": 4_197,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_016,
+    "beidou_governance": 2_026,
 }
 
 

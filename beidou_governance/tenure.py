@@ -63,6 +63,7 @@ class Tenure:
     """What the record says about one sleeve, in order."""
 
     book: str
+    strategy: str  # the registry entry id; `governance_state.json` keys on THIS, not on the book name
     events: tuple[Derived, ...]
     skipped: tuple[Skipped, ...]
     windows_survived: int
@@ -72,6 +73,7 @@ class Tenure:
     def as_dict(self) -> dict[str, Any]:
         return {
             "book": self.book,
+            "strategy": self.strategy,
             "windows_survived": self.windows_survived,
             "stopped_at": self.stopped_at,
             "cycles_read": self.cycles_read,
@@ -184,6 +186,7 @@ def tenure(
     # One pass over the record: the first counted stop, and the cycles each window actually saw.
     stopped_at: str | None = None
     stopped_when: datetime | None = None
+    strategy = ""
     read = 0
     seen: dict[int, int] = {}
     closed = windows(anchor, policy=policy, now=horizon)
@@ -197,6 +200,8 @@ def tenure(
                 seen[index] = seen.get(index, 0) + 1
                 break
         probe = _probe_row(row, book)
+        if probe is not None and not strategy and probe.get("strategy"):
+            strategy = str(probe["strategy"])
         if stopped_at is not None or probe is None or not probe.get("stop"):
             continue
         contamination = flow_contaminated(row)
@@ -236,6 +241,7 @@ def tenure(
 
     return Tenure(
         book=book,
+        strategy=strategy,
         events=tuple(events),
         skipped=tuple(skipped),
         windows_survived=survived,

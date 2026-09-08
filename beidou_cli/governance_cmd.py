@@ -204,7 +204,10 @@ def tenure_cmd(root: str, cycles: str, anchor: str, started: tuple[str, ...], as
         click.echo("the record names no probe; nothing to derive")
         return
     for result in out:
-        state = book.candidates.get(result.book)
+        # by STRATEGY, not by book: the record's probe rows are keyed on the book ("flow_short")
+        # and `governance_state.json` on the registry entry id ("flow").  Keying on the book meant
+        # this annotation silently never printed.
+        state = book.candidates.get(result.strategy) or book.candidates.get(result.book)
         held = f" (state holds {state.windows_survived})" if state is not None else ""
         click.echo(
             f"{result.book:20s} windows {result.windows_survived}/{policy.windows_to_main}{held}  "
@@ -225,8 +228,9 @@ def tenure_cmd(root: str, cycles: str, anchor: str, started: tuple[str, ...], as
         # before this module existed.  Closing it changes what can halt the live main book, which is
         # an operator's decision and not a side effect of adding a reader.
         click.echo(
-            f"note: {', '.join(silent)} sit in main and the record reports no stop for them "
-            "(probes_from_registry excludes the main book), so main -> probe cannot fire from it"
+            f"note: {', '.join(silent)} {'sits' if len(silent) == 1 else 'sit'} in main and the record "
+            "reports no stop for it (probes_from_registry excludes the main book), so main -> probe "
+            "cannot fire from the record"
         )
 
 
