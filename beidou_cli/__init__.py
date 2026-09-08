@@ -33,8 +33,8 @@ def report() -> None:
     """Daily attribution reports."""
 
 
-from beidou_cli import data_cmd, live_cmd, research_cmd  # noqa: E402  (importing registers the commands)
+from beidou_cli import data_cmd, governance_cmd, live_cmd, research_cmd  # noqa: E402  (importing registers them)
 
-COMMAND_MODULES = (data_cmd, research_cmd, live_cmd)
+COMMAND_MODULES = (data_cmd, research_cmd, live_cmd, governance_cmd)
 
 __all__ = ["COMMAND_MODULES", "main"]

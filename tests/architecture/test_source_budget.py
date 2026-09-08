@@ -17,7 +17,15 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("beidou_alpha", "beidou_live", "beidou_cli", "beidou_data", "beidou_exchange", "beidou_shared")
+PACKAGES = (
+    "beidou_alpha",
+    "beidou_live",
+    "beidou_cli",
+    "beidou_data",
+    "beidou_exchange",
+    "beidou_shared",
+    "beidou_governance",
+)
 
 # The plan's budget, kept here so the gap between intent and reality stays legible.
 # The plan's original budget, plus the operator's 2026-09-04 revision of the alpha share from 60% to 90%.
@@ -1021,13 +1029,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 2026-09-08 report recorded `charged: 514` - what the run did - with nothing about what the family cost
 # afterwards, which is the number the next validation reads.  `ledger.family_prior` carries before and
 # after through the same `unique_trials` fold.  Three lines, two of them the comment saying why.
+# 2026-09-08, a new package arrives with its own ceiling: `beidou_governance` at 1,036 for Phase 0
+# (policy 135, lifecycle 279, replay 602, __init__ 20) plus +111 in beidou_cli for `governance replay`.
+# The sentence the rule requires, and the honest accounting for the 90% alpha target: none of this is
+# signal.  It buys the subject of the sentence "and therefore it goes live" - until now every promotion
+# was a person editing a YAML, and Q9 (2026-09-08) ruled that the machine does it from the first
+# transaction.  `replay` is the biggest of the three and most of it is the exception register: seven
+# operator rulings, each with the rule it breaks and why it should NOT become a rule.  That prose is
+# the deliverable rather than commentary on it - a register that only recorded what happened would
+# admit anything, and the "why not encoded" field is what a later reader has to argue with before
+# turning a named exception into a general permission.  It is also what AC-G0 grades.
+# The cli half is `governance replay` and the git reading behind it: which reports the registry has
+# cited and when.  That lives in the cli rather than in the package on purpose - it is a fact about
+# this checkout's history, and keeping `subprocess` out of `beidou_governance` is what lets the replay
+# be tested against fixtures instead of against whatever `git log` prints today.
 CEILING = {
     "beidou_alpha": 6_046,
     "beidou_live": 5_904,
-    "beidou_cli": 3_576,
+    "beidou_cli": 3_687,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
+    "beidou_governance": 1_036,
 }
 
 

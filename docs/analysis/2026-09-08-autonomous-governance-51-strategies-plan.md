@@ -170,8 +170,8 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 ## 8. Phase 与顺序（拆开首次晋级与构造改动，KILL-AR-12）
 
 ```text
-Phase 0 回放（1–2 周，零风险）：A 描述性回放 + B 合成序列属性测试 + D 时间回放（降级侧，用 cycles/attribution）→ 规则第一版定稿 + 例外清单
-Phase 1 尺子（2–4 周，无重启）：R0 报告口径、search_space_version 必填、budget / lifecycle / governance_digest、L1 属性测试
+Phase 0 回放 ✔（2026-09-08 完成）：A + B + D 已跑，AC-G0 通过（29 差异 / 0 未归因）；产物见 §18
+Phase 1 尺子（2–4 周，无重启）：**先做 DL-G9（两条判据可读）**，再 R0 报告口径、search_space_version 必填、budget / lifecycle / governance_digest、L1 属性测试
 Phase 2 调度器 + 事务 + Canary（3–5 周，无重启；paper 上跑 DRILL-G1..G6）
 Phase 3 数据宽度 + 节点 + 手写含缠论（4–8 周，并行，无重启）
 Phase 4a 批次窗口 #1（构造）：块 4 必改项一次改完 → 重启 → 攒 30 天干净窗口（K-EX14）
@@ -194,6 +194,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | DL-G6′ 时间规则 | §3 ← 选项 b | `tenure.py` | T-G6′-1 三窗口无 stop → main；T-G6′-2 main 触发 stop → 回 probe 重计；T-G6′-3 TRANSFER 周期的 stop 不计 | AC-G6′ | M-G01 | gov +≈150 |
 | DL-G7 治理 digest + 快通道 | R8 / R9 | `engine.py` 每周期落盘；回撤梯接 `throttle_scalar`（归因口径 + 告警 + 宽限） | T-G7-1 digest 变 → `live verify` 报；T-G7-2 −35% 注入 → 告警，2 周期后 scalar 0.75；T-G7-3 权益回撤（抵押品）不触发 | AC-G7 / DRILL-G3 | M-Q10, M-015 | live +≈100 |
 | DL-G8 调度器 + 研究机 | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
+| **DL-G9 判据可读性** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
 | DL-S51 缠论 | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
 | DL-D4 metrics→Panel | 块 1 | `Panel.metrics` + 叶节点 + M-011 平价接日报 | T-D4-1 5 分钟桶对齐 166/166；T-D4-2 无平价证据 → queued 卡住 | AC-D4 | M-011 | alpha/data +≈150 |
 | DL-D5 现货 ingest | 块 1 | 同源 REST + 月归档 + basis 叶 | T-D5-1 对齐契约；T-D5-2 因果 | AC-D5 | M-011 | data +≈250 |
@@ -202,7 +203,8 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 
 | AC | DL | 层级 | 前置 | 操作 / 观察 | 客观预期 | 失败动作 |
 | --- | --- | --- | --- | --- | --- | --- |
-| AC-G0 | G0 | Hypothesis | 账本 / 报告在案 | `governance replay --since 2026-09-03` | 输出规则结论 + 例外清单 + 差异归因；**无"未归因"项** | 规则第一版不定稿 |
+| AC-G0 ✔ | G0 | Hypothesis | 账本 / 报告在案 | `governance replay --since 2026-09-03` | 输出规则结论 + 例外清单 + 差异归因；**无"未归因"项** | 规则第一版不定稿 |
+| AC-G9 | G9 | Functional | Phase 1 | 重跑 `governance replay` | 「被挂起的判据」一节里 DL-K3 与 KILL-AR-07 两条消失 | 状态机仍不可通电 |
 | AC-G1 | G1 | Functional | Phase 1 | 重算历史报告 | 判定不变；tsmom 的两个口径（146 / 677）都写进报告 | 口径重查 |
 | AC-G3 | G3 | Functional | Phase 1 | hypothesis 跑 1,000 序列 | R0–R10 零违反 | 修状态机 |
 | AC-G4 | G4 | Scenario | paper | DRILL-G1 | ROLLBACK 行 + 重启成功 + digest 等于回滚前 | 事务不上线 |
@@ -307,12 +309,30 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | registry | 指针已换；`registry_evidence_problems` = []；`registry_digest` 不变（16671c63a12e）→ 无分叉、M-010 窗口不清零 | 同左 |
 | 重启 #6 | 11:00:02Z kickstart；PID 66596 → 83421；首周期 11:00:31Z（收盘后 29 s，DL-L4 窗口内）；18 币全 NO_TRADE_BAND；`live status --check` 通过 | — |
 
+## 18. Phase 0 执行结果（2026-09-08）
+
+`beidou_governance`（`policy` / `lifecycle` / `replay`，1,036 行）+ `beidou governance replay`。
+产物 `docs/analysis/2026-09-08-governance-phase0-replay.md`（生成物，规则版本变更后重跑）；
+完整记录见 RESEARCH_LOG 同日条目。
+
+| 项 | 结果 |
+| --- | --- |
+| AC-G0 | **通过**：规则复现 10 项、差异 29 条、未归因 **0** 条 |
+| A 描述性回放 | 18 个历史指针中规则认得 4 份 book（3 份凭 D-029 书面承认）+ 1 份 validation；其余 13 份归因到规则版本（8 份无 `oos_selection`、5 份 gate 无名）。**反方向更有力**：9 份从未采纳的 PASS，规则也都不采纳且理由与历史一致，其中 `mined_594a12f9307a15d9` 走完整链条（PASS → book REJECT `oos_mdd_worsening`） |
+| B 属性测试 | R3 / R4 / R7 / RETIRED 吸收态 / no-decision 零变更 / 拒绝必具名，各 200 组随机序列零违反 |
+| D 时间回放 | 148 个可判周期（ERROR 1、SKIPPED 4、重基 1 已排除）。**探针 P&L stop 从未触发**，故 R5 / R7 未被真实事件走过；probe→main 覆盖 0.21 个窗口（需 9） |
+| **新发现（改 Phase 1 顺序）** | `candidate → validated` 的四条判据里两条读的字段没人写：DL-K3 预登记指针、KILL-AR-07 构造比对（digest 不可反解）。**状态机今天一个候选也放不进去**，故 Phase 1 先做 DL-G9 |
+| 被挂起的判据 | 共 6 条（上述 2 条 + book 报告无 `slippage_stress`、corr/换手无字段链回 book、M-011 随 DL-D4、Canary 尚不存在），每条带修法与所属 Phase |
+| 例外清单 | 七条（D-019 / D-029 / K-EX07 / Q7 / P10 cell B / P11 / P13），每条记「为什么不该写成规则」。D-029 是唯一已部分成为规则的一条 |
+| 未能归因的形状 | 6.2 天内构造改了 6 次（规则允许每 30 天一次），归 `evidence_gap`：digest 不可反解，改了什么读不出来。其中 2 次可读为**回滚**（digest 回到旧值），正是 R6 要处理的形状 |
+| 实盘影响 | 无：零重启、零 registry 改动、零账本行 |
+
 ## Checkpoint
 
 | 项 | 值 |
 | --- | --- |
-| Phase | 7 ✔（G6 PARTIAL）；8–9 v2.1（本文件，自洽）；执行中：证据重出 ✔、重启 #6 ✔ |
+| Phase | 7 ✔（G6 PARTIAL）；8–9 v2.1（本文件，自洽）；**Phase 0 ✔（2026-09-08，§18）**；证据重出 ✔、重启 #6 ✔ |
 | 已冻结 Decision | D-G1 机器主体（**含第一次事务，Q9**）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
 | 开放 | Q-CRITICAL / Q2 / Q3 / Q4 / Q5；AR-17 |
-| 下一动作 | (a) Phase 0：`beidou_governance` 脚手架 + `replay.py`（A + B + D，零账本零风险）；(b) Q-CRITICAL 与 Q2 决定 Track C 的优先级 |
+| 下一动作 | (a) Phase 1 从 **DL-G9** 起步——在两条判据可读之前，§3 的状态机一个候选也放不进去；(b) Q-CRITICAL 与 Q2 决定 Track C 的优先级 |

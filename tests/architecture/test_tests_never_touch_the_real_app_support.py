@@ -41,7 +41,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("beidou_shared", "beidou_data", "beidou_alpha", "beidou_exchange", "beidou_live", "beidou_cli")
+PACKAGES = (
+    "beidou_shared",
+    "beidou_data",
+    "beidou_alpha",
+    "beidou_exchange",
+    "beidou_governance",
+    "beidou_live",
+    "beidou_cli",
+)
 
 # The one file allowed to know where the real home is.  It is the module whose entire subject is
 # addressing an account rather than a working directory, so the anchor belongs there and nowhere else.

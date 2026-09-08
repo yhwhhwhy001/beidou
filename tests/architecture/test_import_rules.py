@@ -1,11 +1,17 @@
 """The only architecture rule: package dependency direction and import-time purity.
 
-alpha    -> numpy, pandas, stdlib only (no beidou_* at all)
-shared   -> stdlib + pyyaml
-data     -> shared
-exchange -> shared
-live     -> alpha, data, exchange, shared
-cli      -> anything
+alpha      -> numpy, pandas, stdlib only (no beidou_* at all)
+shared     -> stdlib + pyyaml
+data       -> shared
+exchange   -> shared
+governance -> alpha, shared
+live       -> alpha, data, exchange, shared
+cli        -> anything
+
+`governance` sits above `alpha` and below `live` on purpose.  It reads what the validation pipeline
+produced (verdicts, the selection gate, the trials ledger) to decide what may run, and R9 will have
+the engine record its digest every cycle - so live must be free to import governance later without a
+cycle.  It reads live artefacts as JSON off a path, never through `beidou_live`.
 """
 
 from __future__ import annotations
@@ -17,12 +23,21 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("beidou_shared", "beidou_data", "beidou_alpha", "beidou_exchange", "beidou_live", "beidou_cli")
+PACKAGES = (
+    "beidou_shared",
+    "beidou_data",
+    "beidou_alpha",
+    "beidou_exchange",
+    "beidou_governance",
+    "beidou_live",
+    "beidou_cli",
+)
 ALLOWED_INTERNAL: dict[str, set[str]] = {
     "beidou_shared": set(),
     "beidou_alpha": set(),
     "beidou_data": {"beidou_shared"},
     "beidou_exchange": {"beidou_shared"},
+    "beidou_governance": {"beidou_alpha", "beidou_shared"},
     "beidou_live": {"beidou_alpha", "beidou_data", "beidou_exchange", "beidou_shared"},
     "beidou_cli": set(PACKAGES),
 }
@@ -31,6 +46,7 @@ ALLOWED_THIRD_PARTY: dict[str, set[str]] = {
     "beidou_alpha": {"numpy", "pandas"},
     "beidou_data": {"numpy", "pandas", "pyarrow", "httpx", "yaml"},
     "beidou_exchange": {"httpx"},
+    "beidou_governance": set(),
     "beidou_live": {"numpy", "pandas", "httpx", "yaml"},
     "beidou_cli": {"numpy", "pandas", "httpx", "yaml", "click"},
 }
