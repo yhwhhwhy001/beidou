@@ -325,7 +325,7 @@ async def test_the_cycle_actually_sends_the_alert(august_panel: object, tmp_path
     # 0.1% from the mark: inside the floor at any volatility this panel can produce.
     sent = await cycle_with_liquidation_price(august_panel, tmp_path, liquidation_fraction=0.001)
 
-    assert any("nearest liquidation" in message for message in sent)
+    assert any("最近的强平距离" in message for message in sent)
 
 
 async def test_a_healthy_book_sends_nothing(august_panel: object, tmp_path: object) -> None:
@@ -334,4 +334,4 @@ async def test_a_healthy_book_sends_nothing(august_panel: object, tmp_path: obje
     # 98% away, which is what the live longs look like when they have a price at all.
     sent = await cycle_with_liquidation_price(august_panel, tmp_path, liquidation_fraction=0.98)
 
-    assert not any("nearest liquidation" in message for message in sent)
+    assert not any("最近的强平距离" in message for message in sent)

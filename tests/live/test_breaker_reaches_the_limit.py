@@ -66,8 +66,8 @@ async def test_the_breaker_says_it_once_and_the_cycle_failures_are_deduped(tmp_p
     """Twelve failures of one kind are one hourly line plus the breaker's, not thirteen."""
     result = await _run_until_breaker(tmp_path, august_panel, limit=12)
 
-    cycle_lines = [m for m in result["alerts"] if "cycle failed" in m]
-    breaker_lines = [m for m in result["alerts"] if "breaker tripped" in m]
+    cycle_lines = [m for m in result["alerts"] if "北斗周期失败" in m]
+    breaker_lines = [m for m in result["alerts"] if "北斗熔断" in m]
     assert len(cycle_lines) == 1, cycle_lines
     assert len(breaker_lines) == 1
 

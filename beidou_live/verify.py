@@ -74,17 +74,17 @@ def compare_targets(
         "tolerance": tolerance,
         "ok": ok,
         "note": (
-            "contributions reproduce the last cycle"
+            "复算结果与上一周期的 contributions 一致"
             if ok
-            else "state.json is from another bar; re-run after the next cycle"
+            else "state.json 属于另一根 K 线；请等下一个周期完成后重跑"
             if not matched
-            else "the model no longer reproduces the last cycle's contributions (config, code or data changed)"
+            else "模型已无法复现上一周期的 contributions（配置、代码或数据发生了变化）"
         ),
         "clock_note": (
             None
             if not label_skew
-            else f"the cycle was labelled {label_skew / 3_600_000:+.2f} h away from its own data: the host clock has "
-            "drifted from the venue's, so cycles.jsonl `bar` and heartbeat `at` are wrong (the trading is not)"
+            else f"该周期被打上的标签与它自己的数据相差 {label_skew / 3_600_000:+.2f} 小时：本机时钟已偏离交易所，"
+            "因此 cycles.jsonl 的 `bar` 与心跳的 `at` 是错的（成交本身没错）"
         ),
     }
 

@@ -219,11 +219,11 @@ def test_verify_flags_a_drifted_contribution_and_a_stale_bar() -> None:
     assert not drifted["ok"] and drifted["bar_matched"]
     assert drifted["max_contribution_diff"] == pytest.approx(0.17)
     assert drifted["contribution_diffs"]["tsmom"]["BTCUSDT"] == pytest.approx(0.17)
-    assert "no longer reproduces" in drifted["note"]
+    assert "无法复现" in drifted["note"]
     stale = compare_targets(
         _targets(bar + pd.Timedelta(hours=1), {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031}), state
     )
-    assert not stale["ok"] and not stale["bar_matched"] and "another bar" in stale["note"]
+    assert not stale["ok"] and not stale["bar_matched"] and "属于另一根 K 线" in stale["note"]
     # a target difference alone is informational: exits / throttle / guards act after the model
     exited = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.0}), state)
     assert exited["ok"] and exited["max_target_diff"] == pytest.approx(0.031)
@@ -289,7 +289,7 @@ def test_verify_prefers_the_data_bar_over_the_clock_label_when_the_host_drifts()
     aware = compare_targets(targets, state, recorded_as_of_ms=int(data_bar.timestamp() * 1000))
     assert aware["ok"] and aware["bar_matched"]
     assert aware["bar_label_skew_ms"] == 3_600_000
-    assert aware["clock_note"] and "host clock has drifted" in aware["clock_note"]
+    assert aware["clock_note"] and "本机时钟已偏离交易所" in aware["clock_note"]
     assert (
         compare_targets(
             targets,
@@ -366,7 +366,7 @@ async def test_a_whole_bar_offset_is_an_accepted_state_not_an_alarm(august_panel
     assert clock["whole_bars"] == 1
     assert clock["alignment_ms"] == pytest.approx(12_000, abs=5_000)
     assert clock["beyond_tolerance"] is False and clock["jumped"] is False
-    assert not [a for a in alerts.sent if "clock" in a], "a constant whole-bar offset must not page anyone"
+    assert not [a for a in alerts.sent if "北斗时钟" in a], "a constant whole-bar offset must not page anyone"
     assert not record["skip"] and record["orders"]
     assert engine.state.last_clock_skew_ms == pytest.approx(clock["skew_ms"])
 
@@ -377,7 +377,7 @@ async def test_a_wake_up_in_the_middle_of_a_bar_is_flagged(august_panel: Panel, 
     clock = record["clock"]
     assert clock["alignment_ms"] == pytest.approx(900_000, abs=5_000)
     assert clock["beyond_tolerance"] is True
-    assert len([a for a in alerts.sent if "clock" in a]) == 1
+    assert len([a for a in alerts.sent if "北斗时钟" in a]) == 1
     assert not record["skip"], "the guard reports; it does not stop the loop"
 
 
@@ -387,20 +387,20 @@ async def test_the_alignment_alert_is_edge_triggered(august_panel: Panel, tmp_pa
     market.cursor += 1  # type: ignore[attr-defined]
     again = await engine.run_cycle(market.bar_open_ms(market.cursor - 1))  # type: ignore[attr-defined]
     assert again["clock"]["beyond_tolerance"] is True
-    assert len([a for a in alerts.sent if "clock" in a]) == 1, "one alert per episode, not one per hour"
+    assert len([a for a in alerts.sent if "北斗时钟" in a]) == 1, "one alert per episode, not one per hour"
 
 
 async def test_a_clock_jump_between_cycles_is_reported(august_panel: Panel, tmp_path: Path) -> None:
     """A jump remaps every label and can send the income watermark backwards — the -1023 of 2026-09-04."""
     _record, alerts, engine = await _cycle_with_skew(august_panel, tmp_path, offset_ms=3_612_000)
-    assert not [a for a in alerts.sent if "clock" in a]
+    assert not [a for a in alerts.sent if "北斗时钟" in a]
     market = engine.market
     market.offset_ms = 12_000  # type: ignore[attr-defined]  the venue stays put; the host clock jumped an hour
     market.cursor += 1  # type: ignore[attr-defined]
     after = await engine.run_cycle(market.bar_open_ms(market.cursor - 1))  # type: ignore[attr-defined]
     assert after["clock"]["jumped"] is True
     assert after["clock"]["beyond_tolerance"] is False  # still aligned, but the mapping changed
-    assert [a for a in alerts.sent if "jumped" in a]
+    assert [a for a in alerts.sent if "跳变" in a]
 
 
 async def test_a_port_without_a_clock_probe_is_not_an_error(august_panel: Panel, tmp_path: Path) -> None:

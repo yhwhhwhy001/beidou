@@ -116,7 +116,7 @@ async def test_guard_state_change_alerts_once_in_each_direction(august_panel: Pa
     engine.config.kill_switch_path.unlink()
     market.cursor += 1
     await engine.run_cycle(bar + 3 * 3_600_000)
-    assert len(alerts.sent) == 2 and "cleared" in alerts.sent[1]
+    assert len(alerts.sent) == 2 and "风控解除" in alerts.sent[1]
     assert engine.state.last_guard_reasons == []
 
 
@@ -143,7 +143,7 @@ async def test_a_failed_cycle_leaves_a_durable_row(august_panel: Panel, tmp_path
     assert "venue unreachable" in failed[0]["error"] and failed[0]["consecutive_errors"] == 1
     assert "equity" not in failed[0], "no equity, so the drift check keeps ignoring it"
     assert failed[0]["targets"] == ok["targets"], "the targets still in force are carried"
-    assert any("cycle failed" in text for text in alerts.sent)
+    assert any("北斗周期失败" in text for text in alerts.sent)
 
 
 async def test_the_score_behind_every_position_survives_in_the_append_only_log(

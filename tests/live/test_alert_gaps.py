@@ -113,7 +113,7 @@ async def test_a_foreign_position_at_startup_alerts(tmp_path: Path) -> None:
 
     sent = await startup_with_foreign_position(["DOGEUSDT"])
 
-    assert any("DOGEUSDT" in message and "foreign" in message.lower() for message in sent), sent
+    assert any("DOGEUSDT" in message and "不在本循环管理" in message for message in sent), sent
 
 
 async def test_a_clean_startup_says_nothing(tmp_path: Path) -> None:
@@ -145,7 +145,7 @@ async def test_a_foreign_open_order_at_startup_alerts() -> None:
 
     sent = await startup_with_foreign_order("manual-acl5-1")
 
-    assert any("manual-acl5-1" in m and "order" in m.lower() for m in sent), sent
+    assert any("manual-acl5-1" in m and "挂单" in m for m in sent), sent
 
 
 async def test_our_own_resting_order_is_not_announced_as_foreign() -> None:

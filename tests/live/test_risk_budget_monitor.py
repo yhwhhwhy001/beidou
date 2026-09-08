@@ -175,9 +175,9 @@ def test_status_collects_every_breached_reason() -> None:
     ]
     out = risk_budget_status(rows, trades, params)
     assert out["status"] == "ALERT"
-    assert any("drawdown" in r for r in out["reasons"])
-    assert any("realised vol" in r for r in out["reasons"])
-    assert any("slippage" in r for r in out["reasons"])
+    assert any("回撤" in r for r in out["reasons"])
+    assert any("实现波动率" in r for r in out["reasons"])
+    assert any("滑点" in r for r in out["reasons"])
 
 
 def test_params_come_from_the_profile_block() -> None:

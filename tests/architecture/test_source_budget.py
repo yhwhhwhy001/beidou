@@ -987,9 +987,15 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 #     ladder's drawdown carries the share of equity that is collateral rather than the book, and
 #     `live_overlay_blocks` hands the gate the loop's own guards and exits.
 # The ratchet caught all three, which is it working: none of this was budgeted for.
+# 2026-09-08, the operator's ruling that the Lark channel is Chinese: +16 live.  The alert text itself
+# is a rewrite, not growth - the 16 lines are `guards.REASON_ZH` and `describe_guard_reason`.  The guard
+# REASON CODES stay English because `cycles.jsonl`, the report and these tests read them and a record
+# that changes meaning between commits is worse than a bilingual alert; the gloss is the alternative to
+# translating the codes themselves, and it lives beside them so a new code cannot be added without
+# seeing that the operator's channel needs a word for it.
 CEILING = {
     "beidou_alpha": 6_046,
-    "beidou_live": 5_865,
+    "beidou_live": 5_881,
     "beidou_cli": 3_550,
     "beidou_data": 1_805,
     "beidou_exchange": 611,

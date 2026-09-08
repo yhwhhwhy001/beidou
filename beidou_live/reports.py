@@ -688,10 +688,10 @@ def drift_check(
         z = (realised - expected_sharpe) / math.sqrt(365.0 / max(days, 1.0))
         if z < -2.0:
             status = "ALERT"
-            reasons.append(f"realised Sharpe {realised:.2f} is {abs(z):.1f} s.e. below expected {expected_sharpe:.2f}")
+            reasons.append(f"实现 Sharpe {realised:.2f} 比预期的 {expected_sharpe:.2f} 低 {abs(z):.1f} 个标准误")
     if worst_expected_mdd is not None and drawdown < 1.5 * worst_expected_mdd:
         status = "ALERT"
-        reasons.append(f"trailing drawdown {drawdown:.3f} exceeds 1.5x the validated drawdown {worst_expected_mdd:.3f}")
+        reasons.append(f"滚动回撤 {drawdown:.3f} 已超过验证期回撤 {worst_expected_mdd:.3f} 的 1.5 倍")
     return {
         "status": status,
         "window_days": round(days, 1),
@@ -993,7 +993,7 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     matter of moving one append, not of finding a suppression to undo.
     """
     alerts: list[str] = []
-    for name, key in (("equity", "drift"), ("income", "income_drift")):
+    for name, key in (("权益", "drift"), ("策略收益", "income_drift")):
         block = payload.get(key) or {}
         if str(block.get("status")) == "ALERT":
             detail = block.get("reasons") or [
@@ -1001,19 +1001,19 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
                 for strategy, row in (block.get("by_strategy") or {}).items()
                 if row.get("z") is not None and row["z"] < -2.0
             ]
-            alerts.append(f"{name} drift ALERT: {'; '.join(str(d) for d in detail)}")
+            alerts.append(f"{name}漂移告警：{'；'.join(str(d) for d in detail)}")
     budget = payload.get("risk_budget") or {}
     if str(budget.get("status")) == "ALERT":
         # P13's ladder: the thresholds were fixed before the change went live, so this says what to do
         # rather than that something looks off.  It alerts; a human still runs the one-line change.
-        alerts.append("risk budget ALERT: " + "; ".join(str(r) for r in budget.get("reasons") or []))
+        alerts.append("风险预算告警：" + "；".join(str(r) for r in budget.get("reasons") or []))
     adaptation = payload.get("risk_adaptation") or {}
     if str(adaptation.get("status")) == "ALERT":
         # M-015: the weights stopped taking each symbol's volatility back out.  Loud rather than
         # quiet because this is the layer D-037 pointed at when it ruled the leverage layer inert.
         alerts.append(
-            f"risk adaptation ALERT: compression {adaptation.get('compression'):.2f} > "
-            f"{adaptation.get('limit'):.2f}; per-symbol sizing is no longer vol-scaled"
+            f"风险自适应告警：压缩度 {adaptation.get('compression'):.2f} > "
+            f"{adaptation.get('limit'):.2f}；每个标的的仓位不再按波动率缩放"
         )
     notices: list[str] = []
     if str(budget.get("status")) == "BLIND":
@@ -1021,15 +1021,13 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         # clears itself once the bars or fills arrive.  It is here rather than nowhere because the
         # 2026-09-07 report said OK while M-Q08's slippage instrument had zero usable fills.
         notices.append(
-            "risk budget BLIND: "
-            + "; ".join(f"{entry.get('metric')} ({entry.get('why')})" for entry in budget.get("unreadable") or [])
+            "风险预算读不出数（BLIND）："
+            + "；".join(f"{entry.get('metric')}（{entry.get('why')}）" for entry in budget.get("unreadable") or [])
         )
     window = payload.get("evidence_window") or {}
     if int(window.get("changes_7d") or 0) > 1:
         # the plan allowed one promotion per week and nothing ever counted them
-        notices.append(
-            f"{window['changes_7d']} construction changes in the last 7 days; the plan allows one promotion per week"
-        )
+        notices.append(f"最近 7 天有 {window['changes_7d']} 次构造变更；计划允许每周一次晋升")
     return alerts, notices
 
 
