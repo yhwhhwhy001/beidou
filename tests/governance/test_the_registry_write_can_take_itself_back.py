@@ -13,6 +13,7 @@ question is whether the thing it is given refuses what the loop would refuse.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -32,6 +33,20 @@ def _real_gate(profile: dict) -> object:
     return gate
 
 
+def _corrupt(registry_text: str) -> str:
+    """Break the first evidence digest, whatever it currently is.
+
+    Not a hardcoded hash: this file deliberately drills against the SHIPPED registry, and pinning the
+    literal `sha256: 11f91787` made the drill go red the first time that evidence was re-derived - the
+    replacement matched nothing, the "corrupt" copy was identical to the original, and the fixture's own
+    guard fired.  A test that breaks whenever the thing it points at is legitimately updated teaches
+    people to edit the test.
+    """
+    corrupted = re.sub(r"sha256: [0-9a-f]{64}", "sha256: " + "0" * 64, registry_text, count=1)
+    assert corrupted != registry_text, "the shipped registry carries no evidence digest to corrupt"
+    return corrupted
+
+
 def _shipped(tmp_path: Path) -> tuple[Path, Path, dict]:
     registry = tmp_path / "alpha_registry.yaml"
     registry.write_text((ROOT / "config" / "alpha_registry.yaml").read_text(encoding="utf-8"), encoding="utf-8")
@@ -42,10 +57,8 @@ def _shipped(tmp_path: Path) -> tuple[Path, Path, dict]:
 def test_drill_g1_a_bad_evidence_pointer_is_written_refused_and_taken_back(tmp_path: Path) -> None:
     registry, log, profile = _shipped(tmp_path)
     original = registry.read_text(encoding="utf-8")
-    corrupt = original.replace("sha256: 11f91787", "sha256: 00000000", 1)
-    assert corrupt != original, "the fixture must actually corrupt something"
 
-    transaction = apply(registry, corrupt, gate=_real_gate(profile), log_path=log, candidate="drill-g1")
+    transaction = apply(registry, _corrupt(original), gate=_real_gate(profile), log_path=log, candidate="drill-g1")
 
     assert transaction.action == ROLLBACK
     assert transaction.reasons, "a rollback with no reason cannot be acted on"
@@ -101,9 +114,8 @@ def test_plan_asks_the_same_gate_without_touching_the_file(tmp_path: Path) -> No
     """A dry run that checks a different thing says nothing about the wet one."""
     registry, _log, profile = _shipped(tmp_path)
     before = registry.read_text(encoding="utf-8")
-    corrupt = before.replace("sha256: 11f91787", "sha256: 00000000", 1)
 
-    proposed = plan(registry, corrupt, gate=_real_gate(profile), candidate="c")
+    proposed = plan(registry, _corrupt(before), gate=_real_gate(profile), candidate="c")
 
     assert proposed.reasons, "the plan must surface what apply would have refused"
     assert not proposed.restart_required

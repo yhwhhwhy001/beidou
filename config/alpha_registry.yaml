@@ -200,9 +200,20 @@ strategies:
     # CPCV 1.86 / q05 1.36 / 0% 负、成本 x2 1.69、DSR p 0.31（只报不判）、PBO 0.09。VERDICT PASS。
     # DL-R4 的标注仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴，不是一次选择的样本外记录。
     # 全库 unique 试验 677（重出后 +4 行）下的分位数门约 1.67，此数亦过；诚实 16 点网格（030942Z，1.485）在该门下不过。
+    # 2026-09-09 重出（操作者裁定「选 2」）：09-08T18:00Z 一次 canary 的池子重排把 universe 指纹从
+    # d47dbc7c127cfef7 换成 788ade109abd2238，成员真的变了，于是 `registry_dataset_problems` 阻塞、
+    # `live run --armed` 被拒绝启动。同一协议重跑（两臂 {crowding_window: [0, 72]}、pit、5 折、
+    # min_train 4000、purge 50、cpcv 6、guards + exits 开），只有一处变：--prior-trials 60 -> 95，
+    # 因为 P26 按 D-039 先例申报的 35 个手工补的格子第一次被喂进 DSR 分母。
+    # 后果是门变严而不是变宽：1.487 @ N=146 -> 1.51 @ N=183，而走前 OOS 1.81 仍然过。
+    # CPCV 1.86 / q05 1.31 / 0% 负、成本 x2 1.69、DSR p 0.36（只报不判）、PBO 0.09。VERDICT PASS。
+    # DL-R4 的标注仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴，不是一次选择的样本外记录。
+    # 不重启：换证据指针不动 construction_fingerprint 也不动 registry_digest，所以 M-010 那段自
+    # 2026-09-04T15:02Z 起未断的窗口不清零。
+    # 这条指针的有效期到下一次 universe 日常重排（约每日 01:00Z）——见 RESEARCH_LOG 同日条目。
     evidence:
-      report: reports/research/tsmom-validation-20260908T105259Z.json
-      sha256: 11f917875f5fba076184c538bbc2f78cfd6aa51c34feeda61dfc2648dfa96009
+      report: reports/research/tsmom-validation-20260908T182204Z.json
+      sha256: da400f4d28ef0da9843417fdcbfe722657dc7902fa204a64ab86e24f60c083e0
       verdict: PASS
   - id: xsmom
     enabled: false
