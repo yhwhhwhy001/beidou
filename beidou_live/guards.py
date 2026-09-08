@@ -32,6 +32,24 @@ class GuardDecision:
     reasons: list[str] = field(default_factory=list)
 
 
+# The reason CODES are what `cycles.jsonl`, the report and the tests read, so they stay in place and
+# stay stable.  The operator's channel is Chinese (ruling 2026-09-08), and a bare `GROSS_CAPPED` in a
+# Chinese alert is a line the reader has to translate before they can act on it, so the alert renders
+# the code with its gloss rather than replacing it: the record keeps the token, the human gets both.
+REASON_ZH = {
+    "STALE_MARKET_DATA": "行情数据陈旧",
+    "KILL_SWITCH": "紧急停止开关已启用",
+    "DAILY_LOSS_PAUSE": "当日亏损触发暂停加仓",
+    "GROSS_CAPPED": "总敞口已被上限截断",
+}
+
+
+def describe_guard_reason(reason: str) -> str:
+    """``CODE（中文）`` for an alert; an unknown code still prints itself rather than vanishing."""
+    gloss = REASON_ZH.get(reason)
+    return f"{reason}（{gloss}）" if gloss else reason
+
+
 def evaluate_guards(
     targets: Mapping[str, float],
     *,

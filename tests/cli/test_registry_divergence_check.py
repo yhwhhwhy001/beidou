@@ -64,7 +64,7 @@ def test_check_passes_when_the_file_matches_the_running_process(tmp_path: Path) 
 
     result = CliRunner().invoke(main, ["live", "status", "--profile", str(profile), "--check"])
 
-    assert "registry: matches the running loop" in result.output
+    assert "registry：与正在运行的循环一致" in result.output
 
 
 def test_check_fails_when_the_file_has_moved_ahead_of_the_running_process(tmp_path: Path) -> None:
@@ -79,7 +79,7 @@ def test_check_fails_when_the_file_has_moved_ahead_of_the_running_process(tmp_pa
     result = CliRunner().invoke(main, ["live", "status", "--profile", str(profile), "--check"])
 
     assert result.exit_code != 0
-    assert "registry on disk" in result.output and "restart" in result.output
+    assert "磁盘上的 registry" in result.output and "重启" in result.output
 
 
 def test_check_is_silent_when_no_cycle_recorded_a_digest(tmp_path: Path) -> None:
@@ -92,7 +92,7 @@ def test_check_is_silent_when_no_cycle_recorded_a_digest(tmp_path: Path) -> None
 
     result = CliRunner().invoke(main, ["live", "status", "--profile", str(profile), "--check"])
 
-    assert "registry: no cycle has recorded one yet" in result.output
+    assert "registry：还没有任何周期记录过 digest" in result.output
 
 
 @pytest.fixture(autouse=True)

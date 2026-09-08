@@ -37,7 +37,7 @@ from beidou_live.alerts import WebhookAlerts
 # re-announces itself once an hour instead of once a run.
 alerts = WebhookAlerts(sys.argv[1], state_path=Path(sys.argv[4]))
 sys.exit(0 if asyncio.run(alerts.send(sys.argv[2], key=sys.argv[3])) else 1)
-' "$BEIDOU_ALERTS_WEBHOOK_URL" "beidou check FAILED ($1): $2" "check-$1" "$SUPPORT/alert-dedup.json" \
+' "$BEIDOU_ALERTS_WEBHOOK_URL" "北斗巡检失败（$1）：$2" "check-$1" "$SUPPORT/alert-dedup.json" \
       || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }

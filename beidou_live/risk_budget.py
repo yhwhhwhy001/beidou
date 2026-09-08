@@ -155,9 +155,9 @@ def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) ->
     ]
     reason = None
     if len(returns) < params.min_vol_bars:
-        reason = f"{len(returns)} bars, needs {params.min_vol_bars}"
+        reason = f"只有 {len(returns)} 根 bar，需要 {params.min_vol_bars} 根"
     elif len(constructions) > 1:
-        reason = f"{len(constructions)} constructions in the window"
+        reason = f"窗口内有 {len(constructions)} 个构造"
     if reason is not None:
         return {"value": None, "band": list(params.vol_band), "bars": len(returns), "enforced": False, "why": reason}
     mean = sum(returns) / len(returns)
@@ -216,8 +216,8 @@ def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, 
             "fills": fills,
             "without_reference": without_reference,
             "enforced": False,
-            "why": f"{fills} fills, needs {params.min_slippage_fills}"
-            + (f"; {without_reference} carry no decision_close" if without_reference else ""),
+            "why": f"只有 {fills} 笔成交，需要 {params.min_slippage_fills} 笔"
+            + (f"；其中 {without_reference} 笔没有 decision_close" if without_reference else ""),
         }
     value = weighted / notional
     return {
@@ -273,12 +273,12 @@ def risk_budget_status(
     guards = guard_firings(rows, params)
     reasons: list[str] = []
     if drawdown["action"]:
-        reasons.append(f"drawdown {drawdown['value']:.1%} from the high-water mark: {drawdown['action']}")
+        reasons.append(f"自高水位回撤 {drawdown['value']:.1%}，应执行：{drawdown['action']}")
     if volatility["enforced"] and not volatility["inside"]:
         low, high = volatility["band"]
-        reasons.append(f"realised vol {volatility['value']:.1%} outside the {low:.0%}-{high:.0%} band")
+        reasons.append(f"实现波动率 {volatility['value']:.1%} 已跑出 {low:.0%}-{high:.0%} 区间")
     if slippage["enforced"] and not slippage["inside"]:
-        reasons.append(f"slippage {slippage['value']:.1f} bps above the {slippage['limit']:.0f} bps assumption")
+        reasons.append(f"滑点 {slippage['value']:.1f} bps 高于假设的 {slippage['limit']:.0f} bps")
     unreadable = [
         {"metric": name, "why": str(block.get("why", ""))}
         for name, block in (("realised_vol", volatility), ("slippage", slippage))

@@ -30,7 +30,7 @@ from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
-from beidou_live.guards import GuardDecision, GuardParams, evaluate_guards
+from beidou_live.guards import GuardDecision, GuardParams, describe_guard_reason, evaluate_guards
 from beidou_live.health import (
     CONSTRUCTION_PAYLOAD_VERSION,
     margin_mode_problems,
@@ -98,8 +98,8 @@ async def breaker_stop(
     much better than a book that vanishes without a word (KILL-P1).
     """
     delivered = await alerts.send(
-        f"beidou breaker tripped after {consecutive_errors} consecutive failures, stopping the loop "
-        f"(launchd will not relaunch a clean exit; run `beidou live run` to resume): {detail}",
+        f"北斗熔断：连续 {consecutive_errors} 次周期失败，已停止循环"
+        f"（干净退出后 launchd 不会重启；恢复请执行 `beidou live run`）：{detail}",
         key="breaker",
         force=True,
     )
@@ -353,8 +353,7 @@ class LiveEngine:
             names = sorted(snapshot.foreign_positions)
             logger.warning("positions outside the managed universe are left untouched: %s", names)
             await self.alerts.send(
-                f"beidou startup: {len(names)} foreign position(s) outside the managed universe are left "
-                f"untouched: {', '.join(names)}",
+                f"北斗启动：有 {len(names)} 个持仓不在本循环管理的 universe 内，保持不动：{', '.join(names)}",
                 key="foreign-positions",
             )
         else:
@@ -368,8 +367,8 @@ class LiveEngine:
         if foreign_orders:
             logger.warning("open orders this loop did not place are left alone: %s", sorted(foreign_orders))
             await self.alerts.send(
-                f"beidou startup: {len(foreign_orders)} open order(s) this loop did not place are left "
-                f"alone: {', '.join(sorted(foreign_orders))}",
+                f"北斗启动：有 {len(foreign_orders)} 个挂单不是本循环下的，保持不动："
+                f"{', '.join(sorted(foreign_orders))}",
                 key="foreign-orders",
             )
         else:
@@ -472,7 +471,7 @@ class LiveEngine:
             # Deduplicated on the failure's type: a venue that is down for six hours says so once an
             # hour, not six times, and the operator's channel stays readable (DL-L3 / KILL-R7).
             await self.alerts.send(
-                f"beidou cycle failed ({self.consecutive_errors}x): {type(exc).__name__}: {exc}",
+                f"北斗周期失败（连续第 {self.consecutive_errors} 次）：{type(exc).__name__}: {exc}",
                 key=f"cycle-failed:{type(exc).__name__}",
             )
             if self.consecutive_errors >= self.config.max_consecutive_errors:
@@ -776,7 +775,7 @@ class LiveEngine:
                 logger.warning("could not persist universe update: %s", exc)
         if entered or left:
             logger.info("universe refreshed: entered=%s left=%s", entered, left)
-            await self.alerts.send(f"beidou universe refresh: entered={entered} left={left}")
+            await self.alerts.send(f"北斗 universe 换手：新进 {entered}，移出 {left}")
         return {**update.to_dict(), "entered": entered, "left": left, "day": day}
 
     async def _leverage_targets(self, symbols: Sequence[str]) -> dict[str, int]:
@@ -882,8 +881,8 @@ class LiveEngine:
         if (beyond and not self._alignment_alerted) or jumped:
             self._alignment_alerted = True
             await self.alerts.send(
-                f"beidou clock: offset {skew / 1000.0:+.0f}s, {alignment / 1000.0:+.1f}s from a bar boundary"
-                + (f", jumped {(skew - (previous or 0.0)) / 1000.0:+.0f}s since the last cycle" if jumped else "")
+                f"北斗时钟：本机与交易所相差 {skew / 1000.0:+.0f}s，距 K 线边界 {alignment / 1000.0:+.1f}s"
+                + (f"；自上一周期跳变 {(skew - (previous or 0.0)) / 1000.0:+.0f}s" if jumped else "")
             )
         if not beyond:
             self._alignment_alerted = False
@@ -991,8 +990,8 @@ class LiveEngine:
                     ", ".join(sorted(foreign["by_symbol"])) or "no symbol",
                 )
                 await self.alerts.send(
-                    f"beidou: {foreign['rows']} foreign fill row(s) {foreign['total']:+.2f} USDT "
-                    f"({', '.join(sorted(foreign['by_symbol'])) or 'no symbol'}) excluded from strategy attribution"
+                    f"北斗：{foreign['rows']} 条流水共 {foreign['total']:+.2f} USDT 来自本循环没下过的成交"
+                    f"（{', '.join(sorted(foreign['by_symbol'])) or '无标的'}），已排除在策略归因之外"
                 )
             if result["by_symbol"] or foreign["rows"]:
                 self.store.append_attribution(
@@ -1012,8 +1011,8 @@ class LiveEngine:
             self.state.day_start_equity = equity
             self.state.equity_hwm = equity
             await self.alerts.send(
-                f"beidou external cash flow {flows['total']:+.2f} USDT ({flows['rows']} rows {flows['by_type']}); "
-                f"equity re-based to {equity:.2f}"
+                f"北斗外部资金变动 {flows['total']:+.2f} USDT（{flows['rows']} 条流水 {flows['by_type']}）；"
+                f"日初权益与高水位已重置为 {equity:.2f}"
             )
         return flows
 
@@ -1032,8 +1031,8 @@ class LiveEngine:
             status = probe_status(probe, rows, equity=self.state.last_equity, now_ms=now)
             if status["stop"]:
                 reason = (
-                    f"trailing {probe.window_days}d attributed P&L {status['pnl']:.2f} "
-                    f"({status['pnl_pct']:.4f} of equity) <= -{probe.max_loss}"
+                    f"近 {probe.window_days} 天归因盈亏 {status['pnl']:.2f}"
+                    f"（占权益 {status['pnl_pct']:.4f}）已跌破 -{probe.max_loss}"
                 )
                 self.state.stopped_books[probe.book] = {
                     "at": utc_now_iso(),
@@ -1045,7 +1044,7 @@ class LiveEngine:
                 self.model = _without_books(self.model, [probe.book])
                 status["status"] = "STOPPED"
                 logger.warning("probe book %s stopped: %s", probe.book, reason)
-                await self.alerts.send(f"beidou: probe book {probe.book} ({probe.strategy}) stopped - {reason}")
+                await self.alerts.send(f"北斗：探针账本 {probe.book}（{probe.strategy}）已停用 —— {reason}")
             statuses.append(status)
         return statuses
 
@@ -1066,10 +1065,11 @@ class LiveEngine:
             return
         bar = datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat()
         if reasons:
-            skipped = " and the cycle was skipped" if decision.skip_cycle else ""
-            await self.alerts.send(f"beidou guards at {bar}: {', '.join(reasons)}{skipped}")
+            skipped = "，本周期已跳过" if decision.skip_cycle else ""
+            told = "、".join(describe_guard_reason(reason) for reason in reasons)
+            await self.alerts.send(f"北斗风控触发 {bar}：{told}{skipped}")
         else:
-            await self.alerts.send(f"beidou guards cleared at {bar}: trading normally again")
+            await self.alerts.send(f"北斗风控解除 {bar}：已恢复正常交易")
         logger.warning("guard state changed: %s -> %s", self.state.last_guard_reasons, reasons)
         self.state.last_guard_reasons = reasons
 
@@ -1221,8 +1221,8 @@ def liquidation_alert(view: Mapping[str, Any], *, threshold: float) -> str | Non
     if not isinstance(distance, (int, float)) or distance >= threshold:
         return None
     return (
-        f"beidou: nearest liquidation is {distance:.1f} daily-vol units away ({view.get('symbol')}), "
-        f"inside the {threshold:.0f}-unit floor (M-Q06); {view.get('measured')} position(s) measurable"
+        f"北斗：最近的强平距离只剩 {distance:.1f} 个日波动单位（{view.get('symbol')}），"
+        f"已进入 {threshold:.0f} 个单位的下限内（M-Q06）；本次有 {view.get('measured')} 个持仓可测"
     )
 
 

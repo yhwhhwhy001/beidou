@@ -37,7 +37,7 @@ def test_a_drill_that_lands_exits_zero(tmp_path, monkeypatch) -> None:  # type: 
     )
 
     assert result.exit_code == 0, result.output
-    assert "delivered" in result.output
+    assert "已送达" in result.output
 
 
 def test_a_drill_the_provider_drops_exits_non_zero(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -54,14 +54,14 @@ def test_a_drill_the_provider_drops_exits_non_zero(tmp_path, monkeypatch) -> Non
     )
 
     assert result.exit_code != 0
-    assert "not delivered" in result.output
+    assert "未送达" in result.output
 
 
 def test_no_channel_configured_is_a_failure_not_a_pass(tmp_path) -> None:  # type: ignore[no-untyped-def]
     result = CliRunner().invoke(main, ["live", "alert-test", "--profile", _profile(tmp_path, "")])
 
     assert result.exit_code != 0
-    assert "no alert channel" in result.output
+    assert "没有配置告警通道" in result.output
 
 
 def test_the_drill_says_which_url_and_never_prints_it_whole(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -96,4 +96,4 @@ def test_repeating_the_drill_shows_the_dedup_window(tmp_path, monkeypatch) -> No
 
     assert result.exit_code == 0, result.output
     assert len(posts) == 1
-    assert "9 suppressed" in result.output
+    assert "9 条因去重窗口被抑制" in result.output

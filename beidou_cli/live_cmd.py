@@ -151,7 +151,7 @@ def refuse_second_instance(busy: LockBusy) -> tuple[int, str]:
     non-zero exit here would relaunch the loser every ThrottleInterval and alert every time -
     an alert storm about the guard working correctly (KILL-R20(d)).
     """
-    return 0, f"another beidou instance already holds this account: {busy}"
+    return 0, f"已有另一个北斗实例持有这个账户的锁：{busy}"
 
 
 @live.command("run")
@@ -289,7 +289,7 @@ def live_run(
         except LockBusy as busy:
             code, message = refuse_second_instance(busy)
             click.echo(message)
-            asyncio.run(alerts.send(f"beidou: {message}", key="second-instance"))
+            asyncio.run(alerts.send(f"北斗：{message}", key="second-instance"))
             raise SystemExit(code) from None
 
     try:
@@ -353,17 +353,17 @@ def live_status(
     problems: list[str] = []
     skew = clock_skew_seconds(str((payload.get("market_data", {}) or {}).get("rest_url", DEFAULT_BASE_URL)))
     if skew is None:
-        click.echo("clock: venue time unavailable (skipped)")
+        click.echo("时钟：取不到交易所时间（本项跳过）")
     else:
         span = float(interval_seconds(interval))
         alignment = ((skew + span / 2) % span) - span / 2
-        click.echo(f"clock: venue is {skew:+.1f}s from this host ({alignment:+.1f}s from a bar boundary)")
+        click.echo(f"时钟：交易所与本机相差 {skew:+.1f}s（距 K 线边界 {alignment:+.1f}s）")
         # D-025: the host clock is the reference, so a whole-bar offset is accepted; the remainder is what
         # decides whether the loop wakes on a bar the venue has already closed.
         if abs(alignment) > max_skew_seconds:
             problems.append(
-                f"the wake-up sits {alignment:+.1f}s from a bar boundary (> {max_skew_seconds:.0f}s): the loop "
-                "may act on a bar that has not closed at the venue"
+                f"唤醒时点距 K 线边界 {alignment:+.1f}s（> {max_skew_seconds:.0f}s）："
+                "循环可能在交易所尚未收线的 K 线上动作"
             )
     # DL-Q0 / KILL-Q15: the loop loads the registry once at startup and never reloads it, so an edit
     # to the file changes what it SAYS without changing what the loop TRADES.  Comparing the digest the
@@ -372,27 +372,27 @@ def live_status(
     # `live verify` rebuilds its model from the same file it would be checking.
     recorded = last_recorded_registry_digest(store)
     if recorded is None:
-        click.echo("registry: no cycle has recorded one yet")
+        click.echo("registry：还没有任何周期记录过 digest")
     else:
         on_disk = registry_digest(build_model(load_registry(payload["registry"]), payload))
         if recorded == on_disk:
-            click.echo(f"registry: matches the running loop ({recorded})")
+            click.echo(f"registry：与正在运行的循环一致（{recorded}）")
         else:
             problems.append(
-                f"registry on disk ({on_disk}) is not the one the loop is running ({recorded}); the next "
-                "restart would silently change what is traded - restart deliberately or revert the file"
+                f"磁盘上的 registry（{on_disk}）不是循环正在跑的那份（{recorded}）；"
+                "下次重启会静默改变交易内容 —— 要么有意识地重启，要么把文件改回去"
             )
     if heartbeat is None:
-        problems.append("no heartbeat")
+        problems.append("没有心跳")
     else:
         try:
             age = (datetime.now(UTC) - datetime.fromisoformat(str(heartbeat.get("at")))).total_seconds()
         except ValueError:
             age = float("inf")
         if age > threshold:
-            problems.append(f"heartbeat is {age:.0f}s old (> {threshold:.0f}s)")
+            problems.append(f"心跳已过期 {age:.0f}s（> {threshold:.0f}s）")
         if heartbeat.get("phase") == "ERROR" and int(heartbeat.get("consecutive_errors", 0)) >= 3:
-            problems.append(f"loop erroring: {heartbeat.get('error')}")
+            problems.append(f"循环处于报错状态：{heartbeat.get('error')}")
     # M-001: what share of the loop's own cycles completed, from the append-only log rather than the heartbeat
     health = cycle_health(
         store.read_jsonl(store.cycles_path),
@@ -401,17 +401,17 @@ def live_status(
         restarted_at=state.restarted_at,
     )
     if health.success_rate is None:
-        click.echo(f"cycles: none in the last {health.window_hours:.0f}h")
+        click.echo(f"周期：最近 {health.window_hours:.0f} 小时内没有任何周期")
     else:
         click.echo(
-            f"cycles: {health.success_rate:.1%} of {health.attempts} completed in the last "
-            f"{health.window_hours:.0f}h ({health.failures} failed); {health.clean_days} clean day(s); "
+            f"周期：最近 {health.window_hours:.0f} 小时共 {health.attempts} 次，完成 "
+            f"{health.success_rate:.1%}（失败 {health.failures} 次）；连续无故障 {health.clean_days} 天；"
             f"{health.restarts_note()}"
         )
         if health.success_rate < min_success_rate:
             problems.append(
-                f"cycle success rate {health.success_rate:.1%} < {min_success_rate:.0%} "
-                f"({health.failures} of {health.attempts} failed, last at {health.last_failure})"
+                f"周期成功率 {health.success_rate:.1%} < {min_success_rate:.0%}"
+                f"（{health.attempts} 次中失败 {health.failures} 次，最近一次在 {health.last_failure}）"
             )
     if problems:
         raise click.ClickException("; ".join(problems))
@@ -441,7 +441,7 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
     store = _store_for(payload, paper)
     state = store.load()
     if state.last_bar_ms is None:
-        raise click.ClickException("no completed cycle in state.json yet")
+        raise click.ClickException("state.json 里还没有任何已完成的周期")
     if state.stopped_books:
         model = model.without_books(list(state.stopped_books))
     universe = list(dict.fromkeys([*state.universe, *state.leaving])) or resolve_universe(payload, None, data_root)
@@ -554,12 +554,12 @@ def live_alert_test(profile: str, repeat: int) -> None:
         transport=alert_transport(),
     )
     if not alerts.enabled:
-        click.echo("no alert channel configured: set alerts.webhook_url in the profile")
+        click.echo("没有配置告警通道：请在 profile 里设置 alerts.webhook_url")
         raise SystemExit(1)
     for url in alerts.urls:
-        click.echo(f"channel: {redacted(url)}")
+        click.echo(f"通道：{redacted(url)}")
     stamp = datetime.now(UTC).isoformat()
-    text = f"beidou alert drill {stamp}: this is a test of the alert channel, no action needed"
+    text = f"北斗告警演练 {stamp}：这是一条告警通道测试消息，无需处理"
     delivered = suppressed = 0
     for _ in range(max(1, repeat)):
         if asyncio.run(alerts.send(text, key="alert-drill")):
@@ -567,9 +567,9 @@ def live_alert_test(profile: str, repeat: int) -> None:
         else:
             suppressed += 1
     if delivered:
-        click.echo(f"delivered {delivered} message(s); {suppressed} suppressed as duplicates (dedup window)")
+        click.echo(f"已送达 {delivered} 条；{suppressed} 条因去重窗口被抑制")
         return
-    click.echo("not delivered: no channel accepted the drill - the breaker cannot announce a stop")
+    click.echo("未送达：没有任何通道接收这次演练 —— 熔断时将无法对外报出停机")
     raise SystemExit(1)
 
 
@@ -639,7 +639,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
     click.echo(markdown)
-    click.echo(f"written {directory / f'{chosen}.md'}")
+    click.echo(f"已写入 {directory / f'{chosen}.md'}")
     # The drift status was computed and then thrown away: nothing ever sent it anywhere.  Which
     # findings page and which are only read is `daily_alerts`' decision and its docstring carries the
     # reasoning; this function does the routing.  Notices go to stdout beside the report and touch
@@ -647,9 +647,9 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
     # health check red - which is what a construction-cadence count did for three days.
     alerts, notices = daily_alerts(data)
     for notice in notices:
-        click.echo(f"notice {chosen}: {notice}")
+        click.echo(f"提示 {chosen}：{notice}")
     if alerts:
-        message = f"beidou {chosen}: " + " | ".join(alerts)
+        message = f"北斗日报 {chosen}：" + " | ".join(alerts)
         click.echo(message, err=True)
         # Every configured channel, not just the first: this path used to read `webhook_url` alone,
         # so a channel added for redundancy would have covered the loop and not the daily check.
@@ -660,7 +660,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
             state_path=ALERT_DEDUP_STATE,
         )
         if daily.enabled and not asyncio.run(daily.send(message)):
-            click.echo(f"notice {chosen}: the alert above was NOT delivered to any channel", err=True)
+            click.echo(f"提示 {chosen}：上面这条告警没有送达任何通道", err=True)
     if check and alerts:
         raise SystemExit(1)
 
@@ -799,7 +799,7 @@ def report_weekly(
         json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
     click.echo(markdown)
-    click.echo(f"written {directory / f'{chosen}.md'}")
+    click.echo(f"已写入 {directory / f'{chosen}.md'}")
 
 
 __all__ = [

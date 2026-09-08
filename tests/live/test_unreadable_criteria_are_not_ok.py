@@ -53,7 +53,7 @@ def test_a_criterion_that_cannot_be_read_is_not_reported_as_ok() -> None:
     assert not out["reasons"]  # nothing is breached; nothing can be read either
     unreadable = {entry["metric"] for entry in out["unreadable"]}
     assert unreadable == {"realised_vol", "slippage"}
-    assert any("needs 30" in entry["why"] for entry in out["unreadable"])
+    assert any("需要 30 笔" in entry["why"] for entry in out["unreadable"])
 
 
 def test_every_criterion_readable_and_inside_its_bar_is_still_ok() -> None:
@@ -78,7 +78,7 @@ def test_a_breach_outranks_a_blind_criterion() -> None:
     out = risk_budget_status(rows, [], params)
 
     assert out["status"] == "ALERT"
-    assert any("drawdown" in reason for reason in out["reasons"])
+    assert any("回撤" in reason for reason in out["reasons"])
     assert {entry["metric"] for entry in out["unreadable"]} == {"realised_vol", "slippage"}
 
 
