@@ -4,10 +4,22 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from beidou_alpha.signals import breakout, carry, flow, meanrev, residual, tsmom, xsmom
+from beidou_alpha.signals import breakout, carry, chanlun, flow, meanrev, residual, tsmom, xsmom
 from beidou_alpha.signals.base import SignalSpec, scores_to_targets
 
 SIGNALS: dict[str, SignalSpec] = {
+    # The 51st strategy (DL-S51).  Its formalisation was pre-registered in §7 of the governance plan
+    # before the module existed, because Chan theory is a family and "whichever variant scores better"
+    # is the failure this pipeline exists to refuse.
+    "chanlun": SignalSpec(
+        "chanlun",
+        chanlun.compute,
+        asdict(chanlun.ChanlunParams()),
+        "缠论 structure: merged bars -> fractals -> pens -> segments -> centres -> third-type points",
+        chanlun.ChanlunParams().warmup_bars,
+        warmup=lambda params: chanlun.ChanlunParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(chanlun.ChanlunParams.from_mapping(params)),
+    ),
     "tsmom": SignalSpec(
         "tsmom",
         tsmom.compute,

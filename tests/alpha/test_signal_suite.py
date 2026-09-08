@@ -49,14 +49,28 @@ def _synthetic_panel(seed: int = 0, n_symbols: int = 6, n_bars: int = 800, with_
 
 @pytest.mark.parametrize("signal_id", sorted(SIGNALS))
 def test_signals_are_causal_and_bounded(signal_id: str) -> None:
+    """KILL-AR-15 / T-S51-1: the panel is sized from the SIGNAL's warmup, not from a constant.
+
+    It used to be 800 bars with the cutoff at 600, and that made this test vacuous for any signal
+    whose warmup exceeds 600: every score before the cutoff was NaN, so the comparison was NaN
+    against NaN and a signal that read the future would have passed.  tsmom's 720-bar horizon was
+    already in that range, and chanlun's is too.  Sizing both from `warmup_for` keeps the test
+    non-vacuous as warmups grow, and the assertion below makes the emptiness a failure rather than
+    a silent pass.
+    """
     spec = SIGNALS[signal_id]
-    panel = _synthetic_panel()
+    warmup = spec.warmup_for(spec.default_params)
+    panel = _synthetic_panel(n_bars=warmup + 600)
     scores = spec.compute(panel, spec.default_params)
     assert scores.shape == panel.close.shape
     assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
     assert scores.iloc[-50:].notna().any().any(), f"{signal_id} produced no scores"
-    cutoff = 600
-    shuffled = _synthetic_panel(seed=99)
+    cutoff = warmup + 300
+    assert scores.iloc[:cutoff].notna().any().any(), (
+        f"{signal_id}: every score before the cutoff is NaN, so the causality comparison below would "
+        "be NaN against NaN - the exact way this test was vacuous before KILL-AR-15"
+    )
+    shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index))
     mixed_frames = {}
     for symbol in panel.symbols:
         mixed_frames[symbol] = pd.DataFrame(

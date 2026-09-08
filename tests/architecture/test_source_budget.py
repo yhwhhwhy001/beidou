@@ -1127,8 +1127,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # dataset gate: a safety check that runs after it can be bypassed by deleting data.  `apply` is refused
 # while the autonomy switch is off, and that switch is the one human confirmation point Q9 did NOT
 # remove - enabling asks, disabling never does, because a stop that needs confirming arrives late.
+# 2026-09-08, DL-S51 - 缠论, the 51st strategy and the one the operator named first: +397 in
+# beidou_alpha.  The sentence the rule requires, and for once it is the good kind: this is signal, and
+# it moves the alpha share the intended way.  Chan theory is a FAMILY of formalisations rather than one
+# algorithm, so §7 of the governance plan pre-registered exactly one - merge rule, fractal confirmation
+# bar, pen minimum, segment overlap, centre definition, which point types trade and which only close -
+# before this module existed, and "whichever variant scores better" is not available.  Most of the
+# addition is the docstring recording that choice, because a later reader who improves one rule has
+# silently run a second experiment on the same data.
+# One thing measured rather than assumed: the first implementation rebuilt every structure from bar 0
+# at each step, which is causally safe (a rebuild sees a prefix) and quadratic - 0.20s / 0.83s / 3.49s
+# at 2k / 4k / 8k bars, extrapolating to ~132s per symbol on the 49,096-bar archive and about 7.5 hours
+# for ONE backtest of the 205-symbol universe.  Every layer here is a left-to-right accumulation, so
+# the single-pass version produces the same structures in 0.30s per symbol; the equivalence is held by
+# a prefix test rather than by the argument.
+# The +18 in tests/ fixes KILL-AR-15 at the same time: the shared causality test sized its panel from a
+# constant (800 bars, cutoff 600), which made it VACUOUS for any signal whose warmup exceeds 600 - the
+# comparison was NaN against NaN.  It now sizes from `warmup_for`, and asserts the pre-cutoff scores are
+# not all NaN so the emptiness fails instead of passing.
 CEILING = {
-    "beidou_alpha": 6_186,
+    "beidou_alpha": 6_583,
     "beidou_live": 6_018,
     "beidou_cli": 4_016,
     "beidou_data": 1_805,
