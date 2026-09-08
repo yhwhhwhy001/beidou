@@ -16,7 +16,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | 操作者裁定 | ① 人退出运行时**决策**（观察与告警保留）；② 机器自动晋级/降级；③ 风控防死循环；④ 51 条作候选输入——实际进 Phase 1–3 的是 32 条，块 6 的 7 条有前置，块 0 的 12 条 Out（范围对账见 §1）；⑤ Testnet 为主；⑥ 选项 b；⑦ Q8：治理代码授权通过。 |
 | Phase 7 结果 | 独立子代理：G6 FAIL，PIVOT；2 P0 / 10 P1 / 8 P2。P0-1 由 R0 的 N 口径 + 证据重出关闭；P0-2 由选项 b 改写（验证 AC-G6′ 待跑，记 MITIGATED）。处置见 §16。G6 现记 **PARTIAL**（AR-08、AR-11 均由操作者 ACCEPTED；AR-17 OPEN）。 |
 | 三条核心设计判断 | (1) 评测模块已存在，缺的是"判定→registry"的写入主体；(2) 机器担任主体的前提：分位数门的 N 口径明确（R0）、只进 probe、批次窗口、降级即时；(3) Canary 是**部署健康检查，不是 alpha 过滤器**——假阳性由 R3 预算 + P&L stop 兜底。 |
-| 人类确认点（D.8） | 治理规则版本合并；自治开关 `governance enable/disable`；真实资金。**Q9（待操作者确认）**：v2 把 KILL-AR-18 的缓解写成"Phase 4 前两次事务由人 `apply`"——两次有边界的运行时人工动作，与"人不操作"的裁定有出入；未确认前按 v2 执行，确认后按操作者的答案改 §3、§8、AC-L5。 |
+| 人类确认点（D.8） | **只有三个**：治理规则版本合并（代码评审）；自治开关 `governance enable/disable`；真实资金。**单次晋级 / 降级不在其中——第一次事务起就由机器执行**（Q9，2026-09-08 操作者裁定）。这是对 KILL-AR-18 的**明示不采纳**：审查者要求把"写 registry + 自动重启 armed 循环"列为人类确认点，操作者裁定不列，理由是"人容易犯错"；D.8 要求把这类残余风险记为具名 ACCEPTED，故 AR-18 记 ACCEPTED（Owner：操作者），补偿控制是 R6 事务回滚 + Canary + R3 预算 + P&L stop，而不是人的一次点击。 |
 | 预期结果 | 全库 unique 试验 **677**，该口径下分位数门 ≈ **1.67**；按策略桶（tsmom N=146）≈ 1.49。两臂协议的 tsmom 1.81 两者都过；诚实 16 点网格 1.485 只过按策略桶的门。**51 条全喂进去，正常结果是 0–2 条进 probe；probe→main 按时间规则，预期多数存活的 probe 会到 main——这是"没被停掉"的意思，不是"被证明有 alpha"。** |
 
 ## 1. 范围（含范围对账）
@@ -66,7 +66,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | candidate → validated | 预登记提交时间戳 < 报告（DL-K3）∧ verdict PASS ∧ 分位数门（N 口径按 R0）∧ **证据构造 ≡ 实盘构造（guards / exits / 小书，KILL-AR-07）** | 调度批次 | 研究机 |
 | validated → booked | book 六项 ∧ `slippage_stress` 5.5 档过 ∧ 与每本在跑的书 corr < 0.5 ∧ 换手 ≤ 3× tsmom | 同上 | 研究机 |
 | booked → queued | 面板平价义务满足（M-011；缺则卡在 `metrics_refusal` 同形闸） | 同上 | 研究机 |
-| queued → probe | 批次窗口 ∧ R3/R4 未满 ∧ 队首 ∧ Canary 健康检查过 | 季度 | 慢：事务 + 重启（前两次是否由人 apply 见 Q9） |
+| queued → probe | 批次窗口 ∧ R3/R4 未满 ∧ 队首 ∧ Canary 健康检查过 | 季度 | 慢：事务 + 重启，**机器执行（含第一次）**；失败由 R6 自动回滚 |
 | **probe → main（时间规则）** | 连续 **3 个批次窗口**存活 ∧ 期间从未触发 P&L stop ∧ 家族门重算仍过。**main 保留 P&L stop 与 fraction 不变**——晋级只解除 R7 的重入计数，不加预算；加预算是设计时决定 | 窗口末 | 慢 |
 | probe → retired | P&L stop（已有）∨ 家族门重算不过 | 即时 | 快：`stopped_books` |
 | main → probe | 触发 P&L stop 一次 → 回 probe 重新计 3 窗口（不 retired） | 即时 | 快 |
@@ -162,7 +162,7 @@ Phase 1 尺子（2–4 周，无重启）：R0 报告口径、search_space_versi
 Phase 2 调度器 + 事务 + Canary（3–5 周，无重启；paper 上跑 DRILL-G1..G6）
 Phase 3 数据宽度 + 节点 + 手写含缠论（4–8 周，并行，无重启）
 Phase 4a 批次窗口 #1（构造）：块 4 必改项一次改完 → 重启 → 攒 30 天干净窗口（K-EX14）
-Phase 4b 批次窗口 #2（晋级）：队首候选 → Canary → 事务（Q9 决定是否由人 apply）→ 重启 → probe
+Phase 4b 批次窗口 #2（晋级）：队首候选 → Canary → 事务（机器 apply）→ 重启 → probe
 Phase 5 稳态：季度窗口；每规则版本变更后重跑 L2 + DRILL
 ```
 
@@ -198,7 +198,7 @@ Phase 5 稳态：季度窗口；每规则版本变更后重跑 L2 + DRILL
 | AC-G7 | G7 | Scenario | 重启 | DRILL-G3；−35% 归因回撤注入；同幅权益回撤注入 | verify 报警；前者告警 + 2 周期后 scalar 0.75；后者不触发；不改 config | 修快通道 |
 | AC-G8 | G8 | Functional | 研究机就绪 | 连跑 3 轮 | 空间未变零 mine；预算耗尽零 validate；队列有序 | 修调度 |
 | AC-S51 | S51 | Hypothesis | 预登记提交在先 | validate + corr 检查 | 判定写入 RESEARCH_LOG（正负都算成功）；corr ≥ 0.5 → 记"tsmom 换写法" | 转 retired |
-| AC-L5 | 全部 | Scenario | Phase 4b | 第一次全自动窗口 | Canary → 事务 → 重启 → probe 生效 → 下单；M-Q10 = 100%；M-010 窗口只清零一次（4a 那次） | 回滚，冻结晋级 |
+| AC-L5 | 全部 | Scenario | Phase 4b | 第一次全自动窗口，**全程无人工动作** | Canary → 事务 → 重启 → probe 生效 → 下单；M-Q10 = 100%；M-010 窗口只清零一次（4a 那次）；事务日志含 APPLY 行且 actor = machine | 回滚，冻结晋级 |
 
 ## 11. Learning Contract
 
@@ -253,7 +253,7 @@ Phase 5 稳态：季度窗口；每规则版本变更后重跑 L2 + DRILL
 | ~~Q6~~ | 缠论形式化 | 按 §7，不改 |
 | ~~Q7~~ | 09-08 重跑的 514 行账本 | 已裁定回退（K-EX07 先例） |
 | ~~Q8~~ | 治理代码 vs 90% alpha 目标 | 已裁定：授权通过，90% 是希望不是硬要求（AR-11 ACCEPTED） |
-| **Q9（新）** | Phase 4b 前两次事务是否由人 `apply`（KILL-AR-18 的缓解，与"人不操作"有出入） | 未确认前按"人 apply"执行 |
+| ~~Q9~~ | Phase 4b 前两次事务是否由人 `apply` | **已裁定（2026-09-08）：不用人 apply，第一次就机器执行**；AR-18 转 ACCEPTED |
 
 ## 15. 明确未做
 块 0；User Story Draft（单操作者，压缩为 §3）；真实资金 pre-flight；跨机契约（AR-17）。
@@ -279,7 +279,7 @@ Phase 5 稳态：季度窗口；每规则版本变更后重跑 L2 + DRILL
 | AR-15 | MITIGATED：独立任务修测试；T-S51-1 面板加长 | §5、§7 |
 | AR-16 | CLOSED：范围对账 | §1 |
 | AR-17 | OPEN：默认单机 | §14 Q5 |
-| AR-18 | MITIGATED → **待 Q9**：前两次事务人 apply；R8 宽限 | §0、§14 |
+| AR-18 | **ACCEPTED（操作者，Q9）**：单次晋级/降级不设人类确认点；残余风险由 R6 回滚 + Canary + R3 + P&L stop 承接；R8 宽限保留 | §0、§14 |
 | AR-19 | CLOSED：Claim Register | §13 |
 | AR-20 | CLOSED：逐判据 no-decision | §5 |
 
@@ -299,7 +299,7 @@ Phase 5 稳态：季度窗口；每规则版本变更后重跑 L2 + DRILL
 | 项 | 值 |
 | --- | --- |
 | Phase | 7 ✔（G6 PARTIAL）；8–9 v2.1（本文件，自洽）；执行中：证据重出 ✔、重启 #6 ✔ |
-| 已冻结 Decision | D-G1 机器主体；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 ACCEPTED |
+| 已冻结 Decision | D-G1 机器主体（**含第一次事务，Q9**）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
-| 开放 | Q-CRITICAL / Q2 / Q3 / Q4 / Q5 / **Q9**；AR-17 |
-| 下一动作 | (a) 操作者答 Q9；(b) Phase 0：`beidou_governance` 脚手架 + `replay.py`（A + B + D）；(c) 实盘 checkout 回到 main（P25 会话） |
+| 开放 | Q-CRITICAL / Q2 / Q3 / Q4 / Q5；AR-17 |
+| 下一动作 | (a) Phase 0：`beidou_governance` 脚手架 + `replay.py`（A + B + D，零账本零风险）；(b) Q-CRITICAL 与 Q2 决定 Track C 的优先级 |
