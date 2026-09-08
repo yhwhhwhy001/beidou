@@ -222,6 +222,29 @@ def test_a_mine_says_what_the_family_now_costs(tmp_path: Path, august_dir: Path,
     )
 
 
+def test_the_report_records_what_the_family_costs(
+    tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path
+) -> None:
+    """The terminal line above is gone when the window closes; the report is what the log cites.
+
+    2026-09-08's report recorded `charged: 514` - what the run did - and nothing about what the family
+    cost afterwards, which is the number the next validation reads.  Same fold, same before and after.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    runner = CliRunner()
+
+    assert runner.invoke(main, _mine_args(root, tmp_path / "r1")).exit_code == 0
+    rows = isolated_trials_ledger.read_text(encoding="utf-8").splitlines()
+    family = len(unique_trials(parse_ledger(rows, MINED_SEARCH_STRATEGY)))
+    first = json.loads(sorted((tmp_path / "r1").glob("mine-shortlist-*.json"))[-1].read_text())
+    assert first["ledger"].get("family_prior") == {"strategy": "mined", "before": 0, "after": family}
+
+    assert runner.invoke(main, _mine_args(root, tmp_path / "r2")).exit_code == 0
+    again = json.loads(sorted((tmp_path / "r2").glob("mine-shortlist-*.json"))[-1].read_text())
+    assert again["ledger"].get("family_prior") == {"strategy": "mined", "before": family, "after": family}
+
+
 def test_a_wider_search_charges_only_what_is_new(
     tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path
 ) -> None:
