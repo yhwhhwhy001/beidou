@@ -3387,7 +3387,9 @@ distinct 先验，同一行给出本轮之前的值与本轮追加的行数，�
 （`tests/cli/test_ledger_is_one_book.py::test_a_mine_says_what_the_family_now_costs`，首跑与重跑各断言一次）；
 beidou_cli 3,550 → 3,573（+23），理由随提交。账本内容与 `signature` 的折叠规则都没动——那是治理裁定，
 不是命令的事。P20 §一那句「代价为零」保持原样：写下它时 DL-K2 尚未落地（P20 裁决提交于 09-07 02:04，
-DL-K2 合并于同日 11:31），它当时是真的，改它等于改历史。
+DL-K2 合并于同日 11:31），它当时是真的，改它等于改历史。报告的 `ledger` 块随后也记了同一个数
+（`family_prior`：`strategy` / `before` / `after`，同一个 `unique_trials` 折叠），`f115e5f`——终端那一行
+关窗就没了，而日志引用的是报告。
 
 **这次没买到什么，明写。**
 
