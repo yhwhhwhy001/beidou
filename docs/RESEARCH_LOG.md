@@ -4379,3 +4379,66 @@ C.7 规则 2：**REFUTED / FAIL / 被 KILL 的条目不得重新进入，除非�
 
 **块 3 的六条：两条 REFUTED、一条结项、两条阻塞、一条 Won't——没有一条进 probe。** 这是分位数门在正常工作
 （RISK-G4 写着"高概率 / 低影响：这是正确行为，转数据宽度而非放松门"），而块 1 的数据宽度正是下一步。
+
+## 2026-09-09 · DRILL 串跑：Phase 2 的东西第一次对着跑着的循环跑，撞出两条只有跑才会撞出的事
+
+单元测试已经把 G1/G4/G5 对着**真闸和实盘那份 registry** 测过了。串跑要回答的是另一个问题：**这些模块对着
+一条真正在跑的循环还成立吗。** 起了两条循环（paper 与 shadow，都等 2026-09-08T18:00Z 那根 bar），实盘循环
+全程未受影响，实盘那份 registry 一个字节没动。
+
+### 一、新字段确实出现在真实记录里
+
+| 字段 | shadow | paper |
+| --- | --- | --- |
+| `governance`（R9） | `753638a519ac` | `753638a519ac` |
+| `evidence_construction`（DL-G9） | `f8567fb15c662476` | `f8567fb15c662476` |
+| `construction_full` | 有（每进程一次） | 有 |
+
+`governance` 与 `policy_digest()` 相等——**R9 通电了**。
+
+**而这一条是今天最有意义的一个数**：P28 那份配对报告的 `evidence_construction` 也是 **`f8567fb15c662476`**。
+一份**研究报告**和一条**实盘周期**，各自独立算出同一个字符串。**KILL-AR-07 从"两侧没有可比对的东西"变成了
+一次字符串比较，而且它成立。** Phase 0 把它挂起时写的那句"修法是两侧各落一个 `evidence_construction`"，
+到这里闭环了。
+
+### 二、canary 对真实周期评分：七项过六项
+
+`startup_gate` / `construction_stable` / `guard_rate`（shadow 0.000 对 armed 0.000）/ `no_error_streak` /
+`participation` / `targets_in_universe` 全过；**只有 `soak` 不过（1/168）**。那是**日历约束，一次 drill 缩
+不了**——照实报告而不是把门调小。
+
+### 三、事务链：APPLY → NOOP → ROLLBACK，链闭合
+
+对 registry 的**副本**跑，用的是**真闸**：
+
+```
+APPLY    ebaca74ee1cc -> 0c75e8eb44f4   restart_required=true  actor=machine
+NOOP     0c75e8eb44f4 -> 0c75e8eb44f4   （同一个事务再来一次）
+ROLLBACK 0c75e8eb44f4 -> 0c75e8eb44f4   tsmom: evidence digest mismatch for …105259Z.json
+```
+
+`chain closed`。回滚后文件与 APPLY 之后逐字节一致——**坏的那次没留下痕迹**。自治开关：关着时 apply 直接
+拒绝并指出 `plan` 这条路；开要确认，关不确认。
+
+### 四、两条只有跑才会撞出的事
+
+**① `--state-dir` 在 `--paper` 下被静默忽略。** paper 分支把 `with_name("paper")` 施加在 profile 说的任何
+路径上——对默认值是对的（让 paper 目录成为 live 的兄弟），而在有人明确指定目录的那一刻就把 flag 丢掉了：
+`--paper --state-dir .beidou/live-shadow` 写到的是 `.beidou/paper`。**一个承诺隔离的 flag，在它允许的两个
+模式之一里不兑现**，两条 paper canary 会共用一个 `state.json` 而两边都不说。已修，加了测试。
+
+**② canary 需要交易凭据才能启动。** 不是缺陷，是没人写下来的事实：canary 是 `live run --dry-run`，而
+dry-run 要向场所读仓位和余额。**这约束了 canary 能跑在哪台机器上**，与"调度器跑在研究机"的摆放有张力
+（Q5 默认单机，所以此刻不冲突；AR-17 的跨机契约要写这一条）。**不改成 `--paper`**：dry-run 对着**真实账本**
+算计划订单，正是它作为部署健康检查的价值——paper 的账本是模拟的，那样的 canary 会对着一本不存在的书体检。
+
+### 五、DRILL 六项的现状
+
+| DRILL | 状态 |
+| --- | --- |
+| G1 坏证据 → 回滚 | **串跑通过**（真闸、真 registry 副本、日志记 ROLLBACK） |
+| G2 连败冻结 / 重基不计数 | 属性测试覆盖；**真实事件仍未发生**（探针 P&L stop 从未触发） |
+| G3 阈值改了不递增版本 | 钉死的 `policy_digest` 覆盖；本次 0.1.0 → 0.2.0 就是它的一次实跑 |
+| G4 canary 拒绝 → 候选回队列 | **串跑通过**（七项过六项，soak 是日历约束） |
+| G5 单实例 + 事务幂等 | 幂等**串跑通过**；单实例锁在 paper 下未验证（见上文①的成因） |
+| G6 503 风暴 → 无治理决定 | 属性测试覆盖；真实 503 这次来自 CDN 而不是代理（见 09-09 摄入条目） |
