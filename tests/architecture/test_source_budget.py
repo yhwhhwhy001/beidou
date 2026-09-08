@@ -1098,9 +1098,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # R9: the loop records `policy_digest()` every cycle.  KILL-Q15 was a registry edited on disk while the
 # loop held the old model for 96 cycles; a policy edited on disk is the same failure with promotions
 # attached, and the difference is that nobody would be looking.
+# 2026-09-08, the instrument audit question 3's ruling owes: +43 in beidou_live.  The operator ruled
+# that the weights' denominator stays TOTAL equity - it is the venue's own margin basis, and under cross
+# margin the collateral does absorb losses - which makes the pro-cyclical amplifier a named ACCEPTED
+# risk rather than an oversight: every weight is a fraction of an equity that is 52% non-USDT, so
+# collateral up 10% is every target notional up 5.2%, and the backtest models no collateral at all.
+# D.8 asks an accepted residual risk to carry a compensating control, and this page's own recurring
+# lesson is blunter: a threshold nothing measures is just a sentence.  `collateral_drift` splits the
+# window's equity change into the book's attributed P&L and collateral repricing - measured on the
+# first 23 cycles that carried a reading, 73% of a -60.11 move was repricing.  Reported, never
+# subtracted, and it does not page: subtracting it would silently produce the USDT-denominator book the
+# operator did not choose, and paging on it would page on a standing fact about the account.
 CEILING = {
     "beidou_alpha": 6_186,
-    "beidou_live": 5_975,
+    "beidou_live": 6_018,
     "beidou_cli": 3_833,
     "beidou_data": 1_805,
     "beidou_exchange": 611,

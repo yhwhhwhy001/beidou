@@ -20,7 +20,7 @@ from beidou_alpha.validation.metrics import DECAY_WINDOW_DAYS, max_drawdown, sha
 from beidou_data.store import KlineStore
 from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
-from beidou_live.risk_budget import RiskBudgetParams, risk_budget_status
+from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, risk_budget_status
 from beidou_live.state import StateStore
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
@@ -979,6 +979,11 @@ def daily_payload(
         "risk_budget": risk_budget_status(
             _cycles(store), store.read_jsonl(store.trades_path), risk_budget or RiskBudgetParams()
         ),
+        # The instrument the 2026-09-08 ruling owes: the denominator stays total equity, so the
+        # pro-cyclical amplifier is an ACCEPTED risk - and an accepted risk with nothing measuring it is
+        # a sentence.  Beside `risk_budget` rather than inside it on purpose: it is not a threshold and
+        # it must never page.
+        "collateral_drift": collateral_drift(_cycles(store), store.read_jsonl(store.attribution_path)),
         "drift": drift_check(store, expectations or {}),
         "evidence_window": window,
         "income_drift": income_drift(

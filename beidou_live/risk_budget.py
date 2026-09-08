@@ -85,6 +85,44 @@ def _latest_collateral_share(rows: Sequence[Mapping[str, Any]]) -> float | None:
     return None
 
 
+def collateral_drift(rows: Sequence[Mapping[str, Any]], attribution: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """How much of the window's equity change was collateral being repriced rather than the book trading.
+
+    The operator ruled on 2026-09-08 (audit question 3) that the denominator stays total equity: it is
+    the venue's own margin basis, and under cross margin the collateral really does absorb losses.  That
+    ruling makes a pro-cyclical amplifier a NAMED accepted risk rather than an oversight - every weight
+    is a fraction of an equity that is 52% non-USDT, so collateral up 10% is every target notional up
+    5.2%, and the backtest models no collateral at all.
+
+    An accepted risk with no instrument is a sentence, which is the failure this repository keeps
+    finding, so this is the instrument.  It measures and changes nothing.  Measured over the first 23
+    cycles that recorded a collateral reading (2026-09-07T15:00Z onward): equity -60.11, attributed
+    P&L -16.19, so 73% of the move was repricing.
+
+    Reported, never subtracted.  Subtracting it would silently turn this into the USDT-denominator book
+    the operator did not choose.
+    """
+    priced = [row for row in rows if isinstance((row.get("collateral") or {}).get("equity"), int | float)]
+    if len(priced) < 2:
+        return {"enforced": False, "reason": f"needs 2 cycles with a collateral reading, has {len(priced)}"}
+    first, last = priced[0]["collateral"], priced[-1]["collateral"]
+    equity_change = float(last["equity"]) - float(first["equity"])
+    since = int(priced[0].get("bar_open_ms") or 0)
+    attributed = sum(float(row.get("total") or 0.0) for row in attribution if int(row.get("bar_open_ms") or 0) >= since)
+    repriced = equity_change - attributed
+    return {
+        "enforced": True,
+        "cycles": len(priced),
+        "equity_change": equity_change,
+        "attributed_pnl": attributed,
+        "collateral_repricing": repriced,
+        # `None` rather than 0.0 or 1.0 on a flat window: a share of nothing is not a share, and zero
+        # would read as "none of it was collateral", which is the opposite of what it would mean.
+        "repricing_share": None if equity_change == 0.0 else repriced / equity_change,
+        "collateral_share": _latest_collateral_share(rows),
+    }
+
+
 def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
     """Drawdown from the high-water mark, with the mark reset at every re-baselined cycle.
 
