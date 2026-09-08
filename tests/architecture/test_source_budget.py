@@ -987,9 +987,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 #     ladder's drawdown carries the share of equity that is collateral rather than the book, and
 #     `live_overlay_blocks` hands the gate the loop's own guards and exits.
 # The ratchet caught all three, which is it working: none of this was budgeted for.
+# 2026-09-08, M-015's limit re-derived with the probe book in place: +23 live, all of it prose.
+# `RISK_COMPRESSION_LIMIT` moved 0.50 -> 0.76 and the three lines that MOVE are the constant, the
+# alert's trailing clause and one docstring sentence; the other twenty say why, because the number
+# they replace was declared in its own comment to be "not a derived threshold" and the next reader
+# has to be able to tell a derivation from a second guess.  Deliberately NOT copied here in full:
+# the method, the counterfactual and the 88-cycle table live in
+# `scratchpad/m015_recalibrate_with_probe.py`, whose docstring was written before it ran, so a
+# correction is made in one place.  What the twenty lines buy that a pointer would not: the two
+# anchors (0.581 working / 1.000 deleted), the pre-registered 1.5 separability gate they passed, and
+# the escalation rule - if this alerts again from the two books cancelling rather than from stage 1,
+# replace the instrument instead of raising the number, which is the failure this file exists to stop.
 CEILING = {
     "beidou_alpha": 6_046,
-    "beidou_live": 5_865,
+    "beidou_live": 5_888,
     "beidou_cli": 3_550,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
