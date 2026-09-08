@@ -191,13 +191,13 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | **DL-G3 状态机 + 预算 ✔** | §3 / §4 | `lifecycle.py`（Phase 0）、`budget.py`（R1 从账本读）、`state.py`/`governance_state.json` | T-G3-1 非法转移拒绝；T-G3-2 R1/R3/R4/R5/R7 属性测试（hypothesis）；T-G3-3 重启后状态持久 | AC-G3 | M-G01 | gov +≈500 |
 | **DL-G4 事务 + 回滚 ✔** | R6 | `promote.py` | T-G4-1 闸拒绝 → 回滚 → digest 等于回滚前；T-G4-2 幂等 | AC-G4 / DRILL-G1 | M-Q10 | gov +≈250 |
 | **DL-G5 Canary ✔** | §5 L4 | `canary.py` + `run_shadow.sh` + `.beidou/live-shadow` + `live run --state-dir` | T-G5-1 健康指标计算；T-G5-2 失败 → 回队列 + R5 计数 | AC-G5 / DRILL-G4 | M-G03 | gov +≈300，cli +≈20，deploy |
-| DL-G6′ 时间规则 | §3 ← 选项 b | `tenure.py` | T-G6′-1 三窗口无 stop → main；T-G6′-2 main 触发 stop → 回 probe 重计；T-G6′-3 TRANSFER 周期的 stop 不计 | AC-G6′ | M-G01 | gov +≈150 |
+| **DL-G6′ 时间规则 ✔** | §3 ← 选项 b | `tenure.py`（从 `cycles.jsonl` 推出事件）+ `governance tenure`；判定仍全在 `lifecycle.py`。**未关的那条边：`probes_from_registry` 排除 main book，所以 main→probe 从记录里不可达**，命令自己会说 | T-G6′-1 ✔；T-G6′-2 ✔；T-G6′-3 ✔（跳过丢不掉真 stop，有测试）；另加两条：窗口内无周期不算存活、中途进场不拿那个窗口 | AC-G6′ | M-G01 | gov +≈150 |
 | DL-G7 治理 digest + 快通道 | R8 / R9 | `engine.py` 每周期落盘；回撤梯接 `throttle_scalar`（归因口径 + 告警 + 宽限） | T-G7-1 digest 变 → `live verify` 报；T-G7-2 −35% 注入 → 告警，2 周期后 scalar 0.75；T-G7-3 权益回撤（抵押品）不触发 | AC-G7 / DRILL-G3 | M-Q10, M-015 | live +≈100 |
-| **DL-G8 调度器 ✔（研究机 plist 未做，AR-17）** | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
+| **DL-G8 调度器 ✔（研究机 plist 未做）** | §2 | `scheduler.py`；跨机契约见 §21（默认单机，且 canary 需要交易凭据） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
 | **DL-C1 冲击成本模型 ✔（含 P26 重推）** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
 | **DL-G9 判据可读性 ✔** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
 | **DL-S51 缠论 ✔ REFUTED** | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
-| DL-D4 metrics→Panel | 块 1 | `Panel.metrics` + 叶节点 + M-011 平价接日报 | T-D4-1 5 分钟桶对齐 166/166；T-D4-2 无平价证据 → queued 卡住 | AC-D4 | M-011 | alpha/data +≈150 |
+| **DL-D4 metrics→Panel ✔** | 块 1 | `Panel.metrics` + 叶节点 + M-011 平价接日报 | T-D4-1 5 分钟桶对齐 166/166；T-D4-2 无平价证据 → queued 卡住 | AC-D4 | M-011 | alpha/data +≈150 |
 | DL-D5 现货 ingest | 块 1 | 同源 REST + 月归档 + basis 叶 | T-D5-1 对齐契约；T-D5-2 因果 | AC-D5 | M-011 | data +≈250 |
 
 ## 10. Acceptance（三层）
@@ -267,14 +267,52 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | ~~Q2~~ | "持续盈利"判据（实盘年化 Sharpe 阈值 + 窗口） | **已裁定（2026-09-08）：双层 + 诚实标注**。领先 M-010 不劣于 q10 = −1.52（"没炸"判据）；滞后 M-G06 构造不变 ≥ 18 个月、按策略、点估计 ≥ 0、t 只报告。见 §19 |
 | ~~Q3~~ | 批次窗口长度 | **已裁定（2026-09-08）：一个月**。连带调整见 §3 注、R1、R5 |
 | Q4 | 新数据源进范围 | 进 |
-| Q5 | 研究机 | 默认单机（AR-17 跨机契约未写） |
+| Q5 | 研究机 | 默认单机。**跨机契约已写（§21）**，并核出了它的代价：canary 走 `--dry-run` → `build_venue`，**需要交易凭据**，所以研究机跑不了 §5 的 L4。要拆机，先裁「多一台能下单的机器」 |
 | ~~Q6~~ | 缠论形式化 | 按 §7，不改 |
 | ~~Q7~~ | 09-08 重跑的 514 行账本 | 已裁定回退（K-EX07 先例） |
 | ~~Q8~~ | 治理代码 vs 90% alpha 目标 | 已裁定：授权通过，90% 是希望不是硬要求（AR-11 ACCEPTED） |
 | ~~Q9~~ | Phase 4b 前两次事务是否由人 `apply` | **已裁定（2026-09-08）：不用人 apply，第一次就机器执行**；AR-18 转 ACCEPTED |
 
 ## 15. 明确未做
-块 0；User Story Draft（单操作者，压缩为 §3）；真实资金 pre-flight；跨机契约（AR-17）。
+块 0；User Story Draft（单操作者，压缩为 §3）；真实资金 pre-flight。~~跨机契约（AR-17）~~ → §21。
+
+## 21. AR-17 跨机契约（2026-09-09）
+
+Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过那条边界、朝哪个方向、以及冲突时谁赢——
+以及今天核出来的那条让"研究机跑全流程"不成立的事实。
+
+### 谁写什么
+
+| 制品 | 写 | 读 | 传递 | 并发 |
+| --- | --- | --- | --- | --- |
+| `reports/research/*`、验证账本 | 研究机 | 两边 | git | 只追加，文件名带时间戳，天然不冲突 |
+| `config/alpha_registry.yaml` | **只有交易机**（事务） | 两边 | git | 单写者 |
+| `governance/transactions.jsonl` | **只有交易机** | 两边 | git | 只追加；`closed()` 验链，断链即"有人绕过事务改了 registry" |
+| `governance/governance_state.json` | **只有交易机** | 两边 | git | **必须单写者**：`probe_entries` 是 R7 的终身计数，两边各加一次就等于白送一条命 |
+| `.beidou/live/*` | 交易机 | **只有交易机** | 不跨机 | — |
+| `.beidou/data/universe.json` | **只有在拿账户交易的那个进程** | 两边 | 不跨机 | 见下第 4 条 |
+
+### 四条规则，每条都有今天的证据
+
+1. **晋级只发生在交易机上。** 研究机产出候选与报告；晋级是一次 registry 事务加一次重启，两者都只在
+   交易机上发生。研究机对 registry 只有读权限。
+2. **调度器不读 `.beidou/live`，tenure 只在交易机上跑。** 前者是 `scheduler.py` 自己 docstring 里写死的
+   （否则一次研究跑的时机会变成"书此刻在做什么"的函数）；后者理由相反而对称——时间规则是一句**关于**
+   实盘记录的陈述，所以它跑在交易机上、紧挨着会据此发起的那次事务。
+3. **canary 需要交易凭据——这是 Q5 的真正代价，2026-09-09 核出来的。** `run_shadow.sh` 用 `--dry-run`，
+   而 `--dry-run` 走 `build_venue`，读 `BEIDOU_BINANCE_API_KEY/SECRET`（`config.py:272`）；引擎启动就要
+   `venue.rules()` 和持仓快照。所以 §5 的 **L4 层不能放在一台只有数据权限的研究机上**。两条路，都要付：
+   要么研究机也持有交易凭据（多一个存密钥的地方，多一台机器能下单），要么 canary 留在交易机上——那研究机
+   就不是"全流程"的，§2 的两机图要改。**不写这条的跨机契约会在第一次 canary 上失败。**
+4. **`universe.json` 是共享观察，只有拿账户交易的那个进程可以重排它**（`may_rerank_shared_pool`）。
+   研究机的任何跑法都不许写它：每一份被引用的证据都记着它产出时的 universe 指纹，改了那个文件就让
+   armed 循环的证据失效、数据集闸拒绝它下一次启动。09-08 一天里被触发了两次（一次 canary、一次裸
+   `--paper`），两次都是在同一台机器上——跨机只会让它更难看见。
+
+### 还没定的
+
+单机时这一节不产生任何动作。要真拆机，第 3 条是先要裁的那个：**多一台能下单的机器，换研究机能自己跑完
+L4**。这条不该由我裁。
 
 ## 16. Phase 7 Kill 处置表
 
@@ -402,12 +440,14 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 属批次窗口（Phase 4a）。DL-C1 交付的是让那次重推**可以做**。另一条近似：书级护栏回放用平费率给自己的权益
 路径定价，冲击下日内止损档会比重放的略早触发；移进回放会让它路径依赖于自己正在产生的量，故记录不修。
 
-## Checkpoint
+## Checkpoint（2026-09-09 更新）
 
 | 项 | 值 |
 | --- | --- |
-| Phase | 7 ✔（G6 PARTIAL）；8–9 v2.1（本文件，自洽）；**Phase 0 ✔（2026-09-08，§18）**；证据重出 ✔、重启 #6 ✔ |
-| 已冻结 Decision | D-G1 机器主体（**含第一次事务，Q9**）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED |
-| G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
-| 开放 | Q4（默认进）/ Q5（默认单机）；AR-17。**审计三问③ 已裁（09-08）** |
-| 下一动作 | Phase 0–2 已完；Phase 3 已开工（缠论 REFUTED 结项）。(a) 块 1 数据宽度（DL-D4 metrics→Panel 是解锁最多条目的一条）；(b) 块 2 挖掘节点；(c) DRILL-G1..G6 的 paper 端到端串跑。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟 |
+| Phase | 7 ✔（G6 PARTIAL）；8–9 v2.1（本文件，自洽）；**Phase 0–2 ✔**；Phase 3 块 3 已结项（缠论 / 配对 / regime 全 REFUTED，无一到达 probe——RISK-G4 说这是对的行为）；证据重出 ✔、重启 #6 ✔、**#7 ✔（2026-09-08T19:24Z，钉住总体）** |
+| 已冻结 Decision | D-G1 机器主体（含第一次事务，Q9）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED；**「选 3」交易总体钉进 registry** |
+| G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL |
+| 开放 | Q4（默认进）。**Q5 已答（§21，代价是 canary 需要交易凭据）；AR-17 已写（§21）**；审计三问③ 已裁（09-08） |
+| 治理线状态 | 自治 **ENABLED**；事务 3 行、链闭合；`governance_state.json` 已按 KILL-AR-06 落 grandfather（tsmom=main、flow=probe，R3 **1/2 位、1/3 预算已满**）；`flow_short` 时间规则 **0/9 窗口**（第一个批次窗口 2026-10-03 才关） |
+| 下一动作 | (a) metrics ingest 跑完（约 5 小时，82/204，可续跑）→ 用 OI/LS 叶做第一次 `mine`，**但本窗口的 mine 轮次已在 09-07 用掉**；(b) 块 2 挖掘节点；(c) DRILL-G1..G6 的 paper 端到端串跑。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟 |
+| 待裁 | ① `probes_from_registry` 排除 main book，§3 却写着 main 保留 P&L stop——**main→probe 目前不可达**，关上它会改变什么可以叫停实盘主书；② probe→main 是 9 个月，改成 3 个月是拿过滤强度换速度（§3 注 2 有两个数），要作为规则版本变更记一笔；③ 拆研究机要不要多一台能下单的机器（§21 第 3 条） |
