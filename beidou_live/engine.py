@@ -25,6 +25,7 @@ from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
+from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
@@ -190,6 +191,13 @@ class LiveEngine:
         self.metrics_store = metrics_store
         self.pool = pool
         self.universe_sink = universe_sink
+        # DL-G9: the construction's INPUTS, written once per process into the append-only record.
+        # The Phase 0 replay found six construction changes in the live log and could attribute none of
+        # them: `cycles.jsonl` and `heartbeat.json` carry a digest and nothing else, a digest does not
+        # invert, and the startup heartbeat that does hold the payload is overwritten by the next start.
+        # A construction can only change at startup (the engine builds its model once - KILL-Q15), so
+        # writing it on this process's first cycle records every change exactly once.
+        self._construction_recorded = False
         self.state: LiveState = store.load()
         if self.state.cycles > 0:  # M-004: this process is a restart, not a first start
             self.state.restarts = self.state.restarts + 1
@@ -590,6 +598,12 @@ class LiveEngine:
             "universe_update": universe_update,
             "inputs": inputs.to_dict(),
             "construction": construction_fingerprint(config)["digest"],
+            # DL-G9: the same construction, restricted to what a validation report can describe, so a
+            # later reader can compare the two as strings.  Cheap enough to write every cycle (16 chars),
+            # and writing it only on change would make a row's meaning depend on finding an earlier row.
+            "evidence_construction": evidence_construction_of(config),
+            # ...and the full payload once per process, which is once per possible change.
+            **({} if self._construction_recorded else {"construction_full": construction_fingerprint(config)}),
             # DL-Q0: which registry this PROCESS is running, not which one is on disk (KILL-Q15).
             "registry": registry_digest(self.model),
             "clock": clock,
@@ -622,6 +636,7 @@ class LiveEngine:
             "orders": [],
             "skipped": [],
         }
+        self._construction_recorded = True
         await self._announce_guards(decision, bar_open_ms)
         # M-Q06.  Before the skip check on purpose: a book approaching liquidation while a guard has
         # stopped it trading is exactly the state an operator needs told about, and it is the state in
@@ -1389,6 +1404,45 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
     # `payload_version` is deliberately NOT part of what is hashed.  Inside, it would move the digest the
     # moment it was introduced - which is the exact failure it exists to make legible (2026-09-07).
     return {"digest": digest, "payload_version": CONSTRUCTION_PAYLOAD_VERSION, **payload}
+
+
+def evidence_construction(config: LiveConfig) -> dict[str, Any]:
+    """The three blocks a validation report can describe, shaped exactly as a report records them.
+
+    DL-G9's live half.  `construction_fingerprint` above covers more than a backtest can have an
+    opinion about - throttle, leverage, `strategy_weights` - so it can never equal anything a report
+    writes.  This is the intersection, and it is what makes "the evidence was produced under the
+    construction the loop holds" answerable from two recorded strings instead of from a config that
+    only exists while the process is alive.
+
+    It duplicates `beidou_live.config.live_overlay_blocks` in shape rather than calling it, because
+    that function reads the raw profile mapping and the engine holds a parsed `LiveConfig`; a test
+    holds the two together so the duplication cannot drift.
+    """
+    return {
+        "portfolio": {
+            "vol_target": config.portfolio.vol_target,
+            "vol_halflife": config.portfolio.vol_halflife,
+            "covariance_halflife": config.portfolio.covariance_halflife,
+            "min_asset_vol": config.portfolio.min_asset_vol,
+            "max_scalar": config.portfolio.max_scalar,
+            "max_weight": config.guards.max_weight,
+            "max_gross": config.guards.max_gross,
+            "no_trade_band": config.rebalance.no_trade_band,
+            "no_trade_rel_band": config.rebalance.no_trade_rel_band,
+        },
+        "book_guards": {
+            "max_weight": config.guards.max_weight,
+            "max_gross": config.guards.max_gross,
+            "daily_loss_pause": config.guards.daily_loss_pause,
+        },
+        "exits": dict(vars(config.exits)) if config.exits.enabled else None,
+    }
+
+
+def evidence_construction_of(config: LiveConfig) -> str:
+    blocks = evidence_construction(config)
+    return evidence_construction_digest(blocks["portfolio"], blocks["book_guards"], blocks["exits"])
 
 
 def _without_books(model: SignalModel, books: Sequence[str]) -> SignalModel:

@@ -161,15 +161,18 @@ SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="DL-K3 预登记早于报告",
         reads="Facts.prereg_before_report",
-        why_unreadable="没有任何一份报告携带预登记指针；预登记记在 RESEARCH_LOG 的散文和 git 提交里",
-        fix="Phase 1：`research validate` 把预登记 commit hash 写进报告，判据改读 artefact",
+        why_unreadable="早于 DL-G9 的报告不携带预登记指针；那时预登记只记在 RESEARCH_LOG 的散文和 git 提交里。"
+        "**DL-G9 已交付**：`research validate --prereg <commit>` 把 commit 与它自己的提交时间写进报告，"
+        "此后的报告按 artefact 判定，更早的仍挂起",
+        fix="Phase 1 ✔ DL-G9：`--prereg` + 报告的 `preregistration` 块",
     ),
     SuspendedCondition(
         condition="KILL-AR-07 证据构造 ≡ 实盘构造",
         reads="Facts.evidence_construction_matches_live",
-        why_unreadable="`cycles.jsonl` 与 `heartbeat.json` 只存 12 字符 digest，不存构造输入，"
-        "digest 不可反解；报告存 `portfolio`/`exits` 但不算同一个 digest",
-        fix="Phase 1：validate 报告落 `construction_digest`，实盘构造变化时落全量而不只是 digest",
+        why_unreadable="早于 DL-G9 时两侧没有可比对的东西：`cycles.jsonl` 只存构造 digest 而 digest 不可反解，"
+        "报告存 `portfolio`/`exits` 却算不出同一个数。**DL-G9 已交付**：两侧各落一个 "
+        "`evidence_construction`（只覆盖 `construction_problems` 比对的那三块），字符串相等即可判定",
+        fix="Phase 1 ✔ DL-G9：报告的 `evidence_construction` + 每周期落盘的同名字段 + 每进程一次的 `construction_full`",
     ),
     SuspendedCondition(
         condition="§3 滑点压力 5.5 档",
@@ -252,21 +255,32 @@ def _report_time(report: Mapping[str, Any]) -> str:
     return str(report.get("generated_at") or "")
 
 
-def _facts_for(report: Mapping[str, Any], *, acknowledged: bool) -> tuple[Event, Facts]:
+def _facts_for(
+    report: Mapping[str, Any], *, acknowledged: bool, live_constructions: frozenset[str] = frozenset()
+) -> tuple[Event, Facts, tuple[str, ...]]:
     """Route a report to the transition it is evidence for, and read only what it actually says.
 
-    Every suspended condition below is set to its passing value and declared in `SUSPENDED`; that is
-    the difference between "the rule held" and "the rule was not applied", and conflating them is how
-    a replay ends up reporting its own blind spots as findings.
+    A suspended condition is set to its passing value and NAMED in the third return value; that is the
+    difference between "the rule held" and "the rule was not applied", and conflating them is how a
+    replay ends up reporting its own blind spots as findings.
+
+    DL-G9 turned two of them from permanent blind spots into artefact-age questions.  A report that
+    carries `preregistration` and `evidence_construction` is judged on them; one written before those
+    fields existed still suspends them, the same way `construction_problems` skips a report with no
+    `portfolio` block rather than refusing it.
     """
     kind = str(report.get("kind") or "")
     if kind == "book":
         verdict = str(report.get("book_verdict") or "")
-        return Event.BOOK, Facts(
-            book_checks_pass=verdict == "ACCEPT" or (verdict == "REJECT" and acknowledged),
-            slippage_stress_pass=True,
-            max_correlation_with_running=0.0,
-            turnover_ratio_to_main=0.0,
+        return (
+            Event.BOOK,
+            Facts(
+                book_checks_pass=verdict == "ACCEPT" or (verdict == "REJECT" and acknowledged),
+                slippage_stress_pass=True,
+                max_correlation_with_running=0.0,
+                turnover_ratio_to_main=0.0,
+            ),
+            ("§3 滑点压力 5.5 档", "§3 与在跑的书 corr < 0.5、换手 ≤ 3x"),
         )
     selection = report.get("oos_selection") or {}
     wf = report.get("walk_forward") or {}
@@ -278,11 +292,28 @@ def _facts_for(report: Mapping[str, Any], *, acknowledged: bool) -> tuple[Event,
         and isinstance(threshold, (int, float))
         and oos >= threshold
     )
-    return Event.VALIDATE, Facts(
-        verdict_pass=report.get("verdict") == "PASS",
-        prereg_before_report=True,
-        quantile_gate_pass=bool(gate_pass),
-        evidence_construction_matches_live=True,
+    suspended: list[str] = []
+    prereg = report.get("preregistration")
+    if isinstance(prereg, Mapping) and prereg.get("committed_at"):
+        prereg_ok = str(prereg["committed_at"]) < str(report.get("generated_at") or "")
+    else:
+        prereg_ok = True
+        suspended.append("DL-K3 预登记早于报告")
+    recorded = report.get("evidence_construction")
+    if isinstance(recorded, str) and recorded and live_constructions:
+        construction_ok = recorded in live_constructions
+    else:
+        construction_ok = True
+        suspended.append("KILL-AR-07 证据构造 ≡ 实盘构造")
+    return (
+        Event.VALIDATE,
+        Facts(
+            verdict_pass=report.get("verdict") == "PASS",
+            prereg_before_report=prereg_ok,
+            quantile_gate_pass=bool(gate_pass),
+            evidence_construction_matches_live=construction_ok,
+        ),
+        tuple(suspended),
     )
 
 
@@ -328,6 +359,7 @@ def replay_adoptions(
     *,
     acknowledged_rejects: Sequence[str] = (),
     policy: Policy | None = None,
+    live_constructions: Sequence[str] = (),
 ) -> ReplayResult:
     """Replay §3's evidence-side transitions against every registry pointer, in both directions.
 
@@ -340,6 +372,9 @@ def replay_adoptions(
     reproduced: list[str] = []
     differences: list[Difference] = []
     acknowledged = set(acknowledged_rejects)
+    live = frozenset(live_constructions)
+    suspensions: dict[str, int] = {}
+    judged: dict[str, int] = {}
 
     adopted_names = {path.rsplit("/", 1)[-1] for path in adoptions}
     for path, adopted_on in sorted(adoptions.items(), key=lambda kv: kv[1]):
@@ -358,7 +393,13 @@ def replay_adoptions(
                 )
             )
             continue
-        event, facts = _facts_for(report, acknowledged=name in acknowledged)
+        event, facts, suspended = _facts_for(report, acknowledged=name in acknowledged, live_constructions=live)
+        for condition in suspended:
+            suspensions[condition] = suspensions.get(condition, 0) + 1
+        if event is Event.VALIDATE:
+            for condition in ("DL-K3 预登记早于报告", "KILL-AR-07 证据构造 ≡ 实盘构造"):
+                if condition not in suspended:
+                    judged[condition] = judged.get(condition, 0) + 1
         state = State.CANDIDATE if event is Event.VALIDATE else State.VALIDATED
         decision = evaluate(book, Candidate(id=name, state=state), event, facts, policy)
         if decision.allowed:
@@ -367,11 +408,16 @@ def replay_adoptions(
             continue
         differences.extend(_attribute(reason, name, report, history) for reason in decision.reasons)
 
+    for condition, count in sorted(judged.items()):
+        reproduced.append(
+            f"{condition}：{count} 份指针**已可判定**（DL-G9 的字段在场）；"
+            f"另有 {suspensions.get(condition, 0)} 份早于该字段仍挂起"
+        )
     for path, report in sorted(reports.items()):
         name = path.rsplit("/", 1)[-1]
         if name in adopted_names or report.get("kind") != "validation" or report.get("verdict") != "PASS":
             continue
-        event, facts = _facts_for(report, acknowledged=False)
+        event, facts, _ = _facts_for(report, acknowledged=False, live_constructions=live)
         decision = evaluate(book, Candidate(id=name), event, facts, policy)
         substantive = [r for r in decision.reasons if not (r.startswith("R0") and not _gate_readable(report))]
         if substantive:

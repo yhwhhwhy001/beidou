@@ -151,3 +151,48 @@ def test_a_fingerprint_change_with_no_behaviour_change_is_not_a_construction_cha
     aliased = replay_live(rows, [], construction_aliases={"renamed": "old"})
     assert len([d for d in raw.differences if "construction" in d.subject]) == 2
     assert len([d for d in aliased.differences if "construction" in d.subject]) == 1
+
+
+def test_dl_g9_turns_a_permanent_blind_spot_into_an_artefact_age_question() -> None:
+    """The two conditions Phase 0 suspended are now judged when the fields are there, and only then.
+
+    Before DL-G9 `prereg_before_report` and `evidence_construction_matches_live` were False for every
+    artefact that could ever exist, which made §3's state machine unable to admit anything at all - the
+    finding that reordered Phase 1.  A report carrying both fields must now be judged on them, and a
+    report carrying a construction the loop never ran must be refused rather than waved through.
+    """
+    modern = {
+        "kind": "validation",
+        "strategy": "x",
+        "verdict": "PASS",
+        "generated_at": "2026-10-01T00:00:00+00:00",
+        "walk_forward": {"oos_sharpe": 2.0},
+        "oos_selection": {"gate": "max_sharpe_quantile", "threshold_annual": 1.0, "n_trials": 10},
+        "preregistration": {"commit": "a" * 40, "committed_at": "2026-09-30T00:00:00+00:00"},
+        "evidence_construction": "deadbeefdeadbeef",
+    }
+    reports = {"reports/research/modern.json": modern}
+    adoptions = {"reports/research/modern.json": "2026-10-01"}
+
+    admitted = replay_adoptions(reports, adoptions, live_constructions=["deadbeefdeadbeef"])
+    assert not admitted.differences, [d.rules_say for d in admitted.differences]
+    assert any("已可判定" in line for line in admitted.reproduced)
+
+    # Same report, a loop running something else: refused on KILL-AR-07 rather than suspended.
+    diverged = replay_adoptions(reports, adoptions, live_constructions=["0000000000000000"])
+    assert [d.rules_say for d in diverged.differences] == [
+        "KILL-AR-07: the evidence was produced under a different construction than the loop holds"
+    ]
+    # And it is a FINDING, not a blind spot: filing a real divergence under "we could not tell" is
+    # exactly what `Difference.attributed` was tightened to stop.
+    assert not diverged.passes_ac_g0
+
+    # And a pre-registration dated AFTER its own report is the DL-K3 violation, not a pass.
+    late = {**modern, "preregistration": {"commit": "b" * 40, "committed_at": "2026-10-02T00:00:00+00:00"}}
+    refused = replay_adoptions(
+        {"reports/research/late.json": late},
+        {"reports/research/late.json": "2026-10-02"},
+        live_constructions=["deadbeefdeadbeef"],
+    )
+    assert any(d.rules_say.startswith("DL-K3") for d in refused.differences)
+    assert not refused.passes_ac_g0, "a pre-registration dated after its own report is a finding"

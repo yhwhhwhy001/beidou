@@ -211,6 +211,43 @@ def construction_problems(
     return problems
 
 
+def evidence_construction_digest(
+    portfolio: Mapping[str, Any] | None,
+    book_guards: Mapping[str, Any] | None,
+    exits: Mapping[str, Any] | None,
+) -> str:
+    """One string for exactly what ``construction_problems`` compares, so both sides can record it.
+
+    DL-G9.  The comparison above needs the live config in hand, which makes it a *startup* check and
+    nothing else: a governance replay reading a report from last month has no way to reconstruct the
+    loop that adopted it, so KILL-AR-07's condition - "the evidence was produced under the construction
+    the loop holds" - was unreadable for every artefact in the archive.  Phase 0 measured that and
+    suspended the condition rather than pretending it held.
+
+    A digest closes it in the one way that survives time: `validate` writes this over the blocks it
+    recorded, the loop writes it over the config it is running, and afterwards the two are comparable
+    as strings by anyone, forever, with no config to reconstruct.
+
+    Deliberately NOT `construction_fingerprint`'s digest.  That one covers throttle, leverage and
+    `strategy_weights` - things a backtest has no opinion about - so it could never match a report and
+    a "matching digest" built from it would be a rule that always fails.  This covers the intersection:
+    the ``CONSTRUCTION_KEYS`` a report records, plus the two overlay blocks, and nothing else.
+
+    ``None`` for a block is preserved as a statement ("this ran no such layer") rather than folded into
+    an absent key, for the same reason ``construction_problems`` distinguishes them.
+    """
+    payload = {
+        "portfolio": (
+            {key: portfolio[key] for key in CONSTRUCTION_KEYS if key in portfolio}
+            if isinstance(portfolio, Mapping)
+            else None
+        ),
+        "book_guards": dict(book_guards) if isinstance(book_guards, Mapping) else None,
+        "exits": dict(exits) if isinstance(exits, Mapping) else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
 def evidence_params(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
     """The parameter set a report actually validated: ``best_params``, or the sleeve's params in a book report."""
     if str(report.get("kind", "")) == "book":

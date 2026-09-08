@@ -1050,14 +1050,27 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # record the policy digest later without a cycle.  Worth naming the direction of the error: it made the
 # operator's record look WORSE than it was, which is the direction a self-assessed audit is least likely
 # to question.
+# 2026-09-08, DL-G9 - the Phase 0 replay's own finding, fixed: +37 alpha, +54 live, +51 cli, +46 gov.
+# The sentence the rule requires.  Two of `candidate -> validated`'s four conditions read fields that
+# nothing wrote, so §3's state machine could not admit ANY candidate - not a strict gate, an inert one.
+# `evidence_construction_digest` is one digest over exactly what `construction_problems` compares, and
+# both sides now record it: `validate` over the blocks it replayed, the loop over the config it holds.
+# Deliberately NOT `construction_fingerprint` - that covers throttle, leverage and `strategy_weights`,
+# which a backtest has no opinion about, so a "matching digest" built from it would be a rule that
+# always fails.  The live half also writes `construction_full` once per process, which is once per
+# possible change: a construction can only move at startup, and the startup heartbeat that held the
+# payload was overwritten by the next start, which is why the replay could attribute none of the six
+# construction changes it found.  `--prereg` records the commit's OWN time, not the moment it was typed.
+# Most of the alpha and live additions are the two docstrings saying why the digest is the intersection
+# rather than the fingerprint; delete either and the next reader "simplifies" them into one.
 CEILING = {
-    "beidou_alpha": 6_046,
-    "beidou_live": 5_904,
-    "beidou_cli": 3_688,
+    "beidou_alpha": 6_083,
+    "beidou_live": 5_958,
+    "beidou_cli": 3_739,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_049,
+    "beidou_governance": 1_095,
 }
 
 

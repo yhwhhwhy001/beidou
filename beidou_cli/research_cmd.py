@@ -8,6 +8,7 @@ import itertools
 import json
 import math
 import os
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -25,7 +26,7 @@ from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, combine_books
-from beidou_alpha.registry import StrategyEntry, registry_fingerprint
+from beidou_alpha.registry import StrategyEntry, evidence_construction_digest, registry_fingerprint
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals import register as register_signal
@@ -525,9 +526,18 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     show_default=True,
     help="apply the profile's exit overlay, as the live loop does (D-012)",
 )
+@click.option(
+    "--prereg",
+    default="",
+    help=(
+        "git commit that pre-registered this run (DL-K3/DL-G9).  Recorded with its commit time so "
+        "'pre-registration came first' is a fact in the artefact rather than in RESEARCH_LOG prose."
+    ),
+)
 def research_validate(
     strategy: str,
     params: str,
+    prereg: str,
     root: str,
     symbols: str,
     interval: str,
@@ -777,6 +787,20 @@ def research_validate(
         # this varies only the second one at declared levels (`costs.yaml: slippage_stress_bps`).
         "slippage_stress": slippage,
         "execution_comparison": {"execution": other_execution, **comparison},
+        # DL-G9.  Two fields that exist so a machine can read what a person used to read in prose.
+        # `preregistration` is null when the run declared none - a statement, not an absence, the same
+        # distinction `book_guards`/`exits` make above.  `evidence_construction` is over exactly the
+        # blocks `registry.construction_problems` compares, so a later reader can check "evidence
+        # construction == live construction" with a string comparison instead of a config they no
+        # longer have.  It is NOT the ledger's `construction_digest` (`_construction_digest` above),
+        # which also folds in costs and execution because those make two runs two TRIALS; this one
+        # answers a different question and folding the two would break both.
+        "preregistration": _preregistration(prereg),
+        "evidence_construction": evidence_construction_digest(
+            _run_portfolio,
+            None if book_guards is None else dict(vars(book_guards)),
+            None if exit_params is None else dict(vars(exit_params)),
+        ),
         "generated_at": datetime.now(UTC).isoformat(),
     }
     verdict, reasons = decide(report)
@@ -1332,6 +1356,28 @@ def _trial_signature(record: TrialRecord) -> tuple[Any, ...]:
 
 def _short_digest(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
+
+
+def _preregistration(commit: str) -> dict[str, str] | None:
+    """DL-G9: resolve a pre-registration commit to a fact the artefact can carry.
+
+    DL-K3 asks that the pre-registration be earlier than the report.  Until now the only record of
+    that was a RESEARCH_LOG paragraph and a reader willing to run `git show`, so the Phase 0 replay
+    had to suspend the condition for all 48 archived reports.  Recording the commit's own timestamp -
+    not the moment `--prereg` was typed - is what makes the ordering checkable afterwards.
+
+    An unresolvable ref is an error, not a silent null: a run that claims a pre-registration it cannot
+    name is worse than one that claims none.
+    """
+    if not commit.strip():
+        return None
+    result = subprocess.run(
+        ["git", "show", "-s", "--format=%H|%cI", commit.strip()], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0 or "|" not in result.stdout:
+        raise click.BadParameter(f"--prereg {commit!r} is not a commit in this checkout")
+    sha, committed_at = result.stdout.strip().split("|", 1)
+    return {"commit": sha, "committed_at": committed_at}
 
 
 def _construction_digest(portfolio: Mapping[str, Any], cost: Any, execution: str) -> str:

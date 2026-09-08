@@ -94,7 +94,12 @@ def replay_cmd(since: str, state_dir: str, out: str, root: str) -> None:
     if since:
         cycles = [row for row in cycles if str(row.get("at", "")) >= since]
         attribution = [row for row in attribution if str(row.get("at", "")) >= since]
-    adopted = replay_adoptions(_reports(checkout), adoptions, acknowledged_rejects=sorted(acknowledged))
+    # DL-G9: the evidence-side construction digests the loop has actually recorded.  A report can now
+    # be checked against them by string equality, which is what makes KILL-AR-07 readable after the fact.
+    seen = sorted({str(row["evidence_construction"]) for row in cycles if row.get("evidence_construction")})
+    adopted = replay_adoptions(
+        _reports(checkout), adoptions, acknowledged_rejects=sorted(acknowledged), live_constructions=seen
+    )
     lived = replay_live(cycles, attribution, construction_aliases=CONSTRUCTION_ALIASES)
     text = render(adopted, lived)
     unattributed = len(adopted.unattributed) + len(lived.unattributed)
