@@ -131,3 +131,23 @@ def test_the_artefact_states_its_own_verdict() -> None:
     )
     assert "AC-G0：未归因项 0 条" in text
     assert "policy_digest" in text
+
+
+def test_a_fingerprint_change_with_no_behaviour_change_is_not_a_construction_change() -> None:
+    """The first version of this replay reported six construction changes where four happened.
+
+    `beidou_live.health.CONSTRUCTION_ALIASES` exists precisely because two of the live record's
+    fingerprints differ from an earlier one only in fields nothing reads differently - `unit_mode`
+    moved the digest without changing a byte of behaviour.  Counting raw digests overstates the thing
+    §8's construction freeze is about, and it does so in the direction that makes the operator's
+    record look worse than it was, which is the direction an audit is least likely to question.
+    """
+    rows = [
+        {"at": "2026-01-01T00:00:00+00:00", "construction": "old"},
+        {"at": "2026-01-01T01:00:00+00:00", "construction": "renamed"},  # same behaviour, new digest
+        {"at": "2026-01-01T02:00:00+00:00", "construction": "genuinely-different"},
+    ]
+    raw = replay_live(rows, [])
+    aliased = replay_live(rows, [], construction_aliases={"renamed": "old"})
+    assert len([d for d in raw.differences if "construction" in d.subject]) == 2
+    assert len([d for d in aliased.differences if "construction" in d.subject]) == 1

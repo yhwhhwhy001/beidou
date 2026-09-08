@@ -444,7 +444,11 @@ def _why_not_adopted(
 
 
 def replay_live(
-    cycles: Sequence[Mapping[str, Any]], attribution: Sequence[Mapping[str, Any]], *, policy: Policy | None = None
+    cycles: Sequence[Mapping[str, Any]],
+    attribution: Sequence[Mapping[str, Any]],
+    *,
+    policy: Policy | None = None,
+    construction_aliases: Mapping[str, str] | None = None,
 ) -> ReplayResult:
     """The downgrade side, replayed against the live record (§8 Phase 0 item D).
 
@@ -470,13 +474,21 @@ def replay_live(
     if not stops:
         reproduced.append("探针 P&L stop 从未触发：R5 连败计数 0，晋级不冻结，与 `stopped_books` 一致")
 
+    # Canonicalise before counting.  `beidou_live.health.CONSTRUCTION_ALIASES` declares digests that
+    # differ from an earlier one only in fields with no behavioural effect - `unit_mode` moved the
+    # fingerprint without changing a byte of behaviour, and the four `regime_*` did the same.  Counting
+    # raw digests reported six construction changes where four happened, which overstates the very
+    # thing §8's freeze is about.  The map is passed in rather than imported: governance depends on
+    # alpha and shared, never on live, so that live can record the policy digest without a cycle.
+    aliases = dict(construction_aliases or {})
     fingerprints: list[tuple[str, str]] = []
     for cycle in decided:
         digest = str(cycle.get("construction") or "")
         if not digest:
             continue
-        if not fingerprints or fingerprints[-1][1] != digest:
-            fingerprints.append((str(cycle.get("at")), digest))
+        canonical = aliases.get(digest, digest)
+        if not fingerprints or fingerprints[-1][1] != canonical:
+            fingerprints.append((str(cycle.get("at")), canonical))
     seen: set[str] = set()
     if fingerprints:
         seen.add(fingerprints[0][1])
@@ -496,8 +508,9 @@ def replay_live(
         )
     if len(fingerprints) > 1:
         reproduced.append(
-            f"构造改动共 {len(fingerprints) - 1} 次，覆盖 {len(decided)} 个可判周期"
-            f"（≈{len(decided) / 24.0:.1f} 天）——规则允许每 {policy.window_days} 天一次"
+            f"构造改动共 {len(fingerprints) - 1} 次（已按 CONSTRUCTION_ALIASES 归一），"
+            f"覆盖 {len(decided)} 个可判周期（≈{len(decided) / 24.0:.1f} 天）"
+            f"——规则允许每 {policy.window_days} 天一次"
         )
 
     losses = sorted({p.get("max_loss") for c in decided for p in (c.get("probes") or []) if p.get("max_loss")})

@@ -16,6 +16,7 @@ import click
 
 from beidou_cli import main
 from beidou_governance.replay import load_jsonl, render, replay_adoptions, replay_live
+from beidou_live.health import CONSTRUCTION_ALIASES
 
 REGISTRY = "config/alpha_registry.yaml"
 
@@ -94,7 +95,7 @@ def replay_cmd(since: str, state_dir: str, out: str, root: str) -> None:
         cycles = [row for row in cycles if str(row.get("at", "")) >= since]
         attribution = [row for row in attribution if str(row.get("at", "")) >= since]
     adopted = replay_adoptions(_reports(checkout), adoptions, acknowledged_rejects=sorted(acknowledged))
-    lived = replay_live(cycles, attribution)
+    lived = replay_live(cycles, attribution, construction_aliases=CONSTRUCTION_ALIASES)
     text = render(adopted, lived)
     unattributed = len(adopted.unattributed) + len(lived.unattributed)
     if out:

@@ -4,8 +4,9 @@
 > `beidou governance replay --since 2026-09-03 --out docs/analysis/2026-09-08-governance-phase0-replay.md`
 > 每次 `POLICY_VERSION` 变更后重跑（§5 L2）。验收是 AC-G0：差异清单无未归因项。
 > 本次数据：201 份 research 报告、registry 的 18 个历史指针、实盘 153 个周期（2026-09-03 → 09-08）。
+> 构造改动已按 `beidou_live.health.CONSTRUCTION_ALIASES` 归一。
 
-`policy_version=0.1.0` `policy_digest=5787506aecdf` 窗口 30 天；规则复现 10 项，差异 29 条，未归因 0 条。
+`policy_version=0.1.0` `policy_digest=5787506aecdf` 窗口 30 天；规则复现 10 项，差异 27 条，未归因 0 条。
 
 ## 一、规则复现的部分
 
@@ -16,7 +17,7 @@
 - book-tsmom-flow-20260908T105322Z.json：规则同意采纳（book；凭 registry 的 D-029 书面承认）
 - no-decision 正确排除：ERROR 1、SKIPPED 4、重基 1；可判周期 148（KILL-AR-20）
 - 探针 P&L stop 从未触发：R5 连败计数 0，晋级不冻结，与 `stopped_books` 一致
-- 构造改动共 6 次，覆盖 148 个可判周期（≈6.2 天）——规则允许每 30 天一次
+- 构造改动共 4 次（已按 CONSTRUCTION_ALIASES 归一），覆盖 148 个可判周期（≈6.2 天）——规则允许每 30 天一次
 - probe->main 不可达：记录覆盖约 0.21 个窗口，规则要求 9 个
 - R8 归因口径可算：27 行归因合计 -16.19 USDT（不读权益曲线）
 
@@ -98,8 +99,6 @@
 | construction 0dcd044d0158 @ 2026-09-04T14:50:07+00:00 | 构造在实盘运行中改变 | §8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = 30 天） | evidence_gap | 记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，也就无法归因到某一条具名裁定 | Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖） |
 | construction a53eecccef38 @ 2026-09-04T15:00:28+00:00 | 构造回到一个此前出现过的指纹（回滚） | §8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = 30 天） | evidence_gap | 记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，也就无法归因到某一条具名裁定 | Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖） |
 | construction 0dcd044d0158 @ 2026-09-04T15:02:41+00:00 | 构造回到一个此前出现过的指纹（回滚） | §8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = 30 天） | evidence_gap | 记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，也就无法归因到某一条具名裁定 | Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖） |
-| construction b441ea62d021 @ 2026-09-07T15:00:33+00:00 | 构造在实盘运行中改变 | §8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = 30 天） | evidence_gap | 记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，也就无法归因到某一条具名裁定 | Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖） |
-| construction c0e5c49c5a4a @ 2026-09-07T16:00:15+00:00 | 构造在实盘运行中改变 | §8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = 30 天） | evidence_gap | 记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，也就无法归因到某一条具名裁定 | Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖） |
 | probe max_loss | 探针止损阈值在运行中取过 [0.01, 0.02] | R10：阈值只在代码里，改动带版本 + 测试 + 预登记；机器不得改自己的阈值 | exception | P13（2026-09-04）：`max_loss` 0.01 -> 0.02 是为保持 D-019 预登记规则的**原意**（书翻倍则同比例放宽），操作者当场记录。机器没有「原意」可读 | — |
 
 **AC-G0：未归因项 0 条** — 通过

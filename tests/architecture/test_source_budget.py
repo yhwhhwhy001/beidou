@@ -1029,8 +1029,8 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 2026-09-08 report recorded `charged: 514` - what the run did - with nothing about what the family cost
 # afterwards, which is the number the next validation reads.  `ledger.family_prior` carries before and
 # after through the same `unique_trials` fold.  Three lines, two of them the comment saying why.
-# 2026-09-08, a new package arrives with its own ceiling: `beidou_governance` at 1,036 for Phase 0
-# (policy 135, lifecycle 279, replay 602, __init__ 20) plus +111 in beidou_cli for `governance replay`.
+# 2026-09-08, a new package arrives with its own ceiling: `beidou_governance` at 1,049 for Phase 0
+# (policy 135, lifecycle 279, replay 615, __init__ 20) plus +112 in beidou_cli for `governance replay`.
 # The sentence the rule requires, and the honest accounting for the 90% alpha target: none of this is
 # signal.  It buys the subject of the sentence "and therefore it goes live" - until now every promotion
 # was a person editing a YAML, and Q9 (2026-09-08) ruled that the machine does it from the first
@@ -1043,14 +1043,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # cited and when.  That lives in the cli rather than in the package on purpose - it is a fact about
 # this checkout's history, and keeping `subprocess` out of `beidou_governance` is what lets the replay
 # be tested against fixtures instead of against whatever `git log` prints today.
+# Same day, +13 gov / +1 cli: the replay counted RAW construction digests and reported six changes where
+# four happened - `CONSTRUCTION_ALIASES` already declares that `unit_mode` and the four `regime_*` moved
+# the fingerprint without changing behaviour.  The alias map is passed in from the cli rather than
+# imported, so `beidou_governance` still depends on alpha and shared only and `beidou_live` stays free to
+# record the policy digest later without a cycle.  Worth naming the direction of the error: it made the
+# operator's record look WORSE than it was, which is the direction a self-assessed audit is least likely
+# to question.
 CEILING = {
     "beidou_alpha": 6_046,
     "beidou_live": 5_904,
-    "beidou_cli": 3_687,
+    "beidou_cli": 3_688,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_036,
+    "beidou_governance": 1_049,
 }
 
 
