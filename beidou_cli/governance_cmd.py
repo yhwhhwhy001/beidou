@@ -18,12 +18,14 @@ import click
 
 from beidou_alpha.registry import parse_registry
 from beidou_cli import main
+from beidou_governance.lifecycle import State
 from beidou_governance.policy import Policy
 from beidou_governance.promote import apply as apply_transaction
 from beidou_governance.promote import closed, read_log
 from beidou_governance.promote import plan as plan_transaction
 from beidou_governance.replay import load_jsonl, render, replay_adoptions, replay_live
 from beidou_governance.state import read as read_state
+from beidou_governance.tenure import books_in, tenure
 from beidou_live.config import registry_evidence_problems
 from beidou_live.health import CONSTRUCTION_ALIASES
 from beidou_shared.config import load_yaml
@@ -161,6 +163,71 @@ def status_cmd(root: str) -> None:
         )
     log = read_log(checkout / TRANSACTIONS)
     click.echo(f"transactions {len(log)} rows, chain {'closed' if closed(log) else 'BROKEN'}")
+
+
+@governance.command("tenure")
+@click.option("--root", default=".", help="Checkout to read governance state from.")
+@click.option("--cycles", default=".beidou/live/cycles.jsonl", show_default=True, help="The append-only live record.")
+@click.option(
+    "--anchor",
+    default="2026-09-03T00:00:00+00:00",
+    show_default=True,
+    help="When the batch calendar starts.  Global: every sleeve's windows are counted off this one clock.",
+)
+@click.option("--started", help="ISO start for one sleeve, as book=ISO; repeatable.", multiple=True)
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable, for the report rather than the terminal.")
+def tenure_cmd(root: str, cycles: str, anchor: str, started: tuple[str, ...], as_json: bool) -> None:
+    """DL-G6': what the live record implies about the time rule.  Reports; promotes nothing.
+
+    Split from `apply` for the same reason `plan` is: a probe reaching main is a registry transaction
+    and a restart, and the operator should be able to read what the record says before either.
+    """
+    path = Path(cycles)
+    if not path.exists():
+        raise click.ClickException(f"no live record at {path}")
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    policy = Policy()
+    book = read_state(Path(root).resolve() / "governance" / "governance_state.json")
+    starts = dict(pair.split("=", 1) for pair in started if "=" in pair)
+
+    out = []
+    for name in books_in(rows) or tuple(book.candidates):
+        # The sleeve's own start, falling back to the calendar anchor: KILL-AR-06 grandfathered both
+        # running sleeves to the registry's effective date, which is that same day.
+        result = tenure(rows, book=name, started_at=starts.get(name, anchor), window_anchor=anchor, policy=policy)
+        out.append(result)
+
+    if as_json:
+        click.echo(json.dumps([r.as_dict() for r in out], indent=2, sort_keys=True, ensure_ascii=False))
+        return
+    if not out:
+        click.echo("the record names no probe; nothing to derive")
+        return
+    for result in out:
+        state = book.candidates.get(result.book)
+        held = f" (state holds {state.windows_survived})" if state is not None else ""
+        click.echo(
+            f"{result.book:20s} windows {result.windows_survived}/{policy.windows_to_main}{held}  "
+            f"cycles {result.cycles_read}" + (f"  STOPPED {result.stopped_at}" if result.stopped_at else "")
+        )
+        for event in result.events:
+            click.echo(f"    {event.at}  {event.event.value:15s} {event.why}")
+        for skip in result.skipped:
+            click.echo(f"    {skip.at}  {'(not counted)':15s} {skip.why}")
+        if result.windows_survived >= policy.windows_to_main and not result.stopped_at:
+            click.echo("    -> the record supports probe -> main; that is a transaction and a restart")
+    named = set(books_in(rows))
+    silent = sorted(n for n, c in book.candidates.items() if c.state is State.MAIN and n not in named)
+    if silent:
+        # Not a limitation of this command.  `probes_from_registry` excludes the main book, so no
+        # cycle ever reports a stop for a main sleeve - and §3 says main KEEPS its P&L stop.  The
+        # main -> probe edge is therefore unreachable from the record, the same way probe -> main was
+        # before this module existed.  Closing it changes what can halt the live main book, which is
+        # an operator's decision and not a side effect of adding a reader.
+        click.echo(
+            f"note: {', '.join(silent)} sit in main and the record reports no stop for them "
+            "(probes_from_registry excludes the main book), so main -> probe cannot fire from it"
+        )
 
 
 @governance.command("transactions")

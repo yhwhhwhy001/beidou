@@ -1294,14 +1294,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # a unit test and taught whoever hit it to edit the constant.  The frozen hash is now a synthetic
 # unpinned registry; whether the shipped file matches the running loop is a runtime fact and
 # `live status --check` compares them every inspection.
+# 2026-09-09, +262 governance +67 cli: DL-G6′, the half of the time rule that was never built.
+# The sentence the rule requires.  `lifecycle.py` shipped knowing what `WINDOW_SURVIVED` and
+# `PNL_STOP` mean and NOTHING produced either, so the state machine was complete and unreachable: no
+# probe could reach main and no main sleeve could be sent back without a person typing the event -
+# which is the hand-driven promotion §3's "all machine-driven" exists to remove.  `tenure.py` reads
+# `cycles.jsonl` (append-only, and it already carries `at`, each probe's `stop`, and
+# `external_flows`) and returns the events that record implies.  It decides nothing; `evaluate` and
+# `apply` still hold every rule.
+# The +67 in beidou_cli is `governance tenure`, split from `apply` for the reason `plan` is: probe ->
+# main is a registry transaction and a restart, and the operator should read what the record says
+# before either.  It also reports the edge this does NOT close - `probes_from_registry` excludes the
+# main book, so no cycle reports a stop for a main sleeve and `main -> probe` stays unreachable.
+# Closing that changes what can halt the live main book, which is a decision, not a side effect of
+# adding a reader.
 CEILING = {
     "beidou_alpha": 6_998,
     "beidou_live": 6_186,
-    "beidou_cli": 4_126,
+    "beidou_cli": 4_193,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_744,
+    "beidou_governance": 2_006,
 }
 
 
