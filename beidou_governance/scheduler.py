@@ -16,8 +16,9 @@ function of what the book happens to be doing.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from beidou_governance.budget import LedgerBudget, refusals
 from beidou_governance.policy import Policy
@@ -83,6 +84,29 @@ def next_action(context: Context, policy: Policy | None = None) -> Action:
     blocked.append(f"R2: search space {context.search_space_digest} was already enumerated")
 
     return Action(WAIT, tuple(blocked))
+
+
+def parity_satisfied(status: Mapping[str, Any] | None) -> tuple[bool, str]:
+    """M-011 / T-D4-2: may a candidate that reads a metrics column leave `booked`?
+
+    Three answers, and the middle one is the point.  No status at all and a status that could not be
+    computed are BOTH "no", because the obligation is to have shown parity - not to have failed to
+    disprove it.  `metrics_parity` already refuses to call zero disagreements out of zero comparisons
+    agreement; this refuses to call a missing report one.
+
+    Returned with its reason rather than as a bare bool: the reason is what `governance status` prints
+    when somebody asks why a candidate has been sitting in `booked` for a month.
+    """
+    if not status:
+        return False, "M-011: no metrics parity report"
+    if not status.get("enforced"):
+        return False, f"M-011: parity not measurable ({status.get('reason', 'unstated')})"
+    if status.get("unmeasurable"):
+        return False, f"M-011: {len(status['unmeasurable'])} symbols have no overlapping buckets"
+    rate = status.get("worst_differing_rate")
+    if not isinstance(rate, int | float) or rate > 0.0:
+        return False, f"M-011: worst symbol disagrees on {rate} of shared buckets"
+    return True, f"M-011: {status.get('symbols_compared', 0)} symbols agree on every shared bucket"
 
 
 def describe(actions: Sequence[Action]) -> str:

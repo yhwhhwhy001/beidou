@@ -461,6 +461,12 @@ def to_signal(candidate: Candidate) -> SignalSpec:
     # comparing.  A hardcoded ``False`` here is the KILL-027 shape - a signal telling the live loop it
     # needs no funding history and then reading ``panel.funding`` anyway (D-023).
     reads_funding = candidate.expr.reads_funding()
+    # DL-D4, and the same sentence as the line above with one word changed: research reads a T+1
+    # archive the live loop cannot have for its first 30 days, so a candidate that reads a metrics
+    # column must say so or `metrics_refusal` has nothing to refuse on.  Derived from the tree for the
+    # same reason `reads_funding` is - `research mine` and `_resolve_mined` build this spec by
+    # different routes and `register` overwrites by id without comparing.
+    reads_metrics = bool(candidate.expr.reads_metrics())
 
     return SignalSpec(
         id=f"mined_{candidate.hash}",
@@ -470,5 +476,6 @@ def to_signal(candidate: Candidate) -> SignalSpec:
         warmup_bars=candidate.lookback,
         warmup=warmup,
         uses_funding=lambda params: reads_funding,
+        needs_metrics=lambda params: reads_metrics,
         canonical=dict,
     )

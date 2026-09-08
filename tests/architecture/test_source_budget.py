@@ -1145,14 +1145,34 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # constant (800 bars, cutoff 600), which made it VACUOUS for any signal whose warmup exceeds 600 - the
 # comparison was NaN against NaN.  It now sizes from `warmup_for`, and asserts the pre-cutoff scores are
 # not all NaN so the emptiness fails instead of passing.
+# 2026-09-08, DL-D4 (metrics -> Panel): +153 alpha, +41 live, +24 gov.  The sentence the rule requires.
+# The alpha half is `Panel.metrics` plus two mining leaves, and it is signal rather than plumbing: it
+# is the first time a candidate expression can read anything other than price, volume and funding, and
+# it is what block 2's remaining leaves and block 1's basis/liquidation columns all sit on.
+# One design decision carries most of the prose.  `Panel` takes ALREADY ALIGNED frames and REFUSES
+# anything else rather than reindexing helpfully, because the alignment rule - a bar may read the
+# latest bucket that had CLOSED by the bar's own close - lives in `beidou_data.metrics.align_to_bars`
+# with the measurement that justifies it (archive `create_time` == rest `timestamp` - 5 minutes,
+# 166/166 exact; one bucket of open interest moves a median 0.090% and always favourably).
+# `beidou_alpha` may not import `beidou_data`, so a copy here would be a SECOND implementation of a
+# look-ahead rule and the two would drift; a helpful reindex would restore the five minutes outright.
+# Both leaves are relative rather than level - a change in open interest, a deviation of the long/short
+# ratio from its own mean - because a level leaf ranks symbols by contract size or by how retail-heavy
+# their book is and calls it a signal.  `reads_metrics` is a METHOD like `reads_funding`, so no
+# existing expression hash moves, and `to_signal` propagates it into `needs_metrics` - without that,
+# `metrics_refusal` has nothing to refuse on and a candidate scored on a T+1 archive would start
+# against a 30-day REST window (KILL-027, one column over).
+# The live half finally CALLS `metrics_parity`, which has existed since DL-D2 with nothing reading it:
+# M-011 now lands in the daily report, folded to the worst symbol rather than the mean, because a book
+# trades a universe.
 CEILING = {
-    "beidou_alpha": 6_583,
-    "beidou_live": 6_018,
+    "beidou_alpha": 6_736,
+    "beidou_live": 6_059,
     "beidou_cli": 4_016,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_668,
+    "beidou_governance": 1_692,
 }
 
 

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from enum import Enum, StrEnum
 from typing import TYPE_CHECKING, ClassVar
 
+import numpy as np
 import pandas as pd
 
 from beidou_alpha import features
@@ -93,6 +94,22 @@ class Expr:
         signature at all.
         """
         return any(child.reads_funding() for child in self.children())
+
+    def reads_metrics(self) -> tuple[str, ...]:
+        """Which `panel.metrics` columns this tree reads.  Empty for every node that reads none.
+
+        A method for the same reason `reads_funding` is one: `signature()` builds its payload from
+        `vars(self)`, so a field would rehash every candidate that already exists and the frozen-hash
+        regression would go red for a change that means nothing about the expressions.
+
+        The live loop refuses to start a strategy whose metrics the LIVE recording does not yet cover
+        (`metrics_refusal`), and research eats a T+1 archive that live cannot have.  A node that reads
+        a column without saying so is that gap with nothing watching it - KILL-027's shape.
+        """
+        seen: list[str] = []
+        for child in self.children():
+            seen.extend(name for name in child.reads_metrics() if name not in seen)
+        return tuple(seen)
 
     def lookback(self) -> int:
         """Bars of history this node needs before it produces a number."""
@@ -193,6 +210,20 @@ class Vol(Expr):
 
     def describe(self) -> str:
         return f"vol({self.window})"
+
+
+def _required_metric(panel: Panel, column: str, node: str) -> pd.DataFrame:
+    """A metrics column a candidate needs, or a loud failure naming both.
+
+    Same rule as `_required` one field over, and the same reason: research eats a T+1 archive that the
+    live loop cannot have for its first 30 days, so a node that quietly accepted a missing column would
+    score in research and evaluate to something else live.  `metrics_refusal` keeps that strategy from
+    starting at all; this keeps it from being scored on nothing if it somehow does.
+    """
+    frame = panel.metric(column)
+    if frame is None:
+        raise ExprError(f"{node} needs panel.metrics[{column!r}], which this panel does not carry")
+    return frame
 
 
 def _required(panel: Panel, field: str, node: str) -> pd.DataFrame:
@@ -296,6 +327,87 @@ class Funding(Expr):
 
     def describe(self) -> str:
         return f"funding({self.window})"
+
+
+@dataclass(frozen=True)
+class OpenInterest(Expr):
+    """DL-D4: the log change in open interest over a window - how much position was opened or closed.
+
+    A change rather than a level, and for the same reason `Ret` is: open interest in contracts is not
+    comparable between a 100,000 USDT coin and a 3 USDT one, so a level leaf would rank symbols by
+    their tick size.  The change is dimensionless and rankable.
+
+    Not a `Ratio` of two levels either: `sum_open_interest` and `sum_open_interest_value` differ by
+    price, so their ratio is a price and the type system would (correctly) refuse it as a score.
+    """
+
+    KIND: ClassVar[str] = "oi"
+    COLUMN: ClassVar[str] = "sum_open_interest"
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.window < 1:
+            raise ExprError("open-interest window must be at least one bar")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RETURN
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        frame = _required_metric(panel, self.COLUMN, "open interest")
+        positive = frame.where(frame > 0)
+        logged = pd.DataFrame(np.log(positive.to_numpy(dtype=float)), index=positive.index, columns=positive.columns)
+        return logged.diff(self.window)
+
+    def lookback(self) -> int:
+        return self.window + 1
+
+    def reads_metrics(self) -> tuple[str, ...]:
+        return (self.COLUMN,)
+
+    def describe(self) -> str:
+        return f"oi({self.window})"
+
+
+@dataclass(frozen=True)
+class LongShortRatio(Expr):
+    """DL-D4: the account long/short ratio against its own trailing mean - positioning, not price.
+
+    Relative to its own history rather than raw, because the level is a venue-wide artefact: this
+    number sits near 2 for most perpetuals most of the time, so a raw leaf would rank symbols by how
+    retail-heavy their book is and call it a signal.  What can carry information is the DEVIATION.
+
+    Which of the four ratios is a pre-registered choice.  `count_long_short_ratio` counts ACCOUNTS,
+    which is the one that is not dominated by a handful of large positions; the top-trader variants
+    are, and `sum_taker_long_short_vol_ratio` is a flow measure the panel already has a better column
+    for (`taker_buy_quote`).  Adding a second one later is a new hypothesis, not a parameter.
+    """
+
+    KIND: ClassVar[str] = "lsr"
+    COLUMN: ClassVar[str] = "count_long_short_ratio"
+    window: int
+
+    def __post_init__(self) -> None:
+        if self.window < 2:
+            raise ExprError("long/short window must be at least two bars")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RATIO
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        frame = _required_metric(panel, self.COLUMN, "long/short ratio")
+        mean = frame.rolling(self.window, min_periods=self.window).mean()
+        return frame.div(mean.where(mean > 0)) - 1.0
+
+    def lookback(self) -> int:
+        return self.window
+
+    def reads_metrics(self) -> tuple[str, ...]:
+        return (self.COLUMN,)
+
+    def describe(self) -> str:
+        return f"lsr({self.window})"
 
 
 # --- operators -------------------------------------------------------------------------------------

@@ -122,6 +122,16 @@ class Panel:
     taker_buy_quote: pd.DataFrame | None = None
     funding: pd.DataFrame | None = None
     reference: pd.DataFrame | None = None
+    # DL-D4.  One wide frame per metrics column (bars x symbols), ALREADY ALIGNED to these bars.
+    #
+    # Aligned by the caller and not here, which is the one design decision in this field.  The rule -
+    # a bar may read the latest bucket that had CLOSED by the bar's own close - lives in
+    # `beidou_data.metrics.align_to_bars` together with the measurement that justifies it (archive
+    # `create_time` == rest `timestamp` - 5 minutes, 166/166 exact).  `beidou_alpha` may not import
+    # `beidou_data`, so a copy here would be a second implementation of a look-ahead rule, and the
+    # two would drift.  `from_frames` refuses a frame that is not on the bar index instead, so a
+    # mis-aligned frame cannot enter through the front door either.
+    metrics: dict[str, pd.DataFrame] | None = None
 
     @classmethod
     def from_frames(
@@ -129,6 +139,7 @@ class Panel:
         frames: Mapping[str, pd.DataFrame],
         interval: str,
         funding: Mapping[str, pd.Series] | pd.DataFrame | None = None,
+        metrics: Mapping[str, pd.DataFrame] | None = None,
     ) -> Panel:
         if not frames:
             raise ValueError("at least one symbol frame is required")
@@ -153,6 +164,19 @@ class Panel:
             funding_frame = funding_frame.reindex(columns=list(normalized)).fillna(0.0).astype(float)
         assert wide["open"] is not None and wide["high"] is not None and wide["low"] is not None
         assert wide["close"] is not None and wide["volume"] is not None
+        metrics_frames: dict[str, pd.DataFrame] | None = None
+        if metrics:
+            metrics_frames = {}
+            for name, frame in metrics.items():
+                if index is not None and not frame.index.equals(index):
+                    # The refusal that makes "aligned by the caller" safe.  A reindex here would be the
+                    # helpful thing to do and would silently re-introduce the five minutes: whatever the
+                    # caller's stamps meant, this class does not know, so it cannot fix them.
+                    raise ValueError(
+                        f"metrics column {name!r} is not on the bar index; align it with "
+                        "beidou_data.metrics.align_to_bars before building the panel"
+                    )
+                metrics_frames[str(name)] = frame.reindex(columns=list(normalized)).astype(float)
         return cls(
             interval=interval,
             open=wide["open"],
@@ -165,7 +189,17 @@ class Panel:
             taker_buy_base=wide["taker_buy_base"],
             taker_buy_quote=wide["taker_buy_quote"],
             funding=funding_frame,
+            metrics=metrics_frames,
         )
+
+    def metric(self, name: str) -> pd.DataFrame | None:
+        """One metrics column, or None when the panel carries none.
+
+        None rather than a zero frame: a metric nobody ingested and a metric that is genuinely zero
+        are different facts, and zero-filling the first is how a node ends up scoring on data that was
+        never there (the `metrics_parity` lesson, one level down).
+        """
+        return None if not self.metrics else self.metrics.get(name)
 
     @property
     def symbols(self) -> list[str]:

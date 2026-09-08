@@ -17,7 +17,8 @@ from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import DECAY_WINDOW_DAYS, max_drawdown, sharpe, window_sharpes
-from beidou_data.store import KlineStore
+from beidou_data.metrics_snapshot import metrics_parity
+from beidou_data.store import KlineStore, MetricsStore
 from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, risk_budget_status
@@ -272,6 +273,41 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
     below = sum(1 for value in tail if value < q10)
     status = "REVIEW" if below == consecutive else "OK"
     return {"status": status, "below": below, "q10": q10, "windows": tail}
+
+
+def metrics_parity_status(symbols: Sequence[str], data_root: str | Path) -> dict[str, Any]:
+    """M-011 across the managed universe: archive against snapshot, per symbol, folded to one number.
+
+    Two refusals rather than one convenient number.  A symbol with no overlap contributes nothing and
+    is counted separately - `metrics_parity` already returns `rate: None` for that case, because zero
+    disagreements out of zero comparisons is not agreement, and a dead snapshot stream would otherwise
+    look healthiest exactly while it stopped recording.  And the fold takes the WORST symbol, not the
+    mean: a book trades a universe, so parity the thinnest symbol does not have is not parity.
+    """
+    archive, snapshot = MetricsStore(data_root), MetricsStore(data_root, kind="metrics_snapshot")
+    compared: dict[str, float] = {}
+    unmeasurable: list[str] = []
+    for symbol in symbols:
+        result = metrics_parity(snapshot.load(symbol), archive.load(symbol))
+        if result["rate"] is None:
+            unmeasurable.append(symbol)
+        else:
+            compared[symbol] = float(result["rate"])
+    if not compared:
+        return {
+            "enforced": False,
+            "reason": f"no overlapping buckets for any of {len(symbols)} symbols",
+            "unmeasurable": unmeasurable,
+        }
+    worst = max(compared, key=lambda symbol: compared[symbol])
+    return {
+        "enforced": True,
+        "symbols_compared": len(compared),
+        "unmeasurable": unmeasurable,
+        "worst_symbol": worst,
+        "worst_differing_rate": compared[worst],
+        "met": not unmeasurable and compared[worst] == 0.0,
+    }
 
 
 def collateral_share(*, equity: float, usdt_equity: float | None) -> dict[str, float | None]:
@@ -979,6 +1015,11 @@ def daily_payload(
         "risk_budget": risk_budget_status(
             _cycles(store), store.read_jsonl(store.trades_path), risk_budget or RiskBudgetParams()
         ),
+        # DL-D4 / M-011: do the T+1 archive and what the loop could actually read agree on the buckets
+        # they share?  The whole same-source contract is this one number, and until now `metrics_parity`
+        # existed with nothing calling it - which is the shape this repository keeps finding, a
+        # measurement that is written but never taken.
+        "metrics_parity": metrics_parity_status(sorted(cycles[-1].get("universe") or []) if cycles else [], data_root),
         # The instrument the 2026-09-08 ruling owes: the denominator stays total equity, so the
         # pro-cyclical amplifier is an ACCEPTED risk - and an accepted risk with nothing measuring it is
         # a sentence.  Beside `risk_budget` rather than inside it on purpose: it is not a threshold and
