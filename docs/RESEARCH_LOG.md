@@ -4618,3 +4618,88 @@ KILL-Q15 的形状，也正是 `registry_digest` 存在的理由。
 
 钉之后循环 digest 会变成 **`c0b4db59a5d7`**——**所以我先前那句话的结论碰巧是对的（M-Q10 会看见），但当时
 给出的理由是错的，而且如果不查，实现会让它看不见。**
+
+### 补记 2026-09-09：那两步执行了，第一次钉的是错的名单，而且钉住根本没生效
+
+操作者裁定执行 `governance enable` + `governance apply`。两条命令都成功，随后 `live status --check`
+按预期报出「磁盘 ≠ 循环」——**而顺着那条报错去看循环到底持有什么，钉住的名单和循环持有的名单对不上**。
+
+事务日志三行都是这次的，前两行是犯错的证据：
+
+```
+19:04:17  APPLY  a18dea694384 -> a55c7337d61e  universe-pin-2026-09-09
+19:10:01  APPLY  a55c7337d61e -> a18dea694384  universe-pin-2026-09-09-rollback
+19:19:14  APPLY  a18dea694384 -> f4ca97e7296d  universe-pin-2026-09-09
+```
+
+#### 缺陷 ①：钉住的名单读自一个被别的进程改写过的文件
+
+上一节里备在 `/tmp/pinned_registry.yaml` 的 18 币含 **PUMPUSDT**；而 armed 循环自 09-03 起持有的一直是含
+**CYSUSDT** 的那套（`cycles.jsonl` 里 09-03 至 09-08 六条 `universe_update` 全部含 CYSUSDT、无 PUMPUSDT）。
+
+我读的是 `.beidou/data/universe.json`。**09-08 18:00Z 一次裸 `--paper` 重排了共享池并改写了那个文件**
+（`.beidou/paper/cycles.jsonl`：`entered=['PUMPUSDT'] left=['CYSUSDT']`）。也就是说 §「没做的一半」里那句
+「钉住当前 18 币」，钉的是循环从来没持有过的一个币。
+
+那道 DL-G5 的闸本来就是为这件事写的，条件却写成了 `if state_dir or registry_override:`——因为上一次干这事
+的是 canary。**而守它的测试断言的正是这句字面量**：
+
+```python
+assert "if state_dir or registry_override:" in source
+```
+
+于是裸 `--paper` 从旁边走过去，测试全绿。**源码断言只能证明一条规则被接上了，永远证明不了它是对的。**
+条件从来不是那两个 flag，是「这个进程是不是在拿账户交易的那个」——现在是 `may_rerank_shared_pool`，
+按 flag 逐行断言真值表，裸 `--paper` 那一行就是当初缺的那行。
+
+#### 缺陷 ②：钉住只移动了 digest，一个币都没换
+
+更严重的一条。`engine.py` 启动时：
+
+```python
+persisted = list(self.state.universe) if config.universe_refresh else []
+self.universe = persisted or list(config.universe)
+```
+
+`config.universe` 是钉住的决定，`state.universe` 是上一次日度重排的观察——**观察赢了决定**。实测：registry
+钉了 18 个名字，进程会报这 18 个，交易的却是 `state` 里那套。
+
+**这比 KILL-Q15 本身更糟。** KILL-Q15 是文件和循环分叉、digest 能看见；这里文件和 digest **互相同意**，
+只有仓位不同意，读起来像一致。而且——**要是缺陷 ① 不存在，② 今天完全看不见**：两套名单相同，什么都不会
+露出来，直到下一次重排把 `state` 推开，此后永久静默分叉。① 是运气，不是本事。
+
+已改：钉住时 `config.universe` 胜出；被它去掉的名字进 `leaving`，像重排的离场者一样只减仓平掉，而不是被
+丢下、留着一笔没有周期管的仓位。`universe_proposal_only` 改名 `universe_pinned`——钉住现在有两个后果，用
+只描述其中一个的名字去管另一个读不通。
+
+新测试在没有修复时确实失败（验过：`assert engine.universe == [...]` 报
+`['BTCUSDT','CYSUSDT'] != ['BTCUSDT','ETHUSDT']`）。
+
+#### 顺带：那个冻结哈希是按「线上 registry 不钉任何东西」冻的
+
+上一节钉死的 `16671c63a12e` 是 `config/alpha_registry.yaml` 的循环 digest，**而它只在这份文件什么都没钉
+的时候成立**。于是第一次 `governance apply`——一次完全有意的变更——挂掉了一条单元测试，教人反手去改那个
+常量。**那正是冻结哈希要防的那个反射。** 冻结哈希改成一个合成的未钉 registry（`d900d4c2ee3b`），它不随
+线上 registry 变；线上文件与运行中循环是否一致是**运行期**事实，`live status --check` 每次巡检都在比。
+
+#### 重钉、重启、核对
+
+第三条事务的名单读自 **`.beidou/live/state.json`**（循环此刻真正持有的那套），不是 `universe.json`。
+钉之后循环 digest 是 **`1ad760a55e8f`**——**注意上一节末尾写的 `c0b4db59a5d7` 已经不适用了**，那是按错
+名单算的；原文保持原样，数以这里为准。
+
+重启（`launchctl kickstart -k com.beidou.live`，PID 83421 → 12685，2026-09-08T19:24:56Z）：
+
+- `universe` 与重启前逐字相同，`leaving` 为空——**没有孤儿仓，一笔仓位没动**，与重启前的推算一致；
+- 18 个 `exit_states` 锚点全部保留，`restarts` 24 → 25；
+- 该周期 `SKIPPED`：晚于收线 1504.2s（窗口 72.8s），**只对账不再平衡**——这是对的，它等下一根 K 线；
+- 构造的**原始** digest 变了：`c0e5c49c5a4a` → `dd32720d3faf`（v4 载荷加进 `portfolio.min_history_bars`，
+  与钉住无关——钉住的和未钉的算出来是同一个数）。**但 M-010 的 30 天窗口没有重置**：`dd32720d3faf` 早已
+  写在 `CONSTRUCTION_ALIASES` 里、在它第一次被写出来之前就声明了，与 `0dcd044d0158` 同书；`report daily`
+  报的正是 `0dcd044d0158`，自 2026-09-04T15:02Z 起未断。**我先前写的是「构造未变」——那句话是错的**，
+  未变的是它被比较时的那个规范形，靠的是读取侧的别名，不是 digest 本身。
+
+commit：`795e800`（两条修复 + 测试）、`4f2b041`（钉住的 registry，含 `governance/` 进 .gitignore——自治
+开关是每个 checkout 的运行期状态，提交它等于在每个克隆里按签出打开自治）。
+
+**可干净重启从此不再每天到期**，直到下一次有人决定重排总体——而那一次会是一条带日志、可回滚的事务。
