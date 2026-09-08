@@ -50,6 +50,7 @@ def test_the_digest_moves_when_the_vol_target_moves(tmp_path: Path) -> None:
         "covariance_halflife",
         "min_asset_vol",
         "max_scalar",
+        "min_history_bars",  # v4 (2026-09-09): it decides which symbols may be held
     }
 
 

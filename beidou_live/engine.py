@@ -140,6 +140,11 @@ class LiveConfig:
     margin_cap: float = 0.40
     max_leverage: int = 5
     margin_buffer: float = 0.10
+    # Which symbols may trade at all.  Carried here so `construction_fingerprint` can see it: it is a
+    # portfolio-construction parameter in every sense that matters and was outside the digest until
+    # 2026-09-09, which meant lowering it would have changed the tradable universe with nothing on the
+    # running record saying so - P10 cell B's shape, one field over.
+    min_history_bars: int = 720
     universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
     liquidity_window: int = 24
     quarantine_after: int = 0  # D-031: rejected cycles before a symbol leaves the universe (0 = off)
@@ -1367,6 +1372,12 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "covariance_halflife": config.portfolio.covariance_halflife,
             "min_asset_vol": config.portfolio.min_asset_vol,
             "max_scalar": config.portfolio.max_scalar,
+            # v4 (2026-09-09).  `AlphaModel.eligible` excludes any symbol with fewer than this many
+            # observed bars - "new listings are excluded", in its own words - so it decides WHICH
+            # SYMBOLS the book may hold, and a book holding different symbols is a different book.
+            # Found by asking whether the new-listing strategy (#27) was implementable: it is not
+            # without lowering this, and lowering it would have moved no digest.
+            "min_history_bars": config.min_history_bars,
         },
         "guards": {
             "max_gross": config.guards.max_gross,

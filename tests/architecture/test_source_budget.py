@@ -1207,9 +1207,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # is it doing its job: growth has to be a dimension that can be turned off (`include_metrics`) or a
 # frozen space stops being one.  Every one of the old 514 hashes survives, asserted, because
 # `_resolve_mined` re-derives an id by enumerating and an id that no longer enumerates cannot be named.
+# 2026-09-09, +27 in beidou_live: `portfolio.min_history_bars` joins the construction fingerprint.
+# The sentence the rule requires, and the way it was found is the interesting half.  Block 3's
+# new-listing strategy (#27) turns out to be unimplementable as the book stands - `AlphaModel.eligible`
+# excludes any symbol with fewer than `min_history_bars` observed bars, "new listings are excluded" in
+# its own words - so it needs that number lowered, which is a construction change.  Asking where that
+# change would show up found that it would show up NOWHERE: the number decides WHICH SYMBOLS may be
+# held, and it was outside the digest.  P10 cell B's shape, one field over.
+# Payload version 3 -> 4, and the alias is declared before it is ever written, exactly as v3 was and on
+# the same proof: recomputed against the shipped config the value is 720 on both sides, so only the
+# shape of what is hashed moved.  Without the alias the next restart resets M-010's 30-day window -
+# unbroken since 2026-09-04T15:02Z - for a book that is byte-identical.
+# Two pinned field sets went red and told me exactly what to do, in their own error messages.
 CEILING = {
     "beidou_alpha": 6_823,
-    "beidou_live": 6_095,
+    "beidou_live": 6_122,
     "beidou_cli": 4_076,
     "beidou_data": 1_889,
     "beidou_exchange": 611,

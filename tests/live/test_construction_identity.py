@@ -73,7 +73,15 @@ def test_the_payload_version_is_reported_outside_the_hash() -> None:
 # M-010.  Nothing failed, so nobody knew.  Now adding or removing a key fails here, and the fix is to
 # bump CONSTRUCTION_PAYLOAD_VERSION and decide - in writing - whether the book actually changed.
 EXPECTED_FIELDS = {
-    "portfolio": {"vol_target", "vol_halflife", "covariance_halflife", "min_asset_vol", "max_scalar"},
+    "portfolio": {
+        "vol_target",
+        "vol_halflife",
+        "covariance_halflife",
+        "min_asset_vol",
+        "max_scalar",
+        # v4 (2026-09-09): it decides WHICH SYMBOLS may be held, so it decides the book.
+        "min_history_bars",
+    },
     "guards": {"max_gross", "max_weight", "daily_loss_pause", "stale_bars_max"},
     "rebalance": {"no_trade_band", "no_trade_rel_band", "max_participation", "max_order_notional"},
     "exits": {

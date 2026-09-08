@@ -211,7 +211,12 @@ def margin_mode_problems(
 #      `regime_window` defaults to 0 and `regime_tp_scale()` returns None at <= 0, and the profile sets
 #      none of the four - so again the values are unchanged and only the shape moved.  Twice in one day
 #      is why `test_construction_identity` now pins the field set: the next one fails a test instead.
-CONSTRUCTION_PAYLOAD_VERSION = 3
+#   4: + `portfolio.min_history_bars` (2026-09-09).  Inert at the shipped config for the same reason
+#      the two above were: the value is 720 before and after, and only the shape of what is hashed
+#      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
+#      may be held at all, so changing it changes the book - found while asking whether the
+#      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
+CONSTRUCTION_PAYLOAD_VERSION = 4
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
@@ -231,6 +236,14 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # v3 (+ the four regime_*), what the next restart will record.  Declared before it is ever written,
     # which is the right order: the claim is about values that are already known to be unchanged.
     "c0e5c49c5a4acb1d0e5bb709873ce38b0674c10a027405d5269dbb724d734d1c": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v4 (+ portfolio.min_history_bars), 2026-09-09.  Declared before it is ever written, same as v3,
+    # and on the same proof: recomputed against the shipped config the value is 720 on both sides of
+    # the change, so only the shape of what is hashed moved.  Without this alias the next restart would
+    # reset M-010's 30-day window - which has been running unbroken since 2026-09-04T15:02Z - for a
+    # book that is byte-identical.
+    "dd32720d3faf5ab0e6a2934a76e9d26489095d7b5a7d19d537bcef44751a7cf6": (
         "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
     ),
 }

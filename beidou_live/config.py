@@ -114,6 +114,9 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         max_bar_alignment_ms=int(float(guards.get("max_bar_alignment_seconds", 60.0)) * 1000),
         # the same mapping the model reads, so the digest describes the book that actually ran
         portfolio=PortfolioParams.from_mapping(portfolio),
+        # The same key `composition.build_model` reads, so the fingerprint cannot describe a different
+        # eligibility rule from the one the model applies; a test holds the two together.
+        min_history_bars=int(portfolio.get("min_history_bars", 720)),
         # DL-X1: the collateral mode the live record was produced under, asserted at startup.  Not part
         # of `construction_fingerprint` on purpose - it describes the ACCOUNT, not the construction, so
         # adding it must not reset M-010's evidence window the way a weight change would.
