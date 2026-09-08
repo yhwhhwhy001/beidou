@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 from click.testing import CliRunner
 
+from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, unique_trials
 from beidou_cli import main
 from beidou_data.store import KlineStore
 
@@ -189,6 +190,36 @@ def test_re_running_the_same_search_does_not_charge_it_twice(
 
     assert first > 0
     assert len(_rows(isolated_trials_ledger)) == first
+
+
+def test_a_mine_says_what_the_family_now_costs(tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path) -> None:
+    """The denominator `research validate` will charge every mined id, printed where the search is run.
+
+    2026-09-08: a re-run of P20's space appended 514 rows - the data range had moved by 24 bars, and
+    the signature folds only exact replays (KILL-Q5) - so the family's prior went 514 -> 1,028 with
+    nothing on the terminal saying so.  Whether those rows stay is a ruling and the rule is untouched
+    here; the line exists so the cost is seen rather than discovered.  The expected number is read
+    back off the ledger through the fold `validate` applies, not taken from what this run wrote.
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    runner = CliRunner()
+
+    first = runner.invoke(main, _mine_args(root, tmp_path / "r1"))
+    assert first.exit_code == 0, first.output
+    rows = isolated_trials_ledger.read_text(encoding="utf-8").splitlines()
+    family = len(unique_trials(parse_ledger(rows, MINED_SEARCH_STRATEGY)))
+    assert family > 0
+    assert f"mined family prior: {family} distinct trials in the ledger (0 before this run, +{family} charged now)" in (
+        first.output
+    )
+
+    again = runner.invoke(main, _mine_args(root, tmp_path / "r2"))
+    assert again.exit_code == 0, again.output
+    assert (
+        f"mined family prior: {family} distinct trials in the ledger ({family} before this run, +0 charged now)"
+        in again.output
+    )
 
 
 def test_a_wider_search_charges_only_what_is_new(

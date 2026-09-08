@@ -1005,10 +1005,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # cancelling rather than from stage 1, replace the instrument instead of raising the number, which is
 # the failure this file exists to stop.  The two raises above met in a merge, so this ceiling is the
 # merged tree measured rather than either branch's number carried over.
+# 2026-09-08, `research mine` saying what it charges: +23 cli, all of it the corrected docstring and one
+# echo.  The docstring's first sentence was "Nothing here touches the trials ledger", which DL-K2 made
+# false on 2026-09-07 - every kept candidate is a `mined` row - and the next day's P20 recovery re-ran
+# the space over 24 more bars, appended 514 rows and moved the family's prior 514 -> 1,028 with nothing
+# on the terminal saying so; that session had told the operator twice that `mine` was free, having read
+# the docstring rather than the code.  The echo reads the family's distinct prior back off the ledger
+# through `unique_trials` - the fold `research validate` applies - before and after the run, so the cost
+# of a search is stated where it is incurred instead of discovered at the next validation.  The charging
+# rule is untouched: rows fold on the full signature, data range included, and whether a replay's rows
+# stay is a ruling (K-EX07's shape), not the command's.  Prose against the 90% target, like most of this
+# page, buying a number that was true and unstated.
 CEILING = {
     "beidou_alpha": 6_046,
     "beidou_live": 5_904,
-    "beidou_cli": 3_550,
+    "beidou_cli": 3_573,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
