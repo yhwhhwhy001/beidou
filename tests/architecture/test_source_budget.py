@@ -1016,10 +1016,15 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # rule is untouched: rows fold on the full signature, data range included, and whether a replay's rows
 # stay is a ruling (K-EX07's shape), not the command's.  Prose against the 90% target, like most of this
 # page, buying a number that was true and unstated.
+# 2026-09-08, the same number in the artefact: +3 cli.  The raise above put the family's prior on the
+# terminal, and the terminal is gone when the window closes; the report is what the log cites, and the
+# 2026-09-08 report recorded `charged: 514` - what the run did - with nothing about what the family cost
+# afterwards, which is the number the next validation reads.  `ledger.family_prior` carries before and
+# after through the same `unique_trials` fold.  Three lines, two of them the comment saying why.
 CEILING = {
     "beidou_alpha": 6_046,
     "beidou_live": 5_904,
-    "beidou_cli": 3_573,
+    "beidou_cli": 3_576,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,

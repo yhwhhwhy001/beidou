@@ -2069,10 +2069,10 @@ def research_mine(
     after the range has moved is recorded as a new trial per candidate: conservative charging, KILL-Q5.
     Measured 2026-09-08: P20's 514-wide space re-run over 24 more bars appended 514 rows and the
     family's prior went 514 -> 1,028; the operator then ruled those rows back out, which is a
-    governance call this command does not make.  The last lines say what this run charged and what
-    the family now costs, so the number is seen where it is incurred rather than discovered at the
-    next validation.  ``--strategy`` is inherited from the shared options and ignored here; the
-    candidates are the strategies.
+    governance call this command does not make.  The last lines, and the report's ``ledger`` block,
+    say what this run charged and what the family now costs, so the number is seen where it is
+    incurred rather than discovered at the next validation.  ``--strategy`` is inherited from the
+    shared options and ignored here; the candidates are the strategies.
     """
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
@@ -2354,6 +2354,9 @@ def research_mine(
         "charged": charged,
         "candidates": len(search.candidates),
         "declared_remainder": remainder,
+        # The family's denominator in the artefact, not only on the terminal: 2026-09-08's report said
+        # `charged: 514` - what the run did - and nothing about what the family cost afterwards.
+        "family_prior": {"strategy": MINED_SEARCH_STRATEGY, "before": family_prior - charged, "after": family_prior},
     }
     path, digest = _write(out, run_id, payload, markdown)
     for row in scored[:top]:
