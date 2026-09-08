@@ -96,7 +96,7 @@ async def test_engine_stops_a_probe_book_and_keeps_it_stopped(august_panel: Pane
     venue = FakeVenue(balance=10_000.0, prices=_prices(august_panel, cursor))
     clock = FakeClock(market.bar_open_ms(cursor) + 5_000)
     store = StateStore(tmp_path / "live")
-    config = _config(tmp_path, probes=(probe,), strategy_weights={"tsmom": 1.0, "breakout": 1.0})
+    config = _config(tmp_path, probes=(probe,), strategy_weights={"tsmom": 1.0, "breakout": 0.5})
     engine = LiveEngine(config, model=_two_book_model(), market=market, venue=venue, clock=clock, store=store)
     await engine.startup()
     bar = market.bar_open_ms(cursor - 1)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from beidou_data.store import FundingStore, KlineStore, funding_per_bar
 from beidou_shared.config import load_yaml
 
 UNIVERSE_STATE = "universe.json"
+logger = logging.getLogger(__name__)
 
 
 def load_panel(
@@ -29,10 +31,26 @@ def load_panel(
     start: str | None = None,
     end: str | None = None,
 ) -> Panel:
+    """Wide panel from the parquet store; symbols without stored klines are excluded (and logged), not fatal.
+
+    The live pool can admit a symbol (e.g. a fresh listing) before ``beidou data
+    sync`` has ever downloaded it; research on ``universe.json`` must not crash
+    on such a name.
+    """
     start_ms = None if start is None else int(pd.Timestamp(start, tz="UTC").timestamp() * 1000)
     end_ms = None if end is None else int(pd.Timestamp(end, tz="UTC").timestamp() * 1000)
-    frames = {symbol: store.load(symbol, interval, start_ms, end_ms) for symbol in symbols}
-    frames = {symbol: frame for symbol, frame in frames.items() if not frame.empty}
+    frames: dict[str, pd.DataFrame] = {}
+    missing: list[str] = []
+    for symbol in symbols:
+        try:
+            frame = store.load(symbol, interval, start_ms, end_ms)
+        except FileNotFoundError:
+            missing.append(symbol)
+            continue
+        if not frame.empty:
+            frames[symbol] = frame
+    if missing:
+        logger.warning("no %s klines stored for %s; excluded from the panel", interval, missing)
     if not frames:
         raise ValueError("no kline data for the requested symbols/range")
     panel = Panel.from_frames(frames, interval=interval)

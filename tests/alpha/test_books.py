@@ -124,6 +124,6 @@ def test_two_books_are_summed_then_capped_and_banded(august_panel: Panel) -> Non
     last = per["breakout"].iloc[-1].fillna(0.0)
     assert set(target.contributions) == {"tsmom", "breakout"}
     for symbol, value in target.contributions["breakout"].items():
-        assert value == pytest.approx(0.5 * float(last[symbol]))  # contributions carry the book fraction
+        assert value == pytest.approx(float(last[symbol]))  # unscaled: the fraction enters via strategy_weights
     for symbol, value in target.weights.items():
         assert value == pytest.approx(float(weights[symbol].iloc[-1]))

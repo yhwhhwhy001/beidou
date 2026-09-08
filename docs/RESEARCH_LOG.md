@@ -266,7 +266,7 @@ IC 几乎一样、多头腿差 7 倍：**flow 的多头证据是幸存者偏差*
 
 操作者选择了第二条路：把 flow 空头小书作为 demo 上的**有界实验**（探针书）运行，目的只有一个——在真实的样本外积累证据。它不是被验证的策略；registry 里的 `verdict: ACCEPT` 是书级判定（D-018），信号级判定仍是 FAIL。实现与约束：
 
-- **book 机制**：registry 新增 `books:`（`flow_short: fraction 0.333333`）与策略的 `book` 字段。模型按书独立构建（各自波动率目标、不带再平衡带）、按 fraction 缩放后求和，再套主书的单币上限、gross 上限与再平衡带（`beidou_alpha/portfolio.py::combine_books`，与 `research book` 的算法同源）。只有主书时代码路径与之前逐位相同（`tests/alpha/test_books.py::test_single_main_book_path_is_unchanged`）。归因 contributions 带 book fraction，日报 `PnL by strategy` 按书拆分。
+- **book 机制**：registry 新增 `books:`（`flow_short: fraction 0.333333`）与策略的 `book` 字段。模型按书独立构建（各自波动率目标、不带再平衡带）、按 fraction 缩放后求和，再套主书的单币上限、gross 上限与再平衡带（`beidou_alpha/portfolio.py::combine_books`，与 `research book` 的算法同源）。只有主书时代码路径与之前逐位相同（`tests/alpha/test_books.py::test_single_main_book_path_is_unchanged`）。归因里书的 fraction 通过 `strategy_weights`（策略权重 × fraction）进入份额计算，contributions 保持未缩放的目标（也是下一周期 hold 的种子）；日报 `PnL by strategy` 按书拆分。
 - **显式例外**：`ACCEPT` 只在非主书且带 `probe` 块（`accepted_by`、`accepted_on`、`stop`）时被启动检查放行；启动时还核对引用的报告是 ACCEPT 的 book 报告、写的是这个 sleeve、且 fraction 与 registry 一致——KILL-015 的延伸，"例外"必须写在 registry 里而不是文档里。
 - **自动止损**（`beidou_live/probe.py`）：每个周期读 `attribution.jsonl`，sleeve 过去 30 天归因净 P&L ≤ −1% 权益即停书：状态持久化（`state.json.stopped_books`），重启后仍停；`cycles.jsonl`、心跳与日报可见；webhook 告警。阈值校准：sleeve 平均敞口约 3% 权益，30 天 P&L 标准差约 0.5% 权益，"亏了就停"会让一个 Sharpe 1 的 sleeve 在首月约 37% 概率被误停；−1% ≈ −2σ，停在"有害的证据"而不是噪声上。想用字面规则可把 `max_loss` 设为 0。
 - **复审**：`review_after_days: 90` → 自 2026-12-02 起日报的 `Probe books` 段标 REVIEW_DUE；届时按 M-009 用实盘归因决定去留，任何"调一调再看"都计入 flow 账本。

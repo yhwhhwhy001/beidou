@@ -10,6 +10,8 @@ venue:
 market_data:
   rest_url: https://fapi.binance.com               # public, unauthenticated reads only (D-002)
   interval: 1h
+  # Lower bound only: the loop requests max(history_bars, min_history_bars + model warmup) closed bars, i.e. 1,442
+  # for the weekly tsmom, and refuses to start if that exceeds the 1,500-bar request limit (E-042).
   history_bars: 400
 universe: config/universe.yaml
 registry: config/alpha_registry.yaml
@@ -27,7 +29,10 @@ portfolio:
   no_trade_rel_band: 0.25     # ...or smaller than 25% of the current position (same-direction resizes only)
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 pool:
-  refresh: daily              # re-rank the universe once per UTC day with the hysteresis in universe.yaml (D-014); never = static
+  # Re-rank once per UTC day with the hysteresis in universe.yaml (D-014); never = static.  The research membership
+  # table is rebuilt at the same daily cadence (`beidou data pool history --refresh D`) so validation trades the
+  # universe the loop would actually have held (round 6; monthly refresh churned 7.3 names/month, daily 11.8).
+  refresh: daily
   candidates: 45              # mainnet 24h-volume shortlist that is re-scored on 30-day volume
   liquidity_window: 24        # bars averaged for the participation cap
 exits:                        # bar-close exit overlay in daily-vol units (D-012); 0 disables a rule.

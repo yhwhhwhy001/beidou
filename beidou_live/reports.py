@@ -75,11 +75,19 @@ def drift_check(
     """Realised trailing Sharpe/drawdown from cycle equity versus the validation expectation."""
     cycles = [
         row for row in store.read_jsonl(store.cycles_path) if row.get("equity") is not None and not row.get("dry_run")
-    ]
-    equity = [float(row["equity"]) for row in cycles][-(window_days * 24) :]
-    if len(equity) < 48:
-        return {"status": "INSUFFICIENT_DATA", "bars": len(equity)}
-    returns = np.asarray([equity[i] / equity[i - 1] - 1.0 for i in range(1, len(equity)) if equity[i - 1] > 0])
+    ][-(window_days * 24) :]
+    if len(cycles) < 48:
+        return {"status": "INSUFFICIENT_DATA", "bars": len(cycles)}
+    # a bar that absorbed an external cash flow (deposit, demo reset; E-044) is not a return and is skipped
+    returns = np.asarray(
+        [
+            float(current["equity"]) / float(previous["equity"]) - 1.0
+            for previous, current in zip(cycles, cycles[1:], strict=False)
+            if float(previous["equity"]) > 0 and not (current.get("external_flows") or {}).get("rebaselined")
+        ]
+    )
+    if len(returns) < 47:
+        return {"status": "INSUFFICIENT_DATA", "bars": len(returns) + 1}
     realised = sharpe(returns, bars_per_year)
     drawdown = max_drawdown(returns)
     expected = [v["oos_sharpe"] for v in expectations.values() if v.get("oos_sharpe") is not None]
@@ -136,10 +144,16 @@ def daily_payload(
         if row.get("executed_qty") and row.get("avg_price"):
             traded += float(row["executed_qty"]) * float(row["avg_price"])
     guard_events = [reason for row in cycles for reason in (row.get("guard_reasons") or [])]
+    flows = [row.get("external_flows") or {} for row in cycles]
     return {
         "day": day,
         "cycles": len(cycles),
         "skipped_cycles": sum(1 for row in cycles if row.get("skip")),
+        "external_flows": {
+            "total": sum(float(flow.get("total", 0.0) or 0.0) for flow in flows),
+            "rows": sum(int(flow.get("rows", 0) or 0) for flow in flows),
+            "rebaselined_cycles": sum(1 for flow in flows if flow.get("rebaselined")),
+        },
         "equity_start": equities[0] if equities else None,
         "equity_end": equities[-1] if equities else None,
         "equity_change_pct": (equities[-1] / equities[0] - 1.0) if len(equities) >= 2 and equities[0] else None,
@@ -170,6 +184,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 },
             ),
             ("Orders", payload["orders"] or {"none": 0}),
+            ("External cash flows (not P&L)", payload.get("external_flows") or {"none": 0}),
             (
                 "Costs",
                 {
