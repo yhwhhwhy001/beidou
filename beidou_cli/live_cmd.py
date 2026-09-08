@@ -173,8 +173,29 @@ def refuse_second_instance(busy: LockBusy) -> tuple[int, str]:
     help="required for a non-dry-run, non-paper loop: this sends real orders to the configured account",
 )
 @click.option("--data-root", default=".beidou/data", show_default=True)
+@click.option(
+    "--registry",
+    "registry_override",
+    default="",
+    help=(
+        "DL-G5: read a CANDIDATE registry instead of the profile's, so a canary can soak one.  "
+        "Refused without --dry-run or --paper: an armed loop is promoted by writing the registry file "
+        "(a transaction that can roll back), never by pointing at a different one."
+    ),
+)
+@click.option(
+    "--state-dir",
+    default="",
+    help=(
+        "DL-G5: write this run's state somewhere other than the profile's `paths.state_dir`, so a "
+        "canary can soak a candidate registry beside the armed loop without touching its record.  "
+        "Refused without --dry-run or --paper: an armed loop with a forked state.json is two books."
+    ),
+)
 @click.option("--verbose", is_flag=True)
 def live_run(
+    registry_override: str,
+    state_dir: str,
     profile: str,
     dry_run: bool,
     paper: bool,
@@ -195,7 +216,22 @@ def live_run(
         raise click.ClickException(
             "this would send real orders to the configured account; pass --armed to confirm, or --dry-run / --paper"
         )
+    # Beside --armed's own refusal, and before anything reads the profile or the data archive.  A
+    # safety check that runs after the dataset gate is one that can be bypassed by deleting data, and
+    # both of these are about what this process may touch rather than about whether it has evidence.
+    #
+    # `state.json` carries the day's equity mark, the leaving set, the exit anchors and
+    # `stopped_books`; an armed loop reading a different copy is a second book trading the same
+    # account, and the account lock would not stop it - that lock is keyed on the API key, not the
+    # directory.  And an armed loop is promoted by WRITING the registry as a transaction that can roll
+    # back, never by pointing at another file: that would be a running book no file on disk describes.
+    if not (dry_run or paper):
+        for flag, value in (("--state-dir", state_dir), ("--registry", registry_override)):
+            if value:
+                raise click.ClickException(f"{flag} requires --dry-run or --paper")
     payload = load_profile(profile)
+    if registry_override:
+        payload["registry"] = registry_override
     model, registry = build_model_from_profile(payload)
     problems = registry_evidence_problems(registry, payload)
     # D-041: the dataset manifest, read rather than only written.  Advisory lines are printed and do not
@@ -211,6 +247,8 @@ def live_run(
                 "enabled strategies lack validation evidence, or cite data that has since changed; "
                 "run `beidou research validate` or pass --allow-unvalidated"
             )
+    if state_dir:
+        payload.setdefault("paths", {})["state_dir"] = state_dir
     universe = resolve_universe(payload, [s for s in symbols.split(",") if s.strip()] or None, data_root)
     config = live_config(payload, universe, registry, dry_run=dry_run)
     if paper:

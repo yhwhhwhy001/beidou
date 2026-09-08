@@ -1,0 +1,41 @@
+"""DL-G5: the two flags a canary needs, and the one rule that keeps them from being a second book.
+
+`--state-dir` and `--registry` exist so a shadow loop can soak a candidate registry beside the armed
+one.  Both refuse to run armed, for reasons that are different and both load-bearing:
+
+* `state.json` carries the day's equity mark, the leaving set, the exit anchors and `stopped_books`.
+  An armed loop reading a different copy of it is a second book trading the same account, and the
+  account lock would NOT stop it - that lock is keyed on the API key, not on the directory.
+* An armed loop is promoted by WRITING the registry file, as a transaction that can roll back
+  (`beidou_governance.promote`).  Pointing an armed loop at a different file instead would produce a
+  running book whose registry nothing on disk describes, which is KILL-Q15 with the sign flipped.
+"""
+
+from __future__ import annotations
+
+from click.testing import CliRunner
+
+from beidou_cli import main
+
+
+def _run(*args: str) -> object:
+    return CliRunner().invoke(main, ["live", "run", *args])
+
+
+def test_state_dir_is_refused_on_an_armed_run() -> None:
+    result = _run("--armed", "--state-dir", ".beidou/live-shadow", "--cycles", "0")
+    assert result.exit_code != 0
+    assert "--state-dir requires --dry-run or --paper" in result.output
+
+
+def test_a_candidate_registry_is_refused_on_an_armed_run() -> None:
+    result = _run("--armed", "--registry", "config/alpha_registry.candidate.yaml", "--cycles", "0")
+    assert result.exit_code != 0
+    assert "--registry requires --dry-run or --paper" in result.output
+
+
+def test_both_flags_are_offered_and_documented() -> None:
+    """A flag whose help does not say why it refuses gets used by someone who then works around it."""
+    help_text = CliRunner().invoke(main, ["live", "run", "--help"]).output
+    assert "--state-dir" in help_text and "--registry" in help_text
+    assert "canary" in help_text

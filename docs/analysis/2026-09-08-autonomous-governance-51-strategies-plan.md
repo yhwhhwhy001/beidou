@@ -172,7 +172,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 ```text
 Phase 0 回放 ✔（2026-09-08 完成）：A + B + D 已跑，AC-G0 通过（29 差异 / 0 未归因）；产物见 §18
 Phase 1 尺子（2–4 周，无重启）：**先做 DL-G9（两条判据可读）**，再 R0 报告口径、search_space_version 必填、budget / lifecycle / governance_digest、L1 属性测试；**并行 DL-C1 冲击成本模型**（不碰构造，不清零 M-010）
-Phase 2 调度器 + 事务 + Canary（3–5 周，无重启；paper 上跑 DRILL-G1..G6）
+Phase 2 ✔（2026-09-08）调度器 + 事务 + Canary，无重启。DRILL-G1/G4/G5 已作单元测试跑通（G1 用真闸 + 实盘 registry），G2/G3/G6 由属性测试与钉死的 policy digest 覆盖；**paper 端到端串跑未做**
 Phase 3 数据宽度 + 节点 + 手写含缠论（4–8 周，并行，无重启）
 Phase 4a 批次窗口 #1（构造）：块 4 必改项一次改完 → 重启 → 攒 30 天干净窗口（K-EX14）
 Phase 4b 批次窗口 #2（晋级）：队首候选 → Canary → 事务（机器 apply）→ 重启 → probe
@@ -189,11 +189,11 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | DL-G1 报告口径 | R0 ← KILL-AR-01 | `multiple_testing.py` 报告全库 N 与 N_eff（不作门） | T-G1-1 现有报告重算判定不变；T-G1-2 报告含两个口径 | AC-G1 | M-Q04 | alpha +≈40 |
 | **DL-G2 同空间不重跑 ✔** | R2 ← 09-08 账本事故 | `SearchResult.space_digest` 进 shortlist 报告；`research mine` 在打分前拒绝已枚举过的空间；`--reauthorize` 记进报告 | T-G2-1 同空间被拒 ✔；T-G2-2 更宽的空间放行 ✔；T-G2-3 早于字段的报告按 `evaluated` 退化并标注 ✔ | AC-G2 | M-G04 | alpha +≈15，cli +≈64 |
 | **DL-G3 状态机 + 预算 ✔** | §3 / §4 | `lifecycle.py`（Phase 0）、`budget.py`（R1 从账本读）、`state.py`/`governance_state.json` | T-G3-1 非法转移拒绝；T-G3-2 R1/R3/R4/R5/R7 属性测试（hypothesis）；T-G3-3 重启后状态持久 | AC-G3 | M-G01 | gov +≈500 |
-| DL-G4 事务 + 回滚 | R6 | `promote.py` | T-G4-1 闸拒绝 → 回滚 → digest 等于回滚前；T-G4-2 幂等 | AC-G4 / DRILL-G1 | M-Q10 | gov +≈250 |
-| DL-G5 Canary | §5 L4 | `canary.py` + `run_shadow.sh` + `.beidou/live-shadow` + `live run --state-dir` | T-G5-1 健康指标计算；T-G5-2 失败 → 回队列 + R5 计数 | AC-G5 / DRILL-G4 | M-G03 | gov +≈300，cli +≈20，deploy |
+| **DL-G4 事务 + 回滚 ✔** | R6 | `promote.py` | T-G4-1 闸拒绝 → 回滚 → digest 等于回滚前；T-G4-2 幂等 | AC-G4 / DRILL-G1 | M-Q10 | gov +≈250 |
+| **DL-G5 Canary ✔** | §5 L4 | `canary.py` + `run_shadow.sh` + `.beidou/live-shadow` + `live run --state-dir` | T-G5-1 健康指标计算；T-G5-2 失败 → 回队列 + R5 计数 | AC-G5 / DRILL-G4 | M-G03 | gov +≈300，cli +≈20，deploy |
 | DL-G6′ 时间规则 | §3 ← 选项 b | `tenure.py` | T-G6′-1 三窗口无 stop → main；T-G6′-2 main 触发 stop → 回 probe 重计；T-G6′-3 TRANSFER 周期的 stop 不计 | AC-G6′ | M-G01 | gov +≈150 |
 | DL-G7 治理 digest + 快通道 | R8 / R9 | `engine.py` 每周期落盘；回撤梯接 `throttle_scalar`（归因口径 + 告警 + 宽限） | T-G7-1 digest 变 → `live verify` 报；T-G7-2 −35% 注入 → 告警，2 周期后 scalar 0.75；T-G7-3 权益回撤（抵押品）不触发 | AC-G7 / DRILL-G3 | M-Q10, M-015 | live +≈100 |
-| DL-G8 调度器 + 研究机 | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
+| **DL-G8 调度器 ✔（研究机 plist 未做，AR-17）** | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
 | **DL-C1 冲击成本模型 ✔（含 P26 重推）** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
 | **DL-G9 判据可读性 ✔** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
 | DL-S51 缠论 | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
@@ -410,4 +410,4 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | 已冻结 Decision | D-G1 机器主体（**含第一次事务，Q9**）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
 | 开放 | Q4（默认进）/ Q5（默认单机）；AR-17。**审计三问③ 已裁（09-08）** |
-| 下一动作 | Phase 1 已完；**Phase 2**（调度器 + 事务 + Canary，paper 上跑 DRILL-G1..G6）。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟，两条都只能等 |
+| 下一动作 | Phase 1、2 已完。(a) DRILL-G1..G6 的 **paper 端到端串跑**；(b) **Phase 3**（数据宽度 + 挖掘节点 + 手写含缠论）。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟，两条都只能等 |

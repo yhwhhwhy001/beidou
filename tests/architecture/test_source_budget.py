@@ -1109,14 +1109,32 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # first 23 cycles that carried a reading, 73% of a -60.11 move was repricing.  Reported, never
 # subtracted, and it does not page: subtracting it would silently produce the USDT-denominator book the
 # operator did not choose, and paging on it would page on a standing fact about the account.
+# 2026-09-08, Phase 2 (scheduler + transaction + canary): +395 gov, +183 cli.  The sentence the rule
+# requires, and the honest note that none of it is signal - it is the machinery that makes a promotion
+# something other than a person editing a YAML, which is what Q9 ruled the machine must do instead.
+# `promote.py` departs from the plan's ordering on purpose: the plan said write, restart, let the
+# startup gate refuse, roll back; this asks the gate IN PROCESS before any restart, so a bad write
+# never reaches a running loop.  That is only safe because it is the SAME function startup calls - the
+# gate is injected and the caller passes `registry_evidence_problems` - and DRILL-G1 proves it by
+# feeding the real shipped registry a report whose sha256 does not match.  The rollback restores the
+# ORIGINAL BYTES rather than a re-serialisation: a YAML round-trip would drop the comments carrying the
+# D-029 acknowledgement and the stress-coverage record, which would be a second silent change made by
+# the undo of the first.
+# `canary.py` is a deployment health check and NOT an alpha filter (KILL-AR-04); the first test in its
+# file is the negative one - a perfectly healthy, perfectly unprofitable shadow must pass.
+# The cli half is `governance status/plan/apply/transactions/enable/disable` plus `live run
+# --state-dir/--registry`.  Both new live flags refuse to run armed, and both refusals sit above the
+# dataset gate: a safety check that runs after it can be bypassed by deleting data.  `apply` is refused
+# while the autonomy switch is off, and that switch is the one human confirmation point Q9 did NOT
+# remove - enabling asks, disabling never does, because a stop that needs confirming arrives late.
 CEILING = {
     "beidou_alpha": 6_186,
     "beidou_live": 6_018,
-    "beidou_cli": 3_833,
+    "beidou_cli": 4_016,
     "beidou_data": 1_805,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 1_273,
+    "beidou_governance": 1_668,
 }
 
 
