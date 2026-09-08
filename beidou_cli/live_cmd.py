@@ -263,7 +263,9 @@ def live_run(
             )
     if state_dir:
         payload.setdefault("paths", {})["state_dir"] = state_dir
-    universe = resolve_universe(payload, [s for s in symbols.split(",") if s.strip()] or None, data_root)
+    universe = resolve_universe(
+        payload, [s for s in symbols.split(",") if s.strip()] or None, data_root, registry=registry
+    )
     config = live_config(payload, universe, registry, dry_run=dry_run)
     store = StateStore(_paper_state_dir(payload, state_dir)) if paper else build_store(payload, dry_run=dry_run)
     market = build_market_data(payload)

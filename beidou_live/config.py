@@ -39,10 +39,21 @@ def load_profile(path: str | Path) -> dict[str, Any]:
 
 
 def resolve_universe(
-    profile: dict[str, Any], override: Sequence[str] | None = None, data_root: str | Path = ".beidou/data"
+    profile: dict[str, Any],
+    override: Sequence[str] | None = None,
+    data_root: str | Path = ".beidou/data",
+    registry: Registry | None = None,
 ) -> list[str]:
+    """`--symbols`, then the registry's pinned universe, then whatever the pool last ranked.
+
+    The registry comes SECOND, above `universe.json`, because a pinned universe is a decision and the
+    file is an observation.  Before 2026-09-09 the file was the decision, and that is what made a
+    cited report stop describing the traded population every day at about 01:00Z.
+    """
     if override:
         return [symbol.upper() for symbol in override]
+    if registry is not None and registry.universe:
+        return list(registry.universe)
     selected = read_universe(data_root)
     if selected:
         return selected
@@ -117,6 +128,8 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         # The same key `composition.build_model` reads, so the fingerprint cannot describe a different
         # eligibility rule from the one the model applies; a test holds the two together.
         min_history_bars=int(portfolio.get("min_history_bars", 720)),
+        # A pinned universe turns the daily re-rank into an observation; see `_refresh_universe`.
+        universe_proposal_only=bool(registry.universe),
         # DL-X1: the collateral mode the live record was produced under, asserted at startup.  Not part
         # of `construction_fingerprint` on purpose - it describes the ACCOUNT, not the construction, so
         # adding it must not reset M-010's evidence window the way a weight change would.

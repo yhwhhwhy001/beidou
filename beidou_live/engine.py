@@ -146,6 +146,10 @@ class LiveConfig:
     # running record saying so - P10 cell B's shape, one field over.
     min_history_bars: int = 720
     universe_refresh: bool = False  # D-014: re-rank once per UTC day through the UniverseProvider
+    # 2026-09-09: when the registry pins a universe, the daily re-rank still RUNS and is still recorded,
+    # and it no longer decides anything.  Observation kept, decision removed - the same split the
+    # governance plan applies to every other construction change, applied to the population.
+    universe_proposal_only: bool = False
     liquidity_window: int = 24
     quarantine_after: int = 0  # D-031: rejected cycles before a symbol leaves the universe (0 = off)
     probes: tuple[ProbeParams, ...] = ()  # D-019: probe books with their automatic stop rules
@@ -788,6 +792,20 @@ class LiveEngine:
             return {"error": "EMPTY_UNIVERSE", "universe": list(self.universe)}
         left = [symbol for symbol in self.universe if symbol not in fresh]
         entered = [symbol for symbol in fresh if symbol not in self.universe]
+        if self.config.universe_proposal_only:
+            # Recorded, not adopted.  `universe.json` is deliberately NOT written either: every cited
+            # report records the universe fingerprint it was produced under, so writing a new one is
+            # what expired restartability daily - the loop re-ranked at about 01:00Z and the dataset
+            # gate then refused the next start.  The day is still marked so this runs once a day rather
+            # than every cycle; what a batch window acts on is this row.
+            self.state.universe_day = day
+            return {
+                "proposal": list(fresh),
+                "entering": entered,
+                "leaving": left,
+                "universe": list(self.universe),
+                "adopted": False,
+            }
         self.universe = fresh
         self.state.universe = list(fresh)
         self.state.universe_day = day

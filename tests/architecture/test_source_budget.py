@@ -1253,10 +1253,22 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # an armed restart went from clean to blocked.  The armed loop refreshes daily at about 01:00Z on its
 # own, so restartability was going to expire that night anyway - the shadow brought it forward by seven
 # hours, which is the whole harm and is also exactly enough to matter during an incident.
+# 2026-09-09, 选 3: the traded universe moves into the registry.  +13 alpha, +31 live, +2 cli.  The
+# sentence the rule requires.  `universe.json` was the DECISION and the loop rewrote it daily at about
+# 01:00Z; every cited report records the universe fingerprint it was produced under, so each re-rank
+# made the evidence stop describing the traded population and the dataset gate refused the next armed
+# start.  Restartability expired every day and nothing said so until a canary triggered it early.
+# Two designs were possible and they differ by a month.  Making the refresh CADENCE a construction
+# parameter would have put it in `construction_fingerprint`, which resets M-010's 30-day window - the
+# clock the entire governance line is waiting on, unbroken since 2026-09-04T15:02Z.  Pinning the
+# population in the REGISTRY instead moves `registry_fingerprint`, which M-010 does not key on, and
+# makes a re-rank a governed transaction with a log and a rollback.  Same intent, no reset.
+# The re-rank still runs and is still recorded; it stops deciding.  Observation kept, decision removed
+# - the split this plan already applies to every other construction change, applied to the population.
 CEILING = {
-    "beidou_alpha": 6_972,
-    "beidou_live": 6_122,
-    "beidou_cli": 4_108,
+    "beidou_alpha": 6_985,
+    "beidou_live": 6_153,
+    "beidou_cli": 4_110,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

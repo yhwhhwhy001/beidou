@@ -52,6 +52,13 @@ class Registry:
     turnover_penalty: float
     strategies: tuple[StrategyEntry, ...]
     books: dict[str, BookSpec] = field(default_factory=dict)  # declared non-main books
+    # The traded population, pinned.  Empty means "whatever the pool last ranked", which is what this
+    # file meant before 2026-09-09 and what made restartability expire every day: the loop re-ranked at
+    # about 01:00Z, `universe.fingerprint` moved, and every cited report - which records the universe it
+    # was produced under - stopped describing the population being traded.  Pinning it here makes a
+    # re-rank a governed transaction (`beidou governance apply`, logged, rollback-able) instead of a
+    # daily side effect, which is what "构造改动进批次窗口" already means for every other such change.
+    universe: tuple[str, ...] = ()
 
     @property
     def enabled(self) -> tuple[StrategyEntry, ...]:
@@ -93,6 +100,7 @@ def parse_registry(payload: Mapping[str, Any]) -> Registry:
             )
         )
     return Registry(
+        universe=tuple(str(symbol).upper() for symbol in (payload.get("universe") or [])),
         version=int(payload.get("version", 1)),
         ensemble_method=str(ensemble.get("method", "mean")),
         turnover_penalty=float(ensemble.get("turnover_penalty", 0.0)),
@@ -128,6 +136,11 @@ def registry_fingerprint(
         "turnover_penalty": registry.turnover_penalty,
         "books": {name: spec.fraction for name, spec in sorted(registry.books.items())},
         "strategies": strategies,
+        # The traded population is part of "what runs".  Leaving it out would be the silence this whole
+        # change exists to end: a pinned universe that could be edited without any digest moving is a
+        # pinned universe nobody can tell has moved.  Empty for a registry that pins none, so every
+        # report written before 2026-09-09 keeps the fingerprint it was produced under.
+        "universe": list(registry.universe),
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     return {"digest": digest, **payload}
