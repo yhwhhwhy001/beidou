@@ -68,7 +68,7 @@ from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_e
 from beidou_cli import research
 from beidou_data.manifest import build_manifest
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
-from beidou_data.store import FundingStore, KlineStore
+from beidou_data.store import FundingStore, KlineStore, MetricsStore
 from beidou_live.composition import (
     build_model,
     cost_model,
@@ -233,11 +233,48 @@ def _model(entry: StrategyEntry, profile: dict[str, Any], interval: str, min_his
     )
 
 
-def _load(root: str, symbols: list[str], interval: str, start: str | None, end: str | None, funding: bool) -> Panel:
+def _load(
+    root: str,
+    symbols: list[str],
+    interval: str,
+    start: str | None,
+    end: str | None,
+    funding: bool,
+    metrics: bool = False,
+) -> Panel:
+    """The research panel.  ``metrics`` is opt-in and defaults off, deliberately.
+
+    Loading it means reading a parquet per symbol and aligning every bucket, which is real work for a
+    run whose signals read none of it - and the alignment is where the only look-ahead in this data
+    lives, so a run that does not need the columns is better off not carrying them at all.  Callers
+    turn it on when a strategy declares `needs_metrics`, and `research mine` turns it on always,
+    because the candidates it is about to enumerate are exactly what decides the answer.
+    """
     store = KlineStore(root)
     return load_panel(
-        store, symbols, interval, funding_store=FundingStore(root) if funding else None, start=start, end=end
+        store,
+        symbols,
+        interval,
+        funding_store=FundingStore(root) if funding else None,
+        metrics_store=MetricsStore(root) if metrics else None,
+        start=start,
+        end=end,
     )
+
+
+def _wants_metrics(strategy: str, params: Mapping[str, Any]) -> bool:
+    """Does this strategy declare it reads a metrics column?  Unknown ids answer no, not crash.
+
+    `research validate` is handed a strategy id from the command line, and a mined id that no longer
+    enumerates is reported as gone elsewhere rather than here; this only decides whether to carry the
+    columns, and carrying them for a signal that reads none is waste, not danger.
+    """
+    try:
+        spec = get_signal(strategy)
+    except (KeyError, ValueError):
+        return False
+    predicate = getattr(spec, "needs_metrics", None)
+    return bool(predicate(params)) if predicate is not None else False
 
 
 def _funding_consumers(entries: Sequence[StrategyEntry]) -> list[str]:
@@ -598,7 +635,13 @@ def research_validate(
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
-    panel = _load(root, chosen, interval, start, end, funding)
+    # DL-D4: carry the metrics columns only when this strategy declares it reads them, so a run
+    # that reads none does not pay for the alignment - and does not carry the one place a
+    # look-ahead could enter data it never uses.
+    # `_entry` above already ran `_resolve_mined` + `get_signal`, so a mined id is registered by now
+    # and answers for itself.  Params are deliberately not passed: `needs_metrics` is derived from the
+    # expression tree, so it cannot depend on which grid cell is being scored.
+    panel = _load(root, chosen, interval, start, end, funding, metrics=_wants_metrics(strategy, {}))
     # KILL-006: the reserved tail is cut here, before folds, membership or costs touch it, so nothing in this
     # run can see it.  It is recorded in the report, which is what makes the reservation checkable later:
     # a promise in prose is not a holdout, and every OOS number produced without one has been selected on.
@@ -2090,7 +2133,9 @@ def research_decompose(
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
-    panel = _load(root, chosen, interval, start, end, funding)
+    # DL-D4: always, because the candidates about to be enumerated are what decides whether the
+    # columns are needed, and enumeration happens after the panel exists.
+    panel = _load(root, chosen, interval, start, end, funding, metrics=True)
     _require_funding([entry], panel)
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)

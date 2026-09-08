@@ -1193,10 +1193,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # proxy that used to answer 503 in bursts, so a 503 should not have been possible - and 16 concurrent
 # symbols produced one anyway, from the CDN, while 8 ran clean.  Concurrency-dependent throttling, so
 # backing off works; a 404 is never retried because an unpublished day is the normal case every morning.
+# 2026-09-09, DL-D4 part two - the columns reach a candidate: +81 alpha, +36 live, +45 cli.  Signal,
+# and the sentence the rule requires.  Part one built `Panel.metrics` and two leaves; nothing loaded
+# them, so `oi()` and `lsr()` raised on every panel in the repository.  Now `load_panel` aligns them
+# through `beidou_data.metrics.align_to_bars` - the one place the five minutes can be got wrong, which
+# is why it is the one place that knows the rule - and `_positioning_family` puts them in the search.
+# `metrics` is opt-in on `_load` and defaults OFF: loading it reads a parquet per symbol and aligns
+# every bucket, which is real work for a run whose signals read none, and a run that does not need the
+# columns is better off not carrying the only look-ahead this data has.  `validate` turns it on when
+# the strategy declares `needs_metrics`; `mine` always, because the candidates it is about to enumerate
+# are what decides the answer and enumeration happens after the panel exists.
+# The family is 90 candidates - 514 -> 604 - and the frozen-hash guard went RED on the first run, which
+# is it doing its job: growth has to be a dimension that can be turned off (`include_metrics`) or a
+# frozen space stops being one.  Every one of the old 514 hashes survives, asserted, because
+# `_resolve_mined` re-derives an id by enumerating and an id that no longer enumerates cannot be named.
 CEILING = {
-    "beidou_alpha": 6_736,
-    "beidou_live": 6_059,
-    "beidou_cli": 4_031,
+    "beidou_alpha": 6_823,
+    "beidou_live": 6_095,
+    "beidou_cli": 4_076,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

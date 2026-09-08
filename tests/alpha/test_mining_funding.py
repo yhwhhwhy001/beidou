@@ -105,9 +105,11 @@ def test_the_existing_search_space_is_bit_for_bit_what_p14_recorded(fixtures_dir
     # merely believed to be.
     # DL-A1 added five more families behind their own switch, for the same reason `include_funding`
     # exists: growth has to be a dimension that can be turned off, or a frozen space stops being one.
+    # DL-D4 added the positioning family behind `include_metrics` and this test is what made it add a
+    # switch at all - it went red on the first run, which is the guard doing precisely its job.
     for result in (
-        enumerate_candidates(include_funding=False, include_panel_nodes=False),
-        enumerate_candidates(include_funding=False, include_panel_nodes=False, max_complexity=8),
+        enumerate_candidates(include_funding=False, include_panel_nodes=False, include_metrics=False),
+        enumerate_candidates(include_funding=False, include_panel_nodes=False, include_metrics=False, max_complexity=8),
     ):
         assert [candidate.hash for candidate in result.candidates] == baseline["hashes"]
         assert {candidate.hash: str(candidate.expr) for candidate in result.candidates} == baseline["expressions"]
@@ -404,3 +406,39 @@ def test_the_crowding_mask_is_the_one_the_modifier_applies() -> None:
     )
     disabled = tsmom.TsmomParams.from_mapping({**_CROWD, "crowding_window": 0})
     assert tsmom.crowding_mask(raw, panel.funding, disabled, None) is None
+
+
+def test_the_positioning_family_is_on_by_default_and_costs_what_was_pre_registered() -> None:
+    """DL-D4, in the shape T-P17-08 established: the delta IS the trial charge.
+
+    Ninety candidates - three open-interest windows and two long/short windows, each with two ranked
+    arms, three scales in both signs, and five momentum interactions in both signs.  Pre-registered as
+    a budget rather than discovered: a family that costs whatever it happens to cost is a family whose
+    price is set after its results are known.
+
+    It was 60 for as long as the interaction's momentum leg took `funding_horizons` (two values).  That
+    was a mistake rather than a choice - a return over a horizon belongs to `horizons`, the dimension an
+    operator rescales when the interval changes - and T-P19's rescale test found it by reading `ret(72)`
+    out of a search whose horizons had been overridden to {1, 3, 7}.  Corrected before anything was run,
+    which is the only time a pre-registered budget may move.
+
+    The subset assertion is the one that matters most.  Every hash of the smaller space must survive
+    into the larger one, because `_resolve_mined` re-derives an id by enumerating, and an id in the
+    ledger that no longer enumerates is a candidate this system can no longer name.
+    """
+    without = enumerate_candidates(include_metrics=False)
+    full = enumerate_candidates()
+
+    assert full.evaluated - without.evaluated == 90
+    assert {c.hash for c in without.candidates} <= {c.hash for c in full.candidates}
+    assert full.rejected == without.rejected, "a growing family must not start rejecting the old one"
+    # And the space's identity moved, which is what R2 reads to decide a re-run is a NEW search.
+    assert full.space_digest != without.space_digest
+
+
+def test_only_the_positioning_family_reads_the_metrics_columns() -> None:
+    """A node that reads a column without declaring it is KILL-027 one column over."""
+    reading = {c.hash for c in enumerate_candidates().candidates if c.expr.reads_metrics()}
+    without = {c.hash for c in enumerate_candidates(include_metrics=False).candidates}
+    assert reading and not (reading & without)
+    assert len(reading) == 90

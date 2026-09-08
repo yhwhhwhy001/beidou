@@ -12,14 +12,44 @@ import pandas as pd
 
 from beidou_alpha.backtest import CostModel, ImpactModel
 from beidou_alpha.model import AlphaModel
-from beidou_alpha.panel import Panel
+from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import Registry, parse_registry
-from beidou_data.store import FundingStore, KlineStore, funding_per_bar
+from beidou_data.metrics import PERIOD_MS, align_to_bars
+from beidou_data.store import FundingStore, KlineStore, MetricsStore, funding_per_bar
 from beidou_shared.config import load_yaml
 
 UNIVERSE_STATE = "universe.json"
 logger = logging.getLogger(__name__)
+
+
+def _metrics_columns(store: MetricsStore, panel: Panel, interval: str) -> dict[str, pd.DataFrame] | None:
+    """DL-D4: one wide frame per metrics column, aligned HERE and not in `Panel`.
+
+    This is the only place the five minutes can be got wrong, which is why it is the only place that
+    knows the rule.  `align_to_bars` gives each bar the latest bucket that had CLOSED by the bar's own
+    close; `Panel.from_frames` then refuses anything not already on the bar index, so the alignment
+    cannot be skipped by a caller who builds a panel some other way.
+
+    A symbol with no stored metrics is left out rather than zero-filled, and the column is then NaN for
+    it.  `_required_metric` lets a node evaluate on that - a NaN score is no score - while zero-filling
+    would make a node read "no open interest change" where the truth is "nobody ingested it".
+    """
+    step_ms = interval_seconds(interval) * 1000
+    per_symbol: dict[str, pd.DataFrame] = {}
+    for symbol in panel.symbols:
+        frame = store.load(symbol)
+        if not frame.empty:
+            per_symbol[symbol] = align_to_bars(frame, panel.index, interval_ms=step_ms, period_ms=PERIOD_MS["5m"])
+    if not per_symbol:
+        return None
+    names = sorted({column for frame in per_symbol.values() for column in frame.columns})
+    return {
+        name: pd.DataFrame(
+            {symbol: frame[name] for symbol, frame in per_symbol.items() if name in frame}, index=panel.index
+        ).reindex(columns=panel.symbols)
+        for name in names
+    }
 
 
 def load_panel(
@@ -28,6 +58,7 @@ def load_panel(
     interval: str,
     *,
     funding_store: FundingStore | None = None,
+    metrics_store: MetricsStore | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> Panel:
@@ -54,10 +85,15 @@ def load_panel(
     if not frames:
         raise ValueError("no kline data for the requested symbols/range")
     panel = Panel.from_frames(frames, interval=interval)
-    if funding_store is not None:
-        funding = {symbol: funding_per_bar(funding_store.load(symbol), panel.index) for symbol in panel.symbols}
-        panel = Panel.from_frames(frames, interval=interval, funding=funding)
-    return panel
+    if funding_store is None and metrics_store is None:
+        return panel
+    funding = (
+        {symbol: funding_per_bar(funding_store.load(symbol), panel.index) for symbol in panel.symbols}
+        if funding_store is not None
+        else None
+    )
+    metrics = _metrics_columns(metrics_store, panel, interval) if metrics_store is not None else None
+    return Panel.from_frames(frames, interval=interval, funding=funding, metrics=metrics)
 
 
 def load_registry(path: str | Path) -> Registry:

@@ -31,8 +31,10 @@ from beidou_alpha.mining.expr import (
     Expr,
     ExprError,
     Funding,
+    LongShortRatio,
     Moment,
     Mul,
+    OpenInterest,
     RangePosition,
     Ratio,
     Residual,
@@ -236,6 +238,74 @@ def _funding_family(
             yield Squash(Sum(((0.5, momentum), (0.5, carry))), interaction_scale)
 
 
+def _positioning_family(
+    oi_windows: Sequence[int],
+    lsr_windows: Sequence[int],
+    vol_window: int,
+    scales: Sequence[float],
+    horizons: Sequence[int],
+    interaction_scale: float,
+) -> Iterator[Expr]:
+    """DL-D4: the only family that reads `panel.metrics` - who is building position, and who is crowded.
+
+    Two leaves with different dimensions and the type system makes the difference load bearing.
+    `OpenInterest` is a log CHANGE, so it is RETURN and every shape must divide it by `Vol` before
+    `Squash` or `Mul` will take it - exactly as `_funding_family` must.  `LongShortRatio` is already a
+    deviation from its own mean, so it is RATIO and passes raw; wrapping it in another normaliser would
+    be normalising a normalised quantity, which is how a leaf stops meaning anything.
+
+    Three things a reader of the shortlist has to know, in the shape `_funding_family` established.
+
+    **Both signs are emitted, so a positioning candidate is always near the top.**  `cross_sectional_rank`
+    and `tanh` are odd, so every short shape is the exact mirror of its long one and the mirror of the
+    worst candidate is the best.  "A positioning expression ranked first" is not information; its margin
+    over the baseline is.
+
+    **The interactions are the hypotheses, the leaves alone are the controls.**  "Price moved and open
+    interest rose" (new money) is a different claim from "price moved and open interest fell" (covering),
+    and neither is expressible by either leaf alone - that is the reason for the family rather than for
+    two more solitary leaves.
+
+    **The long/short leaf is a CONTRARIAN prior in shape four and its mirror is in the family too.**  The
+    published intuition is that crowded-long names fall, so the negated arm is the one that matches it;
+    both ship, because deciding which sign is right from the same data that ranked them is the failure
+    this whole pipeline exists to refuse.
+
+    Grid choice, pre-registered: `oi_windows` reuses `funding_windows`' values because the meaning
+    carries - a trailing window over a five-minute-bucket series - and `lsr_windows` drops the shortest,
+    because the leaf is already a deviation from a rolling mean and a 24-bar base makes it mostly noise
+    about noise.  The interaction's momentum leg takes `horizons`, the general return-horizon dimension,
+    so an operator rescaling the search for another interval rescales it too.  Adding a value is a
+    parameter; adding a fifth shape is a hypothesis (KILL-P6).
+    """
+    for window in oi_windows:
+        flow = Ratio(OpenInterest(window), Vol(vol_window))
+        short_flow = Mul(Const(-1.0), flow)
+        yield CrossSectional(flow, "rank")
+        yield CrossSectional(short_flow, "rank")
+        for scale in scales:
+            yield Squash(flow, scale)
+            yield Squash(short_flow, scale)
+        for horizon in horizons:
+            momentum = Ratio(Ret(horizon), Vol(vol_window))
+            interaction = Mul(momentum, flow)
+            yield Squash(interaction, interaction_scale)
+            yield Squash(Mul(Const(-1.0), interaction), interaction_scale)
+    for window in lsr_windows:
+        crowding = LongShortRatio(window)
+        short_crowding = Mul(Const(-1.0), crowding)
+        yield CrossSectional(crowding, "rank")
+        yield CrossSectional(short_crowding, "rank")
+        for scale in scales:
+            yield Squash(crowding, scale)
+            yield Squash(short_crowding, scale)
+        for horizon in horizons:
+            momentum = Ratio(Ret(horizon), Vol(vol_window))
+            interaction = Mul(momentum, crowding)
+            yield Squash(interaction, interaction_scale)
+            yield Squash(Mul(Const(-1.0), interaction), interaction_scale)
+
+
 # --- DL-A1: five families over the panel's existing columns ------------------------------------
 #
 # One family per new node, and each says something none of the seven before it could.  All of them
@@ -347,6 +417,11 @@ def enumerate_candidates(
     regime_long_windows: Sequence[int] = (400, 720),
     include_funding: bool = True,
     funding_windows: Sequence[int] = (24, 72, 168),
+    # DL-D4.  A search-space parameter, not a panel probe, for the same reason `include_funding` is:
+    # this function must stay deterministic and data-free so `_resolve_mined` can re-derive an id.
+    include_metrics: bool = True,
+    oi_windows: Sequence[int] = (24, 72, 168),
+    lsr_windows: Sequence[int] = (72, 168),
     funding_horizons: Sequence[int] = (72, 168),
     funding_scale: float = 1.0,
     # DL-A1 windows.  Reused from the families above wherever the meaning carries over, so the space
@@ -402,6 +477,18 @@ def enumerate_candidates(
         families = (
             *families,
             _funding_family(funding_windows, vol_windows[0], scales, funding_horizons, funding_scale),
+        )
+    if include_metrics:
+        # Appended, never interleaved, for the reason recorded below: a family's position does not enter
+        # a candidate's hash, but the order candidates are FIRST SEEN in decides which duplicate is kept,
+        # and every id already in the ledger has to keep resolving.
+        families = (
+            *families,
+            # `horizons`, not `funding_horizons`: the interaction's momentum leg is a return over a
+            # horizon, so it belongs to the dimension an operator rescales when the interval changes.
+            # Caught by T-P19's rescale test, which is exactly what that test is for - it read `ret(72)`
+            # out of a search whose horizons had been overridden to {1, 3, 7}.
+            _positioning_family(oi_windows, lsr_windows, vol_windows[0], scales, horizons, funding_scale),
         )
     if include_panel_nodes:
         # Appended, never interleaved: a family's position does not enter a candidate's hash, but the
