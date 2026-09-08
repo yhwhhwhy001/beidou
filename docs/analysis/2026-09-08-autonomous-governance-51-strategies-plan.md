@@ -138,7 +138,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | 块 5 验证/账本扩展 | R0 报告口径、`search_space_version` 必填、时间规则、事件时间对齐契约、配对选择计费 | **Phase 1** | 没它们，后面做了也不算数 |
 | 块 1 数据管线（13 条） | metrics→Panel（#16 OI / #17 多空比）、现货 ingest（解锁 #11 基差 / #14 资金费套利 / #39 期现）、公共清算流（#19）、外部 API（#28 解锁 / #29 指数 / #30 社交 / #31 链上 / #32 宏观） | Phase 3 | 每列进实盘前过平价义务；外部 API 每个一份对齐契约 |
 | 块 2 挖掘节点（6 条） | hour-of-day（#8）、OI/LS 叶、basis 叶、liquidation 叶、regime（#47 部分） | Phase 3 | 每节点：量纲 + 因果 + 哈希稳定 + 预登记提交早于第一份报告 |
-| 块 3 手写信号（6 条） | 配对/协整（#6）、上新（#27）、**缠论（#51）**、regime（#47）、岭回归（#22，≥3 因子后）、meta-label（#24，与 P24 结项冲突，Won't） | Phase 3 | 各自预登记网格先提交 |
+| 块 3 手写信号（6 条） | 配对/协整（#6）、上新（#27）、~~缠论（#51）~~ **REFUTED 2026-09-08（corr 0.64、边际 −0.63）→ retired**、regime（#47）、岭回归（#22，≥3 因子后）、meta-label（#24，与 P24 结项冲突，Won't） | Phase 3 | 各自预登记网格先提交 |
 | 块 4 构造/执行层（7 条） | **冲击模型（#43）移到 Phase 1（DL-C1，Q-CRITICAL 裁定）**；GARCH（#35）、HRP（#48）、VWAP（#42）、回撤节流（#20，已判否）、动态杠杆（#49，已有）、抵押品分母 | 其余仍在批次窗口 #1（Phase 4a） | 每条 = 重启 + 清零 M-010。**成本模型是例外**：它不在 `construction_fingerprint` 里，所以建它不清零 M-010——但采纳它要按 D-033/D-034 先例重出证据（加账本行，计入 R1） |
 | 块 6 已判否 7 条 | xsmom / carry / meanrev / breakout / residual(手写) / 节流 / regime | 块 5 完成后按 pit·0.30·D-034 后重测 | 写明产生旧否决的网格（校准记录的教训） |
 | 块 0 换系统级 12 条 | 做市 / 盘口 / 清算-盘口侧 / 路由 / 跨所 / 三角 / 跨期 / ETF / 期权 ×3 / LSTM / RL | Out | 另立项目 |
@@ -196,7 +196,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | **DL-G8 调度器 ✔（研究机 plist 未做，AR-17）** | §2 | `scheduler.py`、`com.beidou.research.plist`；跨机契约待 AR-17（默认单机） | T-G8-1 空间未变不 mine；T-G8-2 预算耗尽停止 validate | AC-G8 | M-G04 | gov +≈300，deploy |
 | **DL-C1 冲击成本模型 ✔（含 P26 重推）** | KILL-A / KILL-Q12 ← Q-CRITICAL 裁定 | 平方根法则 `σ·(Q/ADV)^0.5` 起步，参数由参与率表与 E-19 的 4.3 bps 校准；`costs.yaml` 加一档；`vol_target` 在该模型下重推 | T-C1-1 平模型是新模型的特例（Q→0 时收敛到 7 bps）；T-C1-2 容量曲线在 10 万 / 100 万上可算；T-C1-3 `cost_stress` 的口径变更进 `ruler_version` | AC-C1 | M-Q08 | alpha +≈180 |
 | **DL-G9 判据可读性 ✔** | Phase 0 §18 ← 回放发现 | validate 报告写预登记 commit + `construction_digest`；构造变化时落全量构造（今天只有启动心跳有且每次启动被覆盖） | T-G9-1 新报告含预登记指针；T-G9-2 构造变化落全量；T-G9-3 回放中这两条判据不再被挂起 | AC-G9 | M-G02 | alpha +≈40，live +≈60 |
-| DL-S51 缠论 | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
+| **DL-S51 缠论 ✔ REFUTED** | §7 | `signals/chanlun.py` + SignalSpec + 预登记提交 | 自动三测 + T-S51-1（面板 ≥ warmup + 600）+ T-S51-2 warmup ≥ 首个可评分 bar + T-S51-3 三类买点 ≥ 300 | AC-S51 | — | alpha +≈350 |
 | DL-D4 metrics→Panel | 块 1 | `Panel.metrics` + 叶节点 + M-011 平价接日报 | T-D4-1 5 分钟桶对齐 166/166；T-D4-2 无平价证据 → queued 卡住 | AC-D4 | M-011 | alpha/data +≈150 |
 | DL-D5 现货 ingest | 块 1 | 同源 REST + 月归档 + basis 叶 | T-D5-1 对齐契约；T-D5-2 因果 | AC-D5 | M-011 | data +≈250 |
 
@@ -214,7 +214,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | AC-G6′ | G6′ | Hypothesis | paper 注入 | 三种序列（无 stop / 一次 stop / TRANSFER 周期 stop） | 状态转移与 §3 一致 | 修 tenure |
 | AC-G7 | G7 | Scenario | 重启 | DRILL-G3；−35% 归因回撤注入；同幅权益回撤注入 | verify 报警；前者告警 + 2 周期后 scalar 0.75；后者不触发；不改 config | 修快通道 |
 | AC-G8 | G8 | Functional | 研究机就绪 | 连跑 3 轮 | 空间未变零 mine；预算耗尽零 validate；队列有序 | 修调度 |
-| AC-S51 | S51 | Hypothesis | 预登记提交在先 | validate + corr 检查 | 判定写入 RESEARCH_LOG（正负都算成功）；corr ≥ 0.5 → 记"tsmom 换写法" | 转 retired |
+| AC-S51 ✔ | S51 | Hypothesis | 预登记提交在先（`4577d07`） | corr 检查 | **已达成**：corr **0.6426** ≥ 0.5 → 记「tsmom 换写法」；边际 **−0.6340**；判定写入 RESEARCH_LOG | 已转 retired |
 | AC-L5 | 全部 | Scenario | Phase 4b | 第一次全自动窗口，**全程无人工动作** | Canary → 事务 → 重启 → probe 生效 → 下单；M-Q10 = 100%；M-010 窗口只清零一次（4a 那次）；事务日志含 APPLY 行且 actor = machine | 回滚，冻结晋级 |
 
 ## 11. Learning Contract
@@ -257,7 +257,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | C-G2′ | 时间规则在 demo 阶段是可执行的晋级依据，且被诚实标注为非证据 | E5 | 机器把连续被 stop 的 sleeve 送进 main（规则 bug） | OPEN（AC-G6′ 待跑） |
 | A-G1 | registry 事务 + 闸 + 回滚能防"自动写入把循环写死" | E1（KILL-Q15 仪表）| 回滚目标与事务目标同病（两份证据都 FAIL）——已由证据重出关闭（§17） | MITIGATED |
 | Pre-A′ | 写死的规则能替代人在运行时的**决策** | E3 | M-G05 分歧率 > 20% | OPEN |
-| A-S51 | 缠论与 tsmom 高相关，预期阴性 | E5 | corr < 0.5 且 PASS | OPEN |
+| A-S51 | 缠论与 tsmom 高相关，预期阴性 | E5 | corr < 0.5 且 PASS | **SUPPORTED**（2026-09-08：corr 0.6426，边际 −0.6340；被证伪的是 §7 那一族形式化，不是「缠论」这个方向） |
 
 ## 14. Assumptions & Open Questions
 
@@ -410,4 +410,4 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | 已冻结 Decision | D-G1 机器主体（**含第一次事务，Q9**）；D-G2′ N 口径按策略桶、全库只报告；D-G3 只进 probe + 批次 + Canary 健康检查；D-G4′ 时间规则（选项 b）；D-S51；Q8 / Q9 ACCEPTED |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL（Claim Register 已补；测试矩阵压缩） |
 | 开放 | Q4（默认进）/ Q5（默认单机）；AR-17。**审计三问③ 已裁（09-08）** |
-| 下一动作 | Phase 1、2 已完。(a) DRILL-G1..G6 的 **paper 端到端串跑**；(b) **Phase 3**（数据宽度 + 挖掘节点 + 手写含缠论）。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟，两条都只能等 |
+| 下一动作 | Phase 0–2 已完；Phase 3 已开工（缠论 REFUTED 结项）。(a) 块 1 数据宽度（DL-D4 metrics→Panel 是解锁最多条目的一条）；(b) 块 2 挖掘节点；(c) DRILL-G1..G6 的 paper 端到端串跑。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟 |
