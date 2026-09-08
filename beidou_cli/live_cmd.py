@@ -283,6 +283,21 @@ def live_run(
         state_path=ALERT_DEDUP_STATE,
     )
     pool = build_pool(payload, market)
+    if state_dir or registry_override:
+        # DL-G5.  A canary must not re-rank the pool: `universe.json` lives under the DATA root, which
+        # `--state-dir` does not isolate, and every enabled strategy's cited evidence records the
+        # universe fingerprint it was produced under.  Refreshing it therefore invalidates the ARMED
+        # loop's evidence and `registry_dataset_problems` then refuses its next start.
+        #
+        # Measured on 2026-09-08: a shadow started at 18:00Z re-ranked the pool, the fingerprint moved
+        # d47dbc7c -> 788ade10, and an armed restart went from clean to blocked.  The armed loop
+        # refreshes daily at about 01:00Z on its own, so restartability was going to expire that night
+        # anyway - the shadow brought it forward by seven hours, which is the whole harm and is also
+        # exactly enough to matter during an incident.
+        #
+        # A canary wants the universe the armed loop is holding, not a fresh opinion about it, so this
+        # is what the check is FOR rather than a limitation of it.
+        pool = None
     engine = LiveEngine(
         config,
         model=model,

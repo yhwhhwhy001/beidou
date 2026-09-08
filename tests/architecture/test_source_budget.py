@@ -1244,10 +1244,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # named a directory: `--paper --state-dir .beidou/live-shadow` wrote to `.beidou/paper`.  A flag whose
 # entire purpose is isolation delivered none, and two paper canaries would have shared one state.json
 # without either of them saying so.  Found by running the DRILL rather than by reading the code.
+# 2026-09-09, +15 cli: a canary no longer re-ranks the shared universe.  The sentence the rule
+# requires, and this is the third isolation - the one `--state-dir` cannot give, because
+# `universe.json` lives under the DATA root and no state flag reaches it.  Every enabled strategy's
+# cited evidence records the universe fingerprint it was produced under, so a shadow that re-ranks the
+# pool invalidates the ARMED loop's evidence and `registry_dataset_problems` refuses its next start.
+# Measured, by causing it: a shadow at 2026-09-08T18:00Z moved the fingerprint d47dbc7c -> 788ade10 and
+# an armed restart went from clean to blocked.  The armed loop refreshes daily at about 01:00Z on its
+# own, so restartability was going to expire that night anyway - the shadow brought it forward by seven
+# hours, which is the whole harm and is also exactly enough to matter during an incident.
 CEILING = {
     "beidou_alpha": 6_972,
     "beidou_live": 6_122,
-    "beidou_cli": 4_093,
+    "beidou_cli": 4_108,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

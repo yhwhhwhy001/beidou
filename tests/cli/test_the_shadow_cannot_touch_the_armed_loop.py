@@ -56,3 +56,24 @@ def test_state_dir_is_honoured_under_paper_too(tmp_path: Path) -> None:
     profile = {"paths": {"state_dir": ".beidou/live"}}
     assert _paper_state_dir(profile, "") == Path(".beidou/paper")
     assert _paper_state_dir(profile, str(tmp_path / "shadow")) == tmp_path / "shadow"
+
+
+def test_a_shadow_does_not_re_rank_the_shared_universe() -> None:
+    """The third isolation, and the one `--state-dir` cannot give.
+
+    `universe.json` lives under the DATA root, which no state flag isolates, and every enabled
+    strategy's cited evidence records the universe fingerprint it was produced under.  A shadow that
+    re-ranks the pool therefore invalidates the ARMED loop's evidence, and the dataset gate refuses
+    its next start - measured on 2026-09-08, when a shadow at 18:00Z moved the fingerprint
+    d47dbc7c -> 788ade10 and an armed restart went from clean to blocked.
+
+    Asserted on the help text and the source rather than by running a loop, because running one is
+    what caused the problem in the first place.
+    """
+    import inspect
+
+    from beidou_cli.live_cmd import live_run
+
+    source = inspect.getsource(live_run.callback)
+    assert "if state_dir or registry_override:" in source
+    assert "pool = None" in source, "a canary must inherit the armed loop's universe, not re-rank it"
