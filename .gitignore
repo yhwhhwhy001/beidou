@@ -35,4 +35,11 @@ scratchpad/*.json
 # The autonomy switch is per-CHECKOUT runtime state, not code: `governance/ENABLED` says THIS working
 # copy may write the registry.  Committing it would turn autonomy on in every clone and every
 # worktree by checkout, which is the one decision the design insists a person takes deliberately.
-governance/
+#
+# The SWITCH only.  The first version of this rule ignored the whole directory and took the
+# transaction chain and the lifecycle state with it - the chain is what proves no registry change
+# happened outside a transaction (`closed(log)`), and `probe_entries` is R7's lifetime count, which
+# nothing else can reconstruct.  A record that is not in the repo is a record one disk failure from
+# never having existed.  What happens when two machines write them is AR-17's question, not a reason
+# to keep them untracked on the one machine there is.
+governance/ENABLED

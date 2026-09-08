@@ -47,10 +47,20 @@ def dump(book: Book) -> dict[str, Any]:
 def load(payload: Any) -> Book:
     """Rebuild a book, refusing nothing that a person could plausibly have hand-edited into it.
 
-    An unreadable state is an empty book rather than an exception.  That is the same direction the
-    live loop's own state store takes, and it is safe here for a specific reason: an empty book has no
-    probes, so every rule that could act on it refuses for want of a candidate rather than acting on a
-    half-read one.
+    An unreadable state is an empty book rather than an exception, the same direction the live loop's
+    own state store takes.
+
+    This used to claim that was SAFE, because "an empty book has no probes, so every rule that could
+    act on it refuses for want of a candidate".  That is true only of the candidate being evaluated,
+    which the caller supplies.  Every rule that reads the book for CONSTRAINTS reads an empty one as
+    headroom: `len(book.probes)` is 0 against R3's two slots and `probe_fraction` is 0.0 against the
+    1/3 cap.  Measured 2026-09-09 with no state file on the trading machine - a second 1/3 probe was
+    ALLOWED on top of the flow probe already running live, 2/3 of the book against a 1/3 cap.
+
+    So an empty book is permissive, not conservative, and the sleeves that are actually running have
+    to be IN it: see `governance/governance_state.json` and the test that holds it to KILL-AR-06.
+    Falling back to empty is still the right behaviour for a TORN file - deciding on half a book is
+    worse - but it is a fallback with teeth, not a safe default.
     """
     if not isinstance(payload, dict):
         return Book()
