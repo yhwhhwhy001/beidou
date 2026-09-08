@@ -3401,3 +3401,69 @@ DL-K2 合并于同日 11:31），它当时是真的，改它等于改历史。�
   产假阳性的那个量。要不要把它推进 `validate` 是一个单独决定，代价是不可撤回的账本行。
 - **家族第二从未被单独看过。** `bb50471fc5a2e537` 同样过 ①②，而预登记的选择规则是「取边际第一」，
   所以它和 P20 当时的 residual 一样，是**被规则挡在门外、不是被判据否掉**。
+
+## 2026-09-08 · 因果性测试对 warmup ≥ 600 的信号一直在空转——包括在册的 xsmom 与实盘跑的 tsmom
+
+**缺陷是一句「两个全 NaN 的帧相等」。** `tests/alpha/test_signal_suite.py::test_signals_are_causal_and_bounded`
+是每个注册信号自动进入的因果性测试：把 cutoff 之后的行情整段换成另一份随机数据，断言 cutoff 之前的分数
+逐位相等。合成面板固定 800 根、cutoff 固定 600，而 `pd.testing.assert_frame_equal` 对两个全 NaN 的帧是
+**通过**的。于是任何 warmup ≥ 600 的信号，`scores.iloc[:600]` 两侧都空，测试报绿。同一函数里那句
+`scores.iloc[-50:].notna().any().any()` 只保证**末尾**有分数——它保证的正好不是需要的那一段。
+
+**不是隐患，是当天就在空转的格子。** 修之前逐格量（`_synthetic_panel` 6 个符号，seed 0）：
+
+| 参数集 | 声明 warmup | cutoff(600) 之前有分数的 bar |
+| --- | ---: | ---: |
+| xsmom（dataclass 默认，测试跑的就是它） | 745 | **0** |
+| tsmom（registry `enabled` 参数，实盘跑的就是它） | 721 | **0**（且当时不在覆盖里） |
+| flow（registry `enabled` 参数） | 721 | 754（不空，但当时不在覆盖里） |
+| 其余五个信号的 dataclass 默认 | 49 ～ 337 | 264 ～ 577 |
+
+两件事要分开。**xsmom 那格是当场生效的**：它的 dataclass 默认（`horizons (168,336,720)` /
+`vol_window 336`）给出 warmup 745，而测试跑的正是这组默认参数——这个信号的因果性从那组默认写下起
+没有被验证过一次。**tsmom / flow 那两格是「本来就没测」**：测试只跑 dataclass 默认（tsmom 默认
+5/20/50 → warmup 101，所以没暴露），实盘跑的是 registry 的 168/336/720，warmup 721。注册表 `enabled`
+的参数集此前根本不在这个测试的覆盖里，这是「研究面板 ⊇ 实盘面板」义务在测试层缺的那一半。
+
+**空转不等于「少测一点」，等于「什么都不测」，这一步是量出来的。** 造一个明确读未来的信号
+（在诚实版本上加 `rolling(9, center=True)`，向后看 4 根），warmup 声明 701：**旧 harness 判它通过**。
+同一个信号在修好的 harness 下被抓住；把 lag 降到 50（warmup 51 < 600）旧 harness 也抓得住。所以旧写法
+漏掉的不是边缘情形，是「warmup 越过 cutoff」这一整类。
+
+**修法：窗口跟着信号自己声明的 warmup 走，且测试会指认自己空转。** `_causality_window(warmup)` 给出
+`cutoff = max(600, warmup + 200)`、`n_bars = cutoff + 200`——cutoff 前留 200 根可比的分数，cutoff 后留
+200 根可改写的未来。再加 `MIN_SCORED_ROWS = 100`：比较窗口里至少 100 根 bar 带分数，否则测试报
+`VACUOUS` 并指着 `_causality_window` 说话，而不是报绿。计数按 **bar** 不按 cell，因为 `residual` 的
+benchmark 列按构造就是 NaN，按 cell 数每个信号的下限都不一样。
+
+**与任务书的一处偏离，明写。** 任务书给的是 `cutoff = warmup + 200`；实现取了 `max(600, ...)`。差别在
+短 warmup 的信号：按字面写，flow（默认 warmup 49）的 cutoff 会从 600 缩到 249，等于用修一个洞的改动
+换掉另外五个信号已有的覆盖。取 max 之后短 warmup 的五格窗口一根不变，只有长 warmup 的伸长。
+
+**registry 的 `enabled` 条目现在与 dataclass 默认并列进入参数化**，参数经 `spec.canonical_params` 取出，
+所以注册表改了参数、或某个信号被 enable，这个测试当天跟着走。另加一条
+`test_the_registry_actually_enables_something`：参数化的来源是一个文件，空文件会静默地什么都不测——
+正是本节要修的那种毛病的一个更小的版本。
+
+**结果：三格从 0 变成有分数，而且都是干净的。** xsmom 0 → 201，tsmom（registry）0 → 201，flow
+（registry）754 且现在被覆盖。**没有找到任何真实的前视**——洞在检查里，不在信号里。这句话的份量要摆正：
+它们现在是被检查过的，不是一直都对。
+
+**顺带量到一件事，不是 bug 但值得记。** flow 在 registry 参数下声明 warmup 721（`gate_horizons` 到 720），
+实际第 167 根就出分数：`short_gate` 的动量在自己 warmup 之前是 NaN，门不触发，未门控的分数照常输出。
+实盘不受影响——D-022 用 `warmup_for` 给实盘请求窗口定长，线上永远有 721 根以上，门永远在场。但旧的
+cutoff 600 意味着这个测试**从未走进过门控那条分支**；新 cutoff 921 之后，721～921 这段是门控的。
+
+**代价与边界。**
+
+- 套件耗时：该文件 0.65 ～ 0.84 s → 0.78 ～ 0.80 s（各三次），全套 58.5 s，上限 240 s
+  （`tests/architecture/suite_duration.py`）。最长的面板是 xsmom 的 1,145 根；符号数保持 6 个不动，
+  这是长面板仍然便宜的原因。
+- **没有改任何信号实现**，没有动 `.beidou/`，没有账本行，没有产生任何证据。这是测试层的修补，与任何
+  策略的收益结论无关。改动在一个 git worktree 上做，主 checkout 被 launchd 的实盘循环占用。
+- 先写红测试再修：三条红分别是 `test_signals_are_causal_and_bounded[xsmom]`、
+  `test_enabled_registry_signals_are_causal_and_bounded[tsmom]` 和
+  `test_the_causality_check_covers_a_signal_whose_warmup_outruns_the_old_cutoff`。
+- 发现来源：2026-09-08 自治治理方案的 Phase 7 对抗审查，KILL-AR-15。**该方案文档此刻不在仓库里**，
+  所以这个编号是一个前向引用。写下这句，是因为本文件上一节刚为「日志里有结论、仓库里没有底稿」
+  付过一次代价。

@@ -1,18 +1,47 @@
-"""Every registered signal: causal, bounded, and directionally sane on synthetic data (incl. T-A07 carry)."""
+"""Every registered signal: causal, bounded, and directionally sane on synthetic data (incl. T-A07 carry).
+
+The causality check replaces the panel after a cutoff bar with a different random history and demands
+that the scores BEFORE the cutoff come out identical to the bit.  That is a check only while there ARE
+scores before the cutoff: ``assert_frame_equal`` compares two all-NaN frames as equal, so a signal whose
+warmup outruns the cutoff used to pass this file without ever being tested.  Found by the Phase 7
+adversarial review on 2026-09-08 (KILL-AR-15); see docs/RESEARCH_LOG.md for what it was passing.
+
+Two things close it.  The synthetic panel grows with the warmup the signal itself declares, and the
+comparison window is asserted to carry real scores before it is trusted - so the harness fails loudly
+rather than quietly when the two drift apart again.  The registry's enabled entries are checked
+alongside the dataclass defaults, because the defaults are not what trades: this is the research-panel
+obligation ("research sees at least what live sees") at the test layer.
+"""
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from beidou_alpha.panel import Panel
+from beidou_alpha.panel import BAR_FIELDS, Panel
+from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.signals import SIGNALS
-from beidou_alpha.signals.base import scores_to_targets
+from beidou_alpha.signals.base import SignalSpec, scores_to_targets
 from beidou_alpha.signals.carry import CarryParams, carry_scores
 from beidou_alpha.signals.meanrev import MeanrevParams, meanrev_scores
 from beidou_alpha.signals.residual import ResidualParams, residual_scores
 from beidou_alpha.signals.xsmom import XsmomParams, xsmom_scores
+from beidou_live.composition import load_registry
+
+ROOT = Path(__file__).resolve().parents[2]
+ENABLED: tuple[StrategyEntry, ...] = load_registry(ROOT / "config" / "alpha_registry.yaml").enabled
+
+# How much scored history the comparison window must hold before ``assert_frame_equal`` is worth
+# anything.  ``_causality_window`` leaves 200 bars between the declared warmup and the cutoff, so half
+# of them is a floor a signal that resolves on schedule clears and one that under-declares its warmup
+# does not.  It is deliberately a count of BARS, not of cells: ``residual`` scores its benchmark column
+# NaN by construction, so a per-cell floor would be a different number for every signal.
+MIN_SCORED_ROWS = 100
 
 
 def _synthetic_panel(seed: int = 0, n_symbols: int = 6, n_bars: int = 800, with_funding: bool = True) -> Panel:
@@ -47,19 +76,26 @@ def _synthetic_panel(seed: int = 0, n_symbols: int = 6, n_bars: int = 800, with_
     return Panel.from_frames(frames, "1h", funding=funding)
 
 
-@pytest.mark.parametrize("signal_id", sorted(SIGNALS))
-def test_signals_are_causal_and_bounded(signal_id: str) -> None:
-    spec = SIGNALS[signal_id]
-    panel = _synthetic_panel()
-    scores = spec.compute(panel, spec.default_params)
-    assert scores.shape == panel.close.shape
-    assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
-    assert scores.iloc[-50:].notna().any().any(), f"{signal_id} produced no scores"
-    cutoff = 600
-    shuffled = _synthetic_panel(seed=99)
-    mixed_frames = {}
-    for symbol in panel.symbols:
-        mixed_frames[symbol] = pd.DataFrame(
+def _causality_window(warmup: int) -> tuple[int, int]:
+    """``(n_bars, cutoff)`` for a signal that declares ``warmup`` bars of history.
+
+    The cutoff sits 200 bars past the warmup so the comparison window holds 200 scored bars, and the
+    panel runs 200 bars past the cutoff so there is a future left to rewrite.  The 600 floor keeps the
+    short-warmup signals on exactly the window they were checked at before KILL-AR-15, so this fix adds
+    coverage without quietly trading any away.
+
+    Cost, since `tests/architecture/suite_duration.py` puts a 240 s ceiling on the suite: the longest
+    warmup in the file today is xsmom's 745, which buys a 1,145-bar panel over the old 800.  Six symbols
+    is what keeps that cheap and is why `_synthetic_panel` is not widened to match.
+    """
+    cutoff = max(600, warmup + 200)
+    return cutoff + 200, cutoff
+
+
+def _spliced_panel(panel: Panel, shuffled: Panel, cutoff: int) -> Panel:
+    """``panel`` up to ``cutoff``, ``shuffled`` from there on - one history grafted onto another."""
+    frames = {
+        symbol: pd.DataFrame(
             {
                 field: np.concatenate(
                     [
@@ -67,26 +103,113 @@ def test_signals_are_causal_and_bounded(signal_id: str) -> None:
                         getattr(shuffled, field)[symbol].to_numpy()[cutoff:],
                     ]
                 )
-                for field in (
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "volume",
-                    "quote_volume",
-                    "trades",
-                    "taker_buy_base",
-                    "taker_buy_quote",
-                )
+                for field in BAR_FIELDS
             },
             index=panel.index,
         )
+        for symbol in panel.symbols
+    }
     funding = None
     if panel.funding is not None and shuffled.funding is not None:
         funding = pd.concat([panel.funding.iloc[:cutoff], shuffled.funding.iloc[cutoff:]])
-    mixed = Panel.from_frames(mixed_frames, "1h", funding=funding)
-    later = spec.compute(mixed, spec.default_params)
-    pd.testing.assert_frame_equal(scores.iloc[:cutoff], later.iloc[:cutoff])
+    return Panel.from_frames(frames, "1h", funding=funding)
+
+
+def _assert_causal_and_bounded(spec: SignalSpec, params: Mapping[str, Any], label: str) -> None:
+    """Scores are in [-1, 1], and rewriting the future cannot move a single score in the past.
+
+    The vacuity assertion in the middle is the point of the whole helper.  Without it a signal whose
+    warmup outruns the cutoff compares two all-NaN frames and reports a pass (KILL-AR-15).
+    """
+    warmup = spec.warmup_for(params)
+    n_bars, cutoff = _causality_window(warmup)
+    panel = _synthetic_panel(n_bars=n_bars)
+    scores = spec.compute(panel, params)
+    assert scores.shape == panel.close.shape
+    assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
+    assert scores.iloc[-50:].notna().any().any(), f"{label} produced no scores"
+    scored = int(scores.iloc[:cutoff].notna().any(axis=1).sum())
+    assert scored >= MIN_SCORED_ROWS, (
+        f"{label} is VACUOUS: only {scored} of the {cutoff} bars before the cutoff carry a score, so the "
+        f"comparison below is between two (almost) empty frames and asserts nothing.  The signal declares "
+        f"a warmup of {warmup} bars; `_causality_window` must leave room for it."
+    )
+    mixed = _spliced_panel(panel, _synthetic_panel(seed=99, n_bars=n_bars), cutoff)
+    pd.testing.assert_frame_equal(scores.iloc[:cutoff], spec.compute(mixed, params).iloc[:cutoff])
+
+
+@pytest.mark.parametrize("signal_id", sorted(SIGNALS))
+def test_signals_are_causal_and_bounded(signal_id: str) -> None:
+    spec = SIGNALS[signal_id]
+    _assert_causal_and_bounded(spec, spec.default_params, signal_id)
+
+
+@pytest.mark.parametrize("entry", ENABLED, ids=lambda entry: entry.id)
+def test_enabled_registry_signals_are_causal_and_bounded(entry: StrategyEntry) -> None:
+    """The same check against the parameters that trade, not the dataclass defaults nobody runs.
+
+    tsmom's defaults warm up in 101 bars and its registry parameters in 721; flow's in 49 and 721.  So
+    the defaults pass this file at a length that says nothing about the configuration the loop holds
+    real positions with, which is the only configuration whose causality anyone is owed.
+    """
+    spec = SIGNALS[entry.id]
+    _assert_causal_and_bounded(spec, spec.canonical_params(entry.params), f"{entry.id} (registry params)")
+
+
+def test_the_registry_actually_enables_something() -> None:
+    """The parameterisation above is read from a file, and an empty file would silently cover nothing."""
+    assert ENABLED, "no enabled registry entries: the registry parameterisation above tested nothing"
+
+
+LATE_LAG = 700  # past the 600-bar cutoff this file used to hard-code, inside the band the registry already uses
+
+
+def _late_blooming(panel: Panel, params: Mapping[str, Any]) -> pd.DataFrame:
+    """A plainly causal signal that simply needs a lot of history: the ``lag``-bar return, clipped.
+
+    Nothing about it is subtle - it reads ``close.shift(lag)`` and nothing else - which is what makes it
+    the right probe.  If the harness reports a pass for THIS while never scoring a bar it compared, the
+    pass carries no information for any signal.
+    """
+    lag = int(params["lag"])
+    return (panel.close / panel.close.shift(lag) - 1.0).clip(-1.0, 1.0)
+
+
+def _late_blooming_spec() -> SignalSpec:
+    return SignalSpec(
+        "late_bloomer",
+        _late_blooming,
+        {"lag": LATE_LAG},
+        "a causal signal whose first score lands after 700 bars",
+        LATE_LAG + 1,
+        warmup=lambda params: int(params["lag"]) + 1,
+    )
+
+
+def test_the_causality_check_covers_a_signal_whose_warmup_outruns_the_old_cutoff() -> None:
+    """KILL-AR-15: the harness must scale to the declared warmup, not to a constant it was written with.
+
+    Built as a local ``SignalSpec`` rather than through ``signals.register`` on purpose: the registry is
+    process-global and a leaked entry would follow every later test in the session.  It is a probe rather
+    than a real signal so that the guard holds for signals not yet written - but it is not hypothetical
+    today either: xsmom's own dataclass defaults warm up in 745 bars, and tsmom's registry parameters in
+    721, so both were landing in this hole when it was found.
+    """
+    spec = _late_blooming_spec()
+    _assert_causal_and_bounded(spec, spec.default_params, "late_bloomer")
+
+
+def test_a_fixed_cutoff_compares_two_empty_frames_and_calls_it_agreement() -> None:
+    """Why the window has to scale, stated as the pandas behaviour that made the hole silent.
+
+    This is the mechanism, not the bug: ``assert_frame_equal`` on two all-NaN frames passes, so a
+    causality test whose window sits entirely inside the warmup reports a pass no matter what the
+    signal does after it.  Kept as a guard against ``_causality_window`` being flattened back to a
+    constant, which would restore exactly this.
+    """
+    scores = _late_blooming(_synthetic_panel(n_bars=800), {"lag": LATE_LAG})
+    assert scores.iloc[:600].isna().all().all()
+    pd.testing.assert_frame_equal(scores.iloc[:600], scores.iloc[:600] * 99.0)
 
 
 def test_carry_direction_and_missing_funding() -> None:
