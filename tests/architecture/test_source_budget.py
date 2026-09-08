@@ -1276,10 +1276,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # pins nothing, and `live verify` would report the running loop as diverged from the file it loaded.
 # Pinned to the measurement: the shipped registry's loop digest must stay 16671c63a12e, which is what
 # the running process reports.
+# 2026-09-09, +19 live +16 cli: the pin has to BIND, and only the account's own process may re-rank.
+# The sentence the rule requires, and it is the second correction in a row to the same change - the
+# first `governance apply` of a pinned universe was inert.  `state.universe` held the last daily
+# re-rank and won at startup, so pinning moved `registry_digest` and not one symbol the loop held: a
+# process reporting a universe it was not trading, which reads as agreement and is therefore worse
+# than KILL-Q15 itself.  +19 in beidou_live is the precedence plus routing the names the pin drops
+# through `leaving`, so they leave reduce-only instead of being orphaned holding a position.
+# +16 in beidou_cli is `may_rerank_shared_pool`.  Its predecessor was an inline `if state_dir or
+# registry_override:` asserted by a test that grepped for that literal string - so the test passed
+# while a bare `--paper` re-ranked the shared pool at 18:00Z on 2026-09-08 and wrote PUMPUSDT over
+# CYSUSDT.  The pin proposed the next morning was built from that file and named a symbol the armed
+# loop had never held.  A source assertion can check that a rule is wired, never that it is right;
+# the rule is now a predicate with a per-flag truth table.
+# Also un-pinned from the shipped registry: the loop digest frozen at 16671c63a12e two commits back
+# keyed on `config/alpha_registry.yaml` pinning NOTHING, so an intentional `governance apply` failed
+# a unit test and taught whoever hit it to edit the constant.  The frozen hash is now a synthetic
+# unpinned registry; whether the shipped file matches the running loop is a runtime fact and
+# `live status --check` compares them every inspection.
 CEILING = {
     "beidou_alpha": 6_998,
-    "beidou_live": 6_167,
-    "beidou_cli": 4_110,
+    "beidou_live": 6_186,
+    "beidou_cli": 4_126,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

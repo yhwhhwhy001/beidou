@@ -21,6 +21,7 @@ import yaml
 
 from beidou_alpha.registry import parse_registry, registry_fingerprint
 from beidou_live.config import resolve_universe
+from beidou_live.engine import LiveEngine
 
 PINNED = {
     "version": 1,
@@ -70,13 +71,13 @@ def test_pinning_a_universe_moves_the_registry_digest() -> None:
 
 @pytest.mark.parametrize("pinned", [True, False])
 def test_the_engine_only_stops_adopting_when_the_registry_pins(pinned: bool) -> None:
-    """`universe_proposal_only` follows the registry, so an unpinned deployment is untouched."""
+    """`universe_pinned` follows the registry, so an unpinned deployment is untouched."""
     from beidou_live.config import live_config
 
     profile = yaml.safe_load(Path("config/live.demo.yaml").read_text(encoding="utf-8"))
     registry = parse_registry(PINNED if pinned else UNPINNED)
     config = live_config(profile, ["BTCUSDT"], registry, dry_run=True)
-    assert config.universe_proposal_only is pinned
+    assert config.universe_pinned is pinned
 
 
 def test_the_digest_the_LOOP_reports_is_the_one_that_must_see_the_universe() -> None:
@@ -90,16 +91,74 @@ def test_the_digest_the_LOOP_reports_is_the_one_that_must_see_the_universe() -> 
 
     Both conditional, both for the reason the `CONSTRUCTION_PAYLOAD_VERSION` apparatus exists one
     fingerprint over: adding the KEY unconditionally moves the digest of every registry that pins
-    nothing.  Measured - the shipped registry's loop digest must stay exactly what the running process
-    reports.
+    nothing.  The frozen hash is a SYNTHETIC unpinned registry, not the shipped one: keying it on the
+    shipped file made an intentional `governance apply` fail a unit test, which teaches whoever hits it
+    to update the constant reflexively - the exact reflex a frozen hash exists to prevent.  Whether the
+    shipped file agrees with the running loop is a runtime fact, and `live status --check` compares
+    them every inspection.
     """
     from beidou_live.composition import build_model
     from beidou_live.engine import registry_digest
 
     profile = yaml.safe_load(Path("config/live.demo.yaml").read_text(encoding="utf-8"))
-    shipped = parse_registry(yaml.safe_load(Path("config/alpha_registry.yaml").read_text(encoding="utf-8")))
-    unpinned = registry_digest(build_model(shipped, profile))
+    unpinned = registry_digest(build_model(parse_registry({**UNPINNED, "books": {}}), profile))
     pinned = registry_digest(build_model(parse_registry({**PINNED, "books": {}}), profile))
 
-    assert unpinned == "16671c63a12e", "the shipped registry's loop digest moved; the running loop would look diverged"
+    assert unpinned == "d900d4c2ee3b", "the loop digest of a registry that pins NOTHING moved"
     assert pinned != unpinned, "pinning a universe must be visible in the digest the loop reports"
+
+
+def test_a_pinned_universe_outranks_the_one_the_last_process_persisted(tmp_path: Any) -> None:
+    """The defect that made the first `governance apply` of a pin inert (2026-09-09).
+
+    `state.universe` held the last daily re-rank and won at startup, so pinning moved
+    `registry_digest` without moving a single symbol the loop held.  Measured against the live state:
+    the registry pinned 18 names, the process would have reported them, and it would have traded the
+    persisted ones - a digest describing a universe nobody was trading, which is worse than no digest
+    because it reads as agreement.
+    """
+    from beidou_live.state import LiveState, StateStore
+    from tests.live.test_live_loop import _config, _model
+
+    store = StateStore(tmp_path / "live")
+    store.save(LiveState(cycles=7, universe=["BTCUSDT", "CYSUSDT"], universe_day="2026-09-08"))
+
+    config = _config(tmp_path, universe=("BTCUSDT", "ETHUSDT"), universe_refresh=True, universe_pinned=True)
+    engine = LiveEngine(config, model=_model(), market=None, venue=None, clock=None, store=store)
+
+    assert engine.universe == ["BTCUSDT", "ETHUSDT"], "the pin lost to the persisted universe"
+    assert engine.state.universe == ["BTCUSDT", "ETHUSDT"]
+    # CYSUSDT may still hold a position; it leaves the way a re-rank's leavers do, not by being dropped
+    assert engine.state.leaving == ["CYSUSDT"]
+
+
+def test_an_unpinned_loop_still_prefers_what_it_persisted(tmp_path: Any) -> None:
+    """The daily re-rank is the decision when nothing is pinned; that must not change."""
+    from beidou_live.state import LiveState, StateStore
+    from tests.live.test_live_loop import _config, _model
+
+    store = StateStore(tmp_path / "live")
+    store.save(LiveState(cycles=7, universe=["BTCUSDT", "CYSUSDT"], universe_day="2026-09-08"))
+
+    config = _config(tmp_path, universe=("BTCUSDT", "ETHUSDT"), universe_refresh=True, universe_pinned=False)
+    engine = LiveEngine(config, model=_model(), market=None, venue=None, clock=None, store=store)
+
+    assert engine.universe == ["BTCUSDT", "CYSUSDT"]
+    assert engine.state.leaving == []
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "may"),
+    [
+        ({"dry_run": False, "paper": False, "state_dir": "", "registry_override": None}, True),
+        ({"dry_run": False, "paper": True, "state_dir": "", "registry_override": None}, False),
+        ({"dry_run": True, "paper": False, "state_dir": "", "registry_override": None}, False),
+        ({"dry_run": False, "paper": True, "state_dir": "/tmp/canary", "registry_override": None}, False),
+        ({"dry_run": False, "paper": True, "state_dir": "", "registry_override": "r.yaml"}, False),
+    ],
+)
+def test_only_the_process_trading_the_account_may_rerank_the_shared_pool(kwargs: Any, may: bool) -> None:
+    """The bare `--paper` row is the one that was missing, and it is how the wrong pin got proposed."""
+    from beidou_cli.live_cmd import may_rerank_shared_pool
+
+    assert may_rerank_shared_pool(**kwargs) is may

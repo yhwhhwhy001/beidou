@@ -124,6 +124,33 @@ def _logging(verbose: bool) -> None:
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+def may_rerank_shared_pool(*, dry_run: bool, paper: bool, state_dir: str, registry_override: str | None) -> bool:
+    """DL-G5: only the process that is trading the account may re-rank the shared pool.
+
+    `universe.json` lives under the DATA root, which neither `--state-dir` nor `--paper` isolates, and
+    every enabled strategy's cited evidence records the universe fingerprint it was produced under.
+    Refreshing it therefore invalidates the ARMED loop's evidence, and `registry_dataset_problems`
+    then refuses its next start.
+
+    Measured on 2026-09-08: a shadow started at 18:00Z re-ranked the pool, the fingerprint moved
+    d47dbc7c -> 788ade10, and an armed restart went from clean to blocked.  The armed loop refreshes
+    daily at about 01:00Z on its own, so restartability was going to expire that night anyway - the
+    shadow brought it forward by seven hours, which is the whole harm and is also exactly enough to
+    matter during an incident.
+
+    The first version of this guard named `--state-dir` and `--registry`, because a canary was what
+    had just done it.  A bare `--paper` was not covered and did it again at 18:00Z the same day,
+    swapping CYSUSDT -> PUMPUSDT in the shared file; the universe pin proposed the next morning was
+    built from that file and named a symbol the armed loop had never held.  The condition was never
+    the flag - it is whether this process is the one trading the account.
+
+    A shadow wants the universe the armed loop is holding, not a fresh opinion about it, so this is
+    what the check is FOR rather than a limitation of it.  `--symbols` is how a person says otherwise,
+    deliberately and in the shell history.
+    """
+    return not (dry_run or paper or state_dir or registry_override)
+
+
 def kill_switch_path(payload: dict[str, Any]) -> Path:
     """The configured kill switch, resolved.
 
@@ -285,20 +312,9 @@ def live_run(
         state_path=ALERT_DEDUP_STATE,
     )
     pool = build_pool(payload, market)
-    if state_dir or registry_override:
-        # DL-G5.  A canary must not re-rank the pool: `universe.json` lives under the DATA root, which
-        # `--state-dir` does not isolate, and every enabled strategy's cited evidence records the
-        # universe fingerprint it was produced under.  Refreshing it therefore invalidates the ARMED
-        # loop's evidence and `registry_dataset_problems` then refuses its next start.
-        #
-        # Measured on 2026-09-08: a shadow started at 18:00Z re-ranked the pool, the fingerprint moved
-        # d47dbc7c -> 788ade10, and an armed restart went from clean to blocked.  The armed loop
-        # refreshes daily at about 01:00Z on its own, so restartability was going to expire that night
-        # anyway - the shadow brought it forward by seven hours, which is the whole harm and is also
-        # exactly enough to matter during an incident.
-        #
-        # A canary wants the universe the armed loop is holding, not a fresh opinion about it, so this
-        # is what the check is FOR rather than a limitation of it.
+    if not may_rerank_shared_pool(
+        dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override
+    ):
         pool = None
     engine = LiveEngine(
         config,

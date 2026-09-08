@@ -129,7 +129,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         # eligibility rule from the one the model applies; a test holds the two together.
         min_history_bars=int(portfolio.get("min_history_bars", 720)),
         # A pinned universe turns the daily re-rank into an observation; see `_refresh_universe`.
-        universe_proposal_only=bool(registry.universe),
+        universe_pinned=bool(registry.universe),
         # DL-X1: the collateral mode the live record was produced under, asserted at startup.  Not part
         # of `construction_fingerprint` on purpose - it describes the ACCOUNT, not the construction, so
         # adding it must not reset M-010's evidence window the way a weight change would.
