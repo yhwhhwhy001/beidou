@@ -2711,7 +2711,20 @@ def research_mine(
             f"turnover={row['turnover']:8.1f}  lookback={row['lookback']:>4}  {row['expression']}"
         )
     if failed:
-        click.echo(f"{len(failed)} candidate(s) could not be evaluated; see the report")
+        # "see the report" is what let this hide for two rounds.  The rows carried the reason all along
+        # - `error: "ExprError: ... does not carry"` on each one - and the summary handed the reader a
+        # bare count, so a family that could NOT RUN read as a family that ran and lost.  90 of 658 is a
+        # plausible number for a search rejecting malformed combinations, which this search legitimately
+        # does.  Printing the distinct reasons is the whole fix: one line per kind, with how many, so the
+        # difference between "these are illegal combinations" and "an entire family cannot see its
+        # column" is visible without opening the JSON.  Truncated per reason because an ExprError
+        # message names the node, and 90 of them are the same sentence.
+        click.echo(f"{len(failed)} candidate(s) could not be evaluated:")
+        reasons: dict[str, int] = {}
+        for row in failed:
+            reasons[str(row.get("error", "unknown"))] = reasons.get(str(row.get("error", "unknown")), 0) + 1
+        for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            click.echo(f"  {count:5d}x  {reason[:160]}")
     if never_traded:
         click.echo(
             f"{len(never_traded)} candidate(s) enumerated but never traded (zero-variance net, so no Sharpe): "

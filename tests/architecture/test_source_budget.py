@@ -1573,10 +1573,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # that comment, moved to where the mistake was.  Note what did NOT find this: I first blamed
 # `Panel._map` (a real, separate bug, fixed in 3b49af8) and re-ran the whole round on that diagnosis -
 # 658 more ledger rows for nothing.  The per-row `error` field had said the true reason all along.
+# 2026-09-09, +12 cli: the miner's failure summary printed a count and the phrase "see the report",
+# and that is what let the DL-D4 gap survive two full rounds.  Every failed row carried its own reason
+# the whole time; 90 of 658 is a plausible number for a search rejecting malformed combinations, which
+# this search legitimately does, so nothing looked wrong.  Now it groups the distinct reasons and prints
+# them with counts - the difference between "these are illegal combinations" and "an entire family
+# cannot see its column" is one glance instead of one JSON file.
 CEILING = {
     "beidou_alpha": 7_625,
     "beidou_live": 6_578,
-    "beidou_cli": 4_458,
+    "beidou_cli": 4_470,
     "beidou_data": 3_286,
     "beidou_exchange": 611,
     "beidou_shared": 289,
