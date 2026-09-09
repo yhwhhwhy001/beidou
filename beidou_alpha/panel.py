@@ -235,10 +235,22 @@ class Panel:
         return replace(self, reference=reference)
 
     def _map(self, function: Callable[[pd.DataFrame], pd.DataFrame]) -> Panel:
+        """Apply `function` to every frame this panel carries - EVERY frame, including `metrics`.
+
+        `metrics` was omitted here, so it defaulted to None and `slice` / `tail` / `select` returned a
+        panel with no metrics columns at all.  Nothing reported that: `_required_metric` raises, the
+        miner counts the raise, and the count is all that reaches the report.  Measured 2026-09-09 on
+        the round mined right after the 202/205 metrics backfill - the whole point of that backfill was
+        the DL-D4 OI / long-short leaves - `outcomes.errored = 90`, and the 90 are EXACTLY the 54 `oi`
+        and 36 `lsr` candidates.  Zero of them have ever been scored, in any round.  The expression
+        evaluates fine on the panel it was handed; the miner slices, and the slice drops the column.
+        """
+
         def maybe(frame: pd.DataFrame | None) -> pd.DataFrame | None:
             return None if frame is None else function(frame)
 
         return Panel(
+            metrics=None if self.metrics is None else {name: function(f) for name, f in self.metrics.items()},
             interval=self.interval,
             open=function(self.open),
             high=function(self.high),

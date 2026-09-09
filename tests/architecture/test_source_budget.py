@@ -1464,8 +1464,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the coverage record, which is the only way "no liquidations" and "never downloaded" stay different
 # facts; and a 404 writes nothing while a published-but-empty day writes an empty file, which is the
 # one place this downloader had to be the inverse of `sync_metrics` rather than a copy of it.
+# 2026-09-09, +12 alpha: `Panel._map` dropped `metrics`, so slice / tail / select returned a panel with
+# no DL-D4 columns and every open-interest or long-short leaf raised there.  Measured on the mine run
+# immediately after the 202/205 metrics backfill - the backfill existed FOR those leaves - the report
+# says `outcomes.errored = 90` and the 90 are exactly the 54 `oi` plus 36 `lsr` candidates.  Zero
+# metrics candidates have ever been scored, in any round.  `_required_metric` raises loudly and the
+# miner counts the raise; the count is all that reached the report, so a family that could not run at
+# all read as a family that ran and lost.  The lines are the docstring recording that, because the
+# one-word fix is not the part a later reader needs.
 CEILING = {
-    "beidou_alpha": 7_150,
+    "beidou_alpha": 7_162,
     "beidou_live": 6_540,
     "beidou_cli": 4_264,
     "beidou_data": 2_485,
