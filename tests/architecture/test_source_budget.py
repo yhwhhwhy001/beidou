@@ -1447,8 +1447,17 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
 # against the other read a sleeve that WAS in the record as absent from it - the same book-vs-strategy
 # mismatch this command got wrong once already, in the other direction.
+# 2026-09-09, +5 alpha: all comment, no code.  Block 4 #42 (VWAP) measured this ledger's own fills and
+# found `ImpactModel`'s docstring asserting "order/ADV around 1e-8 ... under a hundredth of a basis
+# point" - DL-C1's PRE-RUN estimate, which DL-C1's own run retracted.  The retraction reached the
+# scratchpad script and RESEARCH_LOG and none of the three places a reader looks, and a day later the
+# stale figure was quoted back at this repo as the premise for closing #42 without measuring.  Measured:
+# order/ADV 4.3e-07 median, 0.48 bps notional-weighted, two orders of magnitude out.  The correction is
+# written as a correction rather than an overwrite, which is what costs the lines: a number that was
+# wrong in three places once will be looked up again, and silently fixing it is how it gets believed a
+# fourth time.
 CEILING = {
-    "beidou_alpha": 7_150,
+    "beidou_alpha": 7_155,
     "beidou_live": 6_540,
     "beidou_cli": 4_264,
     "beidou_data": 1_889,

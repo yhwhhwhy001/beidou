@@ -75,11 +75,16 @@ class ImpactModel:
         impact_fraction = coefficient * sigma_daily * sqrt(order_notional / ADV)
 
     **The coefficient is an assumption, not a measurement, and it cannot be calibrated here.**  The
-    only fills this system has are demo, 40-800 USDT against ADVs in the hundreds of millions, so
-    order/ADV is around 1e-8 and the model predicts well under a hundredth of a basis point - the
-    5.52 bps measured over 101 fills is spread and fee, and contains no information about impact at
-    all.  A number from the equities literature (Almgren et al.; coefficient near 1 with sigma daily
-    and participation as defined above) is therefore what ships, declared E5 for this venue, and the
+    only fills this system has are demo, 54-762 USDT.  Measured per fill over all 121 of them
+    (2026-09-09, `scratchpad/vwap_participation_measurement.py`), order/ADV is 4.3e-07 at the median
+    and the model predicts 0.48 bps notional-weighted - small, but two orders of magnitude above the
+    1e-8 / "hundredth of a basis point" this docstring asserted until then.  That figure was DL-C1's
+    pre-run estimate, taken from the liquid names' ADV rather than the book's; DL-C1's own run
+    retracted it and the retraction did not reach here.  The conclusion survives the correction and
+    the reason changes: 0.48 bps sits inside the [2.01, 9.19] bps interval of the same fills' measured
+    slippage, so impact is not too small to matter, it is too small to SEPARATE from spread.  A number
+    from the equities literature (Almgren et al.; coefficient near 1 with sigma daily and
+    participation as defined above) is therefore what ships, declared E5 for this venue, and the
     honest output of this model is a **capacity curve** - where cost starts to bend - rather than a
     prediction of what a fill will cost.
 

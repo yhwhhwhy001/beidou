@@ -7,10 +7,16 @@ approximation at demo notional (40-800 USDT), and it is the assumption KILL-Q12 
 out of scope on since 2026-09-05.
 
 What is asserted here is the SHAPE, never a cost number.  The coefficient is an assumption this system
-cannot calibrate - its only fills are demo, order/ADV around 1e-8, where the model predicts under a
-hundredth of a basis point - so a test that pinned a bps figure would be pinning a literature constant
-and calling it a measurement.  The shape is what has to hold: off by default, the flat model as the
-exact limit, monotone in size, superlinear in size, and causal.
+cannot calibrate - its only fills are demo, and the 5.52 bps measured across them is spread and fee
+with no separable impact content - so a test that pinned a bps figure would be pinning a literature
+constant and calling it a measurement.  The shape is what has to hold: off by default, the flat model
+as the exact limit, monotone in size, superlinear in size, and causal.
+
+(The docstring here used to say "order/ADV around 1e-8, where the model predicts under a hundredth of
+a basis point".  That was DL-C1's pre-run estimate and DL-C1's own run retracted it; measured per fill
+on 121 real fills it is order/ADV 4.3e-07 median and 0.48 bps notional-weighted - see the 2026-09-09
+VWAP section of RESEARCH_LOG.  The retraction had reached the scratchpad script and the log but not
+the three places a reader actually looks, of which this was one.)
 """
 
 from __future__ import annotations
@@ -87,6 +93,47 @@ def test_the_charge_grows_with_the_square_root_of_size(factor: float) -> None:
     small = impact_costs(turnover, rets, panel, columns, ImpactModel(capital=1_000.0)).to_numpy().sum()
     large = impact_costs(turnover, rets, panel, columns, ImpactModel(capital=1_000.0 * factor)).to_numpy().sum()
     assert np.isclose(large / small, np.sqrt(factor), rtol=1e-9)
+
+
+@pytest.mark.parametrize("slices", [2, 4, 10])
+def test_slicing_an_order_is_exactly_a_smaller_coefficient(slices: int) -> None:
+    """Block 4 #42 (VWAP), 2026-09-09: the whole benefit of child orders is one constant.
+
+    Under the square-root law, N equal children cost
+    ``N * (Q/N) * c * sigma * sqrt((Q/N)/ADV) = impact(Q) / sqrt(N)``, so a PERFECT N-way VWAP - zero
+    timing risk, zero leakage, every child at the arrival price - is arithmetically the same run as
+    ``coefficient / sqrt(N)``.  That is what let #42 be priced without building an execution layer:
+    the best case an execution layer could ever reach is a move in a parameter that is declared E5 and
+    that this venue cannot calibrate, so the benefit sits inside its own generating assumption's error
+    bar and could never be verified as having arrived.
+
+    This test is the refusal's premise, not its conclusion.  If the impact model ever stops being
+    sqrt-concave - a linear term, a fixed per-order cost, a spread component - the identity breaks
+    here, and #42 has to be re-decided rather than staying refused by a stale argument.
+    """
+    panel = _panel()
+    rets = panel.close / panel.open - 1.0
+    turnover = _weights(panel).diff().abs().fillna(0.4)
+    columns = list(panel.close.columns)
+    capital = 1_000_000.0
+
+    sliced = (
+        slices * impact_costs(turnover / slices, rets, panel, columns, ImpactModel(capital=capital)).to_numpy().sum()
+    )
+    cheaper_coefficient = (
+        impact_costs(turnover, rets, panel, columns, ImpactModel(capital=capital, coefficient=1.0 / np.sqrt(slices)))
+        .to_numpy()
+        .sum()
+    )
+    assert np.isclose(sliced, cheaper_coefficient, rtol=1e-12)
+
+    # And the recovered share is 1 - 1/sqrt(N) everywhere at once: it does not depend on ADV, on sigma
+    # or on capital.  So there is no thin corner of the universe where slicing pays for itself while
+    # the rest does not - "just slice the illiquid names" buys the same fraction as slicing everything.
+    whole = impact_costs(turnover, rets, panel, columns, ImpactModel(capital=capital))
+    per_cell = whole - slices * impact_costs(turnover / slices, rets, panel, columns, ImpactModel(capital=capital))
+    share = (per_cell / whole.where(whole > 0)).stack().dropna()
+    assert np.allclose(share.to_numpy(), 1.0 - 1.0 / np.sqrt(slices), atol=1e-12)
 
 
 def test_it_reads_no_bar_the_decision_could_not_have() -> None:

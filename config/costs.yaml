@@ -23,10 +23,16 @@ slippage_stress_bps: [2.0, 5.5, 9.2]
 # backtest scale-free - a property of the arithmetic, not a finding about the world - and is the
 # assumption KILL-Q12 has held real capital out of scope on since 2026-09-05.
 #   impact_fraction = coefficient * sigma_daily * sqrt(order_notional / ADV)
-# `coefficient` is an ASSUMPTION and this system cannot calibrate it.  Its only fills are demo, 40-800
-# USDT against ADVs in the hundreds of millions: order/ADV around 1e-8, so the model predicts under a
-# hundredth of a basis point and the 5.52 bps measured over 101 fills is spread and fee with no impact
-# content whatsoever.  1.0 is the equities-literature value (Almgren et al., with sigma daily and
+# `coefficient` is an ASSUMPTION and this system cannot calibrate it.  Its only fills are demo, 54-762
+# USDT.  Measured per fill over all 121 of them (2026-09-09, block 4 #42): order/ADV 4.3e-07 median,
+# 2.5e-06 max, modelled impact 0.48 bps notional-weighted.  The "around 1e-8 / under a hundredth of a
+# basis point" this comment carried until then was DL-C1's pre-run estimate, retracted by DL-C1's own
+# run and not propagated here; it understated the reading by two orders of magnitude.  The conclusion
+# is unchanged for a different reason: 0.48 bps is inside the [2.01, 9.19] bps interval of the same
+# fills' slippage, so impact is not too small to matter but too small to separate from spread.  The
+# retraction is left visible rather than overwritten, because the stale figure was quoted back to this
+# repo as a premise on 2026-09-09.
+# 1.0 is the equities-literature value (Almgren et al., with sigma daily and
 # participation as defined above); for this venue it is E5.  Read the OUTPUT as a capacity curve -
 # where cost starts to bend with size - not as a prediction of what a fill will cost.
 # Change this number only with fills large enough for it to be measurable, which demo cannot produce.
