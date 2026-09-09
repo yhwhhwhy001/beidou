@@ -124,8 +124,10 @@ def _logging(verbose: bool) -> None:
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def may_rerank_shared_pool(*, dry_run: bool, paper: bool, state_dir: str, registry_override: str | None) -> bool:
-    """DL-G5: only the process that is trading the account may re-rank the shared pool.
+def trades_the_account(*, dry_run: bool, paper: bool, state_dir: str, registry_override: str | None) -> bool:
+    """DL-G5: is this the process trading the account?  Only that one may write the shared records.
+
+    Two of them, found one at a time and the same shape both times.
 
     `universe.json` lives under the DATA root, which neither `--state-dir` nor `--paper` isolates, and
     every enabled strategy's cited evidence records the universe fingerprint it was produced under.
@@ -147,6 +149,14 @@ def may_rerank_shared_pool(*, dry_run: bool, paper: bool, state_dir: str, regist
     A shadow wants the universe the armed loop is holding, not a fresh opinion about it, so this is
     what the check is FOR rather than a limitation of it.  `--symbols` is how a person says otherwise,
     deliberately and in the shell history.
+
+    The SECOND record is `metrics_snapshot`, found 2026-09-09 while about to start the L3 paper soak.
+    `MetricsStore.append` is read-modify-write through one `.parquet.tmp` per symbol, so two writers
+    do not merely lose rows - they can publish a file one of them was still writing.  And DL-Q6 says
+    that store is "the metrics the loop could read", meaning the ARMED loop: a paper process adding
+    rows to it makes the parity check (M-011) compare the live decision against data no live decision
+    was made on.  A shadow still READS it - coverage gating needs that the moment a metrics-using
+    strategy is enabled - it just does not write.
     """
     return not (dry_run or paper or state_dir or registry_override)
 
@@ -312,9 +322,7 @@ def live_run(
         state_path=ALERT_DEDUP_STATE,
     )
     pool = build_pool(payload, market)
-    if not may_rerank_shared_pool(
-        dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override
-    ):
+    if not trades_the_account(dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override):
         pool = None
     engine = LiveEngine(
         config,
@@ -329,6 +337,10 @@ def live_run(
         # DL-Q6: the loop records the metrics it could read, which is what makes research and live one
         # source rather than two (KILL-Q11).
         metrics_store=MetricsStore(data_root, kind="metrics_snapshot"),
+        # Read always, write only from the account's own process; see `trades_the_account`.
+        record_metrics=trades_the_account(
+            dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override
+        ),
     )
     leverage = "auto" if config.leverage_mode == "auto" else str(config.leverage)
     click.echo(

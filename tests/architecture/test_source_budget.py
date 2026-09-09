@@ -1324,10 +1324,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # probes on the BOOK ("flow_short") and `governance_state.json` on the entry id ("flow"), so the
 # "state holds N" line - the only thing that would show the derivation disagreeing with the stored
 # count - was keyed on the wrong name and never printed.
+# 2026-09-09, +11 live +12 cli: the SECOND shared record a shadow was writing, found while about to
+# start the L3 paper soak - i.e. found by being about to cause it.  The sentence the rule requires.
+# `MetricsStore.append` is read-modify-write through one `.parquet.tmp` per symbol, so two writers do
+# not merely lose rows: one can publish a file the other was still writing.  And DL-Q6 says that
+# store holds "the metrics the loop could read" - the ARMED loop; rows a paper process added would
+# make M-011 compare the live decision against data no live decision was made on.  A shadow still
+# READS it, because coverage gating needs that the moment a metrics-using strategy is enabled.
+# The predicate is renamed `trades_the_account`: it was named after one of its consequences
+# (re-ranking the pool) and there are now two, which is how the first one got the condition wrong.
 CEILING = {
     "beidou_alpha": 6_998,
-    "beidou_live": 6_186,
-    "beidou_cli": 4_197,
+    "beidou_live": 6_197,
+    "beidou_cli": 4_209,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
