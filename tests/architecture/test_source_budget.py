@@ -1565,10 +1565,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # diagonal from the floored `asset_vol` - the raw EWMA diagonal contains symbols whose variance rounds to
 # zero, which handed one name ~100% of the inverse-variance budget and produced tilts of 1e86.  Deleting
 # any of those four comments restores a bug that looks like a simplification.
+# 2026-09-09, +8 cli: `research mine` loaded its panel WITHOUT metrics while enumerating the DL-D4
+# leaves, so every `oi` and `lsr` candidate has raised `ExprError` in every round since DL-D4 shipped -
+# `outcomes.errored = 90` on two consecutive rounds, and the 90 are exactly 54 `oi` plus 36 `lsr`.  One
+# missing keyword: `research decompose` has `metrics=True` with a comment saying why it must be
+# unconditional, and the command that actually enumerates them was written without it.  The lines are
+# that comment, moved to where the mistake was.  Note what did NOT find this: I first blamed
+# `Panel._map` (a real, separate bug, fixed in 3b49af8) and re-ran the whole round on that diagnosis -
+# 658 more ledger rows for nothing.  The per-row `error` field had said the true reason all along.
 CEILING = {
     "beidou_alpha": 7_625,
     "beidou_live": 6_578,
-    "beidou_cli": 4_450,
+    "beidou_cli": 4_458,
     "beidou_data": 3_286,
     "beidou_exchange": 611,
     "beidou_shared": 289,

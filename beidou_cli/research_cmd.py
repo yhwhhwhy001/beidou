@@ -2399,7 +2399,14 @@ def research_mine(
     """
     profile_payload = load_yaml(profile)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
-    panel = _load(root, chosen, interval, start, end, funding)
+    # DL-D4: `metrics=True`, for the reason `research decompose` states one function up - enumeration
+    # happens after the panel exists, so the panel cannot be conditioned on what will be enumerated.
+    # This command is the one that ENUMERATES the metrics leaves, and it loaded a panel without them:
+    # every `oi` and `lsr` candidate raised `ExprError` in every round since DL-D4 shipped.  Measured
+    # 2026-09-09 across two rounds, `outcomes.errored = 90` both times, and the 90 are exactly the 54
+    # `oi` plus 36 `lsr`.  The rows carry the reason - `error: ExprError: ... does not carry` - and only
+    # the count reached the summary, so it read as a family that ran and lost.
+    panel = _load(root, chosen, interval, start, end, funding, metrics=True)
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     portfolio = portfolio_params(profile_payload)
