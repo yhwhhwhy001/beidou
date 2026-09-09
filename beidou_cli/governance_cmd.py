@@ -13,11 +13,15 @@ import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import click
+import yaml
 
 from beidou_alpha.registry import parse_registry
 from beidou_cli import main
+from beidou_governance.admission import Admission, admit
+from beidou_governance.canary import evaluate as evaluate_canary
 from beidou_governance.lifecycle import State
 from beidou_governance.policy import Policy
 from beidou_governance.promote import apply as apply_transaction
@@ -36,6 +40,9 @@ REGISTRY = "config/alpha_registry.yaml"
 #: all is a person's decision, taken once, and it is OFF until somebody takes it.
 SWITCH = "governance/ENABLED"
 TRANSACTIONS = "governance/transactions.jsonl"
+#: The lifecycle state R3/R4/R5/R7 are counted in.  Read by `status`, `tenure` and, since 2026-09-09,
+#: by the admission gate `plan`/`apply` run before a write.
+STATE = "governance/governance_state.json"
 
 
 @main.group()
@@ -144,7 +151,7 @@ def status_cmd(root: str) -> None:
     """What rules this process would run under, and whether it is allowed to write."""
     checkout = Path(root).resolve()
     policy = Policy()
-    book = read_state(checkout / "governance" / "governance_state.json")
+    book = read_state(checkout / STATE)
     enabled = _switch(checkout).exists()
     click.echo(f"policy   {policy.version} digest={policy.digest()} window={policy.window_days}d")
     click.echo(f"autonomy {'ENABLED' if enabled else 'DISABLED'}  ({_switch(checkout)})")
@@ -187,7 +194,7 @@ def tenure_cmd(root: str, cycles: str, anchor: str, started: tuple[str, ...], as
         raise click.ClickException(f"no live record at {path}")
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     policy = Policy()
-    book = read_state(Path(root).resolve() / "governance" / "governance_state.json")
+    book = read_state(Path(root).resolve() / STATE)
     starts = dict(pair.split("=", 1) for pair in started if "=" in pair)
 
     out = []
@@ -265,13 +272,53 @@ def _gate(profile_path: str) -> Callable[[Path], list[str]]:
     return gate
 
 
+def _rows(path: Path) -> list[dict[str, Any]]:
+    return load_jsonl(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, shadow_dir: str) -> Admission:
+    """R3/R4/R5/R7 and K-EX14, asked of the change before the bytes move.
+
+    Added 2026-09-09.  Until then `apply` asked the startup gate and nothing else, so every constraint
+    §3 lists as a precondition of `queued -> probe` was decorative on the only path that promotes:
+    a proposal moving 0.9 of the book to an unproven sleeve was accepted against a cap of 1/3.
+    """
+    return admit(
+        parse_registry(load_yaml(registry_path)),
+        parse_registry(yaml.safe_load(proposed)),
+        book=read_state(root / STATE),
+        policy=Policy(),
+        cycles=_rows(Path(state_dir) / "cycles.jsonl"),
+        shadow=_rows(Path(shadow_dir) / "cycles.jsonl"),
+        # K-EX14's clock reads the canonical construction, not the raw digest: three of the raw
+        # changes since 09-04 altered no behaviour and were declared equivalent here on the read side.
+        aliases=CONSTRUCTION_ALIASES,
+    )
+
+
+def _report_admission(admission: Admission) -> None:
+    for key, value in sorted(admission.measured.items()):
+        click.echo(f"  {key}: {value}", err=True)
+    for reason in admission.reasons:
+        click.echo(f"  REFUSED {reason}", err=True)
+
+
 @governance.command("plan")
 @click.option("--proposed", required=True, help="Path to the candidate registry YAML.")
 @click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--candidate", default="", help="Which candidate this change is for; recorded in the log.")
-def plan_cmd(proposed: str, registry_path: str, profile: str, candidate: str) -> None:
+@click.option("--root", default=".", help="Checkout holding the governance state and transaction log.")
+@click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop's record.")
+@click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The canary's record.")
+def plan_cmd(
+    proposed: str, registry_path: str, profile: str, candidate: str, root: str, state_dir: str, shadow_dir: str
+) -> None:
     """What `apply` would do, asked of the same gate, without touching the file."""
+    admission = _admission(registry_path, Path(proposed).read_text(encoding="utf-8"), Path(root).resolve(), state_dir, shadow_dir)
+    click.echo(f"admission: {'ALLOWED' if admission.allowed else 'REFUSED'} "
+               f"(promoting: {', '.join(admission.promoting) or 'nothing'})", err=True)
+    _report_admission(admission)
     transaction = plan_transaction(
         Path(registry_path),
         Path(proposed).read_text(encoding="utf-8"),
@@ -279,7 +326,34 @@ def plan_cmd(proposed: str, registry_path: str, profile: str, candidate: str) ->
         candidate=candidate or Path(proposed).name,
     )
     click.echo(json.dumps(json.loads(transaction.to_json()), indent=2, ensure_ascii=False))
-    if transaction.reasons:
+    if transaction.reasons or not admission.allowed:
+        raise SystemExit(1)
+
+
+@governance.command("canary")
+@click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The soak's state directory.")
+@click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop, as the baseline.")
+@click.option("--gate-refusals", default=0, show_default=True, help="Startup-gate refusals the soak itself saw.")
+def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
+    """L4 / DL-G5: score a finished shadow soak against the armed loop over the same window.
+
+    The soak is `deploy/run_shadow.sh`; this is the half that reads it.  Until 2026-09-09 there was no
+    such half: the module computing the checks had no caller outside its own tests, so §3's
+    `Canary 健康检查过` was a precondition nothing could ever satisfy or refuse.
+
+    Deployment health only (KILL-AR-04).  A candidate that passes has been shown to deploy, not to
+    have edge; a candidate that fails has hit a wiring or venue problem, and reading that as evidence
+    against the sleeve is the mistake this command's own docstring exists to prevent.
+    """
+    shadow = load_jsonl(Path(shadow_dir) / "cycles.jsonl")
+    baseline = load_jsonl(Path(state_dir) / "cycles.jsonl")
+    if not shadow:
+        raise click.ClickException(f"no shadow record at {shadow_dir}/cycles.jsonl; run deploy/run_shadow.sh first")
+    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals)
+    for check in result.checks:
+        click.echo(f"{'PASS' if check.passed else 'FAIL'}  {check.name:22s} {check.detail}")
+    click.echo(f"{'HEALTHY' if result.healthy else 'UNHEALTHY'}  {result.soaked} cycles soaked")
+    if not result.healthy:
         raise SystemExit(1)
 
 
@@ -309,7 +383,19 @@ def disable_cmd(root: str) -> None:
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--candidate", default="", help="Which candidate this change is for; recorded in the log.")
 @click.option("--root", default=".", help="Checkout holding the switch and the transaction log.")
-def apply_cmd(proposed: str, registry_path: str, profile: str, candidate: str, root: str) -> None:
+@click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop's record.")
+@click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The canary's record.")
+@click.option("--actor", default="machine", show_default=True, help="Who initiated this; recorded in the log.")
+def apply_cmd(
+    proposed: str,
+    registry_path: str,
+    profile: str,
+    candidate: str,
+    root: str,
+    state_dir: str,
+    shadow_dir: str,
+    actor: str,
+) -> None:
     """Write the registry as a transaction, rolling back if the startup gate refuses.
 
     Refused while the autonomy switch is off.  Q9 removed the confirmation point from a SINGLE
@@ -322,12 +408,22 @@ def apply_cmd(proposed: str, registry_path: str, profile: str, candidate: str, r
             f"autonomy is disabled ({_switch(checkout)} does not exist).  `beidou governance enable` "
             "turns it on; `governance plan` shows what this would do without it."
         )
+    text = Path(proposed).read_text(encoding="utf-8")
+    admission = _admission(registry_path, text, checkout, state_dir, shadow_dir)
+    if not admission.allowed:
+        _report_admission(admission)
+        raise click.ClickException(
+            "the governance rules refuse this change; `governance plan` shows the same reasons without "
+            "writing.  Loosening a rule to admit a change is R10's whole subject - the thresholds live "
+            "in policy.py and move with a version, a test and a pre-registration."
+        )
     transaction = apply_transaction(
         Path(registry_path),
-        Path(proposed).read_text(encoding="utf-8"),
+        text,
         gate=_gate(profile),
         log_path=checkout / TRANSACTIONS,
         candidate=candidate or Path(proposed).name,
+        actor=actor,
     )
     click.echo(json.dumps(json.loads(transaction.to_json()), indent=2, ensure_ascii=False))
     if transaction.action == "ROLLBACK":

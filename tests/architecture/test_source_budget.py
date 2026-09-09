@@ -1655,14 +1655,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the count columns admitted, on the source's own testimony.  The declared availability is +2 days, not
 # the arithmetic +1: measured completion runs 2.3-5.8h past day close, so +1 is a bound the source has
 # never once met and declaring it would buy a daily lookahead.
+# 2026-09-09, +281 governance / +96 cli, and the sentence the rule requires: the admission gate.
+# `governance apply` wrote the registry after asking two questions - is autonomy on, does the startup
+# gate accept the result - and the startup gate is a PER-ENTRY evidence check.  It cannot see a sum, a
+# count, a calendar or a history, which is exactly what R3, R4, R5, R7 and K-EX14 are.  So every
+# precondition §3 lists for `queued -> probe` was decorative on the only path that promotes, and §0's
+# acceptance of AR-18 (no human confirmation point, because "R6 回滚 + Canary + R3 预算 + P&L stop"
+# carries it) was resting on two controls with no caller anywhere in the tree.  `admission.py` is the
+# layer that asks them, `governance canary` is what makes `canary.evaluate` reachable at all, and
+# `--actor` exists because `promote.py` defaulted it to "machine" while its own docstring said a log
+# that cannot tell a machine write from a person's is not evidence - which made AC-L5 unfalsifiable.
+# Measured before: 1,846 production lines could not be reached from any `beidou` command, 337 of them
+# the governance package's own budget, scheduler and canary.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
-    "beidou_cli": 4_492,
+    "beidou_cli": 4_588,
     "beidou_data": 4_275,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_092,
+    "beidou_governance": 2_373,
 }
 
 

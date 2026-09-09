@@ -63,8 +63,32 @@ def _synthetic_panel(
     return Panel.from_frames(frames, "1h", funding=funding)
 
 
-@pytest.mark.parametrize("signal_id", sorted(SIGNALS))
-def test_signals_are_causal_and_bounded(signal_id: str) -> None:
+def _live_params() -> list[tuple[str, dict]]:
+    """Every enabled entry of the registry, so the suite covers the params the loop actually holds.
+
+    KILL-AR-15's fix sized the panel from `warmup_for`, which was right, and then read the warmup off
+    `default_params` - and the defaults are not what runs.  Measured 2026-09-09: tsmom's defaults warm
+    up in 101 bars, the registry runs `horizons: [168, 336, 720]` with `vol_window: 400` for a warmup
+    of 721; flow is 49 against the same 721.  So the causality, boundedness and non-vacuity checks were
+    all being made about a configuration this system decided against in round 6, and the one it trades
+    had never been through them.  The parametrisation below closes that: defaults AND the registry.
+    """
+    from beidou_alpha.registry import parse_registry
+    from beidou_shared.config import load_yaml
+
+    registry = parse_registry(load_yaml("config/alpha_registry.yaml"))
+    return [(entry.id, dict(entry.params)) for entry in registry.strategies if entry.enabled and entry.params]
+
+
+CASES = [(signal_id, {}, "defaults") for signal_id in sorted(SIGNALS)] + [
+    (signal_id, params, "live") for signal_id, params in _live_params()
+]
+
+
+@pytest.mark.parametrize(
+    ("signal_id", "overrides", "label"), CASES, ids=[f"{name}-{label}" for name, _p, label in CASES]
+)
+def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: str) -> None:
     """KILL-AR-15 / T-S51-1: the panel is sized from the SIGNAL's warmup, not from a constant.
 
     It used to be 800 bars with the cutoff at 600, and that made this test vacuous for any signal
@@ -75,16 +99,18 @@ def test_signals_are_causal_and_bounded(signal_id: str) -> None:
     a silent pass.
     """
     spec = SIGNALS[signal_id]
-    warmup = spec.warmup_for(spec.default_params)
+    params = {**spec.default_params, **overrides}
+    warmup = spec.warmup_for(params)
     panel = _synthetic_panel(n_bars=warmup + 600, correlated=True)
-    scores = spec.compute(panel, spec.default_params)
+    scores = spec.compute(panel, params)
     assert scores.shape == panel.close.shape
     assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
     assert scores.iloc[-50:].notna().any().any(), f"{signal_id} produced no scores"
     cutoff = warmup + 300
     assert scores.iloc[:cutoff].notna().any().any(), (
-        f"{signal_id}: every score before the cutoff is NaN, so the causality comparison below would "
-        "be NaN against NaN - the exact way this test was vacuous before KILL-AR-15"
+        f"{signal_id} ({label}, warmup {warmup}): every score before the cutoff is NaN, so the "
+        "causality comparison below would be NaN against NaN - the exact way this test was vacuous "
+        "before KILL-AR-15"
     )
     shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index), correlated=True)
     mixed_frames = {}
@@ -115,7 +141,7 @@ def test_signals_are_causal_and_bounded(signal_id: str) -> None:
     if panel.funding is not None and shuffled.funding is not None:
         funding = pd.concat([panel.funding.iloc[:cutoff], shuffled.funding.iloc[cutoff:]])
     mixed = Panel.from_frames(mixed_frames, "1h", funding=funding)
-    later = spec.compute(mixed, spec.default_params)
+    later = spec.compute(mixed, params)
     pd.testing.assert_frame_equal(scores.iloc[:cutoff], later.iloc[:cutoff])
 
 
