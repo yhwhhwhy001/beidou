@@ -1517,10 +1517,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 0/5599 at the rivals.  Twelve mutants caught; the first pass caught seven, and the NaN rule had no test
 # until the mutation forced one.  Admitted debt, written here because it is this repository's own
 # recurring shape: `admits_live_signal` has no production caller yet - contract precedes downloader.
+# 2026-09-09, +169 alpha / +111 cli: the pairs signal's own search was charged nothing.  `research mine`
+# charges every candidate it kept (DL-K2) because a free search is a DSR denominator wrong in the one
+# direction that flatters it; one level down, `pairs` chose its partners out of every pair its formation
+# window could form and the shipped report recorded `n_trials: 4`.  Measured on that report's own panel:
+# 69 refits, 52-175 pairable symbols each, 19,578 DISTINCT pairs examined and 183 ever traded - so the
+# grid was 0.02% of the denominator.  The lines are a census the signal returns (it has to walk the loop
+# that trades, or it drifts silently toward under-charging), a `SignalSpec` field that declares which
+# shared ledger bucket the candidates are charged to, and the `validate` plumbing that writes them BEFORE
+# the run reads its own denominator.  Most of the count is the reasoning: which digests these rows must
+# NOT carry, and why the bucket is shared rather than per-strategy, are the two decisions a future reader
+# would otherwise have to re-derive from the ledger's fold rule.
 CEILING = {
-    "beidou_alpha": 7_167,
+    "beidou_alpha": 7_336,
     "beidou_live": 6_540,
-    "beidou_cli": 4_264,
+    "beidou_cli": 4_375,
     "beidou_data": 2_869,
     "beidou_exchange": 611,
     "beidou_shared": 289,

@@ -17,6 +17,30 @@ FundingPredicate = Callable[[Mapping[str, Any]], bool]
 CanonicalFunction = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
+@dataclass(frozen=True)
+class SearchCensus:
+    """What a signal's own search examined, in ids the trials ledger can charge one row each.
+
+    ``research mine`` met this problem first and DL-K2 settled it there: a search that costs nothing is
+    a DSR denominator wrong in the one direction that flatters it.  The same hole was open one level
+    down, inside the signals - ``pairs`` chooses which SYMBOL PAIRS to trade out of every pair its
+    formation window can form, and the report that shipped on 2026-09-08 recorded ``n_trials: 4`` for a
+    run that had looked at 19,578 of them.
+
+    ``candidates`` is one id per hypothesis EXAMINED and is already deduplicated: re-examining a
+    candidate at the next refit is one hypothesis looked at twice, not two hypotheses.  ``selected`` is
+    the subset the signal actually traded, reported rather than charged - the ratio between the two is
+    what a reader needs in order to judge whether the charge is the right size.
+    """
+
+    candidates: tuple[str, ...]
+    selected: tuple[str, ...]
+    facts: dict[str, Any]
+
+
+SelectionCensus = Callable[[Panel, Mapping[str, Any]], SearchCensus]
+
+
 def jsonable(value: Any) -> Any:
     """Tuples to lists, recursively, so params that came from YAML and from JSON compare equal."""
     if isinstance(value, tuple | list):
@@ -40,6 +64,14 @@ class SignalSpec:
     # say so and be refused at startup until the LIVE recording covers it (`metrics_refusal`).
     needs_metrics: FundingPredicate | None = None
     canonical: CanonicalFunction | None = None  # params with this signal's defaults applied
+    # DL-K2 one level down.  A signal that picks WHICH combinations of the data to trade has made a
+    # selection, and the DSR denominator has to be able to read it back.  A spec that declares the
+    # census must also name the shared ledger bucket its candidates are charged to, and `ledger_scope`
+    # must actually route the strategy there; `tests/alpha/test_a_signals_own_search_is_charged.py`
+    # holds the three together, so the next pair-type formalisation cannot be registered with a free
+    # denominator - which is the whole point of a shared bucket rather than a per-strategy one.
+    selection: SelectionCensus | None = None
+    selection_bucket: str = ""
 
     def warmup_for(self, params: Mapping[str, Any]) -> int:
         """Bars of history the signal needs under *these* params, not under the defaults.
@@ -59,6 +91,15 @@ class SignalSpec:
         from the one that was validated (KILL-027).
         """
         return bool(self.uses_funding(params)) if self.uses_funding is not None else False
+
+    def search_census(self, panel: Panel, params: Mapping[str, Any]) -> SearchCensus | None:
+        """The candidates this signal's own search examined here, or None when it searches nothing.
+
+        Most signals score every symbol they are handed and select nothing, so None is the honest
+        answer rather than an empty census: "this signal ran no search" and "this run's search found
+        nothing" are different facts, and a report that cannot tell them apart cannot be audited.
+        """
+        return None if self.selection is None else self.selection(panel, params)
 
     def canonical_params(self, params: Mapping[str, Any]) -> dict[str, Any]:
         """Params with the signal's defaults filled in, in a form two sources can be compared in.

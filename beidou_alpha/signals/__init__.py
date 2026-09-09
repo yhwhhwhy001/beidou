@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from beidou_alpha.signals import breakout, carry, chanlun, flow, meanrev, pairs, residual, tsmom, xsmom
 from beidou_alpha.signals.base import SignalSpec, scores_to_targets
+from beidou_alpha.validation.ledger import PAIR_SEARCH_STRATEGY
 
 SIGNALS: dict[str, SignalSpec] = {
     # The 51st strategy (DL-S51).  Its formalisation was pre-registered in §7 of the governance plan
@@ -21,7 +22,9 @@ SIGNALS: dict[str, SignalSpec] = {
         canonical=lambda params: asdict(chanlun.ChanlunParams.from_mapping(params)),
     ),
     # P28 (#6).  Vol-matched rather than OLS-beta because stage 1 sizes each leg on its own vol; the
-    # formalisation was pre-registered before the module existed.
+    # formalisation was pre-registered before the module existed.  The only signal so far that SEARCHES
+    # before it scores, so the only one that declares a census: choosing the partner out of every pair
+    # the formation window can form is a selection, and `selection_bucket` is where it is charged.
     "pairs": SignalSpec(
         "pairs",
         pairs.compute,
@@ -30,6 +33,8 @@ SIGNALS: dict[str, SignalSpec] = {
         pairs.PairsParams().warmup_bars,
         warmup=lambda params: pairs.PairsParams.from_mapping(params).warmup_bars,
         canonical=lambda params: asdict(pairs.PairsParams.from_mapping(params)),
+        selection=pairs.search_census,
+        selection_bucket=PAIR_SEARCH_STRATEGY,
     ),
     "tsmom": SignalSpec(
         "tsmom",

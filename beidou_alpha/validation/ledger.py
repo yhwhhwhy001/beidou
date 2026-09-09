@@ -133,6 +133,17 @@ class TrialRecord:
 # the full sample - so its denominator has to be able to read the space back.
 MINED_SEARCH_STRATEGY = "mined"
 
+# The same rule for a search the SIGNAL runs rather than the operator: `pairs` picks which symbol pairs
+# to trade out of every pair its formation window can form (measured 2026-09-09: 19,578 distinct pairs
+# examined, 183 traded), and until this key existed that choice was charged nothing at all.  One shared
+# bucket for the same reason the mined one is shared: the space belongs to the SEARCH, not to the
+# strategy that ran it, so a second pair-type formalisation - cointegration instead of correlation, say -
+# starts from what looking at those 19,578 pairs already cost instead of from zero.  Separate from the
+# `pairs` key rather than merged into it because the two answer different questions: `pairs` holds the
+# configurations that were scored (4 of them, with Sharpes that set the DSR's variance), and this holds
+# the candidates that were only looked at (no Sharpe each, and 19,578 rows would bury the other four).
+PAIR_SEARCH_STRATEGY = "pairs_search"
+
 
 def ledger_scope(strategy: str) -> tuple[str, ...]:
     """Which ledger keys a strategy's DSR denominator draws from.
@@ -140,9 +151,17 @@ def ledger_scope(strategy: str) -> tuple[str, ...]:
     A hand-written strategy pays for its own grid.  A mined candidate pays for the search that found
     it as well: nothing about `mined_594a12f9307a15d9` is remarkable until you know it was the best of
     514, and that number used to be copied off a terminal into `--prior-trials` by hand.
+
+    A pair-type strategy pays for the pair search the same way.  Matched on the id, as the mined rule
+    is, so this module stays free of the signal registry; the link that actually has to hold - a signal
+    declaring a census is routed to the bucket it declares - is asserted in
+    `tests/alpha/test_a_signals_own_search_is_charged.py`, so registering a pair searcher under a name
+    this rule does not catch fails a test rather than quietly restoring the free denominator.
     """
     if strategy.startswith("mined_"):
         return (strategy, MINED_SEARCH_STRATEGY)
+    if strategy.startswith("pairs") and strategy != PAIR_SEARCH_STRATEGY:
+        return (strategy, PAIR_SEARCH_STRATEGY)
     return (strategy,)
 
 

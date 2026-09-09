@@ -714,6 +714,18 @@ def research_validate(
         StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
     ).portfolio.__dict__
     ledger_path = resolve_ledger_path(out=out)
+    # Charged BEFORE the denominator below is read, which is the whole difference between this and the
+    # way `mine` charges.  A shortlist is not a verdict, so `mine` can write its rows at the end; this
+    # command decides a PASS/FAIL, and a verdict computed under a denominator that excludes the run's
+    # own search is the un-charged number shipping while the next run pays for this one's selection.
+    signal_search = _charge_signal_search(
+        strategy,
+        panel,
+        combos,
+        ledger_path,
+        range_start=str(common_index[0]),
+        range_end=str(common_index[-1]),
+    )
     ledger_lines = ledger_path.read_text(encoding="utf-8").splitlines() if ledger_path.exists() else []
     # R0 is a CALIBER, not a number, so the field that names it has to be the thing this line obeys.
     # `gate_scope` sat in `policy_digest()` - promising that an edit to it would be visible - while
@@ -862,6 +874,10 @@ def research_validate(
             },
             "whole_library_trials": whole_library,
         },
+        # What the signal's own search cost, where the verdict can be read next to it.  Absent for the
+        # eight signals that search nothing, which is why it is spread in rather than written as null:
+        # "this signal ran no search" and "its search found nothing" are different facts (DL-K2).
+        **({"signal_search": signal_search} if signal_search is not None else {}),
         "best_params": params_by_key[best_key],
         "full_sample": results[best_key].summary(),
         # F3 (KILL-Q2): `best_params` is the full-sample argmax and is what reaches the registry,
@@ -946,6 +962,19 @@ def research_validate(
             ),
             ("CPCV", {k: v for k, v in cpcv.items() if k != "chosen"}),
             ("Multiple testing", mt),
+            # Immediately above the gate it moves, because at 19,578 candidates against a four-cell grid
+            # the search IS the denominator and a reader who sees only `n_trials` cannot tell where it
+            # came from.  The per-configuration facts stay in the JSON; this is the headline.
+            *(
+                [
+                    (
+                        "Signal's own search (DL-K2)",
+                        {k: v for k, v in signal_search.items() if k != "configurations"},
+                    )
+                ]
+                if signal_search is not None
+                else []
+            ),
             ("Selection-deflated OOS threshold (D-028)", report["oos_selection"]),
             (
                 "Stability",
@@ -992,6 +1021,14 @@ def research_validate(
     click.echo(
         f"trials ledger: {ledger_path} (+{len(nets)}; {pooled['ledger_trials']} already in ledger, {prior_trials} declared pre-ledger)"
     )
+    if signal_search is not None:
+        # Where the cost is incurred, as `mine` prints its own: this run's denominator is mostly this
+        # line, and reading it off `multiple_testing.n_trials` afterwards is how it stayed invisible.
+        click.echo(
+            f"signal search ({signal_search['bucket']}): {signal_search['candidates']} candidates examined, "
+            f"{signal_search['selected']} traded; +{signal_search['charged']} charged now, "
+            f"family prior {signal_search['family_prior']['before']} -> {signal_search['family_prior']['after']}"
+        )
     click.echo(f"best params: {params_by_key[best_key]}")
     click.echo(
         f"walk-forward OOS sharpe={_fmt(wf_summary['oos_sharpe'])} return={wf_summary['oos_return']:.4f} consistency={_fmt(wf_summary['fold_consistency'])}"
@@ -1777,6 +1814,80 @@ def _durable(handle: Any) -> None:
     """
     handle.flush()
     os.fsync(handle.fileno())
+
+
+def _charge_signal_search(
+    strategy: str,
+    panel: Panel,
+    combos: Sequence[Mapping[str, Any]],
+    ledger_path: Path,
+    *,
+    range_start: str,
+    range_end: str,
+) -> dict[str, Any] | None:
+    """DL-K2 for a search the SIGNAL runs: one ledger row per candidate it examined.  None if it runs none.
+
+    `pairs` chose which symbol pairs to trade out of every pair its formation window could form and paid
+    nothing for it: the 2026-09-08 report recorded `n_trials: 4` - its four-cell parameter grid - for a
+    run that had examined 19,578 distinct pairs.  The reason is the one `mine`'s docstring gives, one
+    level down: a search that costs nothing is a DSR denominator wrong in the direction that flatters it.
+
+    The rows carry **no construction or overlay digest and no Sharpe**, and neither omission is laziness.
+    The pair search runs on `panel.close` before any weight exists, so it enumerates the identical
+    candidates under every vol target, cost model and exit stack; stamping the construction on would
+    charge the same hypotheses again for every re-run at a new target - two prices for one selection,
+    which is the mirror of the under-charging this fixes.  `sharpe_annual` is None because these
+    candidates were never scored one at a time (they are selected on formation-window correlation, not
+    on their own P&L), and `dsr_inputs` pools only rows that have one: the census moves N and leaves the
+    Sharpe dispersion to the configurations that really were scored.  `mine` already writes None-Sharpe
+    rows for its never-traded candidates, so this is the established shape rather than a new one.
+
+    The union over the grid, not one census per cell: the grid's two `z_window` values search almost the
+    same 19,578 pairs, and a pair looked at under both is one hypothesis (DL-K2's rule for a widened
+    space).  `parameter_neighborhood` re-runs the search under perturbed windows and is deliberately NOT
+    charged - nothing selects on a neighbourhood, its numbers are reported and never kept.
+    """
+    census_of = get_signal(strategy).selection
+    bucket = get_signal(strategy).selection_bucket
+    if census_of is None or not bucket:
+        return None
+    per_configuration = {param_key(dict(combo)): census_of(panel, combo) for combo in combos}
+    candidates = sorted({candidate for census in per_configuration.values() for candidate in census.candidates})
+    selected = sorted({candidate for census in per_configuration.values() for candidate in census.selected})
+    stamp = datetime.now(UTC).isoformat()
+    charged = _record_trials(
+        ledger_path,
+        [
+            TrialRecord(
+                strategy=bucket,
+                param_key=candidate,
+                sharpe_annual=None,
+                bars_per_year=panel.bars_per_year,
+                recorded_at=stamp,
+                range_start=range_start,
+                range_end=range_end,
+                symbols=len(panel.symbols),
+                run_id=f"{strategy}-search-{_stamp()}",
+                symbol_set_hash=_symbol_set_hash(panel.symbols),
+            )
+            for candidate in candidates
+        ],
+    )
+    # Read back off the file through the fold the denominator applies, exactly as `mine` reports its
+    # family prior - `charged` is what this run added, and the two part ways as soon as the range moves.
+    family_prior = (
+        len(unique_trials(parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), bucket)))
+        if ledger_path.exists()
+        else 0
+    )
+    return {
+        "bucket": bucket,
+        "charged": charged,
+        "candidates": len(candidates),
+        "selected": len(selected),
+        "configurations": {key: census.facts for key, census in per_configuration.items()},
+        "family_prior": {"strategy": bucket, "before": family_prior - charged, "after": family_prior},
+    }
 
 
 def _record_trials(ledger_path: Path, records: Sequence[TrialRecord]) -> int:
