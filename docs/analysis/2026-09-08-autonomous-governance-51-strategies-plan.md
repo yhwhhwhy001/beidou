@@ -211,7 +211,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | **AC-G3 ✔（2026-09-09）** | G3 | Functional | Phase 1 | hypothesis 跑 1,000 序列 | R0–R10 零违反 | 修状态机 |
 | AC-G4 | G4 | Scenario | paper | DRILL-G1 | ROLLBACK 行 + 重启成功 + digest 等于回滚前 | 事务不上线 |
 | AC-G5 | G5 | Scenario | dry-run 影子 | 一次真实候选浸泡 168 周期 | 六项全过；失败时 armed 循环零改动 | Canary 不上线 |
-| AC-G6′ | G6′ | Hypothesis | paper 注入 | 三种序列（无 stop / 一次 stop / TRANSFER 周期 stop） | 状态转移与 §3 一致 | 修 tenure |
+| **AC-G6′ ✔（2026-09-09）** | G6′ | Hypothesis | paper 注入 | 三种序列（无 stop / 一次 stop / TRANSFER 周期 stop） | 状态转移与 §3 一致 | 修 tenure |
 | **AC-G7 ✔（2026-09-09，T-G7-1/2/3）** | G7 | Scenario | 重启 | DRILL-G3；−35% 归因回撤注入；同幅权益回撤注入 | verify 报警；前者告警 + 2 周期后 scalar 0.75；后者不触发；不改 config | 修快通道 |
 | AC-G8 | G8 | Functional | 研究机就绪 | 连跑 3 轮 | 空间未变零 mine；预算耗尽零 validate；队列有序 | 修调度 |
 | AC-S51 ✔ | S51 | Hypothesis | 预登记提交在先（`4577d07`） | corr 检查 | **已达成**：corr **0.6426** ≥ 0.5 → 记「tsmom 换写法」；边际 **−0.6340**；判定写入 RESEARCH_LOG | 已转 retired |
@@ -319,7 +319,7 @@ L4**。这条不该由我裁。
 | Kill | 处置 | 落点 |
 | --- | --- | --- |
 | AR-01 P0 | **CLOSED**：R0 保持按策略桶；证据已在现行门下重出（PASS 1.81 / 门 1.49） | §4 R0、§17 |
-| AR-02 P0 | **MITIGATED**：选项 b 改写为时间规则并标注非证据；验证 AC-G6′ 待跑（D.6：改方案须有验证才算 CLOSED） | §3、§10 |
+| AR-02 P0 | **CLOSED（2026-09-09）**：选项 b 改写为时间规则并标注非证据；AC-G6′ 已跑——三条序列都由**真引擎写记录、真 tenure 读回来**，两半此前各自有测试而从不相接，而这条缝正是本项目缺陷所在（`probes_from_registry` 漏掉主账本、记录按账本名而状态按策略 id、stop 阈值不进 digest）| §3、§10 |
 | AR-03 | CLOSED：AC-G0 改例外清单 | §9–10 |
 | AR-04 | CLOSED：Canary 改标签；补 `--state-dir` | §5 |
 | AR-05 | MITIGATED：R8 改归因口径 + 告警 + 宽限 | §4 |
