@@ -506,6 +506,18 @@ def _why_not_adopted(
             f"被同策略的后续指针取代：`{later[0]}` 更晚且被采纳——旧报告不是被拒绝，是被超越",
         )
 
+    capital = float((report.get("impact_model") or {}).get("capital") or 0.0)
+    if capital > 0:
+        return Difference(
+            name,
+            "从未写进 registry",
+            rules_say,
+            RULE_VERSION,
+            f"DL-C1 的容量臂：按 {capital:,.0f} USDT 计冲击成本，而本账本约 1.1 万——"
+            "被采纳的同策略指针都是 `capital: 0`（尺度无关的平模型）。"
+            "它回答的是「9 倍规模下判定还成不成立」，不是「该不该晋级」，与 `universe_mode: static` 同形",
+        )
+
     if report.get("universe_mode") == "static":
         return Difference(
             name,

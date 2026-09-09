@@ -173,6 +173,108 @@ def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) 
     }
 
 
+def attributed_drawdown_state(
+    rows: Sequence[Mapping[str, Any]],
+    attribution: Sequence[Mapping[str, Any]],
+    params: RiskBudgetParams,
+) -> dict[str, Any]:
+    """R8's ruler: the drawdown of the equity path with collateral repricing taken out.
+
+    ``drawdown_state`` above reads venue equity, which is the operator's capital and therefore the
+    right denominator for P13's budget.  It is the wrong NUMERATOR for a rule that decides whether the
+    book is losing money: 52% of this account is non-USDT collateral and, measured over the 23 cycles
+    that carried a collateral reading, 73% of the equity change was repricing rather than trading
+    (KILL-AR-05).  A -35% equity drawdown can be bitcoin, and de-risking a book that never lost
+    anything is a real cost paid for a reading that was never about the book.
+
+    So the path here is ``base + cumsum(attributed P&L)``: it starts at the account's equity and moves
+    only when the book realises something.  The high-water mark re-bases on the same event
+    ``drawdown_state`` uses - a cycle whose external flows were re-baselined - because a demo reset
+    arrives as a TRANSFER and carrying a pre-reset peak forward reports a drawdown nobody suffered.
+
+    Like every metric in this file it refuses to report zero when it cannot compute: a record with no
+    priced cycle, or with no attribution row inside it, says ``enforced: false`` and why.
+    """
+    by_bar: dict[int, float] = {}
+    for row in attribution:
+        bar = row.get("bar_open_ms")
+        try:
+            key = int(bar)  # type: ignore[arg-type]
+            by_bar[key] = by_bar.get(key, 0.0) + float(row.get("total") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    base: float | None = None
+    path = peak = 0.0
+    drawdown = 0.0
+    baseline_at: str | None = None
+    bars = 0
+    used = 0
+    for row in rows:
+        value = row.get("equity")
+        if not isinstance(value, int | float) or value <= 0:
+            continue
+        equity = float(value)
+        if base is None or (row.get("external_flows") or {}).get("rebaselined"):
+            base = path = peak = equity
+            baseline_at = str(row.get("at") or "")
+            bars = 0
+        bars += 1
+        try:
+            bar_key = int(row.get("bar_open_ms"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            bar_key = None
+        if bar_key is not None and bar_key in by_bar:
+            path += by_bar.pop(bar_key)
+            used += 1
+        peak = max(peak, path)
+        current = 0.0 if peak <= 0 else path / peak - 1.0
+        drawdown = min(drawdown, current)
+    if base is None:
+        return {
+            "enforced": False,
+            "why": "no cycle carried an equity reading, so there is no path to draw down from",
+            "value": None,
+            "action": None,
+            "rows": 0,
+        }
+    if used == 0:
+        return {
+            "enforced": False,
+            "why": "no attribution row lands on a priced cycle: the book has realised nothing to measure",
+            "value": None,
+            "action": None,
+            "rows": 0,
+            "base": base,
+            "baseline_at": baseline_at,
+        }
+    action: str | None = None
+    if current <= -params.rollback_at:
+        action = f"vol_target -> {params.rollback_to}"
+    elif current <= -params.deescalate_at:
+        action = f"vol_target -> {params.deescalate_to}"
+    return {
+        "enforced": True,
+        # `value` is the CURRENT distance below the running peak, because that is what a ladder is: a
+        # book that recovered is not still down.  `drawdown_state` above reports the deepest reading
+        # ever instead - correct for a monitor answering "was the budget ever breached", wrong for a
+        # rule that acts, which would then be pinned to the worst hour this account ever had.  Both are
+        # returned so neither question has to be answered with the other one's number.
+        # negative, so it reads the same way as `Policy.throttle_scalar` takes it
+        "value": current,
+        "max_drawdown": drawdown,
+        "path": path,
+        "peak": peak,
+        "base": base,
+        "attributed": path - base,
+        "baseline_at": baseline_at,
+        "bars": bars,
+        "rows": used,
+        "deescalate_at": -params.deescalate_at,
+        "rollback_at": -params.rollback_at,
+        "action": action,
+    }
+
+
 def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
     """Annualised volatility of the live equity path, enforced only on a single-construction window.
 
@@ -292,7 +394,10 @@ def guard_firings(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -
 
 
 def risk_budget_status(
-    rows: Sequence[Mapping[str, Any]], trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams
+    rows: Sequence[Mapping[str, Any]],
+    trades: Sequence[Mapping[str, Any]],
+    params: RiskBudgetParams,
+    attribution: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """The whole P13 monitoring block: ALERT where a threshold is breached, BLIND where one cannot be read.
 
@@ -306,12 +411,19 @@ def risk_budget_status(
     the readings arrive, which is the "unactionable standing fact" ``daily_alerts`` keeps as a notice.
     """
     drawdown = drawdown_state(rows, params)
+    # Both rulers, side by side, because the gap between them IS the reading: on 2026-09-09 the equity
+    # path was 1.30% below its mark and the attributed path 0.23%, a factor of 5.6 on the same record.
+    # R8 acts on the second one; this block is where a reader can see why that choice is not cosmetic.
+    attributed = attributed_drawdown_state(rows, attribution, params)
     volatility = realised_vol(rows, params)
     slippage = slippage_bps(trades, params, latest_ms=_latest_ms(rows))
     guards = guard_firings(rows, params)
     reasons: list[str] = []
+    if attributed["enforced"] and attributed["action"]:
+        reasons.append(f"归因回撤 {attributed['value']:.1%}（R8 口径），已执行：{attributed['action']}")
     if drawdown["action"]:
-        reasons.append(f"自高水位回撤 {drawdown['value']:.1%}，应执行：{drawdown['action']}")
+        # Kept as a reason but named for what it is: this one is a notice, R8 does not act on it.
+        reasons.append(f"权益自高水位回撤 {drawdown['value']:.1%}（含抵押品重估，R8 不据此动作）")
     if volatility["enforced"] and not volatility["inside"]:
         low, high = volatility["band"]
         reasons.append(f"实现波动率 {volatility['value']:.1%} 已跑出 {low:.0%}-{high:.0%} 区间")
@@ -327,6 +439,7 @@ def risk_budget_status(
         "reasons": reasons,
         "unreadable": unreadable,
         "drawdown": drawdown,
+        "attributed_drawdown": attributed,
         "realised_vol": volatility,
         "slippage": slippage,
         "guards": guards,
@@ -335,6 +448,7 @@ def risk_budget_status(
 
 __all__ = [
     "RiskBudgetParams",
+    "attributed_drawdown_state",
     "drawdown_state",
     "guard_firings",
     "realised_vol",

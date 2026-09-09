@@ -100,6 +100,20 @@ class AlphaModel:
             raise ValueError("stopping these books would leave no strategy")
         return replace(self, entries=entries, books={k: v for k, v in self.books.items() if k not in dropped})
 
+    def without_symbols(self, symbols: Iterable[str]) -> AlphaModel:
+        """A model that no longer names `symbols` in its pinned universe.
+
+        The mirror of `without_books`, and it exists for the same reason: when the loop stops trading
+        something, `registry_digest` has to stop claiming it does.  D-031 quarantines a symbol the venue
+        keeps rejecting, which under a pinned universe is the machine departing from a governed decision -
+        measured 2026-09-09: one quarantine left the engine trading 17 of 18 pinned symbols while the
+        digest stayed byte-identical, so `live status --check` would keep reporting agreement.
+        """
+        drop = {str(symbol).upper() for symbol in symbols}
+        if not drop or not self.universe:
+            return self
+        return replace(self, universe=tuple(s for s in self.universe if s not in drop))
+
     # --- targets --------------------------------------------------------------
     def eligible(self, panel: Panel, membership: pd.DataFrame | None = None) -> pd.DataFrame:
         """Symbols become tradable only after ``min_history_bars`` observed bars (new listings are excluded).

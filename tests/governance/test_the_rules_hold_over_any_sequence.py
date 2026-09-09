@@ -6,9 +6,19 @@ actually produced.  These properties answer that: hypothesis drives arbitrary ev
 machine and asserts the invariants that make autonomous promotion survivable.
 
 The invariants are the ones whose failure is expensive rather than the ones that are easy to state.
-R3's two probe slots and 1/3 budget bound what a wrong rule can cost; R7's three lives bound how
-long it can keep costing it; RETIRED being absorbing is what stops a demotion loop, which is the
-failure the operator explicitly asked to be protected against.
+R3's two probe slots and 1/3 budget bound what a wrong rule can cost; R5's freeze and R7's three
+lives bound how long it can keep costing it; RETIRED being absorbing is what stops a demotion loop,
+which is the failure the operator explicitly asked to be protected against.
+
+AC-G3 says "R0-R10, zero violations over 1,000 sequences", and this file must not be read as making
+that claim whole: only R3/R4/R5/R7 and the no-decision rule are properties OF A SEQUENCE of events.
+The others are not, and each is held somewhere a sequence cannot reach - R0 by the gate the report
+carries (`quantile_gate_pass` here is an input, not the rule), R1/R2 by the ledger and space digest in
+`budget.py` and its tests, R6 by the rollback drill, R8 by
+`tests/live/test_the_ladder_reads_attributed_pnl_not_equity.py`, R9 by the recorded digest and its
+comparison in `live status --check`, R10 by the pinned `policy_digest()`.  Naming the split is the
+point: a property test that quietly covered six of eleven rules while an acceptance criterion said
+eleven would be the same defect this project keeps finding.
 """
 
 from __future__ import annotations
@@ -59,7 +69,7 @@ def _run(sequence: list[tuple[str, Event, Facts, bool]]) -> list[Book]:
     return seen
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
 def test_r3_bounds_what_a_wrong_rule_can_cost(sequence: list[tuple[str, Event, Facts, bool]]) -> None:
     for book in _run(sequence):
@@ -67,7 +77,7 @@ def test_r3_bounds_what_a_wrong_rule_can_cost(sequence: list[tuple[str, Event, F
         assert book.probe_fraction <= POLICY.probe_budget_share + 1e-9
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
 def test_r4_lets_at_most_one_candidate_in_and_one_up_per_window(
     sequence: list[tuple[str, Event, Facts, bool]],
@@ -77,7 +87,7 @@ def test_r4_lets_at_most_one_candidate_in_and_one_up_per_window(
         assert book.to_main_this_window <= POLICY.max_probe_to_main_per_window
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
 def test_r7_gives_three_lives_and_no_more(sequence: list[tuple[str, Event, Facts, bool]]) -> None:
     for book in _run(sequence):
@@ -85,7 +95,7 @@ def test_r7_gives_three_lives_and_no_more(sequence: list[tuple[str, Event, Facts
             assert candidate.probe_entries <= POLICY.max_probe_entries_lifetime
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
 def test_retired_is_absorbing_so_a_demotion_loop_cannot_form(
     sequence: list[tuple[str, Event, Facts, bool]],
@@ -99,7 +109,7 @@ def test_retired_is_absorbing_so_a_demotion_loop_cannot_form(
                 assert name not in retired, f"{name} left RETIRED"
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
 def test_a_no_decision_cycle_changes_nothing(sequence: list[tuple[str, Event, Facts, bool]]) -> None:
     """KILL-AR-20: an ERROR phase or a rebaselined cycle must not be able to move any state."""
@@ -111,7 +121,7 @@ def test_a_no_decision_cycle_changes_nothing(sequence: list[tuple[str, Event, Fa
         assert not decision.allowed
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
 def test_every_refusal_names_something(sequence: list[tuple[str, Event, Facts, bool]]) -> None:
     """T-G0-2's property, at the source: a refusal with no rule attached cannot be attributed."""
@@ -122,6 +132,48 @@ def test_every_refusal_names_something(sequence: list[tuple[str, Event, Facts, b
             assert decision.reasons, "a refusal produced no reason"
             for reason in decision.reasons:
                 assert reason.split(":")[0].strip(), reason
+
+
+@settings(max_examples=1_000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(steps)
+def test_r5_a_frozen_book_admits_nothing(sequence: list[tuple[str, Event, Facts, bool]]) -> None:
+    """Two stopped probes freeze promotion for six windows - and a freeze that is only recorded is not one."""
+    book = Book(candidates={i: Candidate(id=i, fraction=POLICY.probe_budget_share / 2) for i in IDS})
+    for candidate_id, event, fact, roll_window in sequence:
+        was_frozen = book.frozen()
+        before = {name for name, c in book.candidates.items() if c.state is State.PROBE}
+        book, _ = apply(book, candidate_id, event, fact, POLICY)
+        after = {name for name, c in book.candidates.items() if c.state is State.PROBE}
+        if was_frozen:
+            assert after <= before, f"{after - before} entered probe while the book was frozen"
+        assert book.consecutive_probe_stops < POLICY.freeze_after_consecutive_stops or book.frozen()
+        if roll_window:
+            book = book.open_next_window()
+
+
+def test_r5_freezes_for_the_rest_of_this_window_and_six_more() -> None:
+    """ "Freeze 6 windows" has two readings, and this pins the one the machine actually implements.
+
+    The stop lands partway through a window that has already been used, so `frozen_until_window` is
+    `window + 6` and `frozen()` is `<=`: the remainder of the stop's own window plus six whole ones,
+    with promotion resuming at window 7.  That is the conservative reading and the same shape the rule
+    had under quarterly windows ("2 windows" = the rest of this quarter plus two).  Written down here
+    because the alternative reading differs by a month and nothing else in the tree would notice.
+    """
+    policy = POLICY
+    book = Book(
+        candidates={
+            "a": Candidate("a", State.PROBE, fraction=policy.probe_budget_share / 2),
+            "b": Candidate("b", State.PROBE, fraction=policy.probe_budget_share / 2),
+        }
+    )
+    for name in ("a", "b"):
+        book, _ = apply(book, name, Event.PNL_STOP, Facts(), policy)
+    assert book.consecutive_probe_stops == policy.freeze_after_consecutive_stops and book.frozen()
+    for _ in range(policy.freeze_windows + 1):
+        assert book.frozen(), f"lifted at window {book.window}, before {policy.freeze_windows} whole ones passed"
+        book = book.open_next_window()
+    assert book.window == policy.freeze_windows + 1 and not book.frozen()
 
 
 def test_a_probe_reaching_main_needs_nine_uninterrupted_windows() -> None:

@@ -27,7 +27,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
-from beidou_governance.policy import policy_digest
+from beidou_governance.policy import Policy, policy_digest
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
@@ -45,6 +45,7 @@ from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, is_own_order, startup_reconcile, take_snapshot
 from beidou_live.reports import collateral_share
+from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state
 from beidou_live.scheduler import (
     last_closed_bar_open_ms,
     late_seconds,
@@ -563,6 +564,7 @@ class LiveEngine:
             else await self._ingest_income(bar_open_ms, snapshot.equity)
         )
         probes = await self._check_probes(bar_open_ms)
+        ladder = await self._risk_ladder(bar_open_ms)
         targets = self.model.targets(
             usable,
             inputs.funding,
@@ -578,7 +580,9 @@ class LiveEngine:
         hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
         self.state.equity_hwm = hwm
         drawdown = 0.0 if hwm <= 0 else max(0.0, 1.0 - snapshot.equity / hwm)
-        scalar = drawdown_scalar(drawdown, config.throttle)
+        # D-017's overlay throttle (disabled) and R8's ladder are different rules on different
+        # rulers; they multiply rather than one shadowing the other.
+        scalar = drawdown_scalar(drawdown, config.throttle) * float(ladder["scalar"])
         raw = {symbol: float(weight) for symbol, weight in targets.weights.items()}
         for symbol in managed:
             raw.setdefault(symbol, 0.0)
@@ -648,12 +652,16 @@ class LiveEngine:
             "registry": registry_digest(self.model),
             # R9, the same instrument pointed at the rules: which governance thresholds this process is
             # running under.  KILL-Q15 was a registry edited on disk while the loop held the old model for
-            # 96 cycles; a policy edited on disk would be the same failure with promotions attached, and
-            # the only difference is that nobody would be looking.  Recorded, never read by the loop.
-            "governance": policy_digest(),
+            # 96 cycles; a policy edited on disk would be the same failure with promotions attached.
+            # Read back by `live status --check`, which is what turns it from a number into an
+            # instrument.  Conditional on the rule's own switch: `record_digest_every_cycle` was in
+            # `policy_digest()` - so the digest PROMISED that changing it was visible - while nothing
+            # consulted it, which is a threshold that looks live and is dead.
+            **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
             "clock": clock,
             "external_flows": flows,
             "throttle": {"scalar": scalar, "drawdown": drawdown, "equity_hwm": hwm},
+            "risk_ladder": ladder,
             "exit_events": exit_events,
             "probes": probes,
             "targets": decision.targets,
@@ -748,7 +756,7 @@ class LiveEngine:
             )
             self._remember_order(report)
             record["orders"].append(report.to_dict())
-        record["quarantined"] = self._quarantine(reports)
+        record["quarantined"] = await self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
         self._finish_cycle(record, targets.contributions)
         return record
@@ -774,7 +782,7 @@ class LiveEngine:
         return reports
 
     # --- helpers ----------------------------------------------------------------
-    def _quarantine(self, reports: Sequence[ExecutionReport]) -> list[str]:
+    async def _quarantine(self, reports: Sequence[ExecutionReport]) -> list[str]:
         """D-031: a symbol the venue keeps rejecting leaves the universe and takes the reduce-only exit path.
 
         Evidence, not suspicion.  A streak only advances when the same cycle placed a non-rejected order
@@ -801,7 +809,23 @@ class LiveEngine:
             self.universe = [symbol for symbol in self.universe if symbol not in hit]
             self.state.universe = list(self.universe)
             self.state.leaving = list(dict.fromkeys([*self.state.leaving, *hit]))
+            # The digest has to follow the traded set, or this path is KILL-Q15 again: measured
+            # 2026-09-09, one quarantine left the loop trading 17 of 18 PINNED symbols while
+            # `registry_digest` stayed byte-identical, so `live status --check` kept reporting
+            # agreement.  Moving it makes the check report a divergence - which is the true statement:
+            # the process is no longer trading the universe the registry names.
+            self.model = _without_symbols(self.model, hit)
             logger.warning("quarantined after %d rejected cycles, exiting reduce-only: %s", after, hit)
+            if self.config.universe_pinned:
+                # Under a pin the daily re-rank records a proposal and adopts nothing, so nothing puts
+                # a quarantined symbol back: the traded set stays smaller than the registry's until
+                # somebody restarts.  That is a machine departing from a governed decision, and it has
+                # to be said out loud rather than left in a log line and a moved digest.
+                await self.alerts.send(
+                    f"北斗：{hit} 连续 {after} 个周期被交易所拒单，已退出（reduce-only）。"
+                    "universe 由 registry 钉住，每日重排只记录不采纳——**不重启就不会回来**，"
+                    "且 registry digest 已随之改变"
+                )
         return hit
 
     async def _maybe_refresh_universe(self, bar_open_ms: int) -> dict[str, Any] | None:
@@ -1089,6 +1113,100 @@ class LiveEngine:
                 f"日初权益与高水位已重置为 {equity:.2f}"
             )
         return flows
+
+    async def _risk_ladder(self, bar_open_ms: int) -> dict[str, Any]:
+        """R8 / DL-G7: de-escalate the book on ATTRIBUTED drawdown, after two cycles of grace.
+
+        Two sentences in this file and in `risk_budget.py` say the acting is deliberately not
+        automated, and they are about the equity instrument: 52% of this account is collateral and
+        73% of its equity moves are repricing, so a rule that de-risked on that reading would pay a
+        real cost for a number that was never about the book.  `attributed_drawdown_state` takes that
+        term out - which is what makes this one defensible, and the only reason it acts (R8, KILL-AR-05).
+
+        The rungs and the grace live in `Policy`, so they are inside `policy_digest()` and the loop
+        already records that every cycle (R9).  Changing one is visible in the record without anything
+        further being added here.
+
+        The grace is two cycles: the first crossing alerts and does nothing, because a single late
+        income page or one outsized fill must not halve the risk budget by itself.  The record needs no
+        special "before" and "after" rows - every cycle already carries this block, so the transition
+        is the pair of adjacent cycles.  It is deliberately NOT written to
+        `governance/transactions.jsonl`: that file is a registry-digest chain and `closed()` reads it as
+        one, so a row that changes no registry digest would break the chain it is meant to prove.
+        """
+        policy = Policy()
+        base = float(self.config.portfolio.vol_target)
+        standing = dict(self.state.risk_ladder or {})
+        reading = attributed_drawdown_state(
+            self.store.read_jsonl(self.store.cycles_path),
+            self.store.read_jsonl(self.store.attribution_path),
+            RiskBudgetParams(),
+        )
+        block: dict[str, Any] = {
+            "ruler": "attributed_pnl",
+            "enforced": bool(reading.get("enforced")),
+            "drawdown": reading.get("value"),
+            "attributed": reading.get("attributed"),
+            "base_vol_target": base,
+            "grace_cycles": policy.drawdown_grace_cycles,
+            "scalar": 1.0,
+            "acting": False,
+        }
+        if not reading.get("enforced"):
+            # A blind reading does not lift a breach that is already standing: "cannot compute" is not
+            # "recovered".  It also cannot start one.
+            block["why"] = reading.get("why")
+            if standing.get("acting"):
+                block.update(
+                    {
+                        "scalar": float(standing["scalar"]),
+                        "acting": True,
+                        "vol_target": float(standing["vol_target"]),
+                        "cycles": int(standing.get("cycles", 0)),
+                        "held_blind": True,
+                    }
+                )
+            return block
+
+        drawdown = float(reading["value"])
+        target = policy.throttle_scalar(drawdown)
+        if target is None:
+            if standing:
+                self.state.risk_ladder = {}
+                await self.alerts.send(
+                    f"北斗：归因回撤回到 {drawdown:.2%}，已在 R8 梯的第一档之上——vol_target 恢复 {base}"
+                )
+                logger.warning("risk ladder cleared at attributed drawdown %.4f", drawdown)
+            return block
+        cycles = int(standing.get("cycles", 0)) + 1
+        scalar = float(target) / base if base > 0 else 1.0
+        acting = cycles > policy.drawdown_grace_cycles
+        self.state.risk_ladder = {
+            "cycles": cycles,
+            "rung": target,
+            "vol_target": target,
+            "scalar": scalar,
+            "acting": acting,
+            "drawdown": drawdown,
+            "since_bar_ms": int(standing.get("since_bar_ms") or bar_open_ms),
+            "at": utc_now_iso(),
+        }
+        block.update({"cycles": cycles, "rung": target, "vol_target": target})
+        if acting:
+            block.update({"scalar": scalar, "acting": True})
+            if not standing.get("acting") or standing.get("rung") != target:
+                logger.warning("risk ladder acting: vol_target -> %s (scalar %.4f)", target, scalar)
+                await self.alerts.send(
+                    f"北斗：归因回撤 {drawdown:.2%} 连续 {cycles} 个周期在 R8 梯上，"
+                    f"vol_target {base} → {target}（scalar {scalar:.4f}）已生效"
+                )
+        elif cycles == 1:
+            logger.warning("risk ladder first crossing at attributed drawdown %.4f", drawdown)
+            await self.alerts.send(
+                f"北斗：归因回撤 {drawdown:.2%} 触及 R8 梯（vol_target → {target}）。"
+                f"按 {policy.drawdown_grace_cycles} 周期宽限，本周期**不缩仓**"
+            )
+        return block
 
     async def _check_probes(self, bar_open_ms: int) -> list[dict[str, Any]]:
         """D-019: evaluate every probe book's stop rule on the attributed P&L; a stopped book leaves the model."""
@@ -1564,6 +1682,15 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
 def evidence_construction_of(config: LiveConfig) -> str:
     blocks = evidence_construction(config)
     return evidence_construction_digest(blocks["portfolio"], blocks["book_guards"], blocks["exits"])
+
+
+def _without_symbols(model: SignalModel, symbols: Sequence[str]) -> SignalModel:
+    """Drop quarantined symbols from a model that pins a universe (``AlphaModel.without_symbols``)."""
+    drop = getattr(model, "without_symbols", None)
+    if not symbols or not callable(drop):
+        return model
+    reduced: SignalModel = drop(list(symbols))
+    return reduced
 
 
 def _without_books(model: SignalModel, books: Sequence[str]) -> SignalModel:

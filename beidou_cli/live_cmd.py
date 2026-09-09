@@ -24,6 +24,7 @@ from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, 
 from beidou_cli import live, report
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore
+from beidou_governance.policy import policy_digest
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
@@ -71,6 +72,7 @@ from beidou_live.verify import (
     cycle_clock,
     last_cycle,
     last_recorded_as_of_ms,
+    last_recorded_governance_digest,
     last_recorded_registry_digest,
     verify_live_targets,
 )
@@ -476,6 +478,19 @@ def live_status(
                 f"磁盘上的 registry（{on_disk}）不是循环正在跑的那份（{recorded}）；"
                 "下次重启会静默改变交易内容 —— 要么有意识地重启，要么把文件改回去"
             )
+    # R9 / RISK-G8, same shape one layer up: the loop imports `policy.py` once, so a rule edit changes
+    # the repository and not the process.  The digest was already in every cycle row; this is the
+    # comparison that turns it into an instrument.
+    recorded_policy = last_recorded_governance_digest(store)
+    if recorded_policy is None:
+        click.echo("治理规则：还没有任何周期记录过 digest")
+    elif recorded_policy == policy_digest():
+        click.echo(f"治理规则：与正在运行的循环一致（{recorded_policy}）")
+    else:
+        problems.append(
+            f"磁盘上的治理规则（{policy_digest()}）不是循环正在跑的那份（{recorded_policy}）；"
+            "阈值改了但进程还按旧的判 —— 要么重启，要么把 policy.py 改回去"
+        )
     if heartbeat is None:
         problems.append("没有心跳")
     else:

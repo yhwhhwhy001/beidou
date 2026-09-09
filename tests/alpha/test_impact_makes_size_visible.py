@@ -127,3 +127,31 @@ def test_negative_parameters_are_refused() -> None:
         ImpactModel(capital=-1.0)
     with pytest.raises(ValueError):
         ImpactModel(coefficient=-1.0)
+
+
+def test_the_stress_arms_carry_the_charge_the_headline_carries() -> None:
+    """`cost_stress` is a GATE (`verdict.decide` reads x2), so it has to be priced as the run is labelled.
+
+    Found 2026-09-09 on the first AC-C1 artefact: its header said `impact_model: {capital: 100000}`, its
+    walk-forward was priced under the square-root law, and both stress blocks were priced flat - within
+    0.002 Sharpe of the flat report produced the day before.  The error ran in the permissive direction.
+
+    The property is what the fix relies on: the impact charge composes with a SCALED `CostModel` rather
+    than being scaled by it.  A multiplier on `turnover_bps` is a question about fees, and impact is not
+    a fee.
+    """
+    panel = _panel()
+    weights = _weights(panel)
+    impact = ImpactModel(capital=5_000_000.0)
+    for multiplier in (1.0, 1.5, 2.0):
+        cost = CostModel(turnover_bps=7.0 * multiplier)
+        flat = run_backtest(panel, weights, cost).costs.to_numpy().sum()
+        charged = run_backtest(panel, weights, cost, impact=impact).costs.to_numpy().sum()
+        assert charged > flat, f"x{multiplier}: the stress arm ignored the impact model"
+    # and the charge itself does not move with the fee multiplier - it is size, not price
+    charges = [
+        run_backtest(panel, weights, CostModel(turnover_bps=7.0 * m), impact=impact).costs.to_numpy().sum()
+        - run_backtest(panel, weights, CostModel(turnover_bps=7.0 * m)).costs.to_numpy().sum()
+        for m in (1.0, 1.5, 2.0)
+    ]
+    assert max(charges) - min(charges) < 1e-9, f"the impact charge scaled with the fee multiplier: {charges}"

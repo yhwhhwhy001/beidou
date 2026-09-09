@@ -123,6 +123,28 @@ def last_recorded_registry_digest(store: StateStore) -> str | None:
     return None
 
 
+def last_recorded_governance_digest(store: StateStore) -> str | None:
+    """Policy digest of the newest non-dry-run cycle: which RULES the running process holds (R9).
+
+    Same shape as `last_recorded_registry_digest` and for the same reason.  A running process holds the
+    `beidou_governance.policy` module it imported at startup, so editing a threshold changes what the
+    repository says without changing what the loop would enforce.  R9 put the digest in every cycle row
+    to make that visible; until this function existed nothing read it back, so the record contained the
+    evidence and no instrument compared it.  Measured on 2026-09-09: policy 0.3.0 landed at 04:48Z, the
+    loop kept reporting 0.2.0's `753638a519ac`, and the 05:08Z restart that closed the gap was for an
+    unrelated reason.
+
+    ``None`` when no cycle recorded one - rows written before the field existed are not a divergence.
+    """
+    for record in reversed(store.read_jsonl(store.cycles_path)):
+        if record.get("dry_run"):
+            continue
+        value = record.get("governance")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def cycle_clock(record: Mapping[str, Any] | None) -> dict[str, Any]:
     """What the last cycle knew about the host clock: its measured skew, and whether income ingestion was skipped."""
     if record is None:
@@ -171,6 +193,7 @@ __all__ = [
     "cycle_clock",
     "last_cycle",
     "last_recorded_as_of_ms",
+    "last_recorded_governance_digest",
     "last_recorded_registry_digest",
     "verify_live_targets",
 ]

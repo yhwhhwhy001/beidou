@@ -1389,14 +1389,57 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # out, `accepted_on` stays in - it decides where the trailing window starts), conditional so an
 # unprobed registry keeps its digest, and NOT in the construction fingerprint, because reviewing a
 # threshold must not reset M-010's 30-day clock.
+# 2026-09-09, +244 live / +15 cli: DL-G7 / R8 - the ladder had no caller and the digest had no reader.
+# `Policy.throttle_scalar` and `drawdown_grace_cycles` were written, versioned, hashed into
+# `policy_digest()` and recorded every cycle, and nothing in the tree consulted them: the fifth
+# instance today of a thing that looks like a control and controls nothing.  The growth is the wiring
+# plus `attributed_drawdown_state`, which is the whole point of the rule - `drawdown_state` reads venue
+# equity, 52% of this account is non-USDT collateral and 73% of its measured equity change was
+# repricing, so de-risking on that reading pays a real cost for a number that was never about the book.
+# On the live record the two rulers differ by 5.6x on the same days (equity -1.30%, attributed -0.23%),
+# which is why this is not a cosmetic choice.  `value` is the CURRENT distance below the running peak,
+# not the deepest ever: a ladder pinned to the worst hour the account ever had would never come back up.
+# The cli line is `live status --check` comparing the recorded governance digest against the module on
+# disk - R9 put the number in every row to make a rule edit visible and nothing read it back.  It found
+# a real one on its first run: policy 0.3.0 landed 04:48Z, the loop kept reporting 0.2.0's
+# `753638a519ac`, and the restart that closed the gap at 05:08Z was for an unrelated reason.
+# 2026-09-09, +2 live / +26 cli / +15 gov: four MORE policy fields that nothing read.  A sweep of every
+# `Policy` field against the production tree - written after the R8 ladder turned out to have no caller -
+# found `gate_scope`, `report_whole_library_n`, `record_digest_every_cycle` and `no_decision_on_rebaseline`
+# in the same state.  None of them was a behaving bug: each hard-coded value happened to match its
+# declared one.  The hazard is what `policy_digest()` PROMISES - change a field and the record shows it -
+# which for these four was false in the worst direction: the digest moved, the operator read a rule
+# version bump, and the machine did exactly what it did before.  Now all four are consulted, and
+# `tests/governance/test_every_threshold_has_a_consumer.py` is the general guard, which is the part
+# worth the lines: it would have caught the ladder, and it catches the next one.
+# The cli growth also carries DL-C1's stress fix (`impact=impact` in `cost_stress`/`slippage_stress`) and
+# the gov growth the replay's capacity-arm attribution, so a report priced at 100k against an 11k book is
+# read as the sensitivity run it is rather than as a promotion the operator skipped.
+# 2026-09-09, +23 alpha: `ensemble.turnover_penalty` is parsed, hashed into `registry_fingerprint`, and
+# implemented by nothing - `combine_targets` takes no such parameter and `AlphaModel` does not carry it.
+# Found by mutating every leaf of the shipped registry and asking which ones move a digest, which is the
+# sweep `tests/live/test_the_digest_sees_every_live_knob.py` now runs every time.  Setting it would move
+# the research fingerprint, make the change look adopted, and leave the loop combining targets exactly as
+# before: KILL-Q15 with the digest on the wrong side, moving when nothing else does.  `parse_registry`
+# now refuses any value but zero; zero stays parseable so archived fingerprints still reproduce, and
+# wiring it is a construction change that needs its own evidence.
+# 2026-09-09, +14 alpha / +25 live: D-031 could shrink a PINNED universe behind the digest.  The sweep
+# above, pointed at the profile instead of the registry, surfaced `pool.quarantine_after` as a live knob
+# outside `construction_fingerprint`; reading what it does found that `_quarantine` removed a symbol from
+# `self.universe` and left `self.model` alone.  Measured: one quarantine, 17 of 18 pinned symbols traded,
+# `registry_digest` byte-identical at `abe21f7a8edf`, and `live status --check` still reporting agreement.
+# The pin shipped the same morning is what made it matter - before it the digest carried no universe to
+# be wrong about.  `AlphaModel.without_symbols` mirrors `without_books`, and the pinned case alerts,
+# because under a pin the daily re-rank adopts nothing and the symbol does not come back without a
+# restart: a machine departing from a governed decision may not do it quietly.
 CEILING = {
-    "beidou_alpha": 7_113,
-    "beidou_live": 6_263,
-    "beidou_cli": 4_209,
+    "beidou_alpha": 7_150,
+    "beidou_live": 6_534,
+    "beidou_cli": 4_250,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_077,
+    "beidou_governance": 2_092,
 }
 
 

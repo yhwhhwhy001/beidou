@@ -103,10 +103,33 @@ def parse_registry(payload: Mapping[str, Any]) -> Registry:
         universe=tuple(str(symbol).upper() for symbol in (payload.get("universe") or [])),
         version=int(payload.get("version", 1)),
         ensemble_method=str(ensemble.get("method", "mean")),
-        turnover_penalty=float(ensemble.get("turnover_penalty", 0.0)),
+        turnover_penalty=_unimplemented_turnover_penalty(ensemble),
         strategies=tuple(entries),
         books=books,
     )
+
+
+def _unimplemented_turnover_penalty(ensemble: Mapping[str, Any]) -> float:
+    """`ensemble.turnover_penalty` is parsed, hashed, and implemented by nothing.  Refuse a live value.
+
+    Found 2026-09-09 by mutating every registry leaf and asking which ones move a digest: this one moves
+    `registry_fingerprint` and reaches no model - `combine_targets` has no such parameter and
+    `AlphaModel` does not carry it.  So setting it would move the research fingerprint, make the change
+    look adopted, and leave the loop combining targets exactly as before.  KILL-Q15's shape with the
+    digest on the wrong side: it moves when nothing else does.
+
+    Zero is left parseable rather than the field deleted, because deleting it would change the
+    fingerprint of every archived report.  Wiring it is a construction change and needs its own
+    evidence; until then it may not be set.
+    """
+    value = float(ensemble.get("turnover_penalty", 0.0))
+    if value != 0.0:
+        raise ValueError(
+            f"ensemble.turnover_penalty={value} is not implemented: `combine_targets` takes no such "
+            "parameter, so setting it would move `registry_fingerprint` and change nothing the loop does.  "
+            "Wire it with its own pre-registered evidence, or leave it at 0."
+        )
+    return value
 
 
 def registry_fingerprint(
