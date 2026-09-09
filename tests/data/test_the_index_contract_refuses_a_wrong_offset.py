@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import httpx
 import numpy as np
 import pandas as pd
 import pytest
@@ -296,3 +297,120 @@ def test_the_client_sends_pair_rather_than_symbol() -> None:
 def test_an_unknown_interval_is_refused_by_name() -> None:
     with pytest.raises(ValueError, match="unsupported metrics period"):
         index_contract("7m")
+
+
+# --------------------------------------------------------------------------------------------------
+# The command.  #29 had a contract and a verification and no way to run either; a command that nothing
+# drives would be the same hole one level out, which is what happened to `governance canary` on
+# 2026-09-09 - it shipped broken on its first real run and no test noticed.
+# --------------------------------------------------------------------------------------------------
+
+
+BARS = 30
+# The newest bucket is half-finished, which is what the venue actually serves: at 09:19Z the 1h bucket
+# came back with `count` 2364 of an eventual 3600 and a `close` that was the index AT THAT MOMENT.
+NOW_MS = START + (BARS - 1) * HOUR_MS + HOUR_MS // 2
+
+
+def _index_transport(asked: list[dict[str, str]]) -> httpx.MockTransport:
+    rows = _rows(BARS)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/fapi/v1/time":
+            return httpx.Response(200, json={"serverTime": NOW_MS})
+        params = dict(request.url.params)
+        asked.append(params)
+        if params["pair"] == "BADUSDT":
+            # The venue's own answer for a pair it does not list; 400 is not retryable, so it lands here.
+            return httpx.Response(400, json={"code": -1121, "msg": "Invalid symbol."})
+        after = int(params.get("startTime", 0))
+        return httpx.Response(200, json=[row for row in rows if int(row[0]) >= after])  # type: ignore[arg-type]
+
+    return httpx.MockTransport(handler)
+
+
+def _run_index(root, monkeypatch, asked, symbols="BTCUSDT"):  # type: ignore[no-untyped-def]
+    from click.testing import CliRunner
+
+    import beidou_cli.data_cmd as data_cmd
+
+    def client(url: str) -> IndexPriceClient:
+        built = IndexPriceClient(url)
+        built._client = httpx.Client(base_url=url, transport=_index_transport(asked))
+        return built
+
+    monkeypatch.setattr(data_cmd, "IndexPriceClient", client)
+    return CliRunner().invoke(
+        data_cmd.data.commands["index"], ["--root", str(root), "--symbols", symbols, "--start", "2026-09"]
+    )
+
+
+def test_the_command_stores_only_closed_bars_and_resumes_from_the_store(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Two claims the operator has to be able to read off one run, and neither is free.
+
+    The bucket in progress must not land in the store - it is a price at a moment dressed as a bar, and
+    `close_time` survives the parse only so `drop_unclosed` can tell the two apart.  And the second run
+    must ask from the watermark rather than re-downloading the history: the store IS the resume point,
+    which is what makes a daily job cheap enough to schedule.
+    """
+    from beidou_data.store import MetricsStore
+
+    asked: list[dict[str, str]] = []
+    first = _run_index(tmp_path, monkeypatch, asked)
+
+    assert first.exit_code == 0, first.output
+    assert f"+{BARS - 1} bars" in first.output, first.output
+    store = MetricsStore(tmp_path, kind="index_klines_1h")
+    assert store.last_open_time("BTCUSDT") == START + (BARS - 2) * HOUR_MS
+    # The interval is part of the store's `kind`: MetricsStore keys on the symbol alone, so 1h and 4h
+    # bars sharing a directory would merge into one file on a key that cannot tell them apart.
+    assert (tmp_path / "index_klines_1h" / "BTCUSDT.parquet").exists()
+
+    second = _run_index(tmp_path, monkeypatch, asked)
+
+    assert second.exit_code == 0, second.output
+    assert "no closed bar the store did not already hold" in second.output
+    assert asked[0].get("startTime") == str(pd.Timestamp("2026-09-01", tz="UTC").value // 1_000_000)
+    assert asked[-1]["startTime"] == str(START + (BARS - 2) * HOUR_MS + 1)
+    assert store.last_open_time("BTCUSDT") == START + (BARS - 2) * HOUR_MS
+
+
+def test_one_unlistable_pair_does_not_end_a_universe_wide_run(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """`metrics_archive.sync_metrics` learned this on a six-hour job: the store is the watermark, so
+    ending the run for one bad symbol throws away every other symbol's work.  The failure is NAMED,
+    because a run that says "1 failed" and nothing else is the shape `ddcb216` had just removed.
+    """
+    from beidou_data.store import MetricsStore
+
+    result = _run_index(tmp_path, monkeypatch, [], symbols="BADUSDT,BTCUSDT")
+
+    assert result.exit_code == 0, result.output
+    assert "BADUSDT: ! HTTPStatusError" in result.output
+    assert MetricsStore(tmp_path, kind="index_klines_1h").symbols() == ["BTCUSDT"]
+
+
+def test_the_ingest_admits_no_column_to_live_and_says_so(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Downloading a column and admitting it are different acts, and this command only does the first.
+
+    `verify_index_contract` needs the daily archive BESIDE this REST page - two independent renderings -
+    and this command fetches one, so the honest line is that four columns are stored and none may reach
+    live.  Printing nothing would leave the reader to assume the ingest settled it.
+    """
+    result = _run_index(tmp_path, monkeypatch, [])
+
+    assert result.exit_code == 0, result.output
+    assert f"live gate: 0/{len(INDEX_VALUE_COLUMNS)} index columns may reach live" in result.output
+    for column in INDEX_VALUE_COLUMNS:
+        assert f"REFUSED {column}" in result.output
+    assert "no verification on record" in result.output
+
+
+def test_the_command_refuses_to_guess_a_universe_when_the_store_is_empty(tmp_path) -> None:
+    from click.testing import CliRunner
+
+    import beidou_cli.data_cmd as data_cmd
+
+    result = CliRunner().invoke(data_cmd.data.commands["index"], ["--root", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "holds no 1h klines" in result.output

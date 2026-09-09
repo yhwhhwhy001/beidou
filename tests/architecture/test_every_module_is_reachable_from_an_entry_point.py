@@ -68,22 +68,13 @@ EXEMPT: dict[str, str] = {
         "was checked; a CLI for it would be a command that can only fail."
     ),
     "beidou_data.liquidation_archive": "The archive half of #19; same ruling, same reason.",
-    "beidou_data.onchain": (
-        "#31 delivered its contract and its verification (Coin Metrics, 49/528 symbols) but no ingest "
-        "command: `beidou data` has metrics/pool/spot/status/sync and nothing for on-chain.  Reachable "
-        "the moment `data_cmd` grows one, which is the honest read of §6 块 1 for this column."
-    ),
-    "beidou_data.index_price": (
-        "#29 the same shape as #31: contract and offset verification landed, store/sync/CLI did not."
-    ),
-    "beidou_data.macro": (
-        "#32, merged 2026-09-09 into the same shape as #31 and #29 - contract, verification and the "
-        "revision ledger landed, no store and no `beidou data macro`.  Its author names the omission "
-        "as a scope call rather than an oversight, which is what an exemption is for.  This guard went "
-        "red on it the first time it ran after the merge, which is the guard working: an 844-line "
-        "module no command can reach is exactly what it exists to make visible."
-    ),
 }
+# Retired 2026-09-10: `beidou_data.onchain`, `beidou_data.index_price` and `beidou_data.macro` are
+# reachable through `beidou data onchain|index|macro`.  The entries are DELETED rather than annotated,
+# which `test_the_exemptions_are_named_rather_than_counted` enforces from the other side - an exemption
+# list nobody prunes stops being a list of decisions.  What each command had to do to earn the deletion
+# is in `data_cmd`: reaching a module is not the same as running it, so each one is driven by a test
+# through the CLI, and each prints its own RISK-G3 gate rather than letting an ingest read as consent.
 
 
 def _modules() -> dict[str, Path]:
@@ -169,3 +160,8 @@ def test_the_guard_can_fail() -> None:
     assert "beidou_governance.canary" in seen, "wired 2026-09-09 by `governance canary`"
     assert "beidou_alpha.signals.tsmom" in seen, "reached only via `from beidou_alpha.signals import tsmom`"
     assert "beidou_live.engine" in seen and "beidou_data.spot" in seen
+    for feed in ("beidou_data.onchain", "beidou_data.index_price", "beidou_data.macro"):
+        # Wired 2026-09-10 by `data onchain|index|macro`.  Named here as well as covered by the dead-code
+        # test above, because these three are the whole reason this file exists and a re-import that
+        # quietly dropped one would otherwise only show up as an exemption someone was tempted to re-add.
+        assert feed in seen, f"{feed} lost its command; it is an ingest, not an exemption"

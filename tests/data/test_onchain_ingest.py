@@ -15,6 +15,7 @@ import pytest
 from beidou_data.onchain import (
     ADMITTED_METRICS,
     STATUS_SUFFIX,
+    WITNESS_COLUMN,
     AssetMapping,
     CommunityClient,
     map_to_asset,
@@ -287,3 +288,140 @@ def test_the_store_is_the_metrics_store_under_its_own_kind(tmp_path) -> None:
     assert store.append("btc", frame) == 1
     assert store.last_open_time("btc") == pd.Timestamp("2026-06-01", tz="UTC").value // 1_000_000
     assert (tmp_path / "onchain" / "btc.parquet").exists()
+
+
+# --------------------------------------------------------------------------------------------------
+# The command, because a command nothing drives is the defect of 2026-09-09
+# --------------------------------------------------------------------------------------------------
+
+
+DAYS = 20
+FIRST_DAY = pd.Timestamp("2026-06-01", tz="UTC")
+
+
+def _tx(i: int) -> float:
+    """A count that MOVES 20% a day, which is the whole precondition for refuting the one-day rivals.
+
+    A flat series agrees with itself at every offset and `verify_stamp_offset` answers UNVERIFIABLE for
+    the honest reason that nothing was refuted; the command would then admit no column and this file
+    would be testing the refusal path while believing it tested the happy one.
+    """
+    return round(500_000 * 1.2**i)
+
+
+def _community_transport(*, status_time: str | None = None) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "catalog" in request.url.path:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"asset": asset, "metrics": [{"frequencies": [{"frequency": "1d", "community": True}]}]}
+                        for asset in ("btc", "eth")
+                    ]
+                },
+            )
+        asset = request.url.params["assets"]
+        rows = [
+            _row(str((FIRST_DAY + pd.Timedelta(days=i)).date()), f"{_tx(i):.0f}", asset=asset, status_time=status_time)
+            for i in range(DAYS)
+        ]
+        return httpx.Response(200, json={"data": rows})
+
+    return httpx.MockTransport(handler)
+
+
+def _witness_transport() -> httpx.MockTransport:
+    """blockchain.info's chart: the same counts, computed independently, under its own stamp."""
+    values = [{"x": int((FIRST_DAY + pd.Timedelta(days=i)).timestamp()), "y": _tx(i)} for i in range(DAYS)]
+    return httpx.MockTransport(lambda request: httpx.Response(200, json={"values": values}))
+
+
+def _run_onchain(root, monkeypatch, *, status_time=None, extra=None):  # type: ignore[no-untyped-def]
+    """Drive the command the way the operator does - through the CLI, against two fake publishers."""
+    from click.testing import CliRunner
+
+    import beidou_cli.data_cmd as data_cmd
+    from beidou_data.onchain import CommunityClient as Community
+    from beidou_data.onchain import WitnessClient as Witness
+
+    monkeypatch.setattr(
+        data_cmd,
+        "CommunityClient",
+        lambda: Community(backoff=0.0, transport=_community_transport(status_time=status_time)),
+    )
+    monkeypatch.setattr(data_cmd, "WitnessClient", lambda: Witness(transport=_witness_transport()))
+    return CliRunner().invoke(
+        data_cmd.data.commands["onchain"],
+        [
+            "--root",
+            str(root),
+            "--symbols",
+            "BTCUSDT,ETHUSDT,SOLUSDT",
+            "--from",
+            str(FIRST_DAY.date()),
+            "--to",
+            str((FIRST_DAY + pd.Timedelta(days=DAYS - 1)).date()),
+            *(extra or []),
+        ],
+    )
+
+
+def test_the_command_stores_by_asset_and_admits_exactly_the_column_the_witness_compared(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Point 6 as the operator sees it: three columns are stored, ONE may reach live.
+
+    The tempting reading of a PASS is "the feed is verified".  The feed is not the unit - the column
+    is - and the free witness publishes transactions and nothing else, so the other two are refused on
+    alignment's fourth refusal.  If this command ever prints ADMITTED for all three, that reading has
+    got into the code.
+    """
+    result = _run_onchain(tmp_path, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    # SOLUSDT has no community asset at all - an honest absence, reported rather than dropped.
+    assert "on-chain legs: 2 assets for 2/3 perpetuals" in result.output
+    assert f"btc (BTCUSDT): {DAYS} rows stored, last day 2026-06-20" in result.output
+    assert "witness: PASS" in result.output
+    assert f"ADMITTED {WITNESS_COLUMN}" in result.output
+    for refused in ("onchain_active_addresses", "onchain_supply"):
+        assert f"REFUSED  {refused}" in result.output, result.output
+    assert "never compared" in result.output
+    assert (tmp_path / "onchain" / "btc.parquet").exists()
+    assert MetricsStore(tmp_path, kind=store_kind()).symbols() == ["btc", "eth"]
+
+
+def test_a_cell_the_source_wrote_late_is_refused_by_the_command_that_just_stored_it(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The fifth refusal, driven end to end: the same PASS, and the column still does not reach live.
+
+    Storing a column and admitting it are different acts.  A command that printed its verdict from
+    anywhere but the stored cells would pass the test above and miss this one.
+    """
+    result = _run_onchain(tmp_path, monkeypatch, status_time="2028-09-09T00:00:00.000000000Z")
+
+    assert result.exit_code == 0, result.output
+    assert "witness: PASS" in result.output
+    assert f"REFUSED  {WITNESS_COLUMN}" in result.output
+    assert "written after their declared availability" in result.output
+
+
+def test_the_command_admits_nothing_when_the_witness_was_skipped(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """`--no-witness` is an ingest with no re-measurement, and silence there would read as consent."""
+    result = _run_onchain(tmp_path, monkeypatch, extra=["--no-witness"])
+
+    assert result.exit_code == 0, result.output
+    assert "witness: skipped" in result.output
+    assert "ADMITTED" not in result.output
+    assert "no verification on record" in result.output
+
+
+def test_the_command_refuses_to_guess_a_universe_when_the_store_is_empty(tmp_path) -> None:
+    from click.testing import CliRunner
+
+    import beidou_cli.data_cmd as data_cmd
+
+    result = CliRunner().invoke(
+        data_cmd.data.commands["onchain"], ["--root", str(tmp_path), "--from", "2026-06-01", "--to", "2026-06-02"]
+    )
+
+    assert result.exit_code != 0
+    assert "holds no 1h klines" in result.output

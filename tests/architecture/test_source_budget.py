@@ -1708,10 +1708,22 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (6 distinct raw vs 3 canonical on the armed record).  Both are the same defect this whole day is
 # about, arriving in the fix for it: a command added to make a module reachable, and then not
 # exercised.  The lines are the alias parameter and the test that drives the command through the CLI.
+# 2026-09-10, +236 beidou_cli: `beidou data onchain`, `data index` and `data macro`, the three ingest
+# commands §9A item 6 asks for.  1,757 lines of tested `beidou_data` - #31's Coin Metrics downloader,
+# #29's index client, #32's release ledger - could not be reached from any command, so three modules
+# with contracts, verifications and their own test files were sitting in the reachability guard's
+# EXEMPT list waiting for exactly this.  232 lines of entry point against 1,757 lines of data code that
+# nothing could run is the trade, and the ratio is the argument: 7.6 lines of data code reached per
+# line of entry point.  What the lines are NOT is a fourth store or a refactor of the three modules -
+# each command reuses `MetricsStore` (macro stores nothing, deliberately), and the largest single block
+# is the docstrings recording why each command prints a RISK-G3 refusal rather than treating an ingest
+# as admission.  The counterweight is that this grows non-alpha again, which the plan's budget already
+# records as breached; the alternative was leaving three modules unreachable, which is the state this
+# whole day's work exists to end.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
-    "beidou_cli": 4_588,
+    "beidou_cli": 4_824,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
