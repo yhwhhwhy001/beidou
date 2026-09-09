@@ -280,6 +280,19 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   slippage_multiple: 2.0      # -> 4.0 bps.  Setting max_slippage_bps here is now refused, not ignored
   slippage_window_days: 30    # real capital (KILL-A) is owed sooner
   min_slippage_fills: 30
+  # M-Q03 (DL-L4 / RISK-P2), 2026-09-09.  These two numbers were already in force - the 2026-09-06
+  # remediation plan's M-Q03 row reads baseline "稳态 0/8", threshold "<= 5% / 0", failure action
+  # "查重启原因" - and `reports.restart_cost` computed the quantities they judge without ever comparing
+  # them to anything.  Transcribed rather than invented, exactly as `model_slippage_bps` transcribed
+  # M-Q08's "2x model": a threshold that lives only in a document has no reader.
+  #
+  # The share is counted per cycle.  KILL-R6 refuted the original per-FILL reading (73% was a
+  # development-period ratio dominated by three operator events) and named this as the fallback in the
+  # same breath: "M-Q03 改为「迟到入场仓位的 bar 小时占比」或至少按周期计".  The bar-hour version needs
+  # how long a late-entered position was held, which nothing records; the 0/8 baseline is per cycle
+  # anyway, so the 5% is compared against the reading it was set against.
+  max_late_cycle_share: 0.05  # of the day's cycles, how many woke outside the rebalance window
+  max_missed_rebalances: 0    # a restart that cost a rebalance; the plan's bar is exactly zero
   # M-Q06 (DL-X1): alert when the nearest REACHABLE liquidation price comes inside this many daily-vol
   # units.  Measured baseline 2026-09-07, replacing the plan's "unmeasured": 242 units (TUTUSDT), with
   # 14 of 18 positions reporting no reachable price at all - the ordinary shape of a cross-margin long,

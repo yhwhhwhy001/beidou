@@ -16,7 +16,13 @@ import pandas as pd
 from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.report import render_markdown
-from beidou_alpha.validation.metrics import DECAY_WINDOW_DAYS, max_drawdown, sharpe, window_sharpes
+from beidou_alpha.validation.metrics import (
+    DECAY_WINDOW_DAYS,
+    max_drawdown,
+    newey_west_tstat,
+    sharpe,
+    window_sharpes,
+)
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
 from beidou_live.health import canonical_construction
@@ -273,6 +279,136 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
     below = sum(1 for value in tail if value < q10)
     status = "REVIEW" if below == consecutive else "OK"
     return {"status": status, "below": below, "q10": q10, "windows": tail}
+
+
+M_G06_WINDOW_MONTHS = 18  # §19 Q2's lagging criterion; not a dial, and shortening it is not an option
+
+
+def _plus_months(stamp: datetime, months: int) -> datetime:
+    """Calendar months, clamped to the shorter month (there is no 31st of February)."""
+    total = stamp.month - 1 + months
+    year, month = stamp.year + total // 12, total % 12 + 1
+    last = [31, 29 if year % 4 == 0 and (year % 100 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    return stamp.replace(year=year, month=month, day=min(stamp.day, last[month - 1]))
+
+
+def long_run_sharpe(
+    store: StateStore,
+    *,
+    equity: float | None,
+    now: datetime | None = None,
+    window_months: int = M_G06_WINDOW_MONTHS,
+    bars_per_year: float = 8760.0,
+) -> dict[str, Any]:
+    """M-G06: per strategy, the attributed annualised Sharpe over an unbroken 18-month construction.
+
+    §19 Q2 (2026-09-08) split "持续盈利" in two.  M-010 is the leading half and `income_drift` is where
+    it lives; this is the lagging half, and until 2026-09-09 it was the one row of the metrics table
+    with no code at all.  Every clause below is quoted from that ruling rather than chosen here:
+
+    * **Per strategy, in M-010's units.**  Attributed P&L from the income rows over the day's equity -
+      literally `income_drift`'s own series - because §19 says the two must be comparable, and equity
+      cannot do it: this account is multi-asset collateral, so equity moves with BTC while the book is
+      flat (KILL-033), and it is one number for a main sleeve plus a probe sleeve.  A single equity
+      denominator across eighteen months is an approximation, and it is M-010's approximation; using a
+      better one here would buy accuracy at the cost of the only thing the ruling asked for.
+    * **Timed by `canonical_construction`.**  `evidence_window` already answers this, aliases included,
+      so a renamed fingerprint field cannot restart the clock (it moved three times in one day).
+    * **Point estimate >= 0, and nothing else.**  `nw_t` is computed and reported and decides nothing,
+      which is the disposition D-P2 gave t.  Eighteen months buys a Sharpe standard error of about
+      0.82, so a passing sleeve with |t| < 2 is the EXPECTED outcome; gating on t would make M-G06
+      unreachable, i.e. would turn the lagging criterion off while appearing to strengthen it.
+    * **Failure action "该策略退出 main"**, carried on the row rather than left in the plan.
+
+    Elapsed time is counted in BARS UNDER THE CONSTRUCTION (`bars / 24`), the same reading the audit
+    quotes for M-010 as "5.00/30 天".  A wall clock would let eighteen months pass while the loop was
+    down and call that evidence.  The calendar is still reported beside it - `calendar_days` and the
+    `downtime_days` between them - because `judgeable_from` is a DATE and the countdown is in bars, and
+    a reader given only one of those two units would be entitled to assume they are the same thing.
+    They are equal only while the loop misses nothing; every hour it is down pushes the date right.
+
+    One asymmetry a reader will notice and should not have to work out: the window's `elapsed_days`
+    counts CYCLE rows while each strategy's `days` counts its own ATTRIBUTION rows, and an attribution
+    row is written only when that strategy had income - so on 2026-09-09 the window reads 5.17 days
+    while tsmom reads 0.83.  That is M-010's series verbatim (`income_drift` divides the same way), and
+    matching it is the one thing §19 Q2 asked of this metric; a denser series with the flat bars filled
+    in would be a better estimator and would make the two criteria incomparable, which is the trade the
+    ruling already decided.  It is named here rather than smoothed over.
+
+    **Today this returns INSUFFICIENT_DATA and that is the answer, not a gap.**  The construction
+    running now began 2026-09-04T14:00Z, so the window closes 2028-03-04 - about 542 days away as of
+    2026-09-09.  `sharpe_so_far` is reported beside `sharpe_standard_error` precisely so the early
+    number cannot be mistaken for a verdict: at five days that error is 8.5.
+    """
+    window = evidence_window(store)
+    since_ms = window["since_ms"]
+    block: dict[str, Any] = {
+        "status": "INSUFFICIENT_DATA",
+        "window_months": window_months,
+        "construction": window["construction"],
+        "since": None,
+        "judgeable_from": None,
+        "bars": window["bars"],
+        "elapsed_days": round(window["bars"] / 24.0, 4),
+        "required_days": None,
+        "days_remaining": None,
+        "by_strategy": {},
+    }
+    if since_ms is None:
+        return {**block, "why": "no cycle has recorded a construction, so there is nothing to time"}
+    since = datetime.fromtimestamp(since_ms / 1000, tz=UTC)
+    closes = _plus_months(since, window_months)
+    required = (closes - since).days
+    elapsed = block["elapsed_days"]
+    calendar = max(0.0, ((now or datetime.now(UTC)) - since).total_seconds() / 86_400.0)
+    block |= {
+        "since": since.isoformat(),
+        # The earliest this could close, i.e. assuming the loop misses nothing from here on.
+        "judgeable_from": closes.isoformat(),
+        "required_days": required,
+        "days_remaining": round(max(0.0, required - elapsed), 4),
+        "calendar_days": round(calendar, 4),
+        # Calendar the record does not cover.  Not an error: the countdown simply did not advance.
+        "downtime_days": round(max(0.0, calendar - elapsed), 4),
+    }
+    if not equity or equity <= 0:
+        return {**block, "why": "no equity to express attributed P&L against (M-010's denominator)"}
+    open_yet = elapsed < required
+    why = (
+        f"构造不变 {elapsed:.2f}/{required} 天（{window_months} 个月），最早可判 {closes.date()}" if open_yet else None
+    )
+    rows: dict[str, Any] = {}
+    worst = "OK"
+    for strategy, points in sorted(_series_by_strategy(store, since_ms).items()):
+        values = np.asarray([value / equity for _bar, value in points], dtype=float)
+        days = values.size / 24.0
+        point = sharpe(values, bars_per_year) if _has_dispersion(values) else None
+        hac = newey_west_tstat(values) if values.size >= 3 else {"t_stat": None}
+        if open_yet or point is None:
+            status, action = "INSUFFICIENT_DATA", None
+        elif point >= 0.0:
+            status, action = "OK", None
+        else:
+            status, action = "FAIL", "该策略退出 main（§19 Q2 滞后判据 M-G06）"
+        if status == "FAIL":
+            worst = "FAIL"
+        elif status == "INSUFFICIENT_DATA" and worst == "OK":
+            worst = "INSUFFICIENT_DATA"
+        rows[strategy] = {
+            "bars": int(values.size),
+            "days": round(days, 2),
+            # Named for what it is.  It is not the criterion until `judgeable_from`, and a key called
+            # `sharpe` would be read as one on the first day the report renders it.
+            "sharpe_so_far": point,
+            "sharpe_standard_error": math.sqrt(365.0 / days) if days > 0 else None,
+            "nw_t": hac["t_stat"],  # reported, never a gate (D-P2)
+            "status": status,
+            "action": action,
+            "why": why if open_yet else ("点估计 < 0" if status == "FAIL" else None),
+        }
+    if not rows:
+        return {**block, "why": why or "no attribution row lands inside this construction"}
+    return {**block, "status": "INSUFFICIENT_DATA" if open_yet else worst, "why": why, "by_strategy": rows}
 
 
 def metrics_parity_status(symbols: Sequence[str], data_root: str | Path) -> dict[str, Any]:
@@ -779,6 +915,84 @@ def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _collateral_drift_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """RISK-G11 in the markdown, which is where a human reads it (it only reached the JSON before).
+
+    `account_misleads` is spelled out rather than left implicit in a percentage above 100: the reader of
+    the equity line four blocks up needs to be told, in words, that its sign does not tell them which
+    way the book went.  Reported, never subtracted - the operator ruled the denominator on 2026-09-08.
+    """
+    if not block:
+        return {"none": 0}
+    if not block.get("enforced"):
+        return {"not measured": str(block.get("reason", "no reason recorded"))}
+    share = block.get("repricing_share")
+    return {
+        "cycles": block.get("cycles"),
+        "equity_change": _fmt_num(block.get("equity_change")),
+        "attributed_pnl": _fmt_num(block.get("attributed_pnl")),
+        "collateral_repricing": _fmt_num(block.get("collateral_repricing")),
+        "repricing_share": "flat window (no move to apportion)" if share is None else f"{share:.1%}",
+        "collateral_share_of_equity": _fmt_pct(block.get("collateral_share")),
+        "direction": str(block.get("direction")),
+        "account_misleads": (
+            "YES - 权益方向与账面归因 P&L 方向相反，本窗口的权益线不能用来判断书的盈亏"
+            if block.get("account_misleads")
+            else "no - 权益方向仍然与书的盈亏同向"
+        ),
+    }
+
+
+def _restart_cost_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """M-Q03 against its own bar.  Before 2026-09-09 these numbers were rendered and judged by nothing."""
+    if not block:
+        return {"missed_rebalances": 0}
+    limits = block.get("limits") or {}
+    share = block.get("late_cycle_share")
+    return {
+        "status": block.get("status"),
+        "missed_rebalances": f"{block.get('missed_rebalances')} (M-Q03 阈值 {limits.get('missed_rebalances')})",
+        "late_cycle_share": (
+            "no cycle ran"
+            if share is None
+            else f"{share:.1%} of {block.get('cycles')} (M-Q03 阈值 {float(limits.get('late_cycle_share', 0.0)):.0%})"
+        ),
+        "worst_late_seconds": _fmt_num(block.get("worst_late_seconds")),
+        "widest_rebalance_window_seconds": _fmt_num(block.get("widest_window_seconds")),
+        # the half M-Q03 is named for, reported without a bar - see `restart_cost`
+        "worst_late_fill_seconds": _fmt_num(block.get("worst_late_fill_seconds")),
+        "fills_measured": block.get("fills_measured"),
+        "reasons": block.get("reasons") or [],
+    }
+
+
+def _long_run_sharpe_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """M-G06.  The countdown is the reading until 2028-03-04, so the countdown is what is rendered."""
+    if not block:
+        return {"none": 0}
+    remaining = block.get("days_remaining")
+    lines: dict[str, Any] = {
+        "status": block.get("status"),
+        "construction": str(block.get("construction")),
+        "unbroken_since": str(block.get("since"))[:16],
+        "window": f"{float(block.get('elapsed_days') or 0.0):.2f}/{block.get('required_days')} 天"
+        f"（{block.get('window_months')} 个月，按 canonical_construction 计时）",
+        "judgeable_from": f"{str(block.get('judgeable_from'))[:10]}"
+        + (f"（还差 {float(remaining):.1f} 个记录日，前提是循环不再缺）" if remaining is not None else ""),
+        "calendar_vs_record": f"日历 {float(block.get('calendar_days') or 0.0):.2f} 天，"
+        f"其中 {float(block.get('downtime_days') or 0.0):.2f} 天记录没有覆盖",
+    }
+    if block.get("why"):
+        lines["why"] = str(block["why"])
+    for strategy, row in (block.get("by_strategy") or {}).items():
+        lines[str(strategy)] = (
+            f"{row.get('status')} sharpe_so_far={_fmt_num(row.get('sharpe_so_far'))} "
+            f"+-{_fmt_num(row.get('sharpe_standard_error'))} nw_t={_fmt_num(row.get('nw_t'))} (报告，不作门) "
+            f"over {row.get('days')}d" + (f" -> {row['action']}" if row.get("action") else "")
+        )
+    return lines
+
+
 def _risk_adaptation_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     """Same rule as `_risk_budget_lines`: a spread that could not be computed says why, not "n/a"."""
     leverages = block.get("leverage_distinct")
@@ -888,41 +1102,89 @@ def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"blocking": list(block.get("blocking", [])), "advisory": list(block.get("advisory", []))}
 
 
-def restart_cost(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """AC-L4 / RISK-P2: what the day's restarts actually cost, counted rather than assumed.
+MISSED_REBALANCE_REASON = "restart outside the rebalance window"
+
+
+def restart_cost(
+    rows: Sequence[Mapping[str, Any]],
+    trades: Sequence[Mapping[str, Any]] = (),
+    params: RiskBudgetParams | None = None,
+) -> dict[str, Any]:
+    """M-Q03 / AC-L4 / RISK-P2: what the day's restarts cost, counted AND judged rather than assumed.
 
     DL-L4 wrote both facts into every cycle row - how late the wake-up was relative to the bar close,
     and whether that lateness cost a rebalance - and nothing read them.  The plan assumed every
     deployment restart costs late fills and 7bps of gross; this is the number that would show whether
     the assumption is generous or mean.
 
-    ``missed_rebalances`` is a RUNNING TOTAL held on the engine, so summing the column double-counts
-    every row after the first miss.  It is also per process: a value that drops means a new process
-    started, and the day owes both stretches.  Hence max-per-stretch, summed across stretches.
+    The thresholds are M-Q03's own, from the 2026-09-06 remediation plan ("<= 5% / 0", baseline
+    "稳态 0/8"), transcribed into ``risk_budget`` in the profile so they have a reader.  Until
+    2026-09-09 they were compared to nothing: the four numbers below were rendered and left there.
+
+    Two things a reader should not have to discover.  First, ``missed_rebalances``, ``skipped_bars`` and
+    ``late_bars`` are the SAME rows today, not three facts that happen to agree: the engine writes
+    ``late_seconds`` into a cycle row only in ``_record_missed_rebalance``, which also sets the phase and
+    the reason.  They are kept apart because they are different questions and a future engine could
+    separate them, but nobody should read agreement between them as corroboration.
+
+    Second, this counts miss ROWS and no longer reconstructs the engine's running total.  That counter
+    is reset by every restart, so three consecutive processes that each missed once write 1, 1, 1 and a
+    drop-detector reports one miss - which is exactly what happened on 2026-09-09, where the record
+    holds three miss rows.  It was also wrong the other way, charging a process that spanned midnight
+    with yesterday's misses.  Every miss appends exactly one row, so the rows are the count.
+
+    The FILL half is reported and deliberately not judged.  M-Q03 is named for late fills, the fills
+    carry their own ``late_seconds``, and the worst one ever written is 26.3s against the 72-98s
+    rebalance windows the engine actually used - so this half has never been the binding one, and
+    picking a seconds bar for it would be the invented number KILL-R6 refuted.  The plan's preferred
+    bar-hour weighting is not computable either: nothing records how long a late-entered position was
+    held.  KILL-R6 named the per-cycle share as the acceptable reading and that is what is judged.
     """
+    params = params or RiskBudgetParams()
     missed = 0
-    running = 0
-    skipped = 0
     late: list[float] = []
+    windows: list[float] = []
     for row in rows:
-        if row.get("phase") == "SKIPPED" or row.get("reason") == "restart outside the rebalance window":
-            skipped += 1
-        seen = row.get("missed_rebalances")
-        if isinstance(seen, int):
-            if seen < running:  # the counter reset: a new process
-                missed += running
-                running = seen
-            else:
-                running = seen
-        value = row.get("late_seconds")
-        if isinstance(value, (int, float)):
+        if row.get("phase") == "SKIPPED" or row.get("reason") == MISSED_REBALANCE_REASON:
+            missed += 1
+            if isinstance(window := row.get("window_seconds"), int | float):
+                windows.append(float(window))
+        if isinstance(value := row.get("late_seconds"), int | float):
             late.append(float(value))
-    missed += running
+    fills = [float(t["late_seconds"]) for t in trades if isinstance(t.get("late_seconds"), int | float)]
+    # `None` rather than 0.0 on a day the loop never ran: a day with no cycles is not a day nothing was
+    # late on, and zero here would read as a pass.  The same refusal the rest of this module makes.
+    share = (len(late) / len(rows)) if rows else None
+    reasons: list[str] = []
+    if missed > params.max_missed_rebalances:
+        reasons.append(
+            f"漏掉 {missed} 次再平衡（M-Q03 阈值 {params.max_missed_rebalances}）；"
+            f"最迟的一次在 bar 收盘后 {max(late) if late else 0.0:.0f} 秒；失败动作：查重启原因"
+        )
+    if share is not None and share > params.max_late_cycle_share:
+        reasons.append(
+            f"迟到周期占比 {share:.1%} 高于 M-Q03 的 {params.max_late_cycle_share:.0%}"
+            f"（{len(late)}/{len(rows)} 个周期在再平衡窗口外醒来）"
+        )
     return {
+        "cycles": len(rows),
         "missed_rebalances": missed,
-        "skipped_bars": skipped,
+        "skipped_bars": missed,
         "worst_late_seconds": max(late) if late else None,
         "late_bars": len(late),
+        "late_cycle_share": share,
+        # What the engine ACTUALLY allowed, read off the rows rather than re-derived here: the window is
+        # grace + launchd's ThrottleInterval + this process's measured startup, so it differs per restart
+        # and a copy of the formula in the reporter would drift away from the one that decided.
+        "widest_window_seconds": max(windows) if windows else None,
+        "worst_late_fill_seconds": max(fills) if fills else None,
+        "fills_measured": len(fills),
+        "limits": {
+            "late_cycle_share": params.max_late_cycle_share,
+            "missed_rebalances": params.max_missed_rebalances,
+        },
+        "status": "ALERT" if reasons else "OK",
+        "reasons": reasons,
     }
 
 
@@ -1007,9 +1269,10 @@ def daily_payload(
             "unreconciled_cycles": unreconciled,
         },
         "guard_events": {event: guard_events.count(event) for event in set(guard_events)},
-        # AC-L4 / RISK-P2: what the day's restarts cost.  DL-L4 wrote these into the cycle rows and
-        # nothing read them; a cost that only exists in a JSONL is an assumption, not a measurement.
-        "restarts": restart_cost(cycles),
+        # M-Q03 / AC-L4 / RISK-P2: what the day's restarts cost, against the plan's own "<= 5% / 0".
+        # DL-L4 wrote these into the cycle rows and nothing read them; a cost that only exists in a
+        # JSONL is an assumption, not a measurement, and one nothing compares to a bar is not a metric.
+        "restarts": restart_cost(cycles, trades, risk_budget or RiskBudgetParams()),
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "risk_budget": risk_budget_status(
@@ -1033,6 +1296,9 @@ def daily_payload(
         "income_drift": income_drift(
             store, expectations or {}, equity=equities[-1] if equities else None, since_ms=window["since_ms"]
         ),
+        # M-G06 (§19 Q2's lagging half).  INSUFFICIENT_DATA for the next year and a half, on purpose:
+        # the row that says how far off it is is the only honest thing it can say today.
+        "long_run_sharpe": long_run_sharpe(store, equity=equities[-1] if equities else None),
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
@@ -1100,6 +1366,43 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     if int(window.get("changes_7d") or 0) > 1:
         # the plan allowed one promotion per week and nothing ever counted them
         notices.append(f"最近 7 天有 {window['changes_7d']} 次构造变更；计划允许每周一次晋升")
+    drift = payload.get("collateral_drift") or {}
+    if drift.get("account_misleads"):
+        # RISK-G11.  NOT an alert, and the reasoning is the same distinction this docstring draws.  The
+        # amplifier itself is a standing fact the operator ACCEPTED on 2026-09-08 with the denominator
+        # ruling, so there is nothing to do about it inside the hour and it must never page (its own
+        # module says so); on the paging path, with `dedup_window_seconds` equal to the hourly job's
+        # period, it would re-announce itself twice an hour for as long as the account holds BTC - the
+        # construction-cadence shape exactly.  What DID change is which side of 1.0 the share sits on,
+        # and that is a fact a reader of the equity line needs at review: above 1 the account's equity
+        # direction no longer tells them which way the book went.
+        notices.append(
+            f"抵押品重估占权益变化的 {drift['repricing_share']:.1%}（>100%）："
+            f"权益 {drift['equity_change']:+.2f} 而书的归因 P&L 是 {drift['attributed_pnl']:+.2f}，"
+            "本窗口权益方向与书的盈亏方向相反（RISK-G11，只报告不相减）"
+        )
+    restarts = payload.get("restarts") or {}
+    if str(restarts.get("status")) == "ALERT":
+        # M-Q03.  A notice for the reason the plan itself gives: its registered failure action is
+        # "查重启原因", an investigation at review.  The miss is already past by the time this renders,
+        # `live status --check` already pages when the loop is actually down, and a single planned
+        # deployment restart would otherwise hold the hourly check red until UTC midnight.  Making it
+        # loud is moving this one append into the list above.
+        notices.append("M-Q03 迟到成交：" + "；".join(str(r) for r in restarts.get("reasons") or []))
+    lagging = payload.get("long_run_sharpe") or {}
+    if str(lagging.get("status")) == "FAIL":
+        # M-G06.  INSUFFICIENT_DATA says nothing here on purpose - it will be the answer until
+        # 2028-03-04 and a finding repeated for 542 days is not a finding.  A FAIL is real, and its
+        # action ("该策略退出 main") is a governance transition taken through `lifecycle.apply` at
+        # review rather than something to do inside the hour.
+        notices.append(
+            "M-G06 滞后判据不通过："
+            + "；".join(
+                f"{strategy} 归因年化 Sharpe {row.get('sharpe_so_far'):.2f} < 0 -> {row.get('action')}"
+                for strategy, row in (lagging.get("by_strategy") or {}).items()
+                if str(row.get("status")) == "FAIL"
+            )
+        )
     return alerts, notices
 
 
@@ -1384,11 +1687,18 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 dict(payload.get("collateral") or {"share": None, "why": "no cycle recorded it yet"}),
             ),
             (
+                # L1-10's other half, and the instrument the 2026-09-08 ruling owes (RISK-G11).  It
+                # reached `reports/daily/*.json` and stopped there until 2026-09-09; the line a reader
+                # of the equity number above actually needs is `account_misleads`.
+                "Collateral repricing (RISK-G11)",
+                _collateral_drift_lines(payload.get("collateral_drift") or {}),
+            ),
+            (
                 # AC-L4: the same sentence as the line below it, one restart over.  RISK-P2 assumed a
                 # deployment restart costs late fills and a rebalance; this is where that stops being
-                # an assumption.
-                "Restart cost (DL-L4 / RISK-P2)",
-                dict(payload.get("restarts") or {"missed_rebalances": 0}),
+                # an assumption - and, since 2026-09-09, where it is compared to M-Q03's own bar.
+                "Restart cost (M-Q03 / DL-L4 / RISK-P2)",
+                _restart_cost_lines(payload.get("restarts") or {}),
             ),
             (
                 # D-041: the manifest was written into every report and read by nothing.  It is read now,
@@ -1465,6 +1775,13 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                         for strategy, row in ((payload.get("income_drift") or {}).get("by_strategy") or {}).items()
                     },
                 },
+            ),
+            (
+                # §19 Q2's lagging criterion.  Rendered while it is still INSUFFICIENT_DATA because the
+                # countdown IS the reading: a criterion nobody can see the distance to is a criterion
+                # nobody waits for.
+                "Long-run attributed Sharpe (M-G06)",
+                _long_run_sharpe_lines(payload.get("long_run_sharpe") or {}),
             ),
             (
                 "Legs (M-008)",
