@@ -6376,3 +6376,41 @@ FAIL 就变成 PASS。
 账：xsmom 0 行（前置闸）、carry +4、residual +8 = **共 12 行**。R1 窗口 169 → 181 / 1700（1.06%）。
 按字面跑七条要 56 行，换 0 个新结论。
 
+## 2026-09-09 · DRILL-G6 自己发生了一次，规则守住了
+
+今天上午写 DRILL-G6（代理 503 风暴 → 无治理决定）时用的是注入的记录。11:00Z 它自己发生了一次。
+
+```
+2026-09-09T10:00:15Z  FULL   registry=abe21f7a8edf  probes=[main, flow_short]
+2026-09-09T11:00:21Z  ERROR  ConnectError: All connection attempts failed
+2026-09-09T12:00:26Z  FULL   registry=abe21f7a8edf  probes=[main, flow_short]
+```
+
+同一段时间里，本机上跑着的三个研究 agent **也全部因为同一条路径死掉**
+（`API Error: Connection refused — a firewall or proxy may be blocking it`）。所以这不是币安侧的事件，
+是本机到外网那条经代理的路径整体不通了一段——**它同时命中了交易循环与开发工具链**，
+而两者的表现完全不同：agent 直接终止，循环记一行 ERROR 然后下一根照常。
+
+**核对 ERROR 那一根有没有产生任何治理决定**（KILL-AR-20 与 §5 的 no-decision 条款）：
+
+| 项 | 值 |
+| --- | --- |
+| `stopped_books` | `{}` |
+| `leaving` | `[]` |
+| universe | 18，逐字未变 |
+| restarts | 28（**没有重启**，退避而不是重来） |
+| `risk_ladder` | `{}` |
+| 治理状态 | flow probe 0/9、tsmom main 0/9，**未动** |
+| 事务日志 | 4 行，链闭合 |
+| `governance tenure` | 读 181 个周期，两本都是 0/9 |
+
+**一个不动。** 下一根 12:00:26Z 完整周期，两个 digest 都一致。
+
+写下来是因为**注入的演练与自然发生的事件不是同一份证据**：注入的那次是我构造的记录喂给读取侧，
+这次是真实的网络故障穿过整条链——venue 客户端、引擎的错误相、心跳、退避、以及第二天读它的
+`tenure`。演练验的是「规则读到 ERROR 会怎么做」，这次验的是「ERROR 真的长成规则预期的那个样子」。
+
+顺带记一条运维事实：**同一条代理路径同时是交易路径和开发路径**。今天它一次故障造成了
+一根 ERROR 周期 + 三个 agent 终止 + 一次 `git push` 失败（503）。这不改变任何判据，
+但它意味着「网络故障」在本项目里从来不是单一子系统的事件。
+
