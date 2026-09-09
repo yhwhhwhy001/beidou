@@ -1447,11 +1447,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
 # against the other read a sleeve that WAS in the record as absent from it - the same book-vs-strategy
 # mismatch this command got wrong once already, in the other direction.
+# 2026-09-09, +596 data: the public liquidation column (#19), conventions and ingest, no mining leaf.
+# Two modules and a store, and the length is almost entirely the four measurements that shaped them.
+# The first one cancels the column: `futures/um/monthly/liquidationSnapshot/` - the path §6 named as
+# this column's history - lists ZERO keys, and so does the daily one.  The only liquidationSnapshot
+# Binance publishes is COIN-margined daily, 2023-06-25 .. 2024-10-14, discontinued.  So there is no
+# USDⓈ-M history to research on and, the archive having stopped 23 months before the live period, no
+# bar any live stream could share with it: the same-source obligation §6 attaches to every block-1
+# column is not unmet here, it is unmeetable, and RISK-G3's failure action ("该列不进实盘") is reached
+# by measurement rather than by judgement.  The code is still worth its lines because the second
+# measurement is the kind this ratchet exists to keep visible: the archive writes every row EXACTLY
+# TWICE (6,438 rows, 17 symbol-days, zero singletons, zero odd groups), so anyone summing the file as
+# it ships gets precisely double the notional with nothing raised anywhere - and the next person to
+# reach for liquidation data will reach for that file.  `parse_archive_csv` halves each group and
+# refuses an odd one; `LiquidationStore` keeps one parquet per symbol-DAY so the file's existence is
+# the coverage record, which is the only way "no liquidations" and "never downloaded" stay different
+# facts; and a 404 writes nothing while a published-but-empty day writes an empty file, which is the
+# one place this downloader had to be the inverse of `sync_metrics` rather than a copy of it.
 CEILING = {
     "beidou_alpha": 7_150,
     "beidou_live": 6_540,
     "beidou_cli": 4_264,
-    "beidou_data": 1_889,
+    "beidou_data": 2_485,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,
