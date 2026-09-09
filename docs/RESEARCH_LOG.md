@@ -5064,3 +5064,78 @@ universe 18   leaving []   guards []   quarantined []
 
 commit：`f42b446`（隔离）、`3129e5d`（孤儿归因）、`3b326bc`（tenure 过期注释）、
 `861b47c`（试验签名）、`3430fd0`（AC-G6′）、`8707e8f`（digest 扫描）。
+
+## 2026-09-09 · regime（#47）复核：结论维持，但支撑它的那句话是错的
+
+`ef17049` 把块 3 的 regime 结项为「不实现」。本节是对那次结项的独立复核：**裁定维持，证据全部复算对得上，
+但其中一条支撑句经不起查——而它恰好是最容易让下一个人把这条重新打开的那句。**
+
+### 复算：三个数一个不差
+
+对着 `reports/research/mine-shortlist-20260908T085016Z.json` 重数：
+
+| 复算项 | `ef17049` 写的 | 实测 |
+| --- | --- | --- |
+| 候选总数 / 边际为正 | 514 / 8 | 514 / 8 |
+| `_regime_family` 形状占几个 | 45 | 45 |
+| 其中边际为正 | 0 | 0 |
+| 最好的三个边际 | −0.3553 / −0.3656 / −0.4181 | 同 |
+| 这三个与基线的相关 | ~+0.70 | +0.7017 / +0.7010 / +0.7025 |
+
+45 这个数还能从网格独立推出来，不必信报告：`horizons(5) × short ∈ vol_windows(48,168,400) ×
+long ∈ regime_long_windows(400,720) × scales(3)`，排除 `short >= long` 与 `short == momentum_window(48)`
+之后 short/long 只剩 3 对 → 5×3×3 = **45**。基线是 **tsmom**（Sharpe 1.8184，pit universe）。全 45 格的
+相关跨度是 **0.1843 – 0.8745**。
+
+### 错的那句：「手写版本能表达的门控形状，45 格已经覆盖了」
+
+不对。挖掘语法（`beidou_alpha/mining/expr.py`）的 21 个算子里——Const / Ret / Vol / VolumeRatio / TakerBuy /
+Funding / HourOfDay / OpenInterest / LongShortRatio / Abs / Moment / Semi / Residual / TradeSize / Ratio /
+ZScore / CrossSectional / Squash / Sum / Mul / RangePosition——**没有一个是比较、阈值、指示函数或取号**。
+所以「区制内做、区制外不做」这种**离散**门控根本不在搜索空间里；45 格搜的全是
+`momentum × (vol_s/vol_l)` 这一种**连续、对称、会放大**的乘法门。
+
+这不是我的推断，仓库自己已经写过同一句话：`_regime_family` 隔壁的 `_funding_family` 文档串在说 tsmom 的
+拥挤修正时写着 "thresholded, one-sided, shrink-only multiplier in {1.0, 0.5}"，并明写
+**"No setting of (h, v, w, s, sign) recovers it"**。既然拥挤修正不可被这套语法复现，离散区制门同样不可。
+
+### 但结论维持，换一条更硬的理由：相关是构造出来的，不是跑出来的
+
+「tsmom 被区制门控」这个形状，**按构造就是 tsmom 持仓的一个子集**——它不会开 tsmom 不开的仓，也不会反向。
+它与在跑的书的相关因此有构造下界：占空比一半的门，corr ≈ √0.5 ≈ **0.7**。实测正好落在那儿（三个最好的是
+0.7017 / 0.7010 / 0.7025）。而本仓库每份预登记都必须带「与在跑的书相关性 < 0.5」——**一个只会缩、不会反向的
+门过不了这条，是构造决定的，不需要跑**。这就是缠论那次的死法（corr 0.6426），区别只在于这次能在写代码之前
+把它说出来。
+
+唯一有机会过 0.5 的形状是**会翻号的切换**（趋势里做动量、震荡里做反转）。而那个形状**已经建好也已经判过**，
+分成两半躺在仓库里：
+
+| 半边 | 在哪 | 状态 |
+| --- | --- | --- |
+| 震荡里做反转 | `beidou_alpha/signals/meanrev.py:60`：`trend_strength = abs(ret_w)/(vol·√w)`，`entry = (abs(z) ≥ z_entry) & (trend_strength ≤ trend_gate_z)`；文档串自称复刻 legacy 的「RANGING only」区制门 | 块 6 已判否 |
+| 趋势里做动量 | `beidou_alpha/signals/tsmom.py::apply_crowding_modifier`：阈值化、单边、只缩的 {1.0, 0.5} 乘子 | 在跑的书本身 |
+
+**离散区制门在这个仓库里已经手写过两次了**，只是没叫这个名字。再写第三次，是把两条已判过的腿重新拼一遍，
+而拼法属于 ensemble 层的权重问题，不是一条新信号。
+
+### 四把区制尺子，没有一把是空的
+
+手写版本要选一族区制刻度，可选的就那么几族，而**每一族都已经被读过**——所以「选一族」这个动作本身已经不
+干净了：无论选哪族都是在四个已知结果里挑，正是「哪族好选哪族」。
+
+| 区制刻度 | 已经在哪被读过 | 状态 |
+| --- | --- | --- |
+| 实现波动率比 | 挖掘 `_regime_family` 45 格 | 边际全负，相关最高 0.8745 |
+| 趋势强度 / 效率比 | 入场侧 `meanrev.trend_gate_z`；退出侧 `beidou_alpha/overlays/exits.py::regime_tp_scale`（Kaufman ER，硬切 `er < regime_er_cut`） | meanrev 块 6 判否；P22b C-EX02b REFUTED |
+| 资金费符号 | `tsmom` 拥挤修正（在跑）、`carry.py` | carry 块 6 判否 |
+| 相关性结构 | `residual.py`（对 BTC 中性）、`pairs.py` | 均 REFUTED |
+
+顺带把同名关系说清：**退出层的 `regime_*` 与这条信号不是一回事，但用的是同一把尺子。** 退出层是 Kaufman
+效率比在 `regime_window` 上的硬切，只改 `take_profit` 的倍数，**不改方向也不改仓位**；一条手写 regime 信号
+会把同一把尺子搬到入场侧去改方向。同一个假设换一层楼，C.7 规则 2 照样管得着。
+
+### 所以
+
+裁定不变：**结项，不实现**；重开仍需块 1 的数据宽度（OI / 多空比 / 基差 / 清算流）定义一把波动率以外的
+尺子，并走新预登记。改变的只是理由的强度——原来靠「已经搜过了」（**不成立**），现在靠「相关按构造就过不了
+0.5」（**成立，且事前可判**）。`ef17049` 那一段按惯例原样保留，不改。
