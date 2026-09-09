@@ -1447,11 +1447,35 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
 # against the other read a sleeve that WAS in the record as absent from it - the same book-vs-strategy
 # mismatch this command got wrong once already, in the other direction.
+# 2026-09-09, +417 data, +75 cli, +38 live, +33 alpha for DL-D5's spot ingest, with the sentence the rule
+# requires - and with the overrun stated first: §9 budgeted "data +=250" and this is 417.  The extra 167
+# is almost entirely the module docstring of `beidou_data/spot.py`, which records nine measurements taken
+# against the venue that day, and the cost of NOT writing them down is the thing DL-D2 already paid.
+# Three of the nine are why the code has the shape it has.  (a) The spot monthly archive switched to
+# MICROSECOND stamps at 2025-01 while the futures archive is still milliseconds, so one market's bars
+# would land tens of thousands of years from the other's and the join would return an all-NaN column
+# indistinguishable from "nobody downloaded this".  (b) `/api/v3/klines?limit=1500` answers HTTP 200
+# with 1000 rows instead of erroring, and `klines_range` decides a range is exhausted when a page comes
+# back short of the limit - so a spot client inheriting the futures 1500 would have ended every REST tail
+# 1000 bars in, silently; that is why `_page_limit` moved from a module constant onto the class, which is
+# most of the diff in `binance_public.py`.  (c) XMRUSDT's spot listing has been halted since 2024-02-20 at
+# 118.70 while its perpetual trades at 503.83, so the "latest value that had closed" rule `metrics` uses -
+# right there, for open interest - would have priced a +324% basis off a dead listing and held it for two
+# years.  Hence same-bar-or-NaN, and hence a test per failure rather than a comment.
+# Where the non-data lines went: cli is `beidou data spot`, which resolves the perp -> spot mapping
+# against the venue's listing, writes it, syncs, and prints the alignment measurement every run rather
+# than behind a flag - a contract only ever checked against fixtures is a contract about fixtures.  live
+# is `_spot_columns`, the one place the alignment rule is applied, mirroring DL-D4's `_metrics_columns`.
+# alpha is `Panel.spot` plus `spot_field`, and it is the one raise here that moves the alpha share the
+# right way; the refusal that makes "aligned by the caller" safe is now shared with `metrics` instead of
+# copied, so that part is smaller than it was.  The honest note: 362 of 528 perpetuals have a spot leg,
+# so a third of these columns will be legitimately all-NaN, and no signal reads any of them yet - the
+# basis leaf is a separate piece of work.  This raise buys hypothesis space that is not yet spent.
 CEILING = {
-    "beidou_alpha": 7_150,
-    "beidou_live": 6_540,
-    "beidou_cli": 4_264,
-    "beidou_data": 1_889,
+    "beidou_alpha": 7_183,
+    "beidou_live": 6_578,
+    "beidou_cli": 4_339,
+    "beidou_data": 2_306,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,

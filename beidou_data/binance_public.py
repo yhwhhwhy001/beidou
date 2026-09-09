@@ -10,7 +10,7 @@ import asyncio
 import random
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import pandas as pd
@@ -71,6 +71,13 @@ def funding_to_frame(rows: list[Mapping[str, Any]]) -> pd.DataFrame:
 class PublicClient:
     """Synchronous public REST client with bounded retry/backoff (used by ``beidou data sync``)."""
 
+    # Per class, not per module, because `beidou_data.spot` subclasses this for a venue whose page size
+    # is 1000 rather than 1500 - and which returns HTTP 200 with 1000 rows when asked for 1500 instead
+    # of erroring.  `klines_range` decides "was that a full page?" by comparing against this number, so
+    # a module constant would have made the spot tail stop after one page without a word (DL-D5 note 8).
+    _klines_path = "/fapi/v1/klines"
+    _page_limit = MAX_KLINE_LIMIT
+
     def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: float = 20.0, max_retries: int = 5) -> None:
         self.base_url = base_url.rstrip("/")
         self._client = httpx.Client(base_url=self.base_url, timeout=timeout, headers={"User-Agent": "beidou-v5"})
@@ -79,7 +86,9 @@ class PublicClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> PublicClient:
+    def __enter__(self) -> Self:
+        # `Self`, not `PublicClient`: `beidou_data.spot.SpotClient` subclasses this, and a `with` block
+        # that narrowed it back to the base class would hide the spot-only methods from every checker.
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -125,14 +134,15 @@ class PublicClient:
         interval: str,
         start_ms: int | None = None,
         end_ms: int | None = None,
-        limit: int = MAX_KLINE_LIMIT,
+        limit: int | None = None,
     ) -> pd.DataFrame:
-        params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": min(limit, MAX_KLINE_LIMIT)}
+        page = self._page_limit if limit is None else min(limit, self._page_limit)
+        params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": page}
         if start_ms is not None:
             params["startTime"] = int(start_ms)
         if end_ms is not None:
             params["endTime"] = int(end_ms)
-        return klines_to_frame(self.get("/fapi/v1/klines", params))
+        return klines_to_frame(self.get(self._klines_path, params))
 
     def klines_range(
         self, symbol: str, interval: str, start_ms: int, end_ms: int, pause_seconds: float = 0.1
@@ -146,7 +156,7 @@ class PublicClient:
                 break
             pages.append(page)
             last_open = int(page["open_time"].iloc[-1])
-            if len(page) < MAX_KLINE_LIMIT or last_open <= cursor:
+            if len(page) < self._page_limit or last_open <= cursor:
                 break
             cursor = last_open + 1
             if pause_seconds:

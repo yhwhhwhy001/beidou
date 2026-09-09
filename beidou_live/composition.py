@@ -16,6 +16,7 @@ from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import Registry, parse_registry
 from beidou_data.metrics import PERIOD_MS, align_to_bars
+from beidou_data.spot import SPOT_PANEL_COLUMNS, SpotMapping, align_spot_to_perp_bars, read_spot_map
 from beidou_data.store import FundingStore, KlineStore, MetricsStore, funding_per_bar
 from beidou_shared.config import load_yaml
 
@@ -52,6 +53,40 @@ def _metrics_columns(store: MetricsStore, panel: Panel, interval: str) -> dict[s
     }
 
 
+def _spot_columns(
+    store: KlineStore, panel: Panel, mappings: Mapping[str, SpotMapping]
+) -> dict[str, pd.DataFrame] | None:
+    """DL-D5: one wide frame per spot field, keyed by the PERPETUAL symbol, aligned HERE and not in `Panel`.
+
+    Every perpetual in the panel gets a column, including the ones with no spot leg, and that is the
+    point: 166 of 528 perpetuals have none, so "this symbol has no spot" is an answer the panel has to
+    be able to give.  It gives it as NaN, never as zero and never as the last price that existed - the
+    two failures `align_spot_to_perp_bars` was written to make unrepresentable.
+
+    The mapping comes from the file the sync wrote, not from the store's directory listing.  A listing
+    says which spot symbols were downloaded; it cannot say which perpetual each one belongs to, and
+    re-deriving that from the names is the string rule that gets 1000SATSUSDT wrong.
+    """
+    per_symbol: dict[str, pd.DataFrame] = {}
+    for symbol in panel.symbols:
+        mapping = mappings.get(symbol)
+        if mapping is None or mapping.spot is None:
+            continue
+        try:
+            frame = store.load(mapping.spot, panel.interval)
+        except FileNotFoundError:
+            continue
+        per_symbol[symbol] = align_spot_to_perp_bars(frame, panel.index, multiplier=mapping.multiplier)
+    if not per_symbol:
+        return None
+    return {
+        field: pd.DataFrame({symbol: frame[field] for symbol, frame in per_symbol.items()}, index=panel.index).reindex(
+            columns=panel.symbols
+        )
+        for field in SPOT_PANEL_COLUMNS
+    }
+
+
 def load_panel(
     store: KlineStore,
     symbols: Sequence[str],
@@ -59,6 +94,8 @@ def load_panel(
     *,
     funding_store: FundingStore | None = None,
     metrics_store: MetricsStore | None = None,
+    spot_store: KlineStore | None = None,
+    spot_map: Mapping[str, SpotMapping] | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> Panel:
@@ -85,7 +122,7 @@ def load_panel(
     if not frames:
         raise ValueError("no kline data for the requested symbols/range")
     panel = Panel.from_frames(frames, interval=interval)
-    if funding_store is None and metrics_store is None:
+    if funding_store is None and metrics_store is None and spot_store is None:
         return panel
     funding = (
         {symbol: funding_per_bar(funding_store.load(symbol), panel.index) for symbol in panel.symbols}
@@ -93,7 +130,8 @@ def load_panel(
         else None
     )
     metrics = _metrics_columns(metrics_store, panel, interval) if metrics_store is not None else None
-    return Panel.from_frames(frames, interval=interval, funding=funding, metrics=metrics)
+    spot = _spot_columns(spot_store, panel, spot_map or read_spot_map(spot_store.root)) if spot_store else None
+    return Panel.from_frames(frames, interval=interval, funding=funding, metrics=metrics, spot=spot)
 
 
 def load_registry(path: str | Path) -> Registry:

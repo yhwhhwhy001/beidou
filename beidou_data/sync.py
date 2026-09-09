@@ -8,8 +8,9 @@ from typing import Any
 
 import pandas as pd
 
-from beidou_data.archive import ArchiveClient, Month, month_range
+from beidou_data.archive import FUTURES_MARKET, ArchiveClient, Month, month_range
 from beidou_data.binance_public import PublicClient, drop_unclosed
+from beidou_data.spot import SymbolNotListed
 from beidou_data.store import FundingStore, KlineStore
 
 Progress = Callable[[str], None]
@@ -23,6 +24,11 @@ class SyncReport:
     rest_rows: int = 0
     total_rows: int = 0
     funding_rows: int = 0
+    # Absence, kept apart from failure.  A spot symbol the venue does not list answers 400 -1121, which
+    # is a fact about the board rather than a broken download; folding it into `errors` would make a
+    # third of the perpetual universe (166 of 528) report as errors every night, and an error list
+    # nobody can read is an error list nobody reads.
+    not_listed: bool = False
     errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,6 +39,7 @@ class SyncReport:
             "rest_rows": self.rest_rows,
             "total_rows": self.total_rows,
             "funding_rows": self.funding_rows,
+            "not_listed": self.not_listed,
             "errors": list(self.errors),
         }
 
@@ -47,7 +54,17 @@ def sync_klines(
     public: PublicClient,
     now_ms: int,
     progress: Progress | None = None,
+    market: str = FUTURES_MARKET,
 ) -> SyncReport:
+    """Monthly archive then REST tail, for whichever market ``market`` and ``public`` name (DL-D5).
+
+    One function for both markets on purpose.  Spot and perpetual bars are compared bar-for-bar by
+    every basis signal, so the two series have to be built by the same watermark, the same dedupe and
+    the same "drop the unclosed bar" rule; a second copy of this loop would let them diverge in exactly
+    the way that produces a basis series with a hole in one leg and not the other.  ``public`` carries
+    the venue difference that does exist - the spot page limit is 1000, and asking for 1500 returns 200
+    with 1000 rows rather than an error.
+    """
     report = SyncReport(symbol=symbol, interval=interval)
     last = store.last_open_time(symbol, interval)
     first_month = history_start if last is None else Month.of_ms(last)
@@ -56,7 +73,7 @@ def sync_klines(
         if last is not None and last >= month.end_ms() - 1:
             continue  # already complete
         try:
-            frame = archive.fetch_month(symbol, interval, month)
+            frame = archive.fetch_month(symbol, interval, month, market)
         except Exception as exc:
             report.errors.append(f"archive {month}: {type(exc).__name__}: {exc}")
             break
@@ -70,6 +87,9 @@ def sync_klines(
     tail_start = (store.last_open_time(symbol, interval) or history_start.start_ms()) + 1
     try:
         tail = drop_unclosed(public.klines_range(symbol, interval, tail_start, now_ms), now_ms)
+    except SymbolNotListed:
+        report.not_listed = True
+        tail = pd.DataFrame()
     except Exception as exc:
         report.errors.append(f"rest tail: {type(exc).__name__}: {exc}")
         tail = pd.DataFrame()

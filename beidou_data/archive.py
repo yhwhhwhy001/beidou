@@ -60,8 +60,17 @@ def month_range(start: Month, end_exclusive: Month) -> list[Month]:
     return months
 
 
-def archive_path(symbol: str, interval: str, month: Month) -> str:
-    return f"/data/futures/um/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{month}.zip"
+FUTURES_MARKET = "futures/um"
+
+
+def archive_path(symbol: str, interval: str, month: Month, market: str = FUTURES_MARKET) -> str:
+    """The archive lays both markets out under one shape, so ``market`` is the only thing that differs.
+
+    Note the units are NOT the same underneath: the spot monthly files switched to microsecond stamps at
+    2025-01 while futures stayed on milliseconds (DL-D5 note 5).  ``klines_to_frame`` normalises both,
+    which is why one path builder and one parser can serve both without a second convention appearing.
+    """
+    return f"/data/{market}/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{month}.zip"
 
 
 def parse_checksum(text: str) -> str:
@@ -109,7 +118,7 @@ class ArchiveClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def list_symbols(self, market: str = "futures/um", listing_url: str = ARCHIVE_LISTING_URL) -> list[str]:
+    def list_symbols(self, market: str = FUTURES_MARKET, listing_url: str = ARCHIVE_LISTING_URL) -> list[str]:
         """Every symbol with a monthly kline archive (includes delisted ones; the survivorship-free candidate set)."""
         prefix = f"data/{market}/monthly/klines/"
         found: list[str] = []
@@ -126,9 +135,11 @@ class ArchiveClient:
             marker = f"{prefix}{page[-1]}/"
         return sorted(set(found))
 
-    def fetch_month(self, symbol: str, interval: str, month: Month) -> pd.DataFrame | None:
+    def fetch_month(
+        self, symbol: str, interval: str, month: Month, market: str = FUTURES_MARKET
+    ) -> pd.DataFrame | None:
         """Return the verified month frame, or ``None`` when the archive has no file for that month (404)."""
-        path = archive_path(symbol, interval, month)
+        path = archive_path(symbol, interval, month, market)
         response = self._client.get(path)
         if response.status_code == 404:
             return None
