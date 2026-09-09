@@ -5064,3 +5064,30 @@ universe 18   leaving []   guards []   quarantined []
 
 commit：`f42b446`（隔离）、`3129e5d`（孤儿归因）、`3b326bc`（tenure 过期注释）、
 `861b47c`（试验签名）、`3430fd0`（AC-G6′）、`8707e8f`（digest 扫描）。
+
+## 2026-09-09 · 预登记：本窗口的 mine 轮次（OI/LS + hod + regime 叶，先写后跑）
+
+**先写后跑。** 本条提交时间早于任何 shortlist 报告；R2 只在搜索空间变化时放行，本轮的变化是
+`_seasonality_family`（#8 hour-of-day，`8c4cb04`）加入枚举，且 metrics 归档在本轮之前补齐到
+**202/205**（3 个符号无归档：MOODENGUSDT / MTLUSDT / UNFIUSDT，扫尾脚本连续两轮无进展后按设计停下并报出，
+不是无限重试）——这让 `_positioning_family`（DL-D4 的 OI / 多空比叶）第一次在接近完整的面板上被搜。
+
+**协议**：`research mine --interval 1h --universe pit --baseline tsmom --from 2021-01-01`，
+默认打开 funding / metrics / seasonality / panel 节点，`--max-lookback 1400`（hod 的网格因此是
+{14, 30, 56} 而不是 {14, 30, 60}——`hod(60)` 要占 1464，第一版把十八个形状全静悄悄丢成 `too_long`）。
+
+**预期（写下来是为了事后不能改口）**：
+
+1. **基准预期是阴性。** 本仓库前一轮 mine 的 514 个候选里，走到 book 的那个（`mined_594a12f9307a15d9`）
+   被 `oos_mdd_worsening` 判 REJECT；`mined_6986a4d80e61b4c2` 亦未采纳。分位数门随 N 单调上升，
+   本轮枚举会把 `mined` 桶继续推高，所以**搜得更多、门自己更高**。
+2. **最可能的死因与缠论同形**：新叶子的边际是「tsmom 换了个写法」。因此**与在跑的书 corr < 0.5**
+   仍是第一道要看的数，不是 Sharpe。
+3. **hod 与 OI/LS 两族若出现在边际前列，要先怀疑数据而不是先高兴**：hod 的估计已经在组内位移一格
+   （否则它有一半是 `ret(1)`），OI/LS 走的是 DL-D4 的 5 分钟桶对齐（归档 `create_time` 比 REST 早
+   整整一个桶，对齐写错不会报错、只会让每份证据带 5 分钟前视）。这两条的测试都在，但**阳性结果的
+   第一反应是去核对齐，不是去写 book 报告**。
+
+**计费**：本轮按 R1 记 **1 个 mine 轮次**（本窗口 1/4 → 2/4），候选行进共享 `mined` 桶，不计入
+每窗口 1700 行的行预算（policy 0.3.0 的口径）。**shortlist 不是证据**——排名是一次选择，把赢家
+当结果正是 D-020 要防的事。
