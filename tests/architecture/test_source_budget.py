@@ -1472,8 +1472,14 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # miner counts the raise; the count is all that reached the report, so a family that could not run at
 # all read as a family that ran and lost.  The lines are the docstring recording that, because the
 # one-word fix is not the part a later reader needs.
+# 2026-09-09, +5 more alpha (merge of the VWAP work): DL-C1's retraction of its own pre-run estimate
+# had reached the scratchpad and the log but not `ImpactModel`'s docstring, `costs.yaml`, or the impact
+# tests - so a day later the stale "order/ADV about 1e-8" came back as the premise for closing #42.
+# Measured on all 121 fills instead: order/ADV median 4.34e-07, notional-weighted impact 0.481 bps, two
+# orders of magnitude off the premise.  These lines are the correction written into the three places a
+# reader actually looks.
 CEILING = {
-    "beidou_alpha": 7_162,
+    "beidou_alpha": 7_167,
     "beidou_live": 6_540,
     "beidou_cli": 4_264,
     "beidou_data": 2_485,

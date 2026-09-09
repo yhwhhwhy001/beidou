@@ -134,6 +134,48 @@ def test_participation_cap_limits_risk_adding_orders() -> None:
     assert orders2[0].note == "" and orders2[0].notional > 1_400.0
 
 
+def test_a_capped_order_is_finished_over_the_following_bars() -> None:
+    """Block 4 #42 (VWAP), 2026-09-09: the loop already IS a rate-limited multi-bar schedule.
+
+    This is why #42 was refused for capacity as well as for cost.  `plan_rebalance` re-derives
+    ``delta`` every bar from the venue's *actual* position, so a truncated order is not a lost order -
+    the residual is simply the next bar's delta, and the participation cap turns one oversized target
+    into a stream of cap-sized clips without an execution layer, a child-order state machine, or a
+    partial-fill protocol.  Asserted here because nothing did: the sibling test above proves one order
+    gets cut and stops there, which is consistent with the residual being dropped on the floor.
+
+    It also pins where the convergence actually stops, which is the honest limit of the free version:
+    not at the target but at the first clip the min-notional rule refuses, 1,440 of a 1,500 target
+    here.  A real VWAP would not fix that either - it is the instrument's floor, not the schedule's.
+    """
+    held = 0.0
+    clips: list[float] = []
+    for bar in range(20):
+        position = {"BTCUSDT": Position("BTCUSDT", held, 60_000.0, 60_000.0)} if held else {}
+        orders, skipped = plan_rebalance(
+            {"BTCUSDT": 0.15},
+            managed_symbols=["BTCUSDT"],
+            equity=10_000.0,
+            positions=position,
+            prices={"BTCUSDT": 60_000.0},
+            rules=DEFAULT_RULES,
+            bar_open_ms=bar,
+            params=RebalanceParams(max_participation=0.02),
+            liquidity={"BTCUSDT": 10_000.0},
+        )
+        if not orders:
+            assert skipped and skipped[0]["reason"] == "MIN_NOTIONAL"
+            break
+        assert orders[0].note == "PARTICIPATION_CAPPED" and orders[0].notional <= 200.0 + 1e-9
+        clips.append(orders[0].notional)
+        held += float(orders[0].quantity)
+    else:  # pragma: no cover - only reached if the residual never converges
+        raise AssertionError("a capped target never finished: the schedule does not terminate")
+
+    assert len(clips) == 8, f"expected the 1,500 target to be walked in cap-sized clips, got {clips}"
+    assert 1_400.0 < held * 60_000.0 < 1_500.0
+
+
 # --- T-X04 ----------------------------------------------------------------------------------------
 
 
