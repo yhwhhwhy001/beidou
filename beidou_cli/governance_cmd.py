@@ -219,18 +219,21 @@ def tenure_cmd(root: str, cycles: str, anchor: str, started: tuple[str, ...], as
             click.echo(f"    {skip.at}  {'(not counted)':15s} {skip.why}")
         if result.windows_survived >= policy.windows_to_main and not result.stopped_at:
             click.echo("    -> the record supports probe -> main; that is a transaction and a restart")
-    named = set(books_in(rows))
+    # By BOOK and by STRATEGY, because the two namespaces meet here: `books_in` reads the record's probe
+    # rows (keyed on the book, "main") and `governance_state.json` keys on the registry entry id
+    # ("tsmom").  Comparing one against the other is the same mismatch this file already fixed once a
+    # few lines above, and it left the note below claiming main -> probe was unreachable for hours
+    # AFTER the main book got a stop and started appearing in the record.
+    named = set(books_in(rows)) | {result.strategy for result in out if result.strategy}
     silent = sorted(n for n, c in book.candidates.items() if c.state is State.MAIN and n not in named)
     if silent:
-        # Not a limitation of this command.  `probes_from_registry` excludes the main book, so no
-        # cycle ever reports a stop for a main sleeve - and §3 says main KEEPS its P&L stop.  The
-        # main -> probe edge is therefore unreachable from the record, the same way probe -> main was
-        # before this module existed.  Closing it changes what can halt the live main book, which is
-        # an operator's decision and not a side effect of adding a reader.
+        # Only true while the main sleeve carries no stop: `probes_from_registry` includes MAIN_BOOK
+        # only when its entry declares one (2026-09-09), so a main book without a stop reports nothing
+        # and the main -> probe edge stays unreachable from the record - the same way probe -> main was
+        # before this module existed.
         click.echo(
-            f"note: {', '.join(silent)} {'sits' if len(silent) == 1 else 'sit'} in main and the record "
-            "reports no stop for it (probes_from_registry excludes the main book), so main -> probe "
-            "cannot fire from the record"
+            f"note: {', '.join(silent)} {'sits' if len(silent) == 1 else 'sit'} in main with no stop in "
+            "the registry, so the record reports nothing for it and main -> probe cannot fire from it"
         )
 
 

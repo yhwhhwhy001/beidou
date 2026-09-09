@@ -1436,10 +1436,15 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # would have vanished from the path, which understates the drawdown - the permissive direction.  Zero on
 # today's record, so this reports rather than fixes; "it is zero today" is not a property, and the day it
 # stops being zero has to be visible.
+# 2026-09-09, +3 cli: `governance tenure`'s "main -> probe cannot fire from the record" note was stale
+# for hours after the main book got a stop and started appearing in the record.  `books_in` is keyed on
+# the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
+# against the other read a sleeve that WAS in the record as absent from it - the same book-vs-strategy
+# mismatch this command got wrong once already, in the other direction.
 CEILING = {
     "beidou_alpha": 7_150,
     "beidou_live": 6_540,
-    "beidou_cli": 4_250,
+    "beidou_cli": 4_253,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

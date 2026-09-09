@@ -240,6 +240,42 @@ def test_the_command_says_when_a_main_sleeve_cannot_be_seen_at_all(tmp_path: Any
     )
     assert result.exit_code == 0, result.output
     assert "tsmom sits in main" in result.output
-    assert "main -> probe cannot fire from the record" in result.output
+    assert "main -> probe cannot fire from it" in result.output
     # and the annotation that only prints when the lookup is keyed on the strategy, not the book
     assert "state holds 0" in result.output
+
+
+def test_a_main_sleeve_that_does_carry_a_stop_is_not_reported_as_invisible(tmp_path: Any) -> None:
+    """The note above was stale for hours after the main book got a stop, and nothing said so.
+
+    `books_in` reads the record's probe rows, which are keyed on the BOOK ("main"), and
+    `governance_state.json` keys on the registry entry id ("tsmom").  Comparing one namespace against
+    the other made a sleeve that WAS in the record read as absent from it - the same book-vs-strategy
+    mismatch this command already got wrong once, in the other direction.
+    """
+    record = tmp_path / "cycles.jsonl"
+    rows = []
+    for day in (1, 31):
+        row = _cycle(day)
+        row["probes"] = [
+            {"book": "main", "strategy": "tsmom", "stop": False, "status": "OK"},
+            {"book": "flow_short", "strategy": "flow", "stop": False, "status": "OK"},
+        ]
+        rows.append(row)
+    record.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    (tmp_path / "governance").mkdir()
+    write_state(
+        tmp_path / "governance" / "governance_state.json",
+        Book(
+            candidates={
+                "tsmom": Candidate(id="tsmom", state=State.MAIN),
+                "flow": Candidate(id="flow", state=State.PROBE, fraction=1 / 3),
+            }
+        ),
+    )
+    result = CliRunner().invoke(
+        cli, ["governance", "tenure", "--root", str(tmp_path), "--cycles", str(record), "--anchor", START]
+    )
+    assert result.exit_code == 0, result.output
+    assert "main" in result.output
+    assert "cannot fire" not in result.output, result.output
