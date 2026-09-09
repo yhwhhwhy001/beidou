@@ -1858,6 +1858,11 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 #     will answer INSUFFICIENT_DATA until 2028-03-04, which is what it is for.
 # The alpha share moves the wrong way and that is stated rather than hidden; the alternative was three
 # more sentences in a plan, which is the thing this repository keeps finding it already has too many of.
+CEILING = {
+    "beidou_alpha": 8_071,
+    "beidou_live": 7_180,
+    "beidou_cli": 5_565,
+    "beidou_data": 5_288,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 3_182,
