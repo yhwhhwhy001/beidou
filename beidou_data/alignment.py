@@ -37,6 +37,20 @@ columns into a row verdict and skips NaN pairs, so it reads `differing: 0, rate:
 never compared, and the M-011 gate reports parity met.  Agreement on a neighbouring column is not
 evidence about this one.
 
+The first column actually held to it is the spot one (DL-D5), and where the holding happens took two
+tries.  `beidou_live.engine.spot_refusal` asks `admits_live_signal` at STARTUP, for every strategy whose
+`needs_spot` predicate says it reads `panel.spot`, and refuses the loop rather than the column.  The
+first attempt put the gate in `beidou_live.composition._spot_columns` instead - the point where a spot
+frame becomes a panel field - which is wrong for a reason worth recording: `load_panel` builds the
+RESEARCH panel too, so that gate made the basis leaf unminable rather than untradeable, and enforced a
+rule nobody wrote.  RISK-G3's sentence is "该列不进实盘", and live is where it binds.
+
+Fail-closed either way: no verification on record is a refusal, because "nobody has shown the offset"
+and "the offset is wrong" are the same answer to "may a signal trade this".  Nothing produces a spot
+`Verification` yet, so today that gate is shut - `beidou_data.spot` records a real measurement, but a
+sentence in a docstring is not one of these, and the path to opening it is a measurement someone runs
+rather than an edit someone makes.
+
 Describes `beidou_data.metrics`; does not replace it.  That module already converts both stamps to one
 canonical `open_time`, and it runs in the live loop, so the contract states what it does and a test
 holds the two against each other.  Whichever one a later change moves, the test fails.
@@ -52,6 +66,7 @@ import numpy as np
 import pandas as pd
 
 from beidou_data.metrics import PERIOD_MS, VALUE_COLUMNS
+from beidou_data.spot import SPOT_PANEL_COLUMNS
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -180,9 +195,70 @@ METRICS = EventTimeContract(
     ),
 )
 
+# DL-D5, the second instance, and the interesting half is that its declared offset is ZERO.  That is
+# what makes it worth declaring rather than assuming: "no offset" and "one bucket of offset" look
+# identical in code, and the METRICS contract above exists because the second one was true where
+# everybody had assumed the first.  Measured for spot on 2026-09-09 and recorded in
+# `beidou_data.spot`'s note 4, and this contract is that sentence in a form a sample can be held
+# against.
+#
+# `period_ms` is the BAR, so this contract is about 1h klines and nothing else.  It is stated at one
+# interval rather than parameterised because the rivals are what carry the evidence and they are
+# defined in bars: `rival_rest_offsets` proposes one period either side, which at 1h is exactly the
+# +-1 bar the measurement refuted.  A 4h panel needs its own declaration and its own measurement;
+# inheriting this one would refute rivals nobody tested.
+#
+# `available_offset_ms` is one bar for the reason the metrics contract gives at its own scale: the
+# boundary is what must be TRUE (the bar has closed), never the observed latency.  The perp bar
+# opening at t and the spot bar opening at t close at the same instant (note 3: every bar of 2026-08
+# in both markets satisfies `open_time % 3_600_000 == 0`), which is why a same-bar read costs nothing
+# and a "latest available" read would have priced XMRUSDT's halted listing at +324% for two years.
+SPOT = EventTimeContract(
+    name="spot",
+    period_ms=PERIOD_MS["1h"],
+    archive=Stamp("open_time", 0, "the bar OPEN"),
+    rest=Stamp("open_time", 0, "the bar OPEN"),
+    available_offset_ms=PERIOD_MS["1h"],
+    measured=(
+        "2026-09-09 against the venue: 744/744 bars of BTCUSDT 2026-08 have identical closes when the "
+        "spot archive's open_time is joined to REST's openTime directly, and 0/743 at a one-bar shift "
+        "either way.  The units had to be measured too - the spot monthly archive switched from "
+        "milliseconds to MICROSECONDS at 2025-01 while the futures archive is still milliseconds."
+    ),
+)
+
+SPOT_PREFIX = "spot_"
+
+
+def spot_column(field: str) -> str:
+    """A `Panel.spot` field name as the column this module keys a contract by.
+
+    Prefixed, because a bare 'close' is the PERPETUAL's close one frame over and `CONTRACTS` is the
+    thing that answers "which contract governs this column" - two different series answering to one
+    key is the confusion the whole module is about.
+
+    A function rather than a second hand-written tuple, and that is the correction rather than the
+    style: the first draft of this listed the five prefixed names literally beside
+    `SPOT_PANEL_COLUMNS`, so a sixth spot field would have been carried by `Panel` while `CONTRACTS`
+    never heard of it.  That fails safe (`contract_for` raises `UndeclaredColumn`) and fails
+    INVISIBLY, which is the pair this repository keeps paying for.
+    """
+    return f"{SPOT_PREFIX}{field}"
+
+
+# Derived, so `Panel` cannot carry a spot field that has no contract.
+SPOT_COLUMNS: tuple[str, ...] = tuple(spot_column(field) for field in SPOT_PANEL_COLUMNS)
+
+# The one a signal reads: `Basis` is log(perp close / spot close), so this is the column RISK-G3 has
+# to admit before a basis candidate may trade.
+SPOT_BASIS_COLUMN = spot_column("close")
+
 # Keyed by COLUMN, not by feed, because RISK-G3's refusal is per column: "该列不进实盘".  A feed's
 # columns share a contract, and a column nobody listed here has none - which is the point.
-CONTRACTS: dict[str, EventTimeContract] = dict.fromkeys(VALUE_COLUMNS, METRICS)
+CONTRACTS: dict[str, EventTimeContract] = {
+    **dict.fromkeys(VALUE_COLUMNS, METRICS),
+    **dict.fromkeys(SPOT_COLUMNS, SPOT),
+}
 
 
 def contract_for(column: str) -> EventTimeContract:

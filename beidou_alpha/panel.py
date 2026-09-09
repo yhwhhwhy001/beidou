@@ -251,6 +251,20 @@ class Panel:
         """
         return 0 if self.funding is None else int((self.funding.abs().sum(axis=0) > 0).sum())
 
+    @property
+    def spot_symbols(self) -> int:
+        """Symbols with at least one spot bar.  DL-D5's answer to "can this panel price a basis?".
+
+        The same question `settled_symbols` answers for funding, and it has to be asked the same way and
+        for a sharper reason: 166 of 528 perpetuals have no spot leg at all, so `spot is not None` only
+        says spot was REQUESTED, and a panel of nothing but all-NaN columns would pass it while every
+        basis candidate evaluated to NaN.  `mine` narrows its search space on this rather than on the
+        flag, which is what stopped the DL-D4 repeat where 90 metrics candidates were charged to
+        `declared_trials` and errored unscored in every round.
+        """
+        close = self.spot_field("close")
+        return 0 if close is None else int(close.notna().any(axis=0).sum())
+
     def reference_mask(self) -> pd.DataFrame:
         """The cross-sectional population as a bars x symbols boolean frame; all-true when unset."""
         if self.reference is None:

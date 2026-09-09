@@ -1579,11 +1579,87 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # this search legitimately does, so nothing looked wrong.  Now it groups the distinct reasons and prints
 # them with counts - the difference between "these are illegal combinations" and "an entire family
 # cannot see its column" is one glance instead of one JSON file.
+# 2026-09-09, +307 data: `beidou_data/index_price.py` - #29, the first feed to enter the event-time
+# contract registry after metrics, which closes the debt `alignment.py` opened ("no production caller
+# yet").  Measured against the venue, not assumed: the daily index archive and /fapi/v1/indexPriceKlines
+# agree on 24/24 buckets of BTC/ETH/SOL for 2026-09-05 at a stamp offset of ZERO, and on 0/23 one bucket
+# either way - the opposite of the metrics feed's -1 bucket, which is exactly why each feed declares its
+# own offset instead of inheriting one.  The four volume/taker columns are identically zero and match
+# 23/23 at BOTH rivals, so they cannot refute anything and are deliberately NOT declared: a column that
+# passes every offset verifies nothing.  Columns are namespaced (`index_close`, not `close`) because
+# CONTRACTS is a flat global table and a bare name would hand the index contract to the perpetual's own
+# close.
+# 2026-09-09, +262 alpha, +62 live, +76 data, +22 cli: DL-D5 block 2, the `basis` leaf and its family -
+# the first hypothesis that reads `panel.spot`, and the first thing that reads across two markets at all.
+# The alpha lines are mostly the two docstrings, and they are the deliverable rather than the packaging:
+# a basis can be written four ways (spread, simple ratio, annualised, net of funding) and three of them
+# are wrong for reasons that are not obvious - a spread is a price, the simple ratio breaks the mirror
+# symmetry every short arm in this module relies on, a perpetual has no maturity to annualise over, and
+# the residual would silently become pure carry on the 166 of 528 perpetuals with no spot leg because
+# `Sum` adds with `fill_value=0.0`.  The choice is recorded where the next reader will be tempted to
+# change it.  The measured numbers are there too, and they refuted the premise this family was written
+# under: funding and basis are the two ends of one arbitrage relation, so near-collinearity was expected,
+# and on 20 liquid perpetuals x 14,592 hourly bars the R^2 of basis/vol on funding/vol is 0.064 and the
+# per-bar cross-sectional Spearman of the two ranked shapes is +0.045.
+#
+# The live and data lines are the correction to the inherited WIP rather than new ground.  It had put the
+# RISK-G3 refusal in `composition._spot_columns`, where a spot frame becomes a panel field - which reads
+# right and is wrong, because `load_panel` builds the RESEARCH panel too, so the gate made the family
+# unminable rather than untradeable and turned two already-passing spot tests red.  RISK-G3's sentence is
+# "该列不进实盘".  The refusal is now `engine.spot_refusal` at startup, which also gives
+# `Expr.reads_spot` the caller the WIP never wrote: it defined the method and nothing asked it, which is
+# the same shape as `uses_funding` hardcoded to False (T-P17-06) and that one reached live.
+#
+# The cli lines are the second narrowing, in the shape the first one already had: `mine` searches what the
+# PANEL can answer (`Panel.spot_symbols`), never what a flag asked for, and says in the artefact and on
+# stdout that it narrowed.  Without that line the report would carry no `basis` rows for a reason it never
+# gives, which is not distinguishable from a family that ran and lost - the exact confusion that let DL-D4
+# survive two rounds.
+# 2026-09-09, +579 data, and the sentence the rule requires: `beidou_data/onchain.py`, block 1's #31.
+# Two of the five external-API columns were researched first, and the raise buys only one of them - #28
+# (token unlocks) ends as "不可得" with no code at all, for #19's reason and with its own measurement:
+# the only free unlock schedule is one continuously-overwritten document whose ALREADY-PAST values were
+# found changing by 5.75x between the two dated captures that exist anywhere.  Not writing that
+# downloader is the larger part of this entry.
+# What the 579 buy is the first thing in this repository that consults an event-time contract in
+# production, and one refusal `alignment.py` could not have predicted.  `verify_stamp_offset` settles
+# the stamp convention - Coin Metrics and blockchain.info are two independent computations of BTC daily
+# transactions, 355/355 at the declared day offset against 97/354 and 97/355 one day either side, at a
+# tolerance that is itself measured (2% fails on the declared offset, so 5% is a number and not a
+# preference).  It cannot see the defect this feed actually has: Coin Metrics publishes a
+# `<metric>-status-time` per CELL, and BTC's exchange inflow for 2024-03-01 carries 2026-04-09 while
+# ETH's for the same day carries 2024-03-02.  Same metric, same day, two assets, availability 769 days
+# apart - so a verified offset and correct values are still unreadable-at-the-time, and the fifth
+# refusal has to be separate from the four.  That is what makes the flow columns refused and the
+# counting columns admitted, per column, on the source's own testimony rather than on judgement.
+# Most of the addition is docstring, and these are the parts a later reader will want to delete: why
+# `available_offset_ms` is TWO days and not one (`AssetEODCompletionTime` puts the vendor's own
+# completion at 26.3-29.8 h after the day OPEN on 32 asset-days, so "+1 day" is a boundary the source
+# has never once met and declaring it carries 2.3-5.8 h of look-ahead every day); why the registry here
+# is separate from `alignment.CONTRACTS` rather than added to it (adding would break
+# `test_every_metrics_column_that_can_reach_the_panel_is_declared`'s "no strays" clause, and mutating
+# it at import time would make a governance verdict depend on import order - the copy that costs is
+# guarded by `test_the_two_registries_refuse_for_the_same_reasons`); why the witness is fetched at all
+# when nothing stores it; and why `align_daily_to_bars` keys on availability rather than on the day's
+# close.  Honest note on the target: this lands on `beidou_data`, so it moves the alpha share the wrong
+# way, and the column it enables covers 49 of 528 perpetuals - 9.3% against spot's 69%.  The coverage
+# number is the finding, not a disappointment: a fifth of the board is what any #31 leaf can rank, and
+# that is worth knowing before a leaf is written rather than after it is backtested.
+# 2026-09-09, +606 data: `beidou_data/onchain.py` - #31, and the module docstring is a measurement
+# record rather than an explanation, which is where most of the count goes.  The criterion it distilled
+# is worth more than the feed: **whether the source tells you when a value was written**.  Both #28 and
+# #31 have a free API, so "is there a free source" separates nothing.  Coin Metrics stamps every cell
+# with `-status-time` - BTC's 2024-03-01 inflow was written 2026-04-09, 769 days after the day it
+# describes, while ETH's same day was written the next morning - so backfill latency is a PER-CELL
+# property and no single `available_offset_ms` can be right.  The flow columns are therefore refused and
+# the count columns admitted, on the source's own testimony.  The declared availability is +2 days, not
+# the arithmetic +1: measured completion runs 2.3-5.8h past day close, so +1 is a bound the source has
+# never once met and declaring it would buy a daily lookahead.
 CEILING = {
-    "beidou_alpha": 7_625,
-    "beidou_live": 6_578,
-    "beidou_cli": 4_470,
-    "beidou_data": 3_286,
+    "beidou_alpha": 7_887,
+    "beidou_live": 6_640,
+    "beidou_cli": 4_492,
+    "beidou_data": 4_275,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,

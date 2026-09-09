@@ -660,14 +660,23 @@ def test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_a
     assert payload["funding_inputs"]["symbols_settled"] == 0
     assert payload["funding_inputs"]["panel_carried"] is True  # a frame arrived; it just said nothing
 
+    # DL-D5 added a second narrowing of the same kind and this OHLCV-only panel triggers both: it has no
+    # settlement AND no spot leg.  So the reference has both dimensions off - keeping it pinned to the
+    # enumerator, which is the whole point of not writing a literal here.
+    assert run["include_basis"] is False
+    assert payload["run"]["spot_symbols"] == 0
+    assert "the basis family is neither searched" in output
+
     # Neither searched nor charged.  Pinned to the enumerator with the carry dimension off, rather than
     # to a literal or to the frozen fixture: DL-A1 added five more families, and an assertion on the
     # absolute total would make "the space grew" and "carry leaked in" the same failure.
-    without_carry = enumerate_candidates(include_funding=False)
+    without_carry = enumerate_candidates(include_funding=False, include_basis=False)
     assert payload["evaluated"] == without_carry.evaluated
     assert payload["declared_trials"] == without_carry.evaluated
-    assert without_carry.evaluated < enumerate_candidates(include_funding=True).evaluated
+    assert without_carry.evaluated < enumerate_candidates(include_funding=True, include_basis=False).evaluated
+    assert without_carry.evaluated < enumerate_candidates(include_funding=False, include_basis=True).evaluated
     assert not any("funding(" in row["expression"] for row in payload["candidates"])
+    assert not any("basis" in row["expression"] for row in payload["candidates"])
 
 
 def _store_with_balanced_flow(august_dir: Path, root: Path) -> None:

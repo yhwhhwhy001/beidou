@@ -27,6 +27,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
+from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_governance.policy import Policy, policy_digest
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
@@ -247,6 +248,10 @@ class LiveEngine:
         # DL-L2: the error streak is a property of this process, not of the book.  Persisting it is what
         # made a tripped breaker trip again on the next start (L1-03 / KILL-R29).
         self.consecutive_errors = 0
+        # DL-D5: nothing produces a spot `Verification` yet, so this is the honest value and the gate
+        # below is shut.  Stated as `None` rather than defaulted around, because "nobody has shown the
+        # offset" and "the offset is wrong" are the same answer to "may a signal trade this".
+        self.spot_verification: Verification | None = None
         self.missed_rebalances = 0
         self.startup_seconds = 0.0
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
@@ -267,6 +272,25 @@ class LiveEngine:
             except Exception:  # a mined id resolved in another process is not a reason to refuse
                 continue
             if _needs_metrics(spec, entry.params):
+                out.append(entry.id)
+        return sorted(out)
+
+    def strategies_needing_spot(self) -> list[str]:
+        """Which enabled strategies declare they read `panel.spot` (DL-D5), under THEIR params.
+
+        Same walk as `strategies_needing_metrics`, and deliberately a second method rather than a
+        parameterised one: the two refusals are cured by different things.  Metrics is a coverage
+        question that time fixes on its own once the live recorder has run 30 days; spot is an
+        event-time question that only a MEASUREMENT fixes, and nothing here waits it out.
+        """
+        out: list[str] = []
+        for entry in getattr(self.model, "entries", ()):
+            try:
+                spec = get_signal(entry.id)
+            except Exception:  # a mined id resolved in another process is not a reason to refuse
+                continue
+            predicate = getattr(spec, "needs_spot", None)
+            if callable(predicate) and bool(predicate(entry.params)):
                 out.append(entry.id)
         return sorted(out)
 
@@ -357,6 +381,15 @@ class LiveEngine:
                 live_coverage_bars=coverage,
                 required_bars=self.history_bars,
             )
+            if refusal is not None:
+                raise RuntimeError(refusal)
+        # DL-D5 / RISK-G3, in the same place and the same shape as the two refusals above it.  The
+        # verification is an attribute rather than a config key on purpose: an operator must not be
+        # able to open this gate by editing YAML, because what it asserts is a measurement, and the
+        # only thing that may set it is code that has taken one.
+        spot_needs = self.strategies_needing_spot()
+        if spot_needs:
+            refusal = spot_refusal(needs_spot=spot_needs, verification=self.spot_verification)
             if refusal is not None:
                 raise RuntimeError(refusal)
         margin_probe = getattr(self.venue, "margin_mode", None)
@@ -1450,6 +1483,35 @@ def metrics_refusal(*, needs_metrics: Sequence[str], live_coverage_bars: int, re
         f"{live_coverage_bars} of the {required_bars} bars they require; research reads the T+1 archive "
         "and live cannot, so trading this would be a research panel the live loop does not have "
         "(KILL-027)"
+    )
+
+
+def spot_refusal(*, needs_spot: Sequence[str], verification: Verification | None) -> str | None:
+    """RISK-G3 at startup: a signal that reads spot may not trade until the spot/perp offset is shown.
+
+    This is `beidou_data.alignment`'s first production caller, and the boundary it stands on is the
+    one the module names: "该列不进实盘".  Not panel construction - `beidou_live.composition.load_panel`
+    builds the RESEARCH panel too, and a gate there would have made the basis leaf unminable rather
+    than untradeable, which is a different rule than the one anybody wrote down.
+
+    Fail-closed, and the closure is the current state rather than a placeholder: `beidou_data.spot`
+    records a real measurement (744/744 bars at lag 0, 0/743 one bar either way), but a sentence in a
+    docstring is not a `Verification`, and `admits_live_signal` is deliberately unable to read one.
+    The path to opening it is therefore a measurement someone runs, not an edit someone makes.
+
+    Only `spot_close` is asked about.  `Basis` is the sole spot reader and reads only the close, and
+    admitting a column on its neighbours' evidence is precisely the fourth refusal `admits_live_signal`
+    exists for - four of the six metrics columns passed M-011 on comparisons that never touched them.
+    """
+    if not needs_spot:
+        return None
+    admitted, reason = admits_live_signal(SPOT_BASIS_COLUMN, verification)
+    if admitted:
+        return None
+    return (
+        f"{', '.join(sorted(needs_spot))} read panel.spot, and {reason}; the perpetual and the spot "
+        "bar are only comparable if that offset has been measured, and an unmeasured one is the DL-D2 "
+        "defect one market over - systematic, always favourable, and silent"
     )
 
 
