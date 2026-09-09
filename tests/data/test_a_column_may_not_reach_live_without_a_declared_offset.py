@@ -39,6 +39,11 @@ from beidou_data.alignment import (
     verify_stamp_offset,
 )
 from beidou_data.index_price import INDEX_PRICE, INDEX_VALUE_COLUMNS
+
+# Imported for its side effect as much as for its names: each feed registers its columns in
+# `alignment.CONTRACTS` when it is imported, so the union below is only complete if every feed in it
+# has been pulled in.  See the note in `test_every_foreign_column_that_can_reach_the_panel_is_declared`.
+from beidou_data.macro import MACRO, MACRO_COLUMNS
 from beidou_data.metrics import (
     PERIOD_MS,
     VALUE_COLUMNS,
@@ -50,6 +55,7 @@ from beidou_data.metrics import (
     usable_from_ms,
 )
 from beidou_data.metrics_snapshot import metrics_parity
+from beidou_data.onchain import PANEL_COLUMNS as ONCHAIN_PANEL_COLUMNS
 from beidou_data.spot import SPOT_PANEL_COLUMNS
 
 FIVE_MIN_MS = PERIOD_MS["5m"]
@@ -291,20 +297,33 @@ def test_every_foreign_column_that_can_reach_the_panel_is_declared() -> None:
     nothing carries is a contract nothing is held to, and the dangerous version of it is a new feed
     registering a bare name like "close" and inheriting another feed's offset.
 
-    Three feeds now, and the equality is stated over their union rather than as a subset.  Two rewrites
+    Four feeds now, and the equality is stated over their union rather than as a subset.  Two rewrites
     of this test arrived on the same day from different directions - one made it a subset to survive new
     feeds, one kept the equality and enumerated two of the three - and both were right about their own
     half: the equality has to stay exact, AND it has to name every feed, which is precisely the edit a
-    fourth feed will be forced to make here.  That forcing is the feature.
+    fourth feed will be forced to make here.  That forcing is the feature, and #32 is the first feed to
+    pay it: adding `beidou_data.macro` turned this test red until its columns were named on both sides.
 
     Each feed's columns are also asserted to carry ITS OWN contract, because equality alone would be
     satisfied by a table that had all the right keys pointing at the wrong contracts.
+
+    The import of `beidou_data.macro` is load-bearing rather than tidy, and it is worth saying why.
+    `CONTRACTS` is populated by each feed at IMPORT time, so this equality is only as complete as the
+    modules this file has pulled in - a feed nobody imported is a feed this test cannot see, and it
+    would pass by being blind rather than by being satisfied.  `beidou_data.onchain` is the live
+    example: it keeps its own registry and is deliberately NOT part of this union, which the assertion
+    at the end of this test states so the exclusion is a decision on record instead of an oversight.
     """
-    declared = set(VALUE_COLUMNS) | set(SPOT_COLUMNS) | set(INDEX_VALUE_COLUMNS)
+    declared = set(VALUE_COLUMNS) | set(SPOT_COLUMNS) | set(INDEX_VALUE_COLUMNS) | set(MACRO_COLUMNS)
     assert set(CONTRACTS) == declared, "every column a feed can put on the panel, and nothing else"
     assert all(contract_for(column) is METRICS for column in VALUE_COLUMNS)
     assert all(contract_for(column) is SPOT for column in SPOT_COLUMNS)
     assert all(contract_for(column) is INDEX_PRICE for column in INDEX_VALUE_COLUMNS)
+    assert all(contract_for(column) is MACRO for column in MACRO_COLUMNS)
+    # On record: the on-chain feed answers `contract_for` from its OWN table, so its columns are absent
+    # here by design and not by omission.  `beidou_data.macro`'s module note says why the reason that
+    # split them has since expired.
+    assert not set(ONCHAIN_PANEL_COLUMNS) & set(CONTRACTS)
     # Derived, not listed: a sixth spot field would otherwise be carried by `Panel` and unknown to
     # `CONTRACTS` - which fails safe, and invisibly.
     assert tuple(f"spot_{field}" for field in SPOT_PANEL_COLUMNS) == SPOT_COLUMNS
