@@ -32,7 +32,7 @@ PACKAGES = (
 # The share is deliberately NOT asserted against the tree: reaching 90% of lines would mean 68,706 lines of
 # signal code against today's 3,661, and bloated signal code is what the V5 rebuild deleted.  The 90% target
 # governs newly authored work and is measured per week by `beidou report weekly` (reports.effort_share).
-PLAN_BUDGET = {"beidou_live": 6_797, "non_alpha_total": 6_000, "alpha_share_tree": 0.60, "alpha_share_effort": 0.90}
+PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree": 0.60, "alpha_share_effort": 0.90}
 
 # Measured 2026-09-04 after the audit remediation.  A ceiling, not a target: lower is always fine.
 #
