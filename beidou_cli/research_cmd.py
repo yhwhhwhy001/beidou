@@ -32,6 +32,16 @@ from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals import register as register_signal
 from beidou_alpha.signals.base import scores_to_targets
+from beidou_alpha.validation.book_limits import (
+    DECISION_SLIPPAGE_BPS,
+    correlations_with_running,
+    marginal_checks,
+    marginal_metrics,
+    max_correlation,
+    slippage_stress_decision,
+    turnover_per_gross,
+    turnover_ratio_to_main,
+)
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.decompose import decompose_book
 from beidou_alpha.validation.labels import forward_returns
@@ -1484,6 +1494,59 @@ def _combine_books(
     return total, binding
 
 
+def _running_book_nets(
+    registry_path: str,
+    profile_payload: dict[str, Any],
+    panel: Panel,
+    membership: pd.DataFrame | None,
+    cost: CostModel,
+    *,
+    interval: str,
+    min_history: int,
+    exclude_strategy: str,
+) -> tuple[dict[str, pd.Series], list[str]]:
+    """Each book the registry says is running, as a net-return stream on this panel.
+
+    "在跑的书" is read off the REGISTRY rather than off `.beidou/live/state.json`, and the difference
+    matters enough to say: the registry is the governed decision (a write goes through
+    `governance apply` and can be rolled back), a state file is what one machine happens to hold, and a
+    research artefact has to be reproducible on a machine that has never run the loop.
+
+    A book containing the candidate itself is SKIPPED and named.  `book-tsmom-flow` re-run today would
+    otherwise correlate `flow` against the running `flow_short` book, get 1.0, and refuse every
+    re-validation of a sleeve already running - a self-correlation is not the crowding this limit is
+    about.  Skipping it is recorded in `running_books_notes` rather than left implicit, because an
+    exclusion that nobody can see is indistinguishable from a limit that does not bite.
+    """
+    path = Path(registry_path)
+    if not path.exists():
+        return {}, [f"{registry_path} does not exist: no running book to correlate against"]
+    registry = load_registry(path)
+    portfolio = portfolio_params(profile_payload)
+    nets: dict[str, pd.Series] = {}
+    notes: list[str] = []
+    for name in sorted({entry.book for entry in registry.enabled}):
+        entries = tuple(entry for entry in registry.enabled if entry.book == name)
+        if any(entry.id == exclude_strategy for entry in entries):
+            notes.append(f"{name}: skipped - the candidate `{exclude_strategy}` is a member of this book")
+            continue
+        try:
+            model = AlphaModel(
+                entries=entries,
+                portfolio=portfolio,
+                interval=interval,
+                ensemble_method=registry.ensemble_method,
+                min_history_bars=min_history,
+                books={name: registry.fraction(name)} if name in registry.books else {},
+            )
+            weights, _c, _p = model.evaluate(panel, membership)
+        except (FundingUnavailable, KeyError, ValueError) as exc:
+            notes.append(f"{name}: not evaluable on this panel ({type(exc).__name__}: {exc})")
+            continue
+        nets[name] = run_backtest(panel, weights, cost).portfolio_net
+    return nets, notes
+
+
 def _netting(main: pd.DataFrame, sleeve: pd.DataFrame) -> dict[str, float]:
     """How much of the sleeve's exposure cancels or stacks on the main book (diagnostic)."""
     columns = main.columns.union(sleeve.columns)
@@ -1706,8 +1769,17 @@ def _evaluate_book(
     cpcv_groups: int,
     prior_trials: int,
     ledger_path: Path,
+    with_limits: bool = False,
+    running_nets: Mapping[str, pd.Series] | None = None,
+    running_notes: Sequence[str] = (),
+    slippage_totals: Mapping[float, float] | None = None,
 ) -> tuple[dict[str, Any], TrialRecord]:
-    """Main book alone vs main + fraction x sleeve on one universe; fractions[0] is the decision fraction."""
+    """Main book alone vs main + fraction x sleeve on one universe; fractions[0] is the decision fraction.
+
+    ``with_limits`` computes §3's three limits (`book_limits`) beside D-018's six checks.  Only the
+    decision universe gets them: they answer "may this sleeve join the running book", and the
+    robustness universe is a sensitivity arm of the evidence, not a second book to admit.
+    """
     bpy = panel.bars_per_year
     bare = replace(portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
     main_model = AlphaModel(entries=(main_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
@@ -1720,12 +1792,15 @@ def _evaluate_book(
             return apply_no_trade_band(weights, portfolio.no_trade_band, portfolio.no_trade_rel_band)
         return weights
 
-    main_result = run_backtest(panel, banded(w_main), cost)
+    main_decision = banded(w_main)
+    main_result = run_backtest(panel, main_decision, cost)
     sleeve_decision = banded(w_sleeve)
     sleeve_result = run_backtest(panel, sleeve_decision, cost)
     totals: dict[float, tuple[BacktestResult, dict[str, float]]] = {}
+    decisions: dict[float, pd.DataFrame] = {}
     for fraction in fractions:
         combined, binding = _combine_books(w_main, w_sleeve * fraction, portfolio)
+        decisions[fraction] = combined
         totals[fraction] = (run_backtest(panel, combined, cost), binding)
     index = main_result.portfolio_net.index
     for total_result, _binding in totals.values():
@@ -1754,28 +1829,11 @@ def _evaluate_book(
     for fraction, (total_result, binding) in totals.items():
         total_net = total_result.portfolio_net.reindex(index).fillna(0.0)
         total_metrics = _fold_metrics(total_net, fold_list, bpy)
-        deltas = [
-            None if t is None or m is None else t - m
-            for t, m in zip(total_metrics["fold_sharpes"], main_metrics["fold_sharpes"], strict=True)
-        ]
-        wins = [d for d in deltas if d is not None]
-        main_oos, total_oos = main_metrics["oos_sharpe"], total_metrics["oos_sharpe"]
         by_fraction[f"{fraction:.4f}"] = {
             "fraction": fraction,
             "total": {**total_metrics, "summary": total_result.summary()},
             "cap_binding": binding,
-            "marginal": {
-                "delta_full_sharpe": (
-                    None
-                    if total_metrics["full_sharpe"] is None or main_metrics["full_sharpe"] is None
-                    else total_metrics["full_sharpe"] - main_metrics["full_sharpe"]
-                ),
-                "delta_oos_sharpe": None if total_oos is None or main_oos is None else total_oos - main_oos,
-                "oos_mdd_worsening": main_metrics["oos_mdd"] - total_metrics["oos_mdd"],
-                "delta_oos_return": total_metrics["oos_return"] - main_metrics["oos_return"],
-                "fold_deltas": deltas,
-                "fold_win_rate": float(np.mean([d > 0 for d in wins])) if wins else None,
-            },
+            "marginal": marginal_metrics(total_metrics, main_metrics),
         }
     sleeve_scaled = run_backtest(panel, banded(w_sleeve * fractions[0]), cost)
     payload: dict[str, Any] = {
@@ -1801,7 +1859,110 @@ def _evaluate_book(
             )
         },
     }
+    if with_limits:
+        payload["book_limits"] = _book_limits(
+            panel=panel,
+            cost=cost,
+            main_decision=main_decision,
+            sleeve_decision=sleeve_decision,
+            total_decision=decisions[fractions[0]],
+            index=index,
+            fold_list=fold_list,
+            bpy=bpy,
+            main_metrics=main_metrics,
+            main_summary=payload["main_only"]["summary"],
+            sleeve_summary=standalone["full_sample"],
+            sleeve_net=sleeve_net,
+            running_nets=running_nets or {},
+            running_notes=running_notes,
+            slippage_totals=slippage_totals or {},
+        )
     return payload, record
+
+
+def _book_limits(
+    *,
+    panel: Panel,
+    cost: CostModel,
+    main_decision: pd.DataFrame,
+    sleeve_decision: pd.DataFrame,
+    total_decision: pd.DataFrame,
+    index: pd.Index,
+    fold_list: Sequence[Fold],
+    bpy: float,
+    main_metrics: Mapping[str, Any],
+    main_summary: Mapping[str, Any],
+    sleeve_summary: Mapping[str, Any],
+    sleeve_net: pd.Series,
+    running_nets: Mapping[str, pd.Series],
+    running_notes: Sequence[str],
+    slippage_totals: Mapping[float, float],
+) -> dict[str, Any]:
+    """§3's three limits, off the streams this run already holds (nothing is re-fitted).
+
+    The slippage arm re-prices weights that are already decided, exactly as `research validate`'s own
+    `slippage_stress` does: the fee is a contract constant and only the half the loop measures moves.
+    Nine backtests over decided weights, no model evaluation - which is why this belongs in the book
+    run rather than in a separate command whose report has nothing linking it back here.  That missing
+    link is the whole reason two of these three limits had never been measured for a book at all.
+    """
+    levels: dict[str, float | None] = {}
+    by_level: dict[float, dict[str, Any]] = {}
+    for level, total_bps in sorted(slippage_totals.items()):
+        stressed = CostModel(total_bps, cost.carry_bps_per_bar, cost.use_funding)
+        main_stressed = run_backtest(panel, main_decision, stressed).portfolio_net.reindex(index).fillna(0.0)
+        total_stressed = run_backtest(panel, total_decision, stressed).portfolio_net.reindex(index).fillna(0.0)
+        sleeve_stressed = run_backtest(panel, sleeve_decision, stressed).portfolio_net.reindex(index).fillna(0.0)
+        main_at_level = _fold_metrics(main_stressed, fold_list, bpy)
+        levels[f"slip{level:g}"] = sharpe(sleeve_stressed, bpy)
+        by_level[level] = {
+            **marginal_metrics(_fold_metrics(total_stressed, fold_list, bpy), main_at_level),
+            "total_cost_bps": total_bps,
+            "main_oos_sharpe": main_at_level["oos_sharpe"],
+        }
+    correlations = correlations_with_running(sleeve_net, running_nets)
+    main_per_gross = turnover_per_gross(main_summary)
+    sleeve_per_gross = turnover_per_gross(sleeve_summary)
+    return {
+        # `Facts.slippage_stress_pass`.  `sleeve_standalone_sharpe` is the same shape validation reports
+        # have carried since 2026-09-08 (`stability.slippage_stress`), so the two artefacts can be read
+        # against each other; the gate is on the marginal, for the reason in `slippage_stress_decision`.
+        "slippage_stress": {
+            "sleeve_standalone_sharpe": levels,
+            "marginal_by_level": {f"slip{level:g}": row for level, row in sorted(by_level.items())},
+            "baseline_cost_bps": cost.turnover_bps,
+            **slippage_stress_decision(by_level, BOOK_RULE, level=DECISION_SLIPPAGE_BPS),
+        },
+        # `Facts.max_correlation_with_running`.  Null when nothing measurable was compared - which is
+        # the case worth naming, because 0.0 is the PASSING value and would read as "correlates with
+        # nothing" where the truth is "nothing was measured".
+        "correlation_with_running": correlations,
+        "max_correlation_with_running": max_correlation(correlations),
+        "running_books": sorted(running_nets),
+        "running_books_notes": list(running_notes),
+        # `Facts.turnover_ratio_to_main`.  Both readings, one gated; see `book_limits.turnover_ratio_to_main`.
+        "turnover_ratio_to_main": turnover_ratio_to_main(sleeve_summary, main_summary),
+        "turnover": {
+            "main_units": main_summary.get("turnover_units"),
+            "sleeve_units": sleeve_summary.get("turnover_units"),
+            "bars": main_summary.get("bars"),
+            "main_per_gross": main_per_gross,
+            "sleeve_per_gross": sleeve_per_gross,
+            "per_gross_ratio": (
+                None if sleeve_per_gross is None or not main_per_gross else sleeve_per_gross / main_per_gross
+            ),
+            "basis": "sleeve standalone (unscaled) turnover units / main book turnover units, same bars",
+        },
+        "main_oos_sharpe": main_metrics["oos_sharpe"],
+        "rule": {
+            "slippage_bps": DECISION_SLIPPAGE_BPS,
+            "max_correlation_with_running": 0.5,
+            "max_turnover_ratio_to_main": 3.0,
+            "note": "the two limits are §3's and are ENFORCED by beidou_governance.lifecycle, not here: "
+            "this report measures them so the state machine can read them off an artefact "
+            "instead of being handed a literal True",
+        },
+    }
 
 
 def _durable(handle: Any) -> None:
@@ -2027,14 +2188,14 @@ def research_book(
     )
     main_entry = _entry(main_id, registry_path, "")
     sleeve_entry = _entry(sleeve_id, registry_path, sleeve_params)
-    cost = cost_model(load_yaml(costs_path), use_funding=funding)
+    costs_payload = load_yaml(costs_path)
+    cost = cost_model(costs_payload, use_funding=funding)
     ledger_path = resolve_ledger_path(out=out)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([main_entry, sleeve_entry], panel)
-    universes: list[tuple[str, Panel, pd.DataFrame | None]] = [
-        (universe_mode, panel, _membership(root, universe_mode, panel))
-    ]
+    decision_membership = _membership(root, universe_mode, panel)
+    universes: list[tuple[str, Panel, pd.DataFrame | None]] = [(universe_mode, panel, decision_membership)]
     if robustness_mode not in {"none", universe_mode}:
         if robustness_mode == "static":
             static = [s for s in read_universe(root) if s in panel.close.columns]
@@ -2044,9 +2205,27 @@ def research_book(
         else:
             pit_panel = _load(root, _resolve_symbols(root, "", interval, "pit"), interval, start, end, funding)
             universes.append(("pit", pit_panel, _membership(root, "pit", pit_panel)))
+    # §3's limits are measured against what is RUNNING, so they are computed once, on the decision
+    # universe, before the loop: the robustness arm is a sensitivity of the evidence, not a second book.
+    running_nets, running_notes = _running_book_nets(
+        registry_path,
+        profile_payload,
+        panel,
+        decision_membership,
+        cost,
+        interval=interval,
+        min_history=history,
+        exclude_strategy=sleeve_id,
+    )
+    slippage_totals = slippage_levels(
+        taker_fee_bps=float(costs_payload.get("taker_fee_bps", 5.0)),
+        levels=[float(v) for v in costs_payload.get("slippage_stress_bps", []) or []],
+    )
+    for name in running_notes:
+        click.echo(f"running book: {name}")
     evaluated: dict[str, dict[str, Any]] = {}
     records: list[TrialRecord] = []
-    for mode, mode_panel, membership in universes:
+    for position, (mode, mode_panel, membership) in enumerate(universes):
         click.echo(
             f"[{mode}] {main_id} + {fraction:.3f} x {sleeve_id} on {len(mode_panel.symbols)} symbols x "
             f"{len(mode_panel.index)} bars"
@@ -2068,6 +2247,10 @@ def research_book(
             cpcv_groups=cpcv_groups,
             prior_trials=prior_trials,
             ledger_path=ledger_path,
+            with_limits=position == 0,
+            running_nets=running_nets,
+            running_notes=running_notes,
+            slippage_totals=slippage_totals,
         )
         evaluated[mode] = payload
         records.append(record)
@@ -2079,15 +2262,10 @@ def research_book(
     robustness_delta = (
         None if robustness is None else robustness["by_fraction"][f"{fraction:.4f}"]["marginal"]["delta_oos_sharpe"]
     )
+    limits = decision["book_limits"]
     checks: dict[str, bool | None] = {
-        "delta_oos_sharpe": (
-            marginal["delta_oos_sharpe"] is not None
-            and marginal["delta_oos_sharpe"] >= BOOK_RULE["min_delta_oos_sharpe"]
-        ),
-        "oos_mdd_worsening": marginal["oos_mdd_worsening"] <= BOOK_RULE["max_oos_mdd_worsening"],
-        "fold_win_rate": (
-            marginal["fold_win_rate"] is not None and marginal["fold_win_rate"] >= BOOK_RULE["min_fold_win_rate"]
-        ),
+        # The same three bars the slippage stress re-applies at 5.5 bps (`book_limits.marginal_checks`).
+        **marginal_checks(marginal, BOOK_RULE),
         "cpcv_negative": (
             standalone["cpcv"]["fraction_negative"] is not None
             and standalone["cpcv"]["fraction_negative"] <= BOOK_RULE["max_cpcv_negative"]
@@ -2129,6 +2307,11 @@ def research_book(
         "universes": evaluated,
         "rule": BOOK_RULE,
         "checks": checks,
+        # §3's three limits, BESIDE D-018's six checks and deliberately not folded into `book_verdict`:
+        # D-018 is a portfolio finding about the evidence, §3 is an admission decision about the running
+        # book, and `beidou_governance.lifecycle` is where the second one is enforced.  Folding them
+        # together would move what `book_verdict` means for the six archived reports that carry it.
+        "book_limits": limits,
         "book_verdict": book_verdict,
         "reasons": reasons,
         "notes": notes,
@@ -2202,6 +2385,19 @@ def research_book(
         ("Yearly returns (main / total / sleeve alone at fraction)", decision["yearly_marginal"]),
         ("Rule (D-018)", BOOK_RULE),
         ("Checks", checks),
+        (
+            "§3 limits (read by the state machine at validated->booked, not by `book_verdict`)",
+            {
+                "slippage_stress_5.5_pass": limits["slippage_stress"]["pass"],
+                "slippage_stress_reasons": limits["slippage_stress"]["reasons"] or ["-"],
+                "sleeve_sharpe_by_slippage": limits["slippage_stress"]["sleeve_standalone_sharpe"],
+                "max_correlation_with_running": limits["max_correlation_with_running"],
+                "correlation_with_running": limits["correlation_with_running"] or {"-": "no running book measured"},
+                "running_books_notes": limits["running_books_notes"] or ["-"],
+                "turnover_ratio_to_main": limits["turnover_ratio_to_main"],
+                "turnover_per_gross_ratio": limits["turnover"]["per_gross_ratio"],
+            },
+        ),
         ("Verdict", {"book_verdict": book_verdict, "reasons": reasons or ["-"], "notes": notes or ["-"]}),
     ]
     markdown = render_markdown(f"Book evidence: {main_id} + {fraction:.3f} x {sleeve_id} — {book_verdict}", sections)
@@ -2225,6 +2421,13 @@ def research_book(
     if robustness_delta is not None:
         click.echo(f"robustness [{robustness_mode}] delta_oos_sharpe={_fmt(robustness_delta)}")
     click.echo(f"checks: {json.dumps(checks)}")
+    click.echo(
+        f"§3 limits: slippage_5.5_pass={limits['slippage_stress']['pass']} "
+        f"{limits['slippage_stress']['reasons'] or ''} | "
+        f"max_corr_with_running={_fmt(limits['max_correlation_with_running'])} "
+        f"({', '.join(sorted(limits['correlation_with_running'])) or 'none measured'}) | "
+        f"turnover_ratio_to_main={_fmt(limits['turnover_ratio_to_main'])}"
+    )
     click.echo(f"BOOK VERDICT: {book_verdict} {reasons if reasons else ''} {notes if notes else ''}")
     click.echo(f"report: {path} sha256={digest}")
 
