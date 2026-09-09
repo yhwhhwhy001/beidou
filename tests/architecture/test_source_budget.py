@@ -1447,11 +1447,41 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
 # against the other read a sleeve that WAS in the record as absent from it - the same book-vs-strategy
 # mismatch this command got wrong once already, in the other direction.
+# 2026-09-09, +384 data: the event-time contract (RISK-G3, block 5), written before the downloader it
+# guards - the DL-D2 order - and it found something on its first run against the production stores.
+# The mechanism is the cheap half: a column declares what each source's own stamp MEANS, as a signed
+# offset from the event time, and `verify_stamp_offset` holds that declaration against two samples.
+# What the lines buy is the refusals.  A check that only CONFIRMS the declared offset passes on any
+# column whose values barely move, so the rivals - the naive join, and one bucket either side - have to
+# be refuted by the same sample or the answer is UNVERIFIABLE.  That is what the 2026-09-07 measurement
+# actually was: 166/166 at -5min is evidence only beside 0/165 at 0 and +-10min.  Re-run on the stores
+# today: 2,798/2,798 rows at the declared offset against 0/5,599 at the rivals, 18 symbols PASS,
+# PUMPUSDT UNVERIFIABLE for having no overlap yet.  Mutation-checked, because a guard that cannot fail
+# is the thing being guarded against: eight mutants, all caught, and the first pass caught only seven -
+# the NaN rule had no test until one was written for it.
+# The find is the fourth refusal, which nothing predicted.  `snapshot_metrics` polls
+# `/futures/data/openInterestHist`, which returns open interest and nothing else, while
+# `REST_TO_ARCHIVE` maps three ratio fields that only OTHER endpoints serve - so four of the six metrics
+# columns are NaN in every snapshot row, on all 19 symbols.  `metrics_parity` folds columns into a ROW
+# verdict and skips NaN pairs, so it reads `differing: 0, rate: 0.0` over data it never compared and the
+# M-011 gate calls that parity met; `_required_metric` does not catch it either, because the column is
+# present and merely carries nothing.  So a verification is admitted PER COLUMN now, and
+# `admits_live_signal("count_long_short_ratio", ...)` refuses on today's data - that being the #17
+# 多空比 leaf, the exact KILL-Q11 shape this gate exists for.  Nothing trades it today.
+# Stated plainly rather than left to be discovered: no production code consults `admits_live_signal`
+# yet, so this raise buys a mechanism and a finding, not an enforced gate.  That is the ladder-with-no-
+# caller shape three raises above, and it is a debt this commit opens rather than closes.
+# The three parts a later reader will want to "simplify" away, all deliberate: the rival-refutation
+# requirement (looks redundant beside a passing check), the relative tolerance (the absolute 1e-6 next
+# door reads zero today only because BTCUSDT's 8.515e9 notional sits 0.9% below 2^33, where one float64
+# ULP becomes 1.9e-6 - and one ULP is exactly the disagreement the stores do show, on 29 of ADAUSDT's
+# 155 buckets), and the per-column list (looks like reporting detail; it is the only field that can
+# express "this column was never compared").
 CEILING = {
     "beidou_alpha": 7_150,
     "beidou_live": 6_540,
     "beidou_cli": 4_264,
-    "beidou_data": 1_889,
+    "beidou_data": 2_273,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,
