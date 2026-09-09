@@ -70,16 +70,49 @@ def test_a_shadow_does_not_re_rank_the_shared_universe() -> None:
     This used to assert the literal text `if state_dir or registry_override:` was present, which is
     how it passed while a bare `--paper` re-ranked the shared pool at 18:00Z that same day: the
     string was there and the CONDITION was wrong.  A source assertion can only check that a rule is
-    wired, never that it is right.  So the rule now lives in `may_rerank_shared_pool`, its truth
+    wired, never that it is right.  So the rule now lives in `trades_the_account`, its truth
     table is asserted per-flag beside the pin it protects
     (`tests/live/test_the_universe_is_pinned_by_the_registry.py`), and what is left here is the one
     thing that genuinely needs the source: that `live_run` asks it at all.
     """
     import inspect
 
-    from beidou_cli.live_cmd import live_run, may_rerank_shared_pool
+    from beidou_cli.live_cmd import live_run, trades_the_account
 
     source = inspect.getsource(live_run.callback)
-    assert "may_rerank_shared_pool(" in source, "the rule exists but nothing asks it"
+    assert "trades_the_account(" in source, "the rule exists but nothing asks it"
     assert "pool = None" in source, "a shadow must inherit the armed loop's universe, not re-rank it"
-    assert may_rerank_shared_pool(dry_run=False, paper=True, state_dir="", registry_override=None) is False
+    assert trades_the_account(dry_run=False, paper=True, state_dir="", registry_override=None) is False
+
+
+def test_a_shadow_does_not_write_the_shared_metrics_record() -> None:
+    """The second shared record, found the same way and one day later.
+
+    `MetricsStore.append` is read-modify-write through one `.parquet.tmp` per symbol, so two writers
+    can publish a file one of them was still writing - and DL-Q6 says that store holds "the metrics
+    the loop could read", meaning the ARMED loop.  A paper process adding rows makes M-011 compare
+    the live decision against data no live decision was made on.
+    """
+    import asyncio
+
+    from beidou_live.engine import LiveEngine
+
+    engine = LiveEngine.__new__(LiveEngine)
+    engine.metrics_store = object()  # present, so "no store wired" is not what answers
+    engine.record_metrics = False
+
+    out = asyncio.run(LiveEngine._snapshot_metrics(engine))
+    assert out["stored"] == {}
+    assert "the armed loop" in out["reason"], out["reason"]
+
+
+def test_the_shared_records_are_written_by_the_account_process_and_only_it() -> None:
+    """One predicate, both records: the pool and the metrics snapshot ask the same question."""
+    from beidou_cli.live_cmd import trades_the_account
+
+    live = {"dry_run": False, "paper": False, "state_dir": "", "registry_override": None}
+    assert trades_the_account(**live) is True
+    for flag in ("dry_run", "paper"):
+        assert trades_the_account(**{**live, flag: True}) is False
+    assert trades_the_account(**{**live, "state_dir": "/tmp/canary"}) is False
+    assert trades_the_account(**{**live, "registry_override": "candidate.yaml"}) is False

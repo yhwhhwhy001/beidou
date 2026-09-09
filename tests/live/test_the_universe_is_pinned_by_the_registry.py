@@ -159,6 +159,6 @@ def test_an_unpinned_loop_still_prefers_what_it_persisted(tmp_path: Any) -> None
 )
 def test_only_the_process_trading_the_account_may_rerank_the_shared_pool(kwargs: Any, may: bool) -> None:
     """The bare `--paper` row is the one that was missing, and it is how the wrong pin got proposed."""
-    from beidou_cli.live_cmd import may_rerank_shared_pool
+    from beidou_cli.live_cmd import trades_the_account
 
-    assert may_rerank_shared_pool(**kwargs) is may
+    assert trades_the_account(**kwargs) is may

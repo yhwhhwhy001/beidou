@@ -187,6 +187,7 @@ class LiveEngine:
         pool: UniverseProvider | None = None,
         universe_sink: Callable[[UniverseUpdate], None] | None = None,
         metrics_store: Any = None,
+        record_metrics: bool = True,
     ) -> None:
         self.config = config
         self.model = model
@@ -199,6 +200,12 @@ class LiveEngine:
         # and live one source rather than two (KILL-Q11).  Optional, because a paper or offline run
         # has nothing to record for.
         self.metrics_store = metrics_store
+        # DL-Q6's store is what the ARMED loop could read.  A shadow reads it (coverage gating
+        # needs that) and does not write it: `MetricsStore.append` is read-modify-write through
+        # one tmp path per symbol, so a second writer can publish a file the first was still
+        # writing, and rows a paper process added would make M-011 compare the live decision
+        # against data no live decision was made on.
+        self.record_metrics = record_metrics
         self.pool = pool
         self.universe_sink = universe_sink
         # DL-G9: the construction's INPUTS, written once per process into the append-only record.
@@ -266,6 +273,10 @@ class LiveEngine:
         """One poll of the REST metrics window, recorded where the decision is made (DL-Q6)."""
         if self.metrics_store is None:
             return {"stored": {}, "reason": "no metrics store wired"}
+        if not self.record_metrics:
+            # Recorded, not silent: a cycle that did not write says so, in the same place a cycle
+            # that did says what it wrote.
+            return {"stored": {}, "reason": "not the account's process; the shared record is the armed loop's"}
         client = getattr(self.market, "client", None)
         if client is None:
             return {"stored": {}, "reason": "market feed exposes no client"}
