@@ -28,8 +28,29 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.2.0"
-"""0.2.0 (2026-09-08): R1 charges a mine ROUND as one event rather than as its row count.
+POLICY_VERSION = "0.3.0"
+"""0.3.0 (2026-09-09): R1's budget opened, by operator ruling.  0.2.0's note follows below.
+
+The ruling ("放开限制") is legitimate on R1's own terms and it is worth saying why, because the
+first thing I told the operator about it was wrong.  I called loosening R1 "relaxing a threshold to
+accommodate one's own change - the thing this whole apparatus exists to prevent."  Two facts say
+otherwise:
+
+* **R1's provenance is E5** - a judgement call, anchored on "one mine round cost 514 rows" and then
+  set to ~500 a quarter.  It was never derived from evidence, so an operator setting it differently
+  is not overruling a measurement.
+* **R1 is a rate limit, not the multiple-testing control.**  R0's quantile gate is that, every trial
+  still enters the ledger and the per-strategy N, and the gate rises MONOTONICALLY with N - measured
+  at a fixed Sharpe variance: N=146 -> 0.1072, N=677 -> 0.1198, N=3000 -> 0.1310.  Searching more
+  therefore makes the bar higher, automatically, with no rule needing to notice.  What opening R1
+  costs is statistical power and compute.  It does not open a hole.
+
+170 -> 1700 rows and 1 -> 4 mine rounds per 30-day window.  Finite on purpose rather than removed:
+AC-G8 asks that an exhausted budget stops `validate`, and a cap of "none" would delete that check
+along with the limit.  R2 (a mine needs a changed space) and R3/R4/R5 (exposure) are untouched -
+they are what actually bound what reaches the book.
+
+0.2.0 (2026-09-08): R1 charges a mine ROUND as one event rather than as its row count.
 
 Why it moved.  R1's budget was anchored on "one mine round cost 514 rows" and then set to 500 a
 quarter - so under Q3's monthly window it became 170, which is a THIRD of a single round, and
@@ -62,13 +83,16 @@ class Policy:
     gate_scope: str = "per_strategy_bucket"
     report_whole_library_n: bool = True
 
-    # R1: new ledger rows per window, EXCLUDING the shared `mined` bucket.  ~500 a quarter, split by
-    # the shorter window; the ledger's growth rate is unchanged by Q3.  E5, anchored on one `research
-    # mine` round costing 514 rows - which is also why that round is no longer charged here (0.2.0).
-    max_ledger_rows_per_window: int = 170
-    # ...and the mine rounds themselves, counted as events.  One selection per window: enumerating the
-    # whole space and taking the top k by marginal is ONE choice, however wide the space was.
-    max_mine_rounds_per_window: int = 1
+    # R1: new ledger rows per window, EXCLUDING the shared `mined` bucket.  E5 throughout: ~500 a
+    # quarter, anchored on one `research mine` round costing 514 rows - which is also why that round
+    # is no longer charged here (0.2.0).  Opened 170 -> 1700 by operator ruling (0.3.0); the reason
+    # it is a rate limit rather than the integrity control is written at POLICY_VERSION.
+    max_ledger_rows_per_window: int = 1_700
+    # ...and the mine rounds themselves, counted as events: enumerating the whole space and taking
+    # the top k by marginal is ONE choice, however wide the space was.  One per window until 0.3.0,
+    # four after it - roughly weekly inside a monthly window.  R2 still refuses a space that has not
+    # changed, so four rounds cannot become the same round four times.
+    max_mine_rounds_per_window: int = 4
 
     # R2: `research mine` runs only when the search space changed.  Re-running the same space and
     # keeping the rows charges the family twice for one hypothesis (the 2026-09-08 incident).

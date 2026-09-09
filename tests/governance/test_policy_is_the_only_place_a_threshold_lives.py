@@ -19,7 +19,12 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # Phase 0, 2026-09-08 -> 0.2.0 the same day.  Raise this in the commit that changes a rule, never to
 # make the test pass.  0.1.0 was "5787506aecdf"; it moved because R1 stopped charging a mine round by
 # its row count, which is the rule change the version bump is for.
-PINNED_DIGEST = "753638a519ac"
+# 0.2.0 was "753638a519ac" -> 0.3.0 (2026-09-09): R1's budget opened by OPERATOR ruling, 170 -> 1700
+# rows and 1 -> 4 mine rounds per window.  Legitimate on R1's own terms: its provenance is E5 (a
+# judgement call anchored on "one mine round cost 514 rows"), and it is a RATE limit, not the
+# multiple-testing control - R0's quantile gate is that, and it rises monotonically with N, so
+# searching more raises the bar by itself.  R2/R3/R4/R5 untouched.
+PINNED_DIGEST = "35e749f7fc0c"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:
