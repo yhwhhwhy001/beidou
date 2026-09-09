@@ -76,6 +76,13 @@ EXEMPT: dict[str, str] = {
     "beidou_data.index_price": (
         "#29 the same shape as #31: contract and offset verification landed, store/sync/CLI did not."
     ),
+    "beidou_data.macro": (
+        "#32, merged 2026-09-09 into the same shape as #31 and #29 - contract, verification and the "
+        "revision ledger landed, no store and no `beidou data macro`.  Its author names the omission "
+        "as a scope call rather than an oversight, which is what an exemption is for.  This guard went "
+        "red on it the first time it ran after the merge, which is the guard working: an 844-line "
+        "module no command can reach is exactly what it exists to make visible."
+    ),
 }
 
 

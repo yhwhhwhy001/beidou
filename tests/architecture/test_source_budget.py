@@ -1667,11 +1667,46 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # that cannot tell a machine write from a person's is not evidence - which made AC-L5 unfalsifiable.
 # Measured before: 1,846 production lines could not be reached from any `beidou` command, 337 of them
 # the governance package's own budget, scheduler and canary.
+# 2026-09-09, +844 data: `beidou_data/macro.py` - #32, whose adjudication was "挂起，等一次操作者动作"
+# until the operator registered a FRED key.  The raise buys the first column in this repository whose
+# VALUES change after the fact, and most of it is the measurement record that makes that checkable.
+# The one number that justifies the feed: January 2024 payrolls was published as 157,700 on 2024-02-02
+# and reads 157,032 today - 668,000 lower, after four revisions, the last written 2026-02-11, which is
+# 739 days after a February 2024 bar would have read it.  Across 2019-2026, 91 of 92 PAYEMS
+# observations differ from their first print and 8 of 90 month-over-month changes flip SIGN, so a
+# naive backfill does not merely shift a level, it reverses the direction of the move on one month in
+# eleven.
+# The structural addition is a third stamp column that `EventTimeContract` has no field for.  Reference
+# period and first availability it can carry; the REVISION HISTORY it cannot, because until now no
+# column's value at a stamp ever changed.  So availability is per RELEASE rather than per contract -
+# measured lag runs 31/34/80 days for PAYEMS and 37/41/78 for the CPI pair, and a single arithmetic
+# offset would have to be 80 days to be safe and would blank the two newest months on every bar.
+# `available_offset_ms` stays as the FLOOR the data is checked against (the reference month has ended)
+# and `revision_leak` is the check the whole column exists for: it asks the ledger, not the aligner,
+# whether each value had been published by its bar.
+# These are the parts a later reader will want to delete, and the reason each is not deletable: why
+# `period_ms` is 31 days and not 30 or 30.44 (a +-31-day rival lands on a real month open only for the
+# seven 31-day months, so 31 draws 16-19 comparisons where 30 would draw zero and the check would
+# answer UNVERIFIABLE having refuted nothing); why availability rounds to TWO whole UTC days
+# (`realtime_start` is a calendar date with no time and no zone, so one day is unsafe by up to eight
+# hours, and the series steps monthly so the two days cost nothing); why the witness is BLS rather than
+# a second FRED query (FRED redistributes BLS, so FRED cannot answer whether FRED's own stamp names the
+# reference month); why UNRATE is downloaded by nobody despite being in the same release (four
+# measurements agree - 33/92 revised, 0/58 sign flips, rivals only 65% refuted, and 27 of 39 distinct
+# values recur so the leak check is nearly blind on it); and why the forward hold across ~730 hourly
+# bars is bounded at 120 days (the 2025 shutdown left PAYEMS 76 days between prints while the numbers
+# stayed correct, so a tighter cap blanks a healthy series and no cap resurrects a dead one).
+# Honest notes on the target.  This lands on `beidou_data`, so it moves the alpha share the wrong way,
+# and it buys no leaf: nothing is mined here and the pre-registration in `docs/RESEARCH_LOG.md` is
+# explicit that a macro column is a market-wide SINGLE SERIES, so every cross-sectional operator in
+# `beidou_alpha` returns a degenerate result on it and only a time-series or interaction term can use
+# it at all.  That is a property of the data, it is asserted in a test rather than described, and it is
+# worth knowing before a leaf is written rather than after it is backtested.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
     "beidou_cli": 4_588,
-    "beidou_data": 4_275,
+    "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_373,
