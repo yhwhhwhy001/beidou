@@ -330,6 +330,65 @@ class Funding(Expr):
 
 
 @dataclass(frozen=True)
+class HourOfDay(Expr):
+    """#8: this symbol's own mean return in THIS hour of the UTC day, over its last `days` occurrences.
+
+    The hypothesis is that crypto has a repeating intraday shape - funding settles at 00/08/16Z,
+    sessions open and close - and that the shape differs BY SYMBOL.  Per symbol is the whole point and
+    also the whole risk: a panel-wide hour effect gives every name the same number at time t, which
+    `cross_sectional_rank` flattens to a constant and a book cannot hold.  What is left is 24 buckets
+    per symbol, which is a lot of parameters chasing a weak effect - exactly the kind of thing this
+    pipeline exists to REFUSE, and the reason it enters as a candidate rather than as a belief.
+
+    **The estimate excludes the current bar, and that is not the causality rule - it is stronger.**
+    The contract only forbids reading bars after t; a mean that included bar t's own return would obey
+    it and still be part `Ret(1)` wearing a seasonality label.  Shifting one occurrence inside the
+    hour group leaves the leaf carrying only the seasonal history, which matters because the family
+    below multiplies it BY momentum: without the shift that interaction would be partly `Ret(1)`
+    squared, and a squared return is a volatility estimate, not a seasonal one.
+
+    `days` counts OCCURRENCES of the hour, not bars, because that is the quantity the estimate is made
+    of - `days` of history whatever the bar size.  `lookback` therefore assumes at most 24 bars a day
+    and over-reserves at any coarser interval, which is the safe direction: it asks for more warmup
+    than it needs and never scores on less.
+    """
+
+    KIND: ClassVar[str] = "hod"
+    days: int
+
+    def __post_init__(self) -> None:
+        if self.days < 2:
+            raise ExprError("hour-of-day needs at least two past occurrences to average")
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RETURN
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        close = panel.close
+        index = close.index
+        hours = getattr(index, "hour", None)
+        if hours is None:
+            raise ExprError("hour-of-day needs a datetime index")
+        returns = close.pct_change()
+        out = pd.DataFrame(np.nan, index=index, columns=close.columns, dtype=float)
+        hours = np.asarray(hours)
+        for hour in np.unique(hours):
+            mask = hours == hour
+            same_hour = returns.loc[mask]
+            # `.shift(1)` is inside the group, so it steps back one OCCURRENCE of this hour, not one bar
+            estimate = same_hour.rolling(self.days, min_periods=self.days).mean().shift(1)
+            out.loc[mask, :] = estimate.to_numpy(dtype=float)
+        return out
+
+    def lookback(self) -> int:
+        return (self.days + 1) * 24
+
+    def describe(self) -> str:
+        return f"hod({self.days})"
+
+
+@dataclass(frozen=True)
 class OpenInterest(Expr):
     """DL-D4: the log change in open interest over a window - how much position was opened or closed.
 

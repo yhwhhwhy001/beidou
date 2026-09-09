@@ -1363,8 +1363,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 677 -> 0.1198, 3000 -> 0.1310), so searching more raises the bar by itself.  Opening R1 costs
 # statistical power and compute; it does not open a hole.  Finite rather than removed, because AC-G8
 # asks that an exhausted budget stop `validate`.
+# 2026-09-09, +115 alpha: #8 hour-of-day, the one block-2 node that needs no new data feed.
+# The sentence the rule requires, and it is ALPHA growth against the 90% target rather than more
+# governance plumbing.  `HourOfDay` is a symbol's own mean return in this hour of the UTC day, over
+# its last `days` occurrences, plus `_seasonality_family` behind `include_seasonality`.
+# The estimate steps back ONE OCCURRENCE inside the hour group, which is stronger than the causality
+# contract asks: a mean including bar t's own return would obey "no future data" and still be part
+# `ret(1)` wearing a seasonality label - and the family multiplies this leaf BY momentum, so without
+# the shift that interaction would be partly a squared return, i.e. a volatility estimate.
+# The grid is {14, 30, 56}, not {14, 30, 60}: `hod(60)` reserves 1464 against `max_lookback` 1400 and
+# the first draft dropped all eighteen of its shapes as `too_long`, silently, because a rejection
+# tally is not a failure.  A grid reporting three windows while searching two is a pre-registration
+# that is not true.  The frozen-hash guard caught the family the same run - the candidate list is
+# sorted BY HASH, so a new expression sorting into the middle shifts every index after it.
 CEILING = {
-    "beidou_alpha": 6_998,
+    "beidou_alpha": 7_113,
     "beidou_live": 6_232,
     "beidou_cli": 4_209,
     "beidou_data": 1_889,

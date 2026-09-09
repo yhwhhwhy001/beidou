@@ -107,9 +107,22 @@ def test_the_existing_search_space_is_bit_for_bit_what_p14_recorded(fixtures_dir
     # exists: growth has to be a dimension that can be turned off, or a frozen space stops being one.
     # DL-D4 added the positioning family behind `include_metrics` and this test is what made it add a
     # switch at all - it went red on the first run, which is the guard doing precisely its job.
+    # #8 added `_seasonality_family` behind `include_seasonality` on 2026-09-09, and it went red the
+    # same way.  The candidate list is sorted BY HASH, so a new expression sorting into the middle
+    # shifts every position after it - the frozen hashes had not changed, only their indices.  The
+    # same run also showed `too_long: 18`, which is how the grid's third arm turned out to be
+    # unsearchable; see `_seasonality_family`.
     for result in (
-        enumerate_candidates(include_funding=False, include_panel_nodes=False, include_metrics=False),
-        enumerate_candidates(include_funding=False, include_panel_nodes=False, include_metrics=False, max_complexity=8),
+        enumerate_candidates(
+            include_funding=False, include_panel_nodes=False, include_metrics=False, include_seasonality=False
+        ),
+        enumerate_candidates(
+            include_funding=False,
+            include_panel_nodes=False,
+            include_metrics=False,
+            include_seasonality=False,
+            max_complexity=8,
+        ),
     ):
         assert [candidate.hash for candidate in result.candidates] == baseline["hashes"]
         assert {candidate.hash: str(candidate.expr) for candidate in result.candidates} == baseline["expressions"]

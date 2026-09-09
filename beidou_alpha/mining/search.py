@@ -31,6 +31,7 @@ from beidou_alpha.mining.expr import (
     Expr,
     ExprError,
     Funding,
+    HourOfDay,
     LongShortRatio,
     Moment,
     Mul,
@@ -314,6 +315,53 @@ def _positioning_family(
 # information; the mirror of the worst tree is the best one.  Only the margin over the baseline is.
 
 
+def _seasonality_family(
+    hod_days: Sequence[int],
+    vol_window: int,
+    scales: Sequence[float],
+    horizons: Sequence[int],
+    interaction_scale: float,
+) -> Iterator[Expr]:
+    """#8: does a symbol's own hour of the UTC day carry anything, and does it modulate momentum?
+
+    `HourOfDay` is a mean RETURN, so every shape divides it by `Vol` before `Squash` or `Mul` will
+    take it - the same discipline `OpenInterest` and `_funding_family` are held to, and the type
+    system is what enforces it rather than a comment.
+
+    Both signs ship, for the reason `_positioning_family` states: `cross_sectional_rank` and `tanh`
+    are odd, so every short shape is the exact mirror of its long one and "a seasonality expression
+    ranked first" is not information.  Deciding the sign from the same data that ranked it is the
+    failure this pipeline exists to refuse.
+
+    The interaction is the hypothesis worth more than the leaf.  "This hour has been kind to this
+    symbol" is weak on its own; "this hour has been kind AND the symbol is trending" is a different
+    claim, and the leaf's one-occurrence shift is what keeps it from being momentum times itself.
+
+    Grid choice, pre-registered: `hod_days` is {14, 30, 56} - two weeks, a month, eight weeks of the
+    same hour.  Shorter than two weeks is fourteen numbers averaging noise; longer than two months and
+    any intraday shape that is real has had time to move.  Adding a value is a parameter; adding a
+    fifth shape is a hypothesis (KILL-P6).
+
+    56 rather than 60 because `max_lookback` is 1400 and `hod(60)` reserves `(60 + 1) * 24 = 1464`.
+    The first draft wrote 60 and the enumeration dropped all eighteen of its shapes as `too_long` -
+    silently, since a rejection tally is not a failure.  A grid that reports three windows and
+    searches two is a pre-registration that is not true, which is worse than a narrower grid.
+    """
+    for days in hod_days:
+        seasonal = Ratio(HourOfDay(days), Vol(vol_window))
+        short_seasonal = Mul(Const(-1.0), seasonal)
+        yield CrossSectional(seasonal, "rank")
+        yield CrossSectional(short_seasonal, "rank")
+        for scale in scales:
+            yield Squash(seasonal, scale)
+            yield Squash(short_seasonal, scale)
+        for horizon in horizons:
+            momentum = Ratio(Ret(horizon), Vol(vol_window))
+            interaction = Mul(momentum, seasonal)
+            yield Squash(interaction, interaction_scale)
+            yield Squash(Mul(Const(-1.0), interaction), interaction_scale)
+
+
 def _surprise_family(horizons: Sequence[int], z_windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
     """How *far* a symbol moved, with the direction thrown away.
 
@@ -430,6 +478,9 @@ def enumerate_candidates(
     semi_windows: Sequence[int] = (72, 168),
     residual_windows: Sequence[int] = (168, 336),
     trade_windows: Sequence[int] = (24, 72),
+    # #8, block 2.  Occurrences of the hour, not bars; see `HourOfDay`.
+    include_seasonality: bool = True,
+    hod_days: Sequence[int] = (14, 30, 56),
     include_panel_nodes: bool = True,
     max_complexity: int = 10,
     max_lookback: int = 1400,
@@ -502,6 +553,11 @@ def enumerate_candidates(
             _residual_family(horizons, residual_windows, vol_windows[0], scales),
             _print_size_family(trade_windows, z_windows, horizons, scales),
         )
+    if include_seasonality:
+        # Appended for the same reason the panel nodes are: a family's position does not enter a
+        # candidate's hash, but the order candidates are FIRST SEEN in decides which duplicate is
+        # kept, and every id already in the ledger has to keep resolving (T-A1-3).
+        families = (*families, _seasonality_family(hod_days, vol_windows[0], scales, horizons, funding_scale))
     for family in families:
         while True:
             try:
