@@ -1423,9 +1423,18 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # before: KILL-Q15 with the digest on the wrong side, moving when nothing else does.  `parse_registry`
 # now refuses any value but zero; zero stays parseable so archived fingerprints still reproduce, and
 # wiring it is a construction change that needs its own evidence.
+# 2026-09-09, +14 alpha / +25 live: D-031 could shrink a PINNED universe behind the digest.  The sweep
+# above, pointed at the profile instead of the registry, surfaced `pool.quarantine_after` as a live knob
+# outside `construction_fingerprint`; reading what it does found that `_quarantine` removed a symbol from
+# `self.universe` and left `self.model` alone.  Measured: one quarantine, 17 of 18 pinned symbols traded,
+# `registry_digest` byte-identical at `abe21f7a8edf`, and `live status --check` still reporting agreement.
+# The pin shipped the same morning is what made it matter - before it the digest carried no universe to
+# be wrong about.  `AlphaModel.without_symbols` mirrors `without_books`, and the pinned case alerts,
+# because under a pin the daily re-rank adopts nothing and the symbol does not come back without a
+# restart: a machine departing from a governed decision may not do it quietly.
 CEILING = {
-    "beidou_alpha": 7_136,
-    "beidou_live": 6_509,
+    "beidou_alpha": 7_150,
+    "beidou_live": 6_534,
     "beidou_cli": 4_250,
     "beidou_data": 1_889,
     "beidou_exchange": 611,

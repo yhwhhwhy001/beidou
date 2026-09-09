@@ -756,7 +756,7 @@ class LiveEngine:
             )
             self._remember_order(report)
             record["orders"].append(report.to_dict())
-        record["quarantined"] = self._quarantine(reports)
+        record["quarantined"] = await self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
         self._finish_cycle(record, targets.contributions)
         return record
@@ -782,7 +782,7 @@ class LiveEngine:
         return reports
 
     # --- helpers ----------------------------------------------------------------
-    def _quarantine(self, reports: Sequence[ExecutionReport]) -> list[str]:
+    async def _quarantine(self, reports: Sequence[ExecutionReport]) -> list[str]:
         """D-031: a symbol the venue keeps rejecting leaves the universe and takes the reduce-only exit path.
 
         Evidence, not suspicion.  A streak only advances when the same cycle placed a non-rejected order
@@ -809,7 +809,23 @@ class LiveEngine:
             self.universe = [symbol for symbol in self.universe if symbol not in hit]
             self.state.universe = list(self.universe)
             self.state.leaving = list(dict.fromkeys([*self.state.leaving, *hit]))
+            # The digest has to follow the traded set, or this path is KILL-Q15 again: measured
+            # 2026-09-09, one quarantine left the loop trading 17 of 18 PINNED symbols while
+            # `registry_digest` stayed byte-identical, so `live status --check` kept reporting
+            # agreement.  Moving it makes the check report a divergence - which is the true statement:
+            # the process is no longer trading the universe the registry names.
+            self.model = _without_symbols(self.model, hit)
             logger.warning("quarantined after %d rejected cycles, exiting reduce-only: %s", after, hit)
+            if self.config.universe_pinned:
+                # Under a pin the daily re-rank records a proposal and adopts nothing, so nothing puts
+                # a quarantined symbol back: the traded set stays smaller than the registry's until
+                # somebody restarts.  That is a machine departing from a governed decision, and it has
+                # to be said out loud rather than left in a log line and a moved digest.
+                await self.alerts.send(
+                    f"北斗：{hit} 连续 {after} 个周期被交易所拒单，已退出（reduce-only）。"
+                    "universe 由 registry 钉住，每日重排只记录不采纳——**不重启就不会回来**，"
+                    "且 registry digest 已随之改变"
+                )
         return hit
 
     async def _maybe_refresh_universe(self, bar_open_ms: int) -> dict[str, Any] | None:
@@ -1666,6 +1682,15 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
 def evidence_construction_of(config: LiveConfig) -> str:
     blocks = evidence_construction(config)
     return evidence_construction_digest(blocks["portfolio"], blocks["book_guards"], blocks["exits"])
+
+
+def _without_symbols(model: SignalModel, symbols: Sequence[str]) -> SignalModel:
+    """Drop quarantined symbols from a model that pins a universe (``AlphaModel.without_symbols``)."""
+    drop = getattr(model, "without_symbols", None)
+    if not symbols or not callable(drop):
+        return model
+    reduced: SignalModel = drop(list(symbols))
+    return reduced
 
 
 def _without_books(model: SignalModel, books: Sequence[str]) -> SignalModel:
