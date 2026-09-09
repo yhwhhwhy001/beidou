@@ -1333,6 +1333,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # READS it, because coverage gating needs that the moment a metrics-using strategy is enabled.
 # The predicate is renamed `trades_the_account`: it was named after one of its consequences
 # (re-ranking the pool) and there are now two, which is how the first one got the condition wrong.
+# 2026-09-09, +26 governance: DL-K3 was comparing two ISO timestamps as STRINGS.  The sentence the
+# rule requires.  `git` writes `preregistration.committed_at` with the COMMITTER's local offset and a
+# report writes `generated_at` in UTC, so the comparison was about spelling.  It failed both ways:
+# measured on the pointer the live registry cites it REFUSED valid evidence (prereg 211s earlier,
+# text says later); turn the offset around and it ACCEPTS a forgery - a "pre-registration" committed
+# 30 minutes AFTER a report sorts before it as text.  DL-K3 is the rule that stops a result being
+# registered once it is known, and a `<` on strings is not that rule.
+# It was also masking a stale fixture: while it refused that report, "the rules say no" and "history
+# never adopted it" agreed, and the agreement hid an adoption list that had not been updated when the
+# registry changed pointers on 2026-09-09.  One bug covering another is why AC-G0 read as passing.
 CEILING = {
     "beidou_alpha": 6_998,
     "beidou_live": 6_197,
@@ -1340,7 +1350,7 @@ CEILING = {
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_026,
+    "beidou_governance": 2_052,
 }
 
 
