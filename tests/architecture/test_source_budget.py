@@ -1733,14 +1733,29 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # are the second reading and the ERROR-streak number that neither covers - one 503 is the proxy
 # blinking, six hours of them is the venue being gone, and only the second says anything about this
 # deployment.
+# 2026-09-10, +227 governance / +95 cli: `verdicts.py` and `governance verdicts|review|divergence`.
+# M-G05 is Pre-A′'s ONLY falsifier - the plan names 'written rules can replace a person's runtime
+# judgement' as its highest-risk assumption and gives it exactly one way to be refuted - and it had no
+# instrument of any kind: a row in §11, a cell in §13, and nothing that wrote, read or computed it.
+# It is not `governance replay` wearing a different hat.  Replay asks whether the rules REPRODUCE
+# decisions already taken (M-G02, backward, fixed record, currently 0 unattributed).  A rule set fitted
+# to a history can reproduce all of it and be wrong about the next one; M-G05 asks people about the
+# rulings the machine is making NOW.
+# Two lines carry most of the count and neither is decoration.  The gate records its own verdict, so
+# the sample is not selected by which decisions somebody found memorable - and the memorable ones are
+# the surprising ones.  And an unreviewed ruling is `pending`, never absent, so the denominator cannot
+# shrink toward agreement; below a quorum of ten the rate is None rather than 0%, because zero of three
+# reviews is three reviews, not a clean record.  Directions are kept apart per §11: a machine that
+# refuses too much and one that admits too much need different fixes, and one averaged rate can look
+# healthy while both are large.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_786,
-    "beidou_cli": 4_664,
+    "beidou_cli": 4_759,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_576,
+    "beidou_governance": 2_803,
 }
 
 

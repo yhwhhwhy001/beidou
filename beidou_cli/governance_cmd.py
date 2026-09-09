@@ -32,6 +32,10 @@ from beidou_governance.promote import closed, read_log
 from beidou_governance.promote import plan as plan_transaction
 from beidou_governance.replay import load_jsonl, render, replay_adoptions, replay_live
 from beidou_governance.state import read as read_state
+from beidou_governance.verdicts import ALLOW, LEDGER as VERDICTS, REFUSE, divergence, read as read_verdicts
+from beidou_governance.verdicts import record as record_verdict
+from beidou_governance.verdicts import review as review_verdict
+from beidou_governance.verdicts import since as verdicts_since
 from beidou_governance.tenure import books_in, tenure
 from beidou_live.config import registry_evidence_problems
 from beidou_live.health import CONSTRUCTION_ALIASES
@@ -299,6 +303,21 @@ def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, sh
     )
 
 
+def _log_admission(root: Path, admission: Admission, subject: str) -> None:
+    """M-G05's numerator and denominator both start here, at the moment the machine rules.
+
+    Recorded by the gate rather than by whoever remembers: a sample of remembered decisions is
+    selected by how memorable they were, and the memorable ones are the surprising ones.
+    """
+    record_verdict(
+        root / VERDICTS,
+        kind="admission",
+        subject=subject,
+        ruling=ALLOW if admission.allowed else REFUSE,
+        reasons=admission.reasons,
+    )
+
+
 def _report_admission(admission: Admission) -> None:
     for key, value in sorted(admission.measured.items()):
         click.echo(f"  {key}: {value}", err=True)
@@ -322,6 +341,7 @@ def plan_cmd(
     click.echo(f"admission: {'ALLOWED' if admission.allowed else 'REFUSED'} "
                f"(promoting: {', '.join(admission.promoting) or 'nothing'})", err=True)
     _report_admission(admission)
+    _log_admission(Path(root).resolve(), admission, Path(proposed).name)
     transaction = plan_transaction(
         Path(registry_path),
         Path(proposed).read_text(encoding="utf-8"),
@@ -365,6 +385,17 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     readings = recheck_gate(registry, read_report, lines)
     for reading in readings:
         click.echo(f"{reading.status:10s} {reading.strategy:22s} {reading.why}")
+    for reading in readings:
+        # UNREADABLE is not a ruling: the gate did not decide, it failed to ask.  Recording it as a
+        # REFUSE would put "we could not read the evidence" into a denominator about judgement.
+        if reading.status in ("PASS", "FAIL"):
+            record_verdict(
+                checkout / VERDICTS,
+                kind="family_gate",
+                subject=reading.strategy,
+                ruling=ALLOW if reading.passes else REFUSE,
+                reasons=(reading.why,),
+            )
     failed = gate_failures(readings)
     unreadable = [r for r in readings if r.status == "UNREADABLE"]
     click.echo(
@@ -372,6 +403,69 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
         f"{len(failed)} fail, {len(unreadable)} unreadable (ledger {ledger})"
     )
     if check and failed:
+        raise SystemExit(1)
+
+
+@governance.command("verdicts")
+@click.option("--root", default=".", help="Checkout holding the verdict ledger.")
+@click.option("--since", "since_at", default="", help="Only verdicts at or after this ISO instant.")
+@click.option("--pending", is_flag=True, help="Only the ones still waiting for a human review.")
+def verdicts_cmd(root: str, since_at: str, pending: bool) -> None:
+    """M-G05's raw material: every machine ruling, and whether a person has reviewed it."""
+    rows = read_verdicts(Path(root).resolve() / VERDICTS)
+    if since_at:
+        rows = verdicts_since(rows, since_at)
+    if pending:
+        rows = [row for row in rows if row.pending]
+    for row in sorted(rows, key=lambda r: r.at):
+        mark = "PENDING " if row.pending else f"{row.review.upper():8s}"
+        click.echo(f"{row.id}  {row.at[:19]}  {row.kind:12s} {row.ruling:7s} {mark} {row.subject}")
+        for reason in row.reasons:
+            click.echo(f"                              {reason}")
+        if row.review_why:
+            click.echo(f"                          why: {row.review_why}")
+    click.echo(f"{len(rows)} verdicts, {sum(1 for r in rows if r.pending)} awaiting review")
+
+
+@governance.command("review")
+@click.argument("identifier")
+@click.option("--agree/--disagree", "agrees", required=True, help="Does the reviewer back the ruling?")
+@click.option("--why", required=True, help="Why.  A review without one is not a review.")
+@click.option("--root", default=".", help="Checkout holding the verdict ledger.")
+def review_cmd(identifier: str, agrees: bool, why: str, root: str) -> None:
+    """The human half of M-G05.  Append-only: the original ruling stays on the record."""
+    from beidou_governance.verdicts import AGREE, DISAGREE
+
+    try:
+        updated = review_verdict(Path(root).resolve() / VERDICTS, identifier, AGREE if agrees else DISAGREE, why)
+    except (KeyError, ValueError) as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"{updated.id}  {updated.kind} {updated.ruling} -> {updated.review}: {updated.review_why}")
+
+
+@governance.command("divergence")
+@click.option("--root", default=".", help="Checkout holding the verdict ledger.")
+@click.option("--since", "since_at", default="", help="Period start (ISO).  §11 asks for a quarter.")
+@click.option("--check", is_flag=True, help="Exit non-zero when M-G05 asks for a rule-version review.")
+def divergence_cmd(root: str, since_at: str, check: bool) -> None:
+    """M-G05 - and Pre-A′'s only falsifier, which had no instrument of any kind until 2026-09-10.
+
+    Not a substitute for `governance replay`.  Replay asks whether the rules reproduce decisions people
+    already took (M-G02, backward, against a fixed record).  This asks whether people agree with the
+    rulings the machine is making now.  A rule set fitted to a history can reproduce all of it and still
+    be wrong about the next one.
+    """
+    rows = read_verdicts(Path(root).resolve() / VERDICTS)
+    if since_at:
+        rows = verdicts_since(rows, since_at)
+    result = divergence(rows)
+    click.echo(f"M-G05  {result.why()}")
+    click.echo(f"       {result.pending} pending review")
+    for kind, (seen, disagreed) in sorted(result.by_kind.items()):
+        click.echo(f"       {kind:14s} {disagreed}/{seen} disagreed")
+    if result.triggers_review:
+        click.echo("       -> §11: rule version review", err=True)
+    if check and result.triggers_review:
         raise SystemExit(1)
 
 
@@ -455,6 +549,7 @@ def apply_cmd(
         )
     text = Path(proposed).read_text(encoding="utf-8")
     admission = _admission(registry_path, text, checkout, state_dir, shadow_dir)
+    _log_admission(checkout, admission, candidate or Path(proposed).name)
     if not admission.allowed:
         _report_admission(admission)
         raise click.ClickException(
