@@ -24,7 +24,14 @@ from beidou_data.pool import (
     point_in_time_membership,
     sync_daily,
 )
-from beidou_data.store import FundingStore, KlineStore, MetricsStore
+from beidou_data.spot import (
+    SPOT_MARKET,
+    SpotClient,
+    map_universe,
+    measure_alignment,
+    write_spot_map,
+)
+from beidou_data.store import SPOT_KLINE_KIND, FundingStore, KlineStore, MetricsStore, interval_ms
 from beidou_data.sync import sync_funding, sync_klines
 from beidou_data.universe import UniverseConfig, eligible_symbols
 from beidou_live.composition import read_universe, write_universe
@@ -142,6 +149,74 @@ def data_metrics(root: str, symbols: str, start: str, end: str, workers: int) ->
         stamp = datetime.fromtimestamp(after / 1000, tz=UTC).isoformat()
         moved = "unchanged" if before[symbol] == after else f"advanced to {stamp}"
         click.echo(f"{symbol}: {rows if rows is not None else store.load(symbol).shape[0]} rows stored, {moved}")
+
+
+@data.command("spot")
+@click.option("--universe", "universe_path", default="config/universe.yaml", show_default=True)
+@click.option("--root", default=".beidou/data", show_default=True, help="parquet store root")
+@click.option("--symbols", default="", help="comma-separated perpetuals (default: every symbol the kline store holds)")
+@click.option("--interval", default="1h", show_default=True)
+@click.option("--start", default=None, help="first archive month YYYY-MM (default from universe.yaml)")
+@click.option("--spot-url", default="https://api.binance.com", show_default=True)
+def data_spot(universe_path: str, root: str, symbols: str, interval: str, start: str | None, spot_url: str) -> None:
+    """Ingest SPOT klines for the perpetuals' spot legs and print the alignment contract (DL-D5).
+
+    The mapping is resolved against the spot venue's own listing and written to ``spot_map.json``, so
+    research and the live loop resolve a perpetual to the same spot symbol instead of each re-deriving
+    it from the name - which gets 1000SATSUSDT and three others wrong, silently and by a factor of 1000.
+
+    The alignment check runs every time rather than behind a flag.  T-D5-1 is a claim about two live
+    series ("same grid, no offset, right multiplier"), and a claim that is only tested against fixtures
+    is a claim about the fixtures; this is the one place both real series are on disk together.
+    """
+    config = UniverseConfig.from_mapping(load_yaml(universe_path))
+    history_start = Month.parse(start or config.history_start)
+    perp_store = KlineStore(root)
+    spot_store = KlineStore(root, kind=SPOT_KLINE_KIND)
+    wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()] or perp_store.symbols(interval)
+    if not wanted:
+        raise click.ClickException(f"no perpetuals to map: {perp_store.directory} holds no {interval} klines")
+    with SpotClient(spot_url) as client, ArchiveClient() as archive:
+        now_ms = client.server_time_ms()
+        mappings = map_universe(wanted, client.listed_symbols())
+        write_spot_map(root, mappings, {"measured_at_ms": now_ms, "interval": interval})
+        absent = sorted(perp for perp, mapping in mappings.items() if not mapping.exists)
+        click.echo(f"spot legs: {len(wanted) - len(absent)}/{len(wanted)} mapped, {len(absent)} with no spot listing")
+        if absent:
+            click.echo(f"  no spot leg: {', '.join(absent)}")
+        for perp, mapping in sorted(mappings.items()):
+            if mapping.spot is None:
+                continue
+            report = sync_klines(
+                mapping.spot,
+                interval,
+                history_start=history_start,
+                store=spot_store,
+                archive=archive,
+                public=client,
+                now_ms=now_ms,
+                market=SPOT_MARKET,
+            )
+            note = " NOT LISTED" if report.not_listed else ""
+            scale = "" if mapping.multiplier == 1.0 else f" x{mapping.multiplier:g}"
+            click.echo(f"{perp} -> {mapping.spot}{scale}: {report.total_rows} rows{note} {'; '.join(report.errors)}")
+    for perp, mapping in sorted(mappings.items()):
+        if mapping.spot is None:
+            continue
+        try:
+            # Either leg can be absent - a perpetual outside this root, or a spot symbol whose archive
+            # published nothing and whose tail failed.  Saying which is missing beats ending the run on
+            # a FileNotFoundError after every download has already been paid for.
+            frames = (perp_store.load(perp, interval), spot_store.load(mapping.spot, interval))
+        except FileNotFoundError as exc:
+            click.echo(f"{perp}/{mapping.spot}: alignment not measured ({exc})")
+            continue
+        evidence = measure_alignment(*frames, mapping=mapping, interval_ms=interval_ms(interval))
+        verdict = "OK" if evidence.aligned else f"REFUSED ({evidence.reason})"
+        click.echo(
+            f"{perp}/{mapping.spot}: overlap={evidence.overlap_bars} lag={evidence.best_lag_bars:+d} "
+            f"median|log ratio|={evidence.median_abs_log_ratio:.5f} p95={evidence.p95_abs_log_ratio:.5f} {verdict}"
+        )
 
 
 @data.command("status")

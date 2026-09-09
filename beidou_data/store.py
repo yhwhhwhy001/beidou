@@ -20,13 +20,27 @@ def interval_ms(interval: str) -> int:
     return int(interval[:-1]) * scale * 1000
 
 
+SPOT_KLINE_KIND = "spot_klines"
+
+
 class KlineStore:
-    def __init__(self, root: str | Path = ".beidou/data") -> None:
+    """Klines for one market.  ``kind`` picks the subdirectory; everything else is identical.
+
+    Spot gets a second directory rather than a second class because the two markets carry the SAME
+    eleven columns under the same ``open_time`` convention (DL-D5 note 4), and a separate class would
+    be a second place for the merge/dedupe/gap rules to drift.  It is keyed by the SPOT symbol, not by
+    the perpetual that references it: the store records what the venue served, and
+    ``beidou_data.spot`` owns the perp -> spot mapping.  One spot symbol backing two perps is then
+    stored once, and a wrong mapping cannot be laundered into looking like wrong data.
+    """
+
+    def __init__(self, root: str | Path = ".beidou/data", *, kind: str = "klines") -> None:
         self.root = Path(root)
+        self.kind = kind
 
     @property
     def directory(self) -> Path:
-        return self.root / "klines"
+        return self.root / self.kind
 
     def path(self, symbol: str, interval: str) -> Path:
         return self.directory / symbol / f"{interval}.parquet"

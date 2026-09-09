@@ -132,6 +132,17 @@ class Panel:
     # two would drift.  `from_frames` refuses a frame that is not on the bar index instead, so a
     # mis-aligned frame cannot enter through the front door either.
     metrics: dict[str, pd.DataFrame] | None = None
+    # DL-D5.  One wide frame per SPOT field (bars x symbols), keyed by the PERPETUAL symbol and already
+    # quoted in the perpetual's unit, so `close / spot["close"] - 1` is the basis and nothing here has
+    # to know that 1000SHIBUSDT trades a thousand SHIB at a time.
+    #
+    # Aligned by the caller, exactly like `metrics` and for the same reason: the rule - a perp bar reads
+    # the spot bar with the SAME open time or reads NaN - lives in `beidou_data.spot` next to the
+    # measurement that justifies it (XMRUSDT's spot has been halted since 2024-02-20 while its perpetual
+    # quadrupled, so "latest available" would price a +324% basis off a dead listing).  A symbol with no
+    # spot leg is an all-NaN column rather than an absent one: 166 of 528 perpetuals have no spot at all,
+    # and the panel has to be able to say that about a symbol it does carry.
+    spot: dict[str, pd.DataFrame] | None = None
 
     @classmethod
     def from_frames(
@@ -140,6 +151,7 @@ class Panel:
         interval: str,
         funding: Mapping[str, pd.Series] | pd.DataFrame | None = None,
         metrics: Mapping[str, pd.DataFrame] | None = None,
+        spot: Mapping[str, pd.DataFrame] | None = None,
     ) -> Panel:
         if not frames:
             raise ValueError("at least one symbol frame is required")
@@ -164,19 +176,23 @@ class Panel:
             funding_frame = funding_frame.reindex(columns=list(normalized)).fillna(0.0).astype(float)
         assert wide["open"] is not None and wide["high"] is not None and wide["low"] is not None
         assert wide["close"] is not None and wide["volume"] is not None
-        metrics_frames: dict[str, pd.DataFrame] | None = None
-        if metrics:
-            metrics_frames = {}
-            for name, frame in metrics.items():
+
+        # The refusal that makes "aligned by the caller" safe, for both foreign sources.  A reindex here
+        # would be the helpful thing to do and would silently re-introduce whatever offset the caller
+        # had: what those stamps meant is exactly what this class does not know, so it cannot fix them.
+        def on_bar_index(kind: str, source: Mapping[str, pd.DataFrame], aligner: str) -> dict[str, pd.DataFrame]:
+            out: dict[str, pd.DataFrame] = {}
+            for name, frame in source.items():
                 if index is not None and not frame.index.equals(index):
-                    # The refusal that makes "aligned by the caller" safe.  A reindex here would be the
-                    # helpful thing to do and would silently re-introduce the five minutes: whatever the
-                    # caller's stamps meant, this class does not know, so it cannot fix them.
                     raise ValueError(
-                        f"metrics column {name!r} is not on the bar index; align it with "
-                        "beidou_data.metrics.align_to_bars before building the panel"
+                        f"{kind} column {name!r} is not on the bar index; align it with "
+                        f"{aligner} before building the panel"
                     )
-                metrics_frames[str(name)] = frame.reindex(columns=list(normalized)).astype(float)
+                out[str(name)] = frame.reindex(columns=list(normalized)).astype(float)
+            return out
+
+        metrics_frames = on_bar_index("metrics", metrics, "beidou_data.metrics.align_to_bars") if metrics else None
+        spot_frames = on_bar_index("spot", spot, "beidou_data.spot.align_spot_to_perp_bars") if spot else None
         return cls(
             interval=interval,
             open=wide["open"],
@@ -190,7 +206,18 @@ class Panel:
             taker_buy_quote=wide["taker_buy_quote"],
             funding=funding_frame,
             metrics=metrics_frames,
+            spot=spot_frames,
         )
+
+    def spot_field(self, name: str) -> pd.DataFrame | None:
+        """One spot field on the bar index, or None when the panel carries no spot at all.
+
+        Two different absences, kept apart.  ``None`` means nobody ingested spot for this panel; an
+        all-NaN COLUMN inside the frame means this perpetual has no spot leg on the venue, which is the
+        ordinary case for a third of the board.  Collapsing them would make "not downloaded" and "does
+        not exist" the same input, and only one of those is fixed by running the sync.
+        """
+        return None if not self.spot else self.spot.get(name)
 
     def metric(self, name: str) -> pd.DataFrame | None:
         """One metrics column, or None when the panel carries none.
@@ -263,6 +290,12 @@ class Panel:
             taker_buy_quote=maybe(self.taker_buy_quote),
             funding=maybe(self.funding),
             reference=maybe(self.reference),
+            # Carried through the slice, because a basis leaf is scored on `panel.slice(end=cutoff)` and
+            # dropping it here would make the holdout split the thing that decides whether the leg
+            # exists.  `metrics` is NOT carried and predates this; it fails loudly (`_required_metric`
+            # raises) rather than scoring on nothing, so it is recorded here rather than changed under
+            # DL-D5's name.
+            spot=None if self.spot is None else {name: function(frame) for name, frame in self.spot.items()},
         )
 
     def slice(self, start: pd.Timestamp | str | None = None, end: pd.Timestamp | str | None = None) -> Panel:
