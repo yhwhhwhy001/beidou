@@ -1108,17 +1108,28 @@ class LiveEngine:
                     f"近 {probe.window_days} 天归因盈亏 {status['pnl']:.2f}"
                     f"（占权益 {status['pnl_pct']:.4f}）已跌破 -{probe.max_loss}"
                 )
-                self.state.stopped_books[probe.book] = {
-                    "at": utc_now_iso(),
-                    "bar_open_ms": bar_open_ms,
-                    "pnl": status["pnl"],
-                    "pnl_pct": status["pnl_pct"],
-                    "reason": reason,
-                }
-                self.model = _without_books(self.model, [probe.book])
-                status["status"] = "STOPPED"
-                logger.warning("probe book %s stopped: %s", probe.book, reason)
-                await self.alerts.send(f"北斗：探针账本 {probe.book}（{probe.strategy}）已停用 —— {reason}")
+                if probe.halts:
+                    self.state.stopped_books[probe.book] = {
+                        "at": utc_now_iso(),
+                        "bar_open_ms": bar_open_ms,
+                        "pnl": status["pnl"],
+                        "pnl_pct": status["pnl_pct"],
+                        "reason": reason,
+                    }
+                    self.model = _without_books(self.model, [probe.book])
+                    status["status"] = "STOPPED"
+                    logger.warning("probe book %s stopped: %s", probe.book, reason)
+                    await self.alerts.send(f"北斗：探针账本 {probe.book}（{probe.strategy}）已停用 —— {reason}")
+                else:
+                    # §3: a main sleeve that fires is DEMOTED and recounts, it does not stop trading.
+                    # Recorded and alerted all the same - the transition is a governance action taken
+                    # on this row, and a row nobody is told about is not a control.
+                    status["status"] = "STOP_REPORTED"
+                    logger.warning("main book %s hit its stop (not halted): %s", probe.book, reason)
+                    await self.alerts.send(
+                        f"北斗：主账本 {probe.book}（{probe.strategy}）触发 P&L stop —— {reason}。"
+                        "按 §3 降级回 probe 重新计窗口，**未停止交易**"
+                    )
             statuses.append(status)
         return statuses
 

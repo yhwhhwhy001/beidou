@@ -246,6 +246,37 @@ strategies:
       report: reports/research/tsmom-validation-20260908T182204Z.json
       sha256: da400f4d28ef0da9843417fdcbfe722657dc7902fa204a64ab86e24f60c083e0
       verdict: PASS
+    # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
+    # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
+    # 它的 30 天滚动归因盈亏既没有被约束，也从来没有被计算过。规则看不见的东西，规则就管不住。
+    #
+    # 语义按 §3，不是按引擎的既有 stop：§3 给两条转移的通道不同——`probe -> retired` 写的是
+    # 「快：stopped_books」，`main -> probe` 没写。探针是未经证明的 sleeve，停掉它就是控制本身；
+    # 主账本 fraction 1.0，停掉它等于把策略关了，而 §3 说触发的 main 是**降级重新计窗口**，
+    # 从没说它停止交易。所以这条 stop 每周期计算、记录、告警并推动生命周期，但不清空账本。
+    # 要把它变成硬停，是 `stop.halts: true` 一个字段，由人走一次治理事务——那才是这个尺寸的决定该有的形状。
+    #
+    # 阈值 6% 的来历（预登记，路线 B：按 D-019 自己的规模换算，不是我拿 6 天样本外推）：
+    # flow 是 1/3 预算、预登记 max_loss 2%；tsmom 是 1.0 预算，3 倍 -> 6%。D-019 记过一次同形调整
+    # ——书翻倍时 0.01 -> 0.02，「阈值是权益的比例，而归因 P&L 随书的大小翻倍，不动它等于把 D-019
+    # 悄悄改严一倍」。分母是总权益（2026-09-08 审计三问③ 的裁定）。
+    #
+    # 路线 A（实测 −2σ，与规则读的是同一个量：已实现归因）给 −1.64%，与本值差 3.7 倍。没有采用，
+    # 因为样本只有 5.8 天、区间内还有一次 +5000 TRANSFER，是 5 倍外推——本项目已经在小样本外推上
+    # 错过三次。`review_after_days: 30` 就是为了拿满 30 天已实现归因后按 D-019 的 −2σ 重新定阈。
+    # 实测当下：trailing 归因 −0.1364% 权益，0.5%～5% 任何一档都不触发；装上它今天不改变任何行为。
+    probe:
+      accepted_by: operator
+      accepted_on: '2026-09-03'
+      reason: >-
+        grandfathered main book (KILL-AR-06).  The stop was added 2026-09-09 because §3 says main
+        keeps one and nothing computed it; the threshold is D-019's rescaled by fraction, and it is
+        due for re-derivation on 30 days of realised attribution.
+      review_after_days: 30
+      stop:
+        window_days: 30
+        max_loss: 0.06
+        halts: false
   - id: xsmom
     enabled: false
     weight: 1.0
