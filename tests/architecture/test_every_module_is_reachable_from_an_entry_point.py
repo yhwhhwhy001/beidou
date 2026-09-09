@@ -49,18 +49,6 @@ ENTRY_POINTS = (
 
 #: Each name says what would make it reachable, so an exemption is an argument rather than a shrug.
 EXEMPT: dict[str, str] = {
-    "beidou_governance.scheduler": (
-        "DL-G8 is delivered as a pure decision function with no assembler and no command: `governance` "
-        "has no `next`, and `deploy/` has neither run_research.sh nor com.beidou.research.plist.  §9 "
-        "records this as '研究机 plist 未做', which understates it - there is no way to run the "
-        "scheduler at all, so AC-G8 ('连跑 3 轮') cannot be attempted.  Reachable the moment a command "
-        "builds `scheduler.Context` from the ledger and the shortlist reports."
-    ),
-    "beidou_governance.budget": (
-        "R1 lives here and its only importer is `scheduler`, so it inherits that module's unreachability.  "
-        "Measured 2026-09-09: `research mine` and `research validate` consult no budget at all - the "
-        "window's 181/1700 rows and 3/4 mine rounds are counted by nothing at the moment they are spent."
-    ),
     "beidou_data.liquidations": (
         "#19 判定不可用 (2026-09-09): Binance publishes no USDⓈ-M liquidation history, and the only "
         "coin-margined archive stopped 23 months before the live period, so the parity obligation is "
@@ -165,5 +153,10 @@ def test_the_guard_can_fail() -> None:
     seen = _reachable()
     assert "beidou_governance.lifecycle" in seen, "the state machine is reached through governance_cmd"
     assert "beidou_governance.canary" in seen, "wired 2026-09-09 by `governance canary`"
+    # The two this file was written about.  `scheduler` was DL-G8 with no assembler and `budget` held
+    # R1 behind it; `governance next` builds the context and `governance advance` folds what the
+    # record already did, which is what `lifecycle.apply` and `state.write` had been waiting for.
+    assert "beidou_governance.scheduler" in seen, "wired 2026-09-10 by `governance next`"
+    assert "beidou_governance.budget" in seen, "R1 reaches a command through the scheduler's context"
     assert "beidou_alpha.signals.tsmom" in seen, "reached only via `from beidou_alpha.signals import tsmom`"
     assert "beidou_live.engine" in seen and "beidou_data.spot" in seen

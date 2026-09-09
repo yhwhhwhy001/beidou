@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,18 +22,23 @@ import yaml
 from beidou_alpha.registry import parse_registry
 from beidou_alpha.validation.ledger import resolve_ledger_path
 from beidou_cli import main
-from beidou_governance.admission import Admission, admit
+from beidou_governance.admission import WINDOW_ANCHOR, Admission, admit, rolled, window_start
+from beidou_governance.assemble import assemble, conclude
+from beidou_governance.budget import window_spend
 from beidou_governance.canary import evaluate as evaluate_canary
 from beidou_governance.family_gate import failures as gate_failures
 from beidou_governance.family_gate import recheck as recheck_gate
-from beidou_governance.lifecycle import State
+from beidou_governance.lifecycle import Book, Facts, State
+from beidou_governance.lifecycle import apply as apply_event
 from beidou_governance.policy import Policy
 from beidou_governance.promote import apply as apply_transaction
 from beidou_governance.promote import closed, read_log
 from beidou_governance.promote import plan as plan_transaction
 from beidou_governance.replay import load_jsonl, render, replay_adoptions, replay_live
+from beidou_governance.scheduler import WAIT
 from beidou_governance.state import read as read_state
-from beidou_governance.tenure import books_in, tenure
+from beidou_governance.state import write as write_state
+from beidou_governance.tenure import Derived, books_in, tenure
 from beidou_governance.verdicts import ALLOW, REFUSE, divergence
 from beidou_governance.verdicts import LEDGER as VERDICTS
 from beidou_governance.verdicts import read as read_verdicts
@@ -94,16 +100,22 @@ def _adoptions(root: Path) -> tuple[dict[str, str], set[str]]:
     return adoptions, acknowledged
 
 
-def _reports(root: Path) -> dict[str, dict]:
-    out: dict[str, dict] = {}
-    for path in sorted((root / "reports" / "research").glob("*.json")):
+def _payloads(directory: Path) -> dict[str, dict[str, Any]]:
+    """Every JSON report in one directory, keyed on its file name.  Unreadable files are skipped."""
+    out: dict[str, dict[str, Any]] = {}
+    for path in sorted(directory.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             continue
         if isinstance(payload, dict):
-            out[path.relative_to(root).as_posix()] = payload
+            out[path.name] = payload
     return out
+
+
+def _reports(root: Path) -> dict[str, dict]:
+    """The same reports, keyed the way the registry cites them - which is what `replay` matches on."""
+    return {f"reports/research/{name}": payload for name, payload in _payloads(root / "reports" / "research").items()}
 
 
 @governance.command("replay")
@@ -577,3 +589,227 @@ def apply_cmd(
         raise SystemExit(1)
     if transaction.restart_required:
         click.echo("restart required: the engine builds its model at startup (KILL-Q15)", err=True)
+
+
+@governance.command("next")
+@click.option("--root", default=".", help="Checkout holding the reports, the ledger and the state.")
+@click.option("--reports", "reports_dir", default="reports/research", show_default=True)
+@click.option("--daily", "daily_dir", default="reports/daily", show_default=True, help="Where M-011's parity lands.")
+@click.option("--anchor", default=WINDOW_ANCHOR, show_default=True, help="The batch calendar R1 counts a window on.")
+@click.option("--wanted", default=1, show_default=True, help="Trials the next `research validate` would charge.")
+@click.option("--check", is_flag=True, help="Exit non-zero when there is something to do (for a `deploy/` timer).")
+def next_cmd(root: str, reports_dir: str, daily_dir: str, anchor: str, wanted: int, check: bool) -> None:
+    """DL-G8: what the research loop does next, assembled from the artefacts.  Decides; does nothing.
+
+    `scheduler.next_action` has been a pure function with no caller since it was written, which is why
+    it and `budget` were both in the reachability guard's EXEMPT list.  This is the assembler, and its
+    real work is the fields it CANNOT read: every one of them is a count whose branch is `> 0`, so a
+    default of 0 does not error, it answers - one step further down the pipeline than the evidence
+    supports.  Each field prints its source, an unreadable one prints why, and `conclude` asks whether
+    the answer would have differed had it read the other way.  If it would, the answer is WAIT.
+
+    Read-only, and it touches `.beidou/live` nowhere: `scheduler`'s own docstring forbids that, because
+    a research run whose timing depends on what the book is doing is not a schedule.  The one live
+    artefact it will read is `reports/daily/*.json`, which is a written report rather than live state.
+    """
+    checkout = Path(root).resolve()
+    policy = Policy()
+    ledger = resolve_ledger_path(root=checkout)
+    if not ledger.exists():
+        raise click.ClickException(
+            f"no trials ledger at {ledger}: R1 cannot be asked.  A budget that reads an absent ledger "
+            "as 'nothing spent' is the empty-book failure again - permissive, not conservative."
+        )
+    opened = window_start(policy, anchor=anchor)
+    budget = window_spend(ledger.read_text(encoding="utf-8").splitlines(), window_start=opened, policy=policy)
+
+    directory = checkout / reports_dir
+    shortlists = sorted(directory.glob("mine-shortlist-*.json"))
+    shortlist = json.loads(shortlists[-1].read_text(encoding="utf-8")) if shortlists else None
+    # M-011's status is not a research artefact: `beidou report daily` computes it against the live
+    # universe and the data root, and a research machine has neither.  Read where it lands rather than
+    # recomputed, so this command keeps its promise not to touch live state.
+    daily = sorted((checkout / daily_dir).glob("*.json"))
+    parity = json.loads(daily[-1].read_text(encoding="utf-8")).get("metrics_parity") if daily else None
+    if not daily:
+        parity_source = f"no daily report under {daily_dir}; `beidou report daily` is what writes M-011"
+    elif not isinstance(parity, dict):
+        parity_source = f"{daily[-1].name} carries no `metrics_parity` block"
+    else:
+        parity_source = f"{daily[-1].name}.metrics_parity"
+
+    assembly = assemble(
+        shortlist=shortlist,
+        shortlist_name=shortlists[-1].name if shortlists else "(none)",
+        reports=_payloads(directory),
+        book=read_state(checkout / STATE),
+        budget=budget,
+        budget_source=f"{ledger.name} since {opened.isoformat()}",
+        parity=parity if isinstance(parity, dict) else None,
+        parity_source=parity_source,
+        wanted_trials=wanted,
+    )
+    said, action = conclude(assembly, policy)
+
+    click.echo(f"policy   {policy.version} digest={policy.digest()} window={policy.window_days}d anchor={anchor}")
+    click.echo(
+        f"budget   R1 {budget.spent}/{budget.allowed} rows, {budget.mine_rounds}/{budget.allowed_mine_rounds} "
+        f"mine rounds ({budget.mined_rows} mined rows reported, never charged)"
+    )
+    for field in assembly.fields:
+        if field.name == "budget":
+            continue
+        click.echo(f"  {'?' if not field.known else ' '} {field.name:24s} {field.value!s:20s} {field.source}")
+    click.echo(f"scheduler {said.kind.upper()}  {'; '.join(said.reasons)}")
+    if action != said:
+        click.echo(f"next      {action.kind.upper()}  {'; '.join(action.reasons)}")
+    if check and action.kind != WAIT:
+        raise SystemExit(1)
+
+
+#: How many times `advance` re-derives one book's tenure.  `tenure` stops at the first counted stop
+#: and its docstring hands the continuation back to the caller, because what follows a stop is a
+#: different tenure - a stopped main returns to probe and keeps counting windows.  Bounded rather than
+#: `while True` so a record that somehow reports a stop at the same instant forever cannot hang a job.
+MAX_TENURES = 8
+
+
+def _after(at: str, watermark: str) -> bool:
+    """Is this event later than what the candidate has already absorbed?
+
+    Parsed rather than compared as text: `tenure` stamps a survived window with the window's CLOSE
+    (`datetime.isoformat()`) and a stop with the cycle's own `at`, and two ISO strings that mean the
+    same instant can differ as text.  An unparseable pair falls back to string order, which is the
+    only remaining option and is at least deterministic.
+    """
+    if not watermark:
+        return True
+    try:
+        return datetime.fromisoformat(at) > datetime.fromisoformat(watermark)
+    except ValueError:
+        return at > watermark
+
+
+def _fold(book: Book, strategy: str, event: Derived, passes: bool, policy: Policy) -> tuple[Book, str]:
+    """One derived event through `lifecycle.apply`, then the watermark, whatever the rules answered.
+
+    The watermark moves on a REFUSED event too.  That is the point of it being a watermark rather than
+    a to-do list: the record produced the event once, the rules answered once, and replaying a refusal
+    every run would eventually apply it against a state that has since moved.
+    """
+    candidate = book.candidates[strategy]
+    if not _after(event.at, candidate.folded_through):
+        return book, f"already folded (watermark {candidate.folded_through})"
+    book, decision = apply_event(book, strategy, event.event, Facts(family_gate_still_passes=passes), policy)
+    updated = replace(book.candidates[strategy], folded_through=event.at)
+    book = replace(book, candidates={**book.candidates, strategy: updated})
+    return book, f"{'->' if decision.allowed else 'x '} {decision.state.value}  {'; '.join(decision.reasons)}"
+
+
+@governance.command("advance")
+@click.option("--root", default=".", help="Checkout holding the governance state, the registry and the ledger.")
+@click.option("--cycles", default=".beidou/live/cycles.jsonl", show_default=True, help="The append-only record.")
+@click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
+@click.option("--anchor", default=WINDOW_ANCHOR, show_default=True, help="The batch calendar, global to all sleeves.")
+@click.option("--started", help="ISO start for one sleeve, as book=ISO; repeatable.", multiple=True)
+@click.option("--commit/--dry-run", default=False, help="Write the state.  A dry run is the default.")
+def advance_cmd(
+    root: str, cycles: str, registry_path: str, anchor: str, started: tuple[str, ...], commit: bool
+) -> None:
+    """Fold what the record already did into `governance_state.json` - the write side of §3.
+
+    `lifecycle.apply` and `state.write` had no production caller, so `governance_state.json` was
+    maintained by hand (`git log` shows one commit) and R4's `promotions_this_window`, R5's
+    `consecutive_probe_stops` and R7's `probe_entries` were typed numbers.  `governance tenure`
+    already derived the events from `cycles.jsonl`; nothing folded them anywhere.
+
+    **Idempotence is the whole difficulty**, and worth naming precisely, because the counter usually
+    cited is not the one at risk here.  R7's `probe_entries` moves on `queued -> probe`, and no event
+    this command derives produces that edge - it is `governance apply`'s.  What a second fold of the
+    same record moves is `windows_survived`, which would reach main in four and a half windows instead
+    of §3's nine, and `consecutive_probe_stops`, where one stop counted twice is R5's two and freezes
+    promotion for six windows.  R7 is then reachable at one remove: a probe demoted by a stop it only
+    took once spends a life when it is promoted back.  It is held by a per-candidate watermark
+    (`folded_through`) that
+    stores the instant of the last event absorbed - state, not derivation, because the derivation is
+    deliberately stateless and re-reads the whole record every run.  Note which half is which: the
+    events are re-derived every time, including the ones already folded, and only the FOLD is skipped.
+    That is why a stop still ends a tenure on a second run even though it is not applied again.
+
+    This never touches the registry, so it never changes what the loop trades.  A `probe -> main` here
+    records that §3's conditions were met; moving the exposure is `governance apply`, past `admission`,
+    and a restart.
+    """
+    checkout = Path(root).resolve()
+    policy = Policy()
+    record = Path(cycles)
+    if not record.exists():
+        raise click.ClickException(f"no live record at {record}")
+    rows = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    state_path = checkout / STATE
+    before = read_state(state_path)
+    if not before.candidates:
+        raise click.ClickException(
+            f"{state_path} carries no candidates.  An empty book is HEADROOM, not safety (see "
+            "`state.load`), and folding a record into one would invent the sleeves it names.  Seed the "
+            "running sleeves first - KILL-AR-06 is why they are in the file."
+        )
+    book, window_why = rolled(before, policy, anchor=anchor)
+    click.echo(f"window   {window_why}")
+
+    ledger = resolve_ledger_path(root=checkout)
+    lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
+    readings = {
+        reading.strategy: reading
+        for reading in recheck_gate(
+            parse_registry(load_yaml(registry_path)),
+            lambda path: json.loads((checkout / path).read_text(encoding="utf-8")),
+            lines,
+        )
+    }
+    for reading in readings.values():
+        click.echo(f"gate     {reading.status:10s} {reading.strategy:20s} {reading.why}")
+
+    starts = dict(pair.split("=", 1) for pair in started if "=" in pair)
+    for name in books_in(rows):
+        at = starts.get(name, anchor)
+        announced = False
+        for _round in range(MAX_TENURES):
+            result = tenure(rows, book=name, started_at=at, window_anchor=anchor, policy=policy)
+            strategy = result.strategy or name
+            if not announced:
+                held = book.candidates.get(strategy)
+                click.echo(
+                    f"{name:16s} -> {strategy:16s} "
+                    + (
+                        f"{held.state.value:10s} folded through {held.folded_through or '(never)'}"
+                        if held is not None
+                        else "NOT IN THE STATE: refusing to invent a candidate the file does not carry"
+                    )
+                )
+                announced = True
+            if strategy not in book.candidates:
+                break
+            for event in result.events:
+                # UNREADABLE and FAIL are both False here, and they are different operator actions -
+                # which is why the gate's own line is printed above rather than folded into this one.
+                passes = strategy in readings and readings[strategy].passes
+                book, said = _fold(book, strategy, event, passes, policy)
+                click.echo(f"    {event.at}  {event.event.value:15s} {said}")
+            for skip in result.skipped:
+                click.echo(f"    {skip.at}  {'(not counted)':15s} {skip.why}")
+            if result.stopped_at is None:
+                break
+            # A stop ends one tenure and starts another (`tenure`'s docstring).  Advanced past the
+            # stop's own instant rather than to it, or the next pass derives the same stop forever.
+            at = (datetime.fromisoformat(result.stopped_at) + timedelta(microseconds=1)).isoformat()
+
+    if book == before:
+        click.echo("the state already matches the record; nothing to write")
+        return
+    if not commit:
+        click.echo(f"dry run: nothing written.  `--commit` writes {state_path}")
+        return
+    write_state(state_path, book)
+    click.echo(f"wrote {state_path}")
