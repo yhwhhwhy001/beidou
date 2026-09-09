@@ -178,14 +178,29 @@ SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="§3 滑点压力 5.5 档",
         reads="Facts.slippage_stress_pass",
-        why_unreadable="book 报告不含 `slippage_stress`（validation 报告含）",
-        fix="Phase 1：book 报告补 `slippage_stress`",
+        why_unreadable="book 报告不含 `slippage_stress`（validation 报告含）。**已交付**："
+        "`research book` 的 `book_limits.slippage_stress` 把 D-018 的三条边际判据在 5.5 bps 上重算一遍并写下 "
+        "`pass`；此后的 book 报告按 artefact 判定，早于该块的 6 份仍挂起——那三个数要重跑才能有，"
+        "档案里没有任何产物能补算出来",
+        fix="Phase 1 ✔：book 报告的 `book_limits.slippage_stress.pass`",
     ),
     SuspendedCondition(
-        condition="§3 与在跑的书 corr < 0.5、换手 ≤ 3x",
-        reads="Facts.max_correlation_with_running / turnover_ratio_to_main",
-        why_unreadable="`research correlate` 的结果是独立报告，没有任何字段把它链回 book 报告",
-        fix="Phase 1：book 报告内联相关系数与换手比",
+        condition="§3 与在跑的书 corr < 0.5",
+        reads="Facts.max_correlation_with_running",
+        why_unreadable="`research correlate` 的结果是独立报告，没有任何字段把它链回 book 报告。**已交付**："
+        "`book_limits.max_correlation_with_running` 在 book 这一步就对 registry 说在跑的每一本书量一次，"
+        "取最大。旧的 6 份只有 `universes[*].correlation.full`（候选对主账本），那是**下界**不是最大值，"
+        "拿来当 `< 0.5` 的输入就是 fail-open，所以仍挂起",
+        fix="Phase 1 ✔：book 报告的 `book_limits.max_correlation_with_running`",
+    ),
+    SuspendedCondition(
+        condition="§3 换手 ≤ 3x 主账本",
+        reads="Facts.turnover_ratio_to_main",
+        why_unreadable="同上，没有字段。**已交付**：`book_limits.turnover_ratio_to_main`（候选单独、未按 "
+        "fraction 缩放的 `turnover_units` ÷ 主账本的），与 RESEARCH_LOG 历次预登记同一口径。"
+        "旧的 6 份**可以补算**——两个 `turnover_units` 都在报告里——但补算要由读的人做，"
+        "回放只判 artefact 自己写下的数",
+        fix="Phase 1 ✔：book 报告的 `book_limits.turnover_ratio_to_main`",
     ),
     SuspendedCondition(
         condition="M-011 面板平价义务",
@@ -200,6 +215,15 @@ SUSPENDED: tuple[SuspendedCondition, ...] = (
         fix="Phase 2：DL-G5",
     ),
 )
+
+
+#: Which suspensions an artefact of a given kind can LIFT, so the replay can report "N judged, M still
+#: suspended" per condition rather than only counting the blind spots.  A condition absent from this map
+#: is one no artefact can decide yet (M-011, L4) and it is only ever counted as suspended.
+JUDGEABLE: dict[Event, tuple[str, ...]] = {
+    Event.VALIDATE: ("DL-K3 预登记早于报告", "KILL-AR-07 证据构造 ≡ 实盘构造"),
+    Event.BOOK: ("§3 滑点压力 5.5 档", "§3 与在跑的书 corr < 0.5", "§3 换手 ≤ 3x 主账本"),
+}
 
 
 @dataclass(frozen=True)
@@ -269,19 +293,41 @@ def _facts_for(
     carries `preregistration` and `evidence_construction` is judged on them; one written before those
     fields existed still suspends them, the same way `construction_problems` skips a report with no
     `portfolio` block rather than refusing it.
+
+    `book_limits` does the same for the other three, and they are the ones that had never been read at
+    all: three of the four conditions on `validated -> booked` were a literal `True`/`0.0`/`0.0`
+    written here, because no book report carried the fields.  A missing or null value still suspends -
+    `None` is "nobody measured it", which is exactly what must not be allowed to read as 0.0, since
+    0.0 is the PASSING value for both of the numeric limits.
     """
     kind = str(report.get("kind") or "")
     if kind == "book":
         verdict = str(report.get("book_verdict") or "")
+        limits = report.get("book_limits")
+        limits = limits if isinstance(limits, Mapping) else {}
+        suspended_book: list[str] = []
+        stress = limits.get("slippage_stress")
+        stress_pass = stress.get("pass") if isinstance(stress, Mapping) else None
+        if not isinstance(stress_pass, bool):
+            stress_pass = True
+            suspended_book.append("§3 滑点压力 5.5 档")
+        correlation = limits.get("max_correlation_with_running")
+        if not isinstance(correlation, (int, float)) or isinstance(correlation, bool):
+            correlation = 0.0
+            suspended_book.append("§3 与在跑的书 corr < 0.5")
+        turnover = limits.get("turnover_ratio_to_main")
+        if not isinstance(turnover, (int, float)) or isinstance(turnover, bool):
+            turnover = 0.0
+            suspended_book.append("§3 换手 ≤ 3x 主账本")
         return (
             Event.BOOK,
             Facts(
                 book_checks_pass=verdict == "ACCEPT" or (verdict == "REJECT" and acknowledged),
-                slippage_stress_pass=True,
-                max_correlation_with_running=0.0,
-                turnover_ratio_to_main=0.0,
+                slippage_stress_pass=stress_pass,
+                max_correlation_with_running=float(correlation),
+                turnover_ratio_to_main=float(turnover),
             ),
-            ("§3 滑点压力 5.5 档", "§3 与在跑的书 corr < 0.5、换手 ≤ 3x"),
+            tuple(suspended_book),
         )
     selection = report.get("oos_selection") or {}
     wf = report.get("walk_forward") or {}
@@ -426,10 +472,9 @@ def replay_adoptions(
         event, facts, suspended = _facts_for(report, acknowledged=name in acknowledged, live_constructions=live)
         for condition in suspended:
             suspensions[condition] = suspensions.get(condition, 0) + 1
-        if event is Event.VALIDATE:
-            for condition in ("DL-K3 预登记早于报告", "KILL-AR-07 证据构造 ≡ 实盘构造"):
-                if condition not in suspended:
-                    judged[condition] = judged.get(condition, 0) + 1
+        for condition in JUDGEABLE.get(event, ()):
+            if condition not in suspended:
+                judged[condition] = judged.get(condition, 0) + 1
         state = State.CANDIDATE if event is Event.VALIDATE else State.VALIDATED
         decision = evaluate(book, Candidate(id=name, state=state), event, facts, policy)
         if decision.allowed:
@@ -440,7 +485,7 @@ def replay_adoptions(
 
     for condition, count in sorted(judged.items()):
         reproduced.append(
-            f"{condition}：{count} 份指针**已可判定**（DL-G9 的字段在场）；"
+            f"{condition}：{count} 份指针**已可判定**（字段在场）；"
             f"另有 {suspensions.get(condition, 0)} 份早于该字段仍挂起"
         )
     for path, report in sorted(reports.items()):
@@ -691,6 +736,7 @@ def load_jsonl(text: str) -> list[dict[str, Any]]:
 __all__ = [
     "EXCEPTIONS",
     "EXCEPTIONS_BY_ID",
+    "JUDGEABLE",
     "SUSPENDED",
     "Difference",
     "ExceptionEntry",

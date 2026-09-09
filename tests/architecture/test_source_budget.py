@@ -1708,14 +1708,34 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (6 distinct raw vs 3 canonical on the armed record).  Both are the same defect this whole day is
 # about, arriving in the fix for it: a command added to make a module reachable, and then not
 # exercised.  The lines are the alias parameter and the test that drives the command through the CLI.
+# 2026-09-09, +184 alpha / +203 cli / +46 governance: §3's three limits stop being a literal `True`.
+# `validated -> booked` has four conditions and `beidou_governance/replay.py` supplied three of them -
+# `slippage_stress_pass`, `max_correlation_with_running`, `turnover_ratio_to_main` - as `True / 0.0 /
+# 0.0` since Phase 0, because NO BOOK REPORT CARRIED THE FIELDS: `slippage_stress` was in seven
+# validation reports and zero book reports, and `research correlate` wrote a separate artefact with
+# nothing linking it back to a book.  So the only thing an artefact could fail at that transition was
+# D-018's verdict, and `lifecycle`'s own "absent knowledge is False" described nothing that ran.
+# Where the lines went, and why none of it is decoration.  `beidou_alpha/validation/book_limits.py` is
+# the arithmetic (pure, so each of the three is testable on a hand-built panel rather than on a
+# two-hour book run) plus the paragraph explaining why the turnover ratio uses the operator's own
+# pre-registered normalisation - raw `turnover_units`, candidate alone and unscaled - when a
+# per-gross reading would have been 3.7x stricter on the shipped book: reporting a number nobody has
+# ever judged against is not the same as enforcing a limit.  `beidou_cli` is `research book` measuring
+# them (nine backtests over ALREADY-DECIDED weights - no model is re-fitted) and enumerating the
+# running books from the registry.  `beidou_governance` is the replay reading the block instead of
+# inventing it, and suspending PER CONDITION when it is absent, so the six archived reports keep
+# passing while the artefact says which three rules were not applied to them.
+# Honest note on the target: this lands 184 lines on `beidou_alpha` against 249 outside it, so it
+# moves the alpha share the wrong way, and it buys no leaf - it is governance plumbing wearing an
+# alpha module's address because that is where the arithmetic belongs.
 CEILING = {
-    "beidou_alpha": 7_887,
+    "beidou_alpha": 8_071,
     "beidou_live": 6_640,
-    "beidou_cli": 4_588,
+    "beidou_cli": 4_791,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_386,
+    "beidou_governance": 2_432,
 }
 
 
