@@ -15,7 +15,6 @@ from beidou_alpha.model import AlphaModel
 from beidou_alpha.panel import Panel, interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import Registry, parse_registry
-from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_data.metrics import PERIOD_MS, align_to_bars
 from beidou_data.spot import SPOT_PANEL_COLUMNS, SpotMapping, align_spot_to_perp_bars, read_spot_map
 from beidou_data.store import FundingStore, KlineStore, MetricsStore, funding_per_bar
@@ -55,10 +54,7 @@ def _metrics_columns(store: MetricsStore, panel: Panel, interval: str) -> dict[s
 
 
 def _spot_columns(
-    store: KlineStore,
-    panel: Panel,
-    mappings: Mapping[str, SpotMapping],
-    verification: Verification | None = None,
+    store: KlineStore, panel: Panel, mappings: Mapping[str, SpotMapping]
 ) -> dict[str, pd.DataFrame] | None:
     """DL-D5: one wide frame per spot field, keyed by the PERPETUAL symbol, aligned HERE and not in `Panel`.
 
@@ -70,21 +66,7 @@ def _spot_columns(
     The mapping comes from the file the sync wrote, not from the store's directory listing.  A listing
     says which spot symbols were downloaded; it cannot say which perpetual each one belongs to, and
     re-deriving that from the names is the string rule that gets 1000SATSUSDT wrong.
-
-    RISK-G3, and this is `beidou_data.alignment`'s first production caller.  A column whose event-time
-    contract is undeclared, unverified, or verified FAIL/UNVERIFIABLE does not reach live, and the
-    only way to make that true of a column is to refuse it HERE - this is the one place a spot frame
-    becomes a panel field, so a check anywhere further in would be a check something can be built
-    around.  Fail-closed: `verification=None` is a refusal, because "nobody has shown the offset" and
-    "the offset is wrong" are the same answer to "may a signal trade this", and the whole reason the
-    contract exists is that the metrics stamp was wrong for every bucket while nothing raised.  It is
-    shut today - nothing produces a spot `Verification` yet - so a `Basis` candidate raises
-    `ExprError` where it is written rather than scoring on a series nobody checked.
     """
-    admitted, reason = admits_live_signal(SPOT_BASIS_COLUMN, verification)
-    if not admitted:
-        logger.warning("spot columns withheld from the panel: %s", reason)
-        return None
     per_symbol: dict[str, pd.DataFrame] = {}
     for symbol in panel.symbols:
         mapping = mappings.get(symbol)
@@ -114,10 +96,6 @@ def load_panel(
     metrics_store: MetricsStore | None = None,
     spot_store: KlineStore | None = None,
     spot_map: Mapping[str, SpotMapping] | None = None,
-    # RISK-G3.  Passed in rather than read off disk, because there is no file that holds one yet and a
-    # reader for a payload nobody writes is the ladder-with-no-caller shape this repository keeps
-    # finding.  `None` refuses, so the gate is shut until a caller can show the measurement.
-    spot_verification: Verification | None = None,
     start: str | None = None,
     end: str | None = None,
 ) -> Panel:
@@ -152,11 +130,7 @@ def load_panel(
         else None
     )
     metrics = _metrics_columns(metrics_store, panel, interval) if metrics_store is not None else None
-    spot = (
-        _spot_columns(spot_store, panel, spot_map or read_spot_map(spot_store.root), spot_verification)
-        if spot_store
-        else None
-    )
+    spot = _spot_columns(spot_store, panel, spot_map or read_spot_map(spot_store.root)) if spot_store else None
     return Panel.from_frames(frames, interval=interval, funding=funding, metrics=metrics, spot=spot)
 
 

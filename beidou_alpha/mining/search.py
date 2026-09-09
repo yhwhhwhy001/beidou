@@ -376,15 +376,31 @@ def _basis_family(
     pre-registered choice of writing (log ratio, level, un-annualised, no window) and why the other
     three were rejected; this docstring is about the family.
 
-    **The question that has to be answered before a hit here means anything: is this the carry family
-    wearing a different hat?**  Funding is the venue's instrument for pinning the perpetual to spot -
-    the two are the ends of one arbitrage relation, not two hypotheses - so a large correlation with
-    `_funding_family` is the EXPECTED outcome and not a surprise to be discovered in a report.  It is
-    pre-registered as a gate rather than argued away: the first run measures corr(basis leaf, funding
-    leaf) before it reads a Sharpe, and only the part funding cannot express is a new claim.  Mechanism
-    says where that part would live - funding is a clamped time-average, so it must saturate in the
-    tail and lag in time, while the basis does neither - but this repository has NOT measured that, and
-    an unmeasured mechanism is a hypothesis, which is why it is written here before the run.
+    **The question that had to be answered before a hit here could mean anything - is this the carry
+    family wearing a different hat? - and it was answered by measurement, not by argument.**  Funding
+    is the venue's instrument for pinning the perpetual to spot, so the two are the ends of one
+    arbitrage relation and a near-collinear pair was the expected answer.  It is not what the data
+    says.  Measured 2026-09-09 on 20 liquid perpetuals x 14,592 hourly bars (2025-01..2026-08), spot
+    fetched from the venue and joined by `align_spot_to_perp_bars`:
+
+    * raw leaf, pooled: corr(basis, funding(w)) = +0.27 / +0.24 / +0.23 for w = 24 / 72 / 168.
+    * the node every shape here actually uses: corr(basis/vol(48), funding(w)/vol(48)) = +0.25 to
+      +0.26 by Pearson but only +0.09 by Spearman - the agreement lives in the tails, not the body.
+    * what the family TRADES: cs_rank(basis/vol) against cs_rank(funding(w)/vol) has a per-bar
+      cross-sectional Spearman of +0.045 on the mean bar, with a 5th-95th percentile of -0.41 to
+      +0.48.  On the typical bar the two order the board almost independently, and the sign of the
+      relationship flips from bar to bar.
+    * regressing basis/vol on funding(w)/vol gives R^2 = 0.064 / 0.064 / 0.067.  Funding accounts for
+      about a fifteenth of this leaf's variance.
+
+    Two mechanisms explain the gap and both are visible in the same data.  Binance's funding formula
+    adds a constant interest term (0.01%/8h) to the premium and then clamps, so funding is not a
+    monotone reading of the premium; and funding is charged on the perpetual against the multi-venue
+    INDEX, while this leaf reads it against Binance spot.  Those are two different spreads, measured
+    the same day: log(index / Binance spot) was +0.00000 to +0.00035 across eight majors while
+    log(mark / Binance spot) was -0.00026 to -0.00067.  So the honest statement is that this family is
+    NOT a restatement of carry - and that the reason is partly an artefact of which spot leg the
+    venue's own formula uses, which is a caveat on the hypothesis rather than support for it.
 
     **The residual shape is missing on purpose and it is the one a reader will want to add.**  The
     orthogonal writing is `basis/vol - funding/vol`, and `Sum` is the only operator that can express it.
@@ -399,6 +415,19 @@ def _basis_family(
     first" is not information - only its margin over the baseline is.  Which sign is right is a real
     open question here (does an un-charged premium mean-revert, or does it mark the crowd that is
     about to keep being right?), and deciding it from the data that ranked it is what D-020 exists for.
+
+    **Six of the eighteen shapes are a market-wide tilt in disguise, and that was measured too.**  The
+    basis has a common level as well as a spread, and the level is nearly always on one side: on the
+    same 20-symbol sample its bar-mean is negative on 98.1% of bars (median -0.000537), which is the
+    sign Binance's constant interest term implies.  So `Squash(carry, s)`, which keeps the level, gives
+    a POSITIVE score to only 8.9% of symbols on the mean bar - it is close to "hold the same side of
+    almost everything, almost always", i.e. a directional bet on the board rather than a claim about
+    which symbol is rich.  `CrossSectional(..., "rank")` removes it, and the cross-sectional part is
+    the larger half anyway (84% of total variance), so the ranked arm is where the stated hypothesis
+    actually lives.  The level shapes still ship - dropping them would make this family
+    non-comparable with `_funding_family`, whose level shapes are exactly as one-sided - but a hit on
+    one of them is a claim about market direction and its falsifier is a constant-position control,
+    not a baseline book.
 
     **The universe is not the same universe, and that is this family's own confound.**  A basis
     candidate can only score 362 of 528 perpetuals; every other family scores all of them.  So a
@@ -557,9 +586,11 @@ def enumerate_candidates(
     hod_days: Sequence[int] = (14, 30, 56),
     # DL-D5, block 2.  A search-space parameter for the same reason `include_funding` and
     # `include_metrics` are: this function stays deterministic and data-free, and the caller narrows
-    # the space when its panel carries no spot.  Unlike those two, the narrowing is the COMMON case -
-    # RISK-G3 keeps the column out of any panel whose event-time contract is not verified, and 166 of
-    # 528 perpetuals have no spot leg even once it is.
+    # the space when its panel carries no spot.  Unlike those two, the narrowing is the COMMON case and
+    # today it is the ONLY case - `research mine` narrows on `Panel.spot_symbols`, and nothing builds a
+    # panel with a spot store yet, so these 18 shapes are enumerable here and unreachable there.  That
+    # asymmetry is deliberate: the space stays declared and hashable (so an id keeps resolving) without
+    # charging `declared_trials` for a family no panel can score.
     include_basis: bool = True,
     include_panel_nodes: bool = True,
     max_complexity: int = 10,
@@ -697,6 +728,11 @@ def to_signal(candidate: Candidate) -> SignalSpec:
     # same reason `reads_funding` is - `research mine` and `_resolve_mined` build this spec by
     # different routes and `register` overwrites by id without comparing.
     reads_metrics = bool(candidate.expr.reads_metrics())
+    # DL-D5, the third of these, and the one that had to be added rather than inherited: the inherited
+    # WIP defined `Expr.reads_spot` and never called it, which is a declaration nothing declares to.
+    # A spot-reading candidate that reached live without saying so would raise `ExprError` from inside
+    # a cycle - loud, but loud in the wrong place, mid-loop instead of at startup.
+    reads_spot = candidate.expr.reads_spot()
 
     return SignalSpec(
         id=f"mined_{candidate.hash}",
@@ -707,5 +743,6 @@ def to_signal(candidate: Candidate) -> SignalSpec:
         warmup=warmup,
         uses_funding=lambda params: reads_funding,
         needs_metrics=lambda params: reads_metrics,
+        needs_spot=lambda params: reads_spot,
         canonical=dict,
     )

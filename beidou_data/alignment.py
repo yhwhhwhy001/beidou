@@ -37,12 +37,19 @@ columns into a row verdict and skips NaN pairs, so it reads `differing: 0, rate:
 never compared, and the M-011 gate reports parity met.  Agreement on a neighbouring column is not
 evidence about this one.
 
-The first column actually held to it is the spot one (DL-D5), and holding it is what a contract with no
-caller could not do: `beidou_live.composition._spot_columns` asks `admits_live_signal` before a spot
-frame reaches a `Panel`, so the refusal is fail-closed - no verification on record means no column,
-which means a `Basis` candidate raises where it is written instead of scoring on an unverified series.
-Nothing produces a spot `Verification` yet, so today that gate is shut; that is the honest state and it
-is stated rather than defaulted around.
+The first column actually held to it is the spot one (DL-D5), and where the holding happens took two
+tries.  `beidou_live.engine.spot_refusal` asks `admits_live_signal` at STARTUP, for every strategy whose
+`needs_spot` predicate says it reads `panel.spot`, and refuses the loop rather than the column.  The
+first attempt put the gate in `beidou_live.composition._spot_columns` instead - the point where a spot
+frame becomes a panel field - which is wrong for a reason worth recording: `load_panel` builds the
+RESEARCH panel too, so that gate made the basis leaf unminable rather than untradeable, and enforced a
+rule nobody wrote.  RISK-G3's sentence is "该列不进实盘", and live is where it binds.
+
+Fail-closed either way: no verification on record is a refusal, because "nobody has shown the offset"
+and "the offset is wrong" are the same answer to "may a signal trade this".  Nothing produces a spot
+`Verification` yet, so today that gate is shut - `beidou_data.spot` records a real measurement, but a
+sentence in a docstring is not one of these, and the path to opening it is a measurement someone runs
+rather than an edit someone makes.
 
 Describes `beidou_data.metrics`; does not replace it.  That module already converts both stamps to one
 canonical `open_time`, and it runs in the live loop, so the contract states what it does and a test
@@ -59,6 +66,7 @@ import numpy as np
 import pandas as pd
 
 from beidou_data.metrics import PERIOD_MS, VALUE_COLUMNS
+from beidou_data.spot import SPOT_PANEL_COLUMNS
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -219,16 +227,31 @@ SPOT = EventTimeContract(
     ),
 )
 
-# The panel's spot fields, prefixed.  Prefixed because a bare 'close' is the PERPETUAL's close one
-# frame over, and this dict is the thing that answers "which contract governs this column"; two
-# different series answering to one key is the confusion the whole module is about.  A verification
-# must therefore be produced over frames whose columns carry the same prefix, or `admits_live_signal`
-# refuses for the fourth reason - the column was never compared - which is the correct answer.
-SPOT_COLUMNS: tuple[str, ...] = ("spot_open", "spot_high", "spot_low", "spot_close", "spot_quote_volume")
+SPOT_PREFIX = "spot_"
+
+
+def spot_column(field: str) -> str:
+    """A `Panel.spot` field name as the column this module keys a contract by.
+
+    Prefixed, because a bare 'close' is the PERPETUAL's close one frame over and `CONTRACTS` is the
+    thing that answers "which contract governs this column" - two different series answering to one
+    key is the confusion the whole module is about.
+
+    A function rather than a second hand-written tuple, and that is the correction rather than the
+    style: the first draft of this listed the five prefixed names literally beside
+    `SPOT_PANEL_COLUMNS`, so a sixth spot field would have been carried by `Panel` while `CONTRACTS`
+    never heard of it.  That fails safe (`contract_for` raises `UndeclaredColumn`) and fails
+    INVISIBLY, which is the pair this repository keeps paying for.
+    """
+    return f"{SPOT_PREFIX}{field}"
+
+
+# Derived, so `Panel` cannot carry a spot field that has no contract.
+SPOT_COLUMNS: tuple[str, ...] = tuple(spot_column(field) for field in SPOT_PANEL_COLUMNS)
 
 # The one a signal reads: `Basis` is log(perp close / spot close), so this is the column RISK-G3 has
 # to admit before a basis candidate may trade.
-SPOT_BASIS_COLUMN = "spot_close"
+SPOT_BASIS_COLUMN = spot_column("close")
 
 # Keyed by COLUMN, not by feed, because RISK-G3's refusal is per column: "该列不进实盘".  A feed's
 # columns share a contract, and a column nobody listed here has none - which is the point.

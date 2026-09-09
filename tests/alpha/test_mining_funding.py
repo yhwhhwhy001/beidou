@@ -112,15 +112,26 @@ def test_the_existing_search_space_is_bit_for_bit_what_p14_recorded(fixtures_dir
     # shifts every position after it - the frozen hashes had not changed, only their indices.  The
     # same run also showed `too_long: 18`, which is how the grid's third arm turned out to be
     # unsearchable; see `_seasonality_family`.
+    # DL-D5 added `_basis_family` behind `include_basis` on 2026-09-09 and it went red here the same
+    # way, which is the fifth time this guard has caught its own delivery.  Its 18 shapes sort into the
+    # middle by hash like every other family's, so the frozen hashes were unmoved and their positions
+    # were not.  `rejected` stayed all-zero: at the declared grid the deepest basis shape reserves 721
+    # bars against `max_lookback` 1400 and the widest is complexity 10 against a cap of 10, so nothing
+    # was dropped - which is what `hod(60)` could not say.
     for result in (
         enumerate_candidates(
-            include_funding=False, include_panel_nodes=False, include_metrics=False, include_seasonality=False
+            include_funding=False,
+            include_panel_nodes=False,
+            include_metrics=False,
+            include_seasonality=False,
+            include_basis=False,
         ),
         enumerate_candidates(
             include_funding=False,
             include_panel_nodes=False,
             include_metrics=False,
             include_seasonality=False,
+            include_basis=False,
             max_complexity=8,
         ),
     ):

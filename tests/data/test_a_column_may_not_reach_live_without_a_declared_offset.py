@@ -26,6 +26,9 @@ from beidou_data.alignment import (
     FAIL,
     METRICS,
     PASS,
+    SPOT,
+    SPOT_BASIS_COLUMN,
+    SPOT_COLUMNS,
     UNVERIFIABLE,
     Stamp,
     UndeclaredColumn,
@@ -46,6 +49,7 @@ from beidou_data.metrics import (
     usable_from_ms,
 )
 from beidou_data.metrics_snapshot import metrics_parity
+from beidou_data.spot import SPOT_PANEL_COLUMNS
 
 FIVE_MIN_MS = PERIOD_MS["5m"]
 HOUR_MS = PERIOD_MS["1h"]
@@ -277,10 +281,39 @@ def test_a_column_the_verification_never_compared_is_not_admitted_by_its_neighbo
     assert admitted is False and "never compared count_long_short_ratio" in reason
 
 
-def test_every_metrics_column_that_can_reach_the_panel_is_declared() -> None:
-    """The columns `Panel` can carry are exactly the ones a contract must cover; no gaps, no strays."""
-    assert set(CONTRACTS) == set(VALUE_COLUMNS)
+def test_every_foreign_column_that_can_reach_the_panel_is_declared() -> None:
+    """The columns `Panel` can carry are exactly the ones a contract must cover; no gaps, no strays.
+
+    Two feeds now, and the equality is still exact rather than a subset - a stray key is as much a
+    defect as a missing one, because `CONTRACTS` is what answers "which contract governs this column"
+    and a key nothing carries is a contract nothing is held to.
+
+    The spot half is derived from `SPOT_PANEL_COLUMNS` rather than listed here, which is the point of
+    `spot_column`: a sixth spot field would otherwise be carried by `Panel` and unknown to `CONTRACTS`,
+    and that fails safe (`UndeclaredColumn`) but invisibly.  Asserting the derivation keeps the two
+    lists from being two lists.
+    """
+    assert set(CONTRACTS) == set(VALUE_COLUMNS) | set(SPOT_COLUMNS)
     assert all(contract_for(column) is METRICS for column in VALUE_COLUMNS)
+    assert all(contract_for(column) is SPOT for column in SPOT_COLUMNS)
+    assert tuple(f"spot_{field}" for field in SPOT_PANEL_COLUMNS) == SPOT_COLUMNS
+    assert SPOT_BASIS_COLUMN == "spot_close"
+
+
+def test_the_spot_contract_declares_a_zero_offset_and_still_names_two_rivals_to_refute() -> None:
+    """DL-D5.  A declared offset of zero is the case where "no offset" and "one bucket" look alike.
+
+    So the rivals matter more here, not less: with `archive` and `rest` both at 0 the naive-join rival
+    IS the declared offset and drops out, and what is left must still be the one bar either way that
+    `beidou_data.spot` note 4 refuted (744/744 at lag 0, 0/743 shifted).  A contract that ended up with
+    no rivals would report PASS on any sample at all, which is `verify_stamp_offset`'s UNVERIFIABLE
+    branch existing for nothing.
+    """
+    assert SPOT.stamp_offset_ms == 0
+    assert SPOT.rival_rest_offsets() == (-PERIOD_MS["1h"], PERIOD_MS["1h"])
+    # One bar, and it is the arithmetic boundary rather than an observed latency: the perp bar and the
+    # spot bar opening at t close at the same instant, so a same-bar read is available one bar on.
+    assert SPOT.available_from(0) == PERIOD_MS["1h"]
 
 
 def test_the_contract_and_metrics_parity_reach_the_same_verdict_on_the_same_buckets() -> None:
