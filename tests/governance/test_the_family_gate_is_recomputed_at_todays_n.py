@@ -92,7 +92,9 @@ def test_a_thin_margin_does_not_survive_the_growth_that_a_wide_one_does() -> Non
 def test_evidence_that_cannot_be_read_is_unreadable_rather_than_passed() -> None:
     """Four ways the question cannot be asked, and none of them answers it yes."""
     assert read_gate("x", {}, []).status == UNREADABLE
-    assert read_gate("x", _report(sharpe=1.0, n_trials=10, ledger_trials=5, gate="expected_max"), []).status == UNREADABLE
+    assert (
+        read_gate("x", _report(sharpe=1.0, n_trials=10, ledger_trials=5, gate="expected_max"), []).status == UNREADABLE
+    )
     no_ledger = _report(sharpe=1.0, n_trials=10, ledger_trials=5)
     del no_ledger["ledger"]
     assert read_gate("x", no_ledger, []).status == UNREADABLE
@@ -128,8 +130,13 @@ def test_a_probe_adopted_on_a_book_report_cannot_be_asked_this_question_at_all()
             "ensemble": {"method": "mean", "turnover_penalty": 0.0},
             "books": {"flow_short": {"fraction": 1 / 3}},
             "strategies": [
-                {"id": "flow", "enabled": True, "weight": 1.0, "book": "flow_short",
-                 "evidence": {"report": "reports/research/book-tsmom-flow.json"}},
+                {
+                    "id": "flow",
+                    "enabled": True,
+                    "weight": 1.0,
+                    "book": "flow_short",
+                    "evidence": {"report": "reports/research/book-tsmom-flow.json"},
+                },
             ],
         }
     )

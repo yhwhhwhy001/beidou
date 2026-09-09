@@ -101,9 +101,7 @@ def grew(before: Registry, after: Registry) -> tuple[str, ...]:
     old, new = exposure(before), exposure(after)
     out = []
     for name, (_book, share) in sorted(new.items()):
-        if name not in old:
-            out.append(name)
-        elif share > old[name][1] + 1e-9:
+        if name not in old or share > old[name][1] + 1e-9:
             out.append(name)
     return tuple(out)
 

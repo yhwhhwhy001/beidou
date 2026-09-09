@@ -139,9 +139,7 @@ def test_no_production_module_is_unreachable_from_a_command() -> None:
     # A package `__init__` is a namespace shim: production imports the submodule directly, so the
     # shim can be unreached while everything under it runs.  Its cost is caught by the line budget.
     dead = sorted(
-        name
-        for name, path in modules.items()
-        if name not in seen and name not in EXEMPT and path.name != "__init__.py"
+        name for name, path in modules.items() if name not in seen and name not in EXEMPT and path.name != "__init__.py"
     )
     assert not dead, (
         f"these modules cannot be reached from any `beidou` command: {dead}.  Give one an entry point, "

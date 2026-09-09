@@ -1748,14 +1748,22 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # reviews is three reviews, not a clean record.  Directions are kept apart per §11: a machine that
 # refuses too much and one that admits too much need different fixes, and one averaged rate can look
 # healthy while both are large.
+# 2026-09-10, +11 live / +7 cli / +3 governance: ruff's own output, plus one real bug it caught.
+# `ruff check` and `ruff format --check` were RED on this session's own files, which CI installs the
+# latest ruff to run - so the day's work would have failed CI on style while its subject was code that
+# looks correct and is not.  The one substantive fix: `soak.score` fell back to a NAIVE
+# `datetime.fromtimestamp(0)` when the first cycle's timestamp would not parse, and subtracting that
+# from the aware stamps around it raises - so a torn first row turned a criterion about seven days into
+# a TypeError.  It now refuses to measure a window whose start it cannot read, which is the same rule
+# every other reading in this session follows: could-not-compute is not passed.
 CEILING = {
     "beidou_alpha": 7_887,
-    "beidou_live": 6_786,
-    "beidou_cli": 4_759,
+    "beidou_live": 6_797,
+    "beidou_cli": 4_766,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_803,
+    "beidou_governance": 2_806,
 }
 
 

@@ -32,11 +32,13 @@ from beidou_governance.promote import closed, read_log
 from beidou_governance.promote import plan as plan_transaction
 from beidou_governance.replay import load_jsonl, render, replay_adoptions, replay_live
 from beidou_governance.state import read as read_state
-from beidou_governance.verdicts import ALLOW, LEDGER as VERDICTS, REFUSE, divergence, read as read_verdicts
+from beidou_governance.tenure import books_in, tenure
+from beidou_governance.verdicts import ALLOW, REFUSE, divergence
+from beidou_governance.verdicts import LEDGER as VERDICTS
+from beidou_governance.verdicts import read as read_verdicts
 from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
-from beidou_governance.tenure import books_in, tenure
 from beidou_live.config import registry_evidence_problems
 from beidou_live.health import CONSTRUCTION_ALIASES
 from beidou_shared.config import load_yaml
@@ -337,9 +339,14 @@ def plan_cmd(
     proposed: str, registry_path: str, profile: str, candidate: str, root: str, state_dir: str, shadow_dir: str
 ) -> None:
     """What `apply` would do, asked of the same gate, without touching the file."""
-    admission = _admission(registry_path, Path(proposed).read_text(encoding="utf-8"), Path(root).resolve(), state_dir, shadow_dir)
-    click.echo(f"admission: {'ALLOWED' if admission.allowed else 'REFUSED'} "
-               f"(promoting: {', '.join(admission.promoting) or 'nothing'})", err=True)
+    admission = _admission(
+        registry_path, Path(proposed).read_text(encoding="utf-8"), Path(root).resolve(), state_dir, shadow_dir
+    )
+    click.echo(
+        f"admission: {'ALLOWED' if admission.allowed else 'REFUSED'} "
+        f"(promoting: {', '.join(admission.promoting) or 'nothing'})",
+        err=True,
+    )
     _report_admission(admission)
     _log_admission(Path(root).resolve(), admission, Path(proposed).name)
     transaction = plan_transaction(

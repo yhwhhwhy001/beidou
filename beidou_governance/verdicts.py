@@ -147,8 +147,15 @@ def review(path: Path, identifier: str, verdict_review: str, why: str, *, now: d
     moment = now or datetime.now(UTC)
     original = rows[identifier]
     updated = Verdict(
-        original.id, original.at, original.kind, original.subject, original.ruling, original.reasons,
-        moment.isoformat(), verdict_review, why.strip(),
+        original.id,
+        original.at,
+        original.kind,
+        original.subject,
+        original.ruling,
+        original.reasons,
+        moment.isoformat(),
+        verdict_review,
+        why.strip(),
     )
     with path.open("a", encoding="utf-8") as handle:
         handle.write(updated.to_json() + "\n")
@@ -200,9 +207,7 @@ class Divergence:
         return "; ".join(parts)
 
 
-def divergence(
-    verdicts: Iterable[Verdict], *, quorum: int = 10, threshold: float = 0.20
-) -> Divergence:
+def divergence(verdicts: Iterable[Verdict], *, quorum: int = 10, threshold: float = 0.20) -> Divergence:
     """M-G05 over a set of verdicts - the caller picks the period, this counts what it is given."""
     reviewed = [verdict for verdict in verdicts if not verdict.pending]
     pending = sum(1 for verdict in verdicts if verdict.pending)

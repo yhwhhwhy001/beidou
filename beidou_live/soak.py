@@ -94,7 +94,20 @@ def score(
         try:
             stamps.append(datetime.fromisoformat(str(row.get("at"))))
         except ValueError:
-            stamps.append(stamps[-1] if stamps else datetime.fromtimestamp(0))
+            # Carry the previous stamp forward: one unreadable row inside a soak is a torn write, not a
+            # reason to refuse the whole reading.  An unreadable FIRST row is different - there is no
+            # previous stamp, and inventing an epoch would silently make `days` enormous and pass a
+            # criterion about seven days on a record that cannot say when it started.
+            if not stamps:
+                return SoakReading(
+                    cycles=len(cycles),
+                    required_days=required_days,
+                    transactions_closed=transactions_closed,
+                    notes=(
+                        f"the first cycle's timestamp is unreadable ({row.get('at')!r}); no window can be measured",
+                    ),
+                )
+            stamps.append(stamps[-1])
     days = (stamps[-1] - stamps[0]).total_seconds() / 86_400.0
 
     errors = [i for i, row in enumerate(cycles) if str(row.get("phase")) in set(no_decision_phases)]
@@ -108,9 +121,7 @@ def score(
     marks = [stamps[0], *[stamps[i] for i in errors], stamps[-1]]
     clean = max((marks[i + 1] - marks[i]).total_seconds() / 86_400.0 for i in range(len(marks) - 1))
 
-    deciding = tuple(
-        f"{cycles[i].get('at')}: {', '.join(_decided(cycles[i]))}" for i in errors if _decided(cycles[i])
-    )
+    deciding = tuple(f"{cycles[i].get('at')}: {', '.join(_decided(cycles[i]))}" for i in errors if _decided(cycles[i]))
     notes: list[str] = []
     if errors and not deciding:
         notes.append(f"{len(errors)} ERROR cycles, none of which decided anything (KILL-AR-20's shape)")

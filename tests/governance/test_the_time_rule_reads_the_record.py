@@ -230,7 +230,11 @@ def test_nine_survived_windows_do_not_reach_main_on_a_gate_nobody_asked() -> Non
     policy = Policy()
     rows = [_cycle(d * policy.window_days + 1) for d in range(policy.windows_to_main + 1)]
     out = tenure(
-        rows, book="flow_short", started_at=START, window_anchor=ANCHOR, policy=policy,
+        rows,
+        book="flow_short",
+        started_at=START,
+        window_anchor=ANCHOR,
+        policy=policy,
         now=_at(policy.window_days * 12),
     )
     book = Book(candidates={"flow": Candidate(id="flow", state=State.PROBE, fraction=1 / 3)})
