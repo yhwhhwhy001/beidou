@@ -37,6 +37,13 @@ columns into a row verdict and skips NaN pairs, so it reads `differing: 0, rate:
 never compared, and the M-011 gate reports parity met.  Agreement on a neighbouring column is not
 evidence about this one.
 
+The first column actually held to it is the spot one (DL-D5), and holding it is what a contract with no
+caller could not do: `beidou_live.composition._spot_columns` asks `admits_live_signal` before a spot
+frame reaches a `Panel`, so the refusal is fail-closed - no verification on record means no column,
+which means a `Basis` candidate raises where it is written instead of scoring on an unverified series.
+Nothing produces a spot `Verification` yet, so today that gate is shut; that is the honest state and it
+is stated rather than defaulted around.
+
 Describes `beidou_data.metrics`; does not replace it.  That module already converts both stamps to one
 canonical `open_time`, and it runs in the live loop, so the contract states what it does and a test
 holds the two against each other.  Whichever one a later change moves, the test fails.
@@ -180,9 +187,55 @@ METRICS = EventTimeContract(
     ),
 )
 
+# DL-D5, the second instance, and the interesting half is that its declared offset is ZERO.  That is
+# what makes it worth declaring rather than assuming: "no offset" and "one bucket of offset" look
+# identical in code, and the METRICS contract above exists because the second one was true where
+# everybody had assumed the first.  Measured for spot on 2026-09-09 and recorded in
+# `beidou_data.spot`'s note 4, and this contract is that sentence in a form a sample can be held
+# against.
+#
+# `period_ms` is the BAR, so this contract is about 1h klines and nothing else.  It is stated at one
+# interval rather than parameterised because the rivals are what carry the evidence and they are
+# defined in bars: `rival_rest_offsets` proposes one period either side, which at 1h is exactly the
+# +-1 bar the measurement refuted.  A 4h panel needs its own declaration and its own measurement;
+# inheriting this one would refute rivals nobody tested.
+#
+# `available_offset_ms` is one bar for the reason the metrics contract gives at its own scale: the
+# boundary is what must be TRUE (the bar has closed), never the observed latency.  The perp bar
+# opening at t and the spot bar opening at t close at the same instant (note 3: every bar of 2026-08
+# in both markets satisfies `open_time % 3_600_000 == 0`), which is why a same-bar read costs nothing
+# and a "latest available" read would have priced XMRUSDT's halted listing at +324% for two years.
+SPOT = EventTimeContract(
+    name="spot",
+    period_ms=PERIOD_MS["1h"],
+    archive=Stamp("open_time", 0, "the bar OPEN"),
+    rest=Stamp("open_time", 0, "the bar OPEN"),
+    available_offset_ms=PERIOD_MS["1h"],
+    measured=(
+        "2026-09-09 against the venue: 744/744 bars of BTCUSDT 2026-08 have identical closes when the "
+        "spot archive's open_time is joined to REST's openTime directly, and 0/743 at a one-bar shift "
+        "either way.  The units had to be measured too - the spot monthly archive switched from "
+        "milliseconds to MICROSECONDS at 2025-01 while the futures archive is still milliseconds."
+    ),
+)
+
+# The panel's spot fields, prefixed.  Prefixed because a bare 'close' is the PERPETUAL's close one
+# frame over, and this dict is the thing that answers "which contract governs this column"; two
+# different series answering to one key is the confusion the whole module is about.  A verification
+# must therefore be produced over frames whose columns carry the same prefix, or `admits_live_signal`
+# refuses for the fourth reason - the column was never compared - which is the correct answer.
+SPOT_COLUMNS: tuple[str, ...] = ("spot_open", "spot_high", "spot_low", "spot_close", "spot_quote_volume")
+
+# The one a signal reads: `Basis` is log(perp close / spot close), so this is the column RISK-G3 has
+# to admit before a basis candidate may trade.
+SPOT_BASIS_COLUMN = "spot_close"
+
 # Keyed by COLUMN, not by feed, because RISK-G3's refusal is per column: "该列不进实盘".  A feed's
 # columns share a contract, and a column nobody listed here has none - which is the point.
-CONTRACTS: dict[str, EventTimeContract] = dict.fromkeys(VALUE_COLUMNS, METRICS)
+CONTRACTS: dict[str, EventTimeContract] = {
+    **dict.fromkeys(VALUE_COLUMNS, METRICS),
+    **dict.fromkeys(SPOT_COLUMNS, SPOT),
+}
 
 
 def contract_for(column: str) -> EventTimeContract:

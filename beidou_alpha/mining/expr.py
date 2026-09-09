@@ -111,6 +111,17 @@ class Expr:
             seen.extend(name for name in child.reads_metrics() if name not in seen)
         return tuple(seen)
 
+    def reads_spot(self) -> bool:
+        """Does this tree read ``panel.spot``?  A method for the same reason ``reads_funding`` is one.
+
+        Separate from ``reads_funding`` although both answer "which foreign series does this need",
+        because the two absences are cured by different things and cost different amounts.  A panel
+        with no funding is one ``--funding`` away; a panel with no spot is blocked on an event-time
+        verification that RISK-G3 requires before the column may reach a signal at all (DL-D5), and
+        for 166 of 528 perpetuals it is never cured because the venue lists no spot leg.
+        """
+        return any(child.reads_spot() for child in self.children())
+
     def lookback(self) -> int:
         """Bars of history this node needs before it produces a number."""
         return max((child.lookback() for child in self.children()), default=0)
@@ -237,6 +248,21 @@ def _required(panel: Panel, field: str, node: str) -> pd.DataFrame:
     if frame is None:
         raise ExprError(f"{node} needs panel.{field}, which this panel does not carry")
     assert isinstance(frame, pd.DataFrame)
+    return frame
+
+
+def _required_spot(panel: Panel, field: str, node: str) -> pd.DataFrame:
+    """A spot field a candidate needs, or a loud failure naming both.
+
+    `Panel.spot_field` answers `None` for "nobody ingested spot" and an all-NaN COLUMN for "this
+    perpetual has no spot leg".  Only the first is a wiring mistake, and it is the one that has to be
+    loud: `research mine` enumerated the DL-D4 metrics leaves against a panel loaded WITHOUT metrics
+    for two whole rounds, and the 90 `ExprError`s per round reached the summary as a count.  Loud is
+    what made that findable at all; the same node accepting `None` would have scored on nothing.
+    """
+    frame = panel.spot_field(field)
+    if frame is None:
+        raise ExprError(f"{node} needs panel.spot[{field!r}], which this panel does not carry")
     return frame
 
 
@@ -467,6 +493,97 @@ class LongShortRatio(Expr):
 
     def describe(self) -> str:
         return f"lsr({self.window})"
+
+
+@dataclass(frozen=True)
+class Basis(Expr):
+    """DL-D5, block 2: ``log(perp_close / spot_close)`` on the SAME bar - how rich the perpetual is.
+
+    Both legs are the panel's own bar close, and `beidou_data.spot.align_spot_to_perp_bars` has already
+    quoted the spot leg in the perpetual's unit, so 1000SHIBUSDT's thousand-SHIB contract needs no
+    special case here and a wrong multiplier cannot be mistaken for a large basis (that is what
+    `measure_alignment`'s 0.5 threshold separates, three hundred times above the real basis and four
+    times below the smallest possible unit error).
+
+    **Why a log ratio and not the other three writings.**  Pre-registered, chosen before any run:
+
+    *A spread* (`perp - spot`) is a PRICE, which the dimension system refuses as a score and should:
+    BTC's 100 USDT spread and SHIB's 0.000001 spread are the same statement about different things.
+
+    *The simple ratio* (`perp / spot - 1`) agrees with the log to first order and disagrees exactly
+    where this family looks.  Every shape here emits both signs, and `tanh` and `cross_sectional_rank`
+    are odd, so the short arm is meant to be the exact mirror of the long one.  Under the simple ratio
+    it is not: a perpetual trading at twice spot reads +1.0 and one at half spot reads -0.5, so the
+    mirror shape is a different magnitude and "the mirror of the worst candidate is the best" - the
+    sentence every family in this module relies on - stops being true.  `log(a/b) = -log(b/a)` makes it
+    true by construction.  It also composes additively with `Ret`, which is the same arithmetic.
+
+    *An annualised basis* is the writing this family deliberately does NOT use, and the reason is
+    decisive rather than aesthetic: a perpetual has no expiry, so there is no time to maturity to
+    annualise over.  Any annualisation is therefore a multiplication by a constant the author picks -
+    and `cross_sectional_rank` cannot see a positive constant factor at all, while `Squash` absorbs it
+    into `scale`, which the grid already searches.  It would add a parameter and exactly zero
+    information, and then the report would name a horizon nothing in the data corresponds to.
+
+    *Basis net of funding* (`log(perp/spot) - funding`) is the one writing that is mechanically NOT a
+    restatement of the carry family, and it is still not here.  `Sum` is the only additive operator and
+    `Sum.evaluate` adds with `fill_value=0.0`, so a term that is NaN is added as zero: for the 166
+    perpetuals with no spot leg the residual shape would silently evaluate to pure carry rather than to
+    nothing.  That is precisely the substitution the whole spot ingest was built to make
+    unrepresentable, arriving through the arithmetic instead of through the data.  So the residual is
+    not shipped until `Sum` propagates missing values, and `_basis_family` records what that costs.
+
+    **Level, not change** - the opposite of `OpenInterest`, and worth the contrast because the reason is
+    the same rule applied to a different quantity.  Open interest in contracts has no comparable zero
+    between a 100,000 USDT coin and a 3 USDT one, so only its change can be ranked.  The basis has a
+    zero that no-arbitrage fixes at exactly the same place for every symbol: perp = spot.  It is one of
+    the very few quantities in this panel whose LEVEL means the same thing across the board, and
+    differencing it would throw that away for nothing.
+
+    **RETURN, so the type system forces the normalisation.**  A log price ratio is dimensionally a log
+    return, so `Squash`, `Mul` and a mixed `Sum` all refuse it raw and every shape has to divide by
+    `Vol` first - the same discipline `Funding`, `OpenInterest` and `HourOfDay` are held to.  That is
+    not ceremony here: the zero is shared across symbols but the SCALE is not, and an altcoin's basis
+    swings orders of magnitude more than BTC's, so a raw cross-sectional rank of the level would mostly
+    rank symbols by their volatility.  It also keeps an interaction with `Funding` honest - both legs
+    get the same treatment, so the interaction measures the two quantities rather than their handling.
+
+    **No window.**  Funding is already the venue's time-average of this quantity, so smoothing the basis
+    over a window walks it towards the carry leaf rather than away from it; the instantaneous
+    dislocation is the part funding's averaging discards.  It also keeps the grid free of a parameter
+    that would multiply `declared_trials` for a hypothesis nobody stated.
+    """
+
+    KIND: ClassVar[str] = "basis"
+    FIELD: ClassVar[str] = "close"
+
+    @property
+    def dim(self) -> Dim:
+        return Dim.RETURN
+
+    def evaluate(self, panel: Panel) -> pd.DataFrame:
+        spot = _required_spot(panel, self.FIELD, "basis")
+        # Both legs masked to strictly positive before the log, exactly as `OpenInterest` masks its own.
+        # A zero or negative close is not a price, and `np.log` answers -inf rather than raising - which
+        # `tanh` then maps to a full-size -1.0 position on a symbol whose data is broken.  NaN is the
+        # only honest answer and it is what the rest of this leaf is built to preserve.
+        perp = panel.close.where(panel.close > 0)
+        ratio = perp / spot.where(spot > 0).reindex_like(perp)
+        return pd.DataFrame(np.log(ratio.to_numpy(dtype=float)), index=ratio.index, columns=ratio.columns)
+
+    def lookback(self) -> int:
+        """One bar: this node reads bar t and nothing before it.
+
+        Not an understatement of a warmup (E-042's failure), because there is no warmup to understate -
+        `align_spot_to_perp_bars` reindexes and never rolls, so the value at t is a function of t alone.
+        """
+        return 1
+
+    def reads_spot(self) -> bool:
+        return True
+
+    def describe(self) -> str:
+        return "basis"
 
 
 # --- operators -------------------------------------------------------------------------------------
