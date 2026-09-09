@@ -462,7 +462,7 @@ L4**。这条不该由我裁。
 | 操作者裁定（2026-09-09） | ① 主账本必须有 stop → 已装并**在运行记录里可见**（06:00:14Z `probes={'main','flow_short'}`）；② probe→main 维持 9 个月；③ 维持单机；R1 预算放开（policy 0.3.0）；#8 现在写 → 已交付；Q4 按默认进 |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED · G4 PASS · G5 PARTIAL（AC-G5 要一次真浸泡） · G6 PARTIAL（AR-17 OPEN） · G7 **PARTIAL**（AC-G7 已跑、DL-G7 已交付，但 §9 的 DL-D5 现货 ingest 仍无实现，AC-G5 的真浸泡与 AC-L5 的首个全自动窗口都没跑过——按 H9 的字面条件这三条各自足以让它不是 PASS） |
 | 治理线 | 自治 ENABLED；policy **0.3.0** digest `35e749f7fc0c`，**循环报的与磁盘一致**（新增比对）；事务 4 行、链闭合；`flow_short` 0/9 窗口 |
-| 预算 | ledger **683 unique / 1700**；mine 轮次 1/4 |
+| 预算（2026-09-09 实测更正） | R1 行预算 **169 / 1700**（此前这一格误填 683——那是**全库 unique 试验数**，与分母不是同一个量；分子换了量分母没换）。全库 unique 现为 **1,999**（今天两轮 mine 各 +658）。**mine 轮次 3/4——本窗口只剩一轮**（窗口 2026-10-03 关） |
 | 本轮找到并修的缺陷 | 共 **17** 条，同一形状：看起来在管事、实际什么都没管。<br>**不生效**：共享 universe、共享 metrics、钉住不生效、R8 梯子无调用者、`ensemble.turnover_penalty` 无实现。<br>**看不见**：DL-K3 比字符串、stop 阈值不进 digest、治理 digest 无读者、隔离在钉住背后缩小交易集、冲击模型不进试验签名、归因落在无定价 bar 上被丢。<br>**声明与实现脱节**：`gate_scope` / `report_whole_library_n` / `record_digest_every_cycle` / `no_decision_on_rebaseline` 无读者、`cost_stress` 未按标签计价、tenure 的「main→probe 不可达」已过期。 |
 | 两道通用护栏 | ① 每个 policy 字段必须有生产读者（`test_every_threshold_has_a_consumer.py`）；② 改一片 registry 叶子必须动某个 digest，例外按名字列（`test_the_digest_sees_every_live_knob.py`）。**它们会抓到 R8 那条梯子和 stop 阈值那个洞，也会抓到下一条**——这是本轮最值钱的产出，不是任何单条修复 |
 | 下一动作 | (a) metrics ingest 收尾（188/205，扫尾已挂）；(b) 用 OI/LS + hod 叶跑这一轮 mine（预算 169/1700、1/4 轮）；(c) L3 的 7 天软泡；(d) AC-G5 一次真候选浸泡 168 周期 |
