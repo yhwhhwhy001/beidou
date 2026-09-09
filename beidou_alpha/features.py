@@ -54,6 +54,102 @@ def annualize_vol(vol: pd.DataFrame, bars_per_year: float) -> pd.DataFrame:
     return vol * math.sqrt(bars_per_year)
 
 
+# GARCH(1,1) is fitted on a two-parameter grid rather than by a general optimiser, because the third
+# parameter is pinned by VARIANCE TARGETING: omega = sigma_bar^2 * (1 - alpha - beta), where sigma_bar^2
+# is the trailing-window mean of r^2.  That is the standard identification for a long-horizon fit and it
+# removes the one direction in which Gaussian QMLE is badly scaled.  What is left is a persistence
+# (alpha + beta) and the share of it that is news (alpha / (alpha + beta)); the grid below spans the range
+# reported for high-frequency crypto - EWMA's RiskMetrics point sits at persistence 1.0, news share 0.06,
+# i.e. just off the top-left of this grid, so an estimated GARCH that collapses onto EWMA will show up as
+# the fit sitting at the boundary rather than as an invisible tie.
+GARCH_PERSISTENCE = (0.90, 0.95, 0.98, 0.995)
+GARCH_NEWS_SHARE = (0.02, 0.05, 0.10, 0.20)
+
+
+def _garch_loglik(r2: np.ndarray, omega: np.ndarray, alpha: np.ndarray, beta: np.ndarray) -> np.ndarray:
+    """Gaussian QMLE log-likelihood of each parameter row, summed over the bars a symbol actually has.
+
+    Accumulated inside the loop rather than returned as a path: the fitting grid is
+    (n_grid, n_symbols) and materialising a variance path for it over five years of hourly bars is
+    1.3 GB, which is the whole reason this is a hand-rolled filter instead of a library call.
+    """
+    h = np.broadcast_to(omega / np.maximum(1.0 - alpha - beta, 1e-9), omega.shape).astype(float).copy()
+    total = np.zeros(h.shape)
+    for row in r2:
+        seen = ~np.isnan(row)
+        shock = np.where(seen, row, 0.0)
+        total += np.where(seen, -0.5 * (np.log(h) + shock / h), 0.0)
+        h = np.where(seen, omega + alpha * shock + beta * h, h)
+    return total
+
+
+def garch_forecast_vol(
+    close: pd.DataFrame,
+    *,
+    fit_bars: int = 8760,
+    refit_bars: int = 720,
+    min_obs: int = 720,
+) -> pd.DataFrame:
+    """One-step-ahead GARCH(1,1) volatility: the value at bar ``t`` forecasts bar ``t+1``.
+
+    This is deliberately NOT the same quantity as ``ewm_vol``.  ``ewm_vol`` reports a level *at* t
+    (an EWMA of squared returns through t); this reports the conditional standard deviation *of t+1*,
+    formed at t.  Both are known at t, so both are causal, and the difference is the entire point:
+    ``backtest.run_backtest`` executes the weight decided at t on bar t+1, so the divisor's job is to
+    forecast the bar that will be traded, not to describe the bar that just closed.
+
+    Causality, stated because it is the part a reader has to trust: parameters are re-fitted every
+    ``refit_bars`` on the trailing ``fit_bars``, and a fit at boundary b sees only bars strictly before
+    b.  The filter recursion is causal by construction.  Bars before the first boundary are NaN rather
+    than filtered with block 0's parameters - using them there would be a fit reading its own sample,
+    and it would be invisible because those bars are all inside every walk-forward training window.
+
+    A symbol with fewer than ``min_obs`` observed returns in the trailing window gets NaN for that
+    block, and its filter restarts at the unconditional variance when it next qualifies.  ``min_obs``
+    defaults to 720 to match ``AlphaModel.min_history_bars``: a symbol this refuses to size is a symbol
+    the model already refuses to trade, so the option does not silently change the traded universe.
+    """
+    simple = close.pct_change()
+    r2 = simple.pow(2).to_numpy(dtype=float)
+    n_bars, n_symbols = r2.shape
+    persistence = np.array([p for p in GARCH_PERSISTENCE for _ in GARCH_NEWS_SHARE], dtype=float)[:, None]
+    share = np.array([s for _ in GARCH_PERSISTENCE for s in GARCH_NEWS_SHARE], dtype=float)[:, None]
+    alpha_grid, beta_grid = persistence * share, persistence * (1.0 - share)
+    boundaries = list(range(max(refit_bars, min_obs), n_bars, max(refit_bars, 1)))
+    out = np.full((n_bars, n_symbols), np.nan)
+    if not boundaries:
+        return pd.DataFrame(out, index=close.index, columns=close.columns)
+    h = np.full(n_symbols, np.nan)
+    omega = np.full(n_symbols, np.nan)
+    alpha = np.zeros(n_symbols)
+    beta = np.zeros(n_symbols)
+    for position, boundary in enumerate(boundaries):
+        window = r2[max(0, boundary - fit_bars) : boundary]
+        present = ~np.isnan(window)
+        observed = present.sum(axis=0)
+        # Hand-rolled rather than `np.nanmean`, which warns on an all-NaN column - and a symbol that has
+        # not listed yet is exactly that column, on most bars, for most of this panel.
+        target = np.where(observed > 0, np.where(present, window, 0.0).sum(axis=0) / np.maximum(observed, 1), 1.0)
+        qualified = (observed >= min_obs) & np.isfinite(target) & (target > 0)
+        # A symbol whose window is entirely flat has target 0, which makes omega 0 and log(h) -inf; it is
+        # already disqualified, but the likelihood is evaluated for every column at once, so it has to be
+        # given a finite placeholder rather than left to poison a warning-free run.  Real on this panel:
+        # a handful of symbol-windows print no price change at all.
+        safe = np.where(qualified, target, 1.0)
+        best = np.argmax(_garch_loglik(window, safe * (1.0 - alpha_grid - beta_grid), alpha_grid, beta_grid), axis=0)
+        alpha, beta = alpha_grid[best, 0], beta_grid[best, 0]
+        omega = np.where(qualified, target * (1.0 - alpha - beta), np.nan)
+        # Restart a symbol that has just qualified at its unconditional variance; drop one that stopped.
+        h = np.where(qualified, np.where(np.isnan(h), target, h), np.nan)
+        end = boundaries[position + 1] if position + 1 < len(boundaries) else n_bars
+        for t in range(boundary, end):
+            row = r2[t]
+            seen = ~np.isnan(row)
+            h = np.where(seen, omega + alpha * np.where(seen, row, 0.0) + beta * h, h)
+            out[t] = h
+    return pd.DataFrame(np.sqrt(out), index=close.index, columns=close.columns)
+
+
 def true_range(high: pd.DataFrame, low: pd.DataFrame, close: pd.DataFrame) -> pd.DataFrame:
     """Max of (high-low, |high-prev close|, |low-prev close|) per symbol, in the input's column order.
 
