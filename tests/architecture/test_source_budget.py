@@ -1415,8 +1415,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # The cli growth also carries DL-C1's stress fix (`impact=impact` in `cost_stress`/`slippage_stress`) and
 # the gov growth the replay's capacity-arm attribution, so a report priced at 100k against an 11k book is
 # read as the sensitivity run it is rather than as a promotion the operator skipped.
+# 2026-09-09, +23 alpha: `ensemble.turnover_penalty` is parsed, hashed into `registry_fingerprint`, and
+# implemented by nothing - `combine_targets` takes no such parameter and `AlphaModel` does not carry it.
+# Found by mutating every leaf of the shipped registry and asking which ones move a digest, which is the
+# sweep `tests/live/test_the_digest_sees_every_live_knob.py` now runs every time.  Setting it would move
+# the research fingerprint, make the change look adopted, and leave the loop combining targets exactly as
+# before: KILL-Q15 with the digest on the wrong side, moving when nothing else does.  `parse_registry`
+# now refuses any value but zero; zero stays parseable so archived fingerprints still reproduce, and
+# wiring it is a construction change that needs its own evidence.
 CEILING = {
-    "beidou_alpha": 7_113,
+    "beidou_alpha": 7_136,
     "beidou_live": 6_509,
     "beidou_cli": 4_250,
     "beidou_data": 1_889,
