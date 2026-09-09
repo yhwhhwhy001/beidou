@@ -444,12 +444,13 @@ L4**。这条不该由我裁。
 
 | 项 | 值 |
 | --- | --- |
-| Phase | Phase 0–2 ✔；Phase 1 全部 DL 交付完（G0/G1/G3/G7/G9/C1）；Phase 3 块 3 结项（全 REFUTED）、块 2 的 #8 ✔；重启 #6/#7/#8 ✔ |
+| Phase | Phase 0–2 ✔；Phase 1 全部 DL 交付完（G0/G1/G3/G7/G9/C1）；Phase 3 块 3 结项（全 REFUTED）、块 2 的 #8 ✔；重启 #6/#7/#8/#9 ✔（#9 06:35Z，07:00:14Z 首个完整周期两把尺子并排落盘） |
 | 操作者裁定（2026-09-09） | ① 主账本必须有 stop → 已装并**在运行记录里可见**（06:00:14Z `probes={'main','flow_short'}`）；② probe→main 维持 9 个月；③ 维持单机；R1 预算放开（policy 0.3.0）；#8 现在写 → 已交付；Q4 按默认进 |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED · G4 PASS · G5 PARTIAL（AC-G5 要一次真浸泡） · G6 PARTIAL（AR-17 OPEN） · G7 **PARTIAL**（AC-G7 已跑、DL-G7 已交付，但 §9 的 DL-D5 现货 ingest 仍无实现，AC-G5 的真浸泡与 AC-L5 的首个全自动窗口都没跑过——按 H9 的字面条件这三条各自足以让它不是 PASS） |
 | 治理线 | 自治 ENABLED；policy **0.3.0** digest `35e749f7fc0c`，**循环报的与磁盘一致**（新增比对）；事务 4 行、链闭合；`flow_short` 0/9 窗口 |
 | 预算 | ledger **683 unique / 1700**；mine 轮次 1/4 |
-| 本轮找到并修的缺陷 | 共 **12** 条，同一形状：看起来在管事、实际什么都没管。共享 universe、共享 metrics、钉住不生效、DL-K3 比字符串、stop 阈值不进 digest、R8 梯子无调用者、治理 digest 无读者、`gate_scope` / `report_whole_library_n` / `record_digest_every_cycle` / `no_decision_on_rebaseline` 无读者、`cost_stress` 未按标签计价。**通用护栏已加**（`test_every_threshold_has_a_consumer.py`） |
-| 下一动作 | (a) metrics ingest 收尾（163/205，扫尾已挂）；(b) 用 OI/LS + hod 叶跑这一轮 mine；(c) L3 的 7 天软泡；(d) AC-G5 一次真候选浸泡 168 周期 |
+| 本轮找到并修的缺陷 | 共 **17** 条，同一形状：看起来在管事、实际什么都没管。<br>**不生效**：共享 universe、共享 metrics、钉住不生效、R8 梯子无调用者、`ensemble.turnover_penalty` 无实现。<br>**看不见**：DL-K3 比字符串、stop 阈值不进 digest、治理 digest 无读者、隔离在钉住背后缩小交易集、冲击模型不进试验签名、归因落在无定价 bar 上被丢。<br>**声明与实现脱节**：`gate_scope` / `report_whole_library_n` / `record_digest_every_cycle` / `no_decision_on_rebaseline` 无读者、`cost_stress` 未按标签计价、tenure 的「main→probe 不可达」已过期。 |
+| 两道通用护栏 | ① 每个 policy 字段必须有生产读者（`test_every_threshold_has_a_consumer.py`）；② 改一片 registry 叶子必须动某个 digest，例外按名字列（`test_the_digest_sees_every_live_knob.py`）。**它们会抓到 R8 那条梯子和 stop 阈值那个洞，也会抓到下一条**——这是本轮最值钱的产出，不是任何单条修复 |
+| 下一动作 | (a) metrics ingest 收尾（188/205，扫尾已挂）；(b) 用 OI/LS + hod 叶跑这一轮 mine（预算 169/1700、1/4 轮）；(c) L3 的 7 天软泡；(d) AC-G5 一次真候选浸泡 168 周期 |
 | 仍未定（操作者） | ① 主账本 stop 阈值 6% 是路线 B，`review_after_days: 30` 到期后按 30 天已实现归因重新按 −2σ 定；要变硬停是 `stop.halts: true` 一个字段。② **R8 梯子现在会自己缩仓**——这是全系统第一条不经人就改变仓位尺寸的控制。理由：它读的是归因不是权益（那两句「刻意不自动化」针对的是权益口径），补偿控制是 2 周期宽限 + 首次告警 + 两档都写在 `policy_digest()` 里。今天不改变任何行为（归因回撤 −0.23%，第一档 −35%）。要改成只告警不动作，是 `_risk_ladder` 里一处判断。③ DL-C1 的 `vol_target` 重推仍未做，属批次窗口（Phase 4a） |
 | 时间约束，干不完的 | L3 7 天软泡；M-Q08 ≥30 笔；probe→main 9 个窗口（首个 2026-10-03 关）；M-G06 构造不变 18 个月（若不再改构造，2028-03-05） |

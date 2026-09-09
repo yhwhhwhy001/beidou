@@ -4983,3 +4983,84 @@ R5 顺带钉下一个歧义：`frozen_until = window + 6` 且 `frozen()` 用 `<=
 `guard_reasons` 空、`stopped_books` 空。main 的 30 天归因 −0.1356%，对着 `max_loss` 0.06。
 
 commit：`1112fe9`（DL-G7 / R8）、`6a9dd27`（四条死阈值与通用护栏）。
+
+## 2026-09-09 · 审查：把「有没有读者」和「digest 看不看得见」两个问题做成扫描，再扫一遍全系统
+
+操作者要求「完成以后审查整个代码与方案」。审查不靠通读——今天已经证明读代码找不到这类东西
+（stop 阈值那个洞是**核对**撞出来的，不是读出来的）。所以把上午那两个问题各做成一台扫描机器，
+指向系统的每一个面。
+
+### 扫描一：每个字段有没有生产读者
+
+结果与护栏见上一条。补记一句范围：同样的扫描指向 `LiveConfig` / `RiskBudgetParams` / `ProbeParams` /
+`Facts` / `PortfolioParams` / `ExitParams` / `GuardParams` / `CostModel` / `ImpactModel`，**全部干净**，
+唯一无读者的是 `LiveState.started_at`——那是给人看状态文件的记录字段，不是控制。`Policy` 是异类，
+因为它的字段本来就该被**别处**消费；这也是为什么护栏只钉它。
+
+### 扫描二：改一片配置，哪个 digest 会动
+
+对线上 registry 的每一片叶子逐个变异，问「至少一个 digest 动不动」。例外按名字列（evidence 指针、
+散文、`version`、禁用策略的参数），其余必须动。**第一次跑抓到 `ensemble.turnover_penalty`**：被解析、
+被哈希进 `registry_fingerprint`、`combine_targets` 根本没有这个参数。设成 0.3 会让研究侧指纹动、
+看起来像采纳了，而循环合成目标的方式一字未变——**digest 站在错的一侧：它动了，别的没动。**
+现在解析时拒绝任何非 0 值；不删字段，删了会改掉每份归档报告的指纹。
+
+把同一个问题指向 profile，`pool.quarantine_after` 是个不在 `construction_fingerprint` 里的线上开关。
+顺着读它做什么，找到**今天早上钉住 universe 自己的洞**：
+
+> `_quarantine` 改 `self.universe`，不动 `self.model`；而 `registry_digest` 读的是 model 的钉住 universe。
+> 实测：一次隔离之后循环交易 18 个里的 17 个，digest 仍是逐字相同的 `abe21f7a8edf`。
+
+钉住之前 digest 里根本没有 universe 可以说错，是钉住让这件事要紧，而 D-031 是唯一能悄悄推翻它的路径。
+`AlphaModel.without_symbols` 与 `without_books` 同形。钉住时还要告警：每日重排在钉住下只记录不采纳，
+所以隔离掉的符号**不重启就不会回来**。
+
+### 自审梯子，以及账本把两个成本模型折成了一条试验
+
+自审 `attributed_drawdown_state`：路径按有 equity 的周期走，所以归因行若落在没有任何周期定价的 bar 上
+会从路径里消失——**低估回撤**，宽松的那一侧。线上今天 0 条，所以这版是报告不是修补；「今天是零」不是性质。
+
+更实的一条：**DL-C1 那两次 impact 定价的 tsmom，账本把它们与平模型的行折成了同一条试验。**
+`window_spend().spent` 一直停在 169，DSR 分母没动——而 §19 早写着「采纳它要加账本行、计入 R1」。
+同一套参数在两个成本模型下各跑一次、留下过关的那个，正是 DSR 存在的理由那种选择。impact 因此进
+`_construction_digest`，**按 enabled 条件加**：无条件加会让此后每次平模型运行得到一个归档行都没有的
+签名，真正的重放会被当成新试验计费——同一个缺陷照镜子。
+
+### 两处**读起来是真的、其实已经过期**的话
+
+1. `governance tenure` 对操作者说「main -> probe 从记录里不可达」。主账本 05:08Z 装上 stop、开始出现在
+   每个周期的 probes 里之后，这句话**继续打印了几个小时**。原因是 `books_in` 按账本名（`main`）而
+   `governance_state.json` 按策略 id（`tsmom`），拿一个命名空间比另一个——这个文件几行之上刚修过同一个
+   错配，方向相反。这是操作者据以判断这条边能不能触发的那句话。
+2. 我自己口头把「现引的 tsmom 报告缺全库口径」说错了：缺的是 `105259Z`，而 registry 现引的是
+   `182204Z`，它早就带了全库口径（N=681、门 1.6628）与预登记块。AC-G1 早已满足。
+
+### AC-G6′：让真引擎写的记录被真 tenure 读回来
+
+两半此前各自有测试而从不相接。补的这条把它们接上，三条序列全走真引擎 → 真记录 → 真 tenure → 状态机。
+写的时候自己踩了一次同形的坑：改 `run_cycle` **返回的**那个 dict 再序列化，会丢掉 `at`（引擎是落盘时
+才加的），于是 tenure 因为时间戳不在窗口内跳过了那一行。手写 fixture 不会有这个问题，因为作者会记得
+写 `at`——**这正是要对着真写入方测的理由。** AR-02 由 MITIGATED 转 CLOSED。
+
+### 重启 #9（操作者授权）
+
+06:35:05Z kickstart，restarts 27 → 28。universe 18 个逐字未变、`leaving` 空、`stopped_books` 空、
+18 个 exit 锚点全留、`risk_ladder` 字段以空字典出现。构造指纹**未动**（`dd32720d3faf` /
+canonical `0dcd044d0158`）——M-010 的 30 天钟没被这次改动清零。
+
+07:00:14Z 首个完整周期：
+
+```
+registry   abe21f7a8edf          governance 35e749f7fc0c
+probes     main OK, flow_short OK
+risk_ladder {ruler: attributed_pnl, enforced: true, drawdown: -0.00212,
+             scalar: 1.0, acting: false, grace_cycles: 2}
+throttle    {drawdown: 0.000714 (权益), scalar: 1.0}
+universe 18   leaving []   guards []   quarantined []
+```
+
+**两把尺子并排出现在同一行记录里**，这是这条改动最想要的形状：梯子读的是 −0.212%，权益读的是
++0.07%，梯子的第一档在 −35%——**装上了，今天不动任何仓位**，和主账本 stop 那次同一句话。
+
+commit：`f42b446`（隔离）、`3129e5d`（孤儿归因）、`3b326bc`（tenure 过期注释）、
+`861b47c`（试验签名）、`3430fd0`（AC-G6′）、`8707e8f`（digest 扫描）。
