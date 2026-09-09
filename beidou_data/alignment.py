@@ -46,10 +46,20 @@ RESEARCH panel too, so that gate made the basis leaf unminable rather than untra
 rule nobody wrote.  RISK-G3's sentence is "该列不进实盘", and live is where it binds.
 
 Fail-closed either way: no verification on record is a refusal, because "nobody has shown the offset"
-and "the offset is wrong" are the same answer to "may a signal trade this".  Nothing produces a spot
-`Verification` yet, so today that gate is shut - `beidou_data.spot` records a real measurement, but a
-sentence in a docstring is not one of these, and the path to opening it is a measurement someone runs
-rather than an edit someone makes.
+and "the offset is wrong" are the same answer to "may a signal trade this".
+
+That gate was shut from the day it was written until 2026-09-09, for the honest reason - nothing
+produced a spot `Verification`, and a sentence in a docstring is not one of these.  `verify_spot_contract`
+is the measurement made runnable and `beidou data spot` is what runs it: the ingest already holds both
+sources open, so the check costs one archive month and one REST page and lands in `spot_alignment.json`
+beside the data it authorises.  `read_spot_verification` is the other half, and it is deliberately not a
+parser.  It RE-DERIVES the verdict from the record's own counts and refuses to return a `PASS` the
+numbers do not support, because a file an operator can edit is otherwise a config key wearing a
+measurement's clothes - which is the one thing `beidou_live.engine` says must never open this gate.
+What that does NOT cover, stated rather than left to be discovered: a hand-written record carrying
+plausible counts is indistinguishable from a measured one, and nothing here bounds a record's AGE.  The
+first is bounded by nothing short of re-downloading; the second is why `run_data.sh` re-measures daily
+and why the record carries `measured_at_ms` for a reader to see.
 
 Describes `beidou_data.metrics`; does not replace it.  That module already converts both stamps to one
 canonical `open_time`, and it runs in the live loop, so the contract states what it does and a test
@@ -58,9 +68,11 @@ holds the two against each other.  Whichever one a later change moves, the test 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import NamedTuple
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -458,3 +470,160 @@ def verify_stamp_offset(
         rivals,
         *seen,
     )
+
+
+# --- DL-D5: the spot contract's own measurement, and the record the live gate reads -----------------
+
+SPOT_VERIFICATION_FILE = "spot_alignment.json"
+
+# Twenty-four bars, quoted from `beidou_data.spot.measure_alignment`'s own floor rather than picked
+# here: a day of hourly bars.  `verify_stamp_offset`'s default is twelve, chosen for a five-minute feed
+# where one poll retrieves that many, and it is too low one market over - a spot symbol listed this
+# morning would otherwise be allowed to speak for the whole feed's stamp convention.
+SPOT_MIN_OVERLAP_BARS = 24
+
+
+def spot_verification_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """A kline frame under the names `CONTRACTS` keys the spot columns by, stamp untouched.
+
+    Renaming and nothing else, which is what keeps the comparison real - `beidou_data.index_price`'s
+    note 8 states the general form of this, and spot needs the one qualification that feed does not.
+    `klines_to_frame` DOES touch the stamp here: the spot monthly archive switched to microseconds at
+    2025-01 (`beidou_data.spot` note 5) and the parser normalises that to milliseconds.  A unit
+    normalisation is a SCALE and the hypotheses under test are SHIFTS of one bar, so it cannot launder a
+    wrong offset into a right one - a mis-scaled stamp lands tens of thousands of years away and joins
+    to nothing at any offset, which `verify_stamp_offset` reports as no overlap rather than as PASS.
+    """
+    stamp = SPOT.archive.column
+    if stamp not in frame.columns:
+        raise KeyError(f"a spot sample must carry {stamp!r}; got {list(frame.columns)}")
+    columns = [column for column in SPOT_PANEL_COLUMNS if column in frame.columns]
+    return frame[[stamp, *columns]].rename(columns={column: spot_column(column) for column in columns})
+
+
+def verify_spot_contract(
+    archive: pd.DataFrame, rest: pd.DataFrame, *, min_overlap: int = SPOT_MIN_OVERLAP_BARS
+) -> Verification:
+    """Hold SPOT's declared ZERO offset against two independent renderings of the same bars.
+
+    The two samples are the monthly archive ZIP and the REST endpoint, which is what makes this a
+    measurement and not a round trip: the same bars downloaded twice by two paths either coincide at
+    the declared offset and scatter one bar either side, or they do not.  Measured 2026-09-09 on
+    BTCUSDT 2026-08, all five columns: 744/744 at the declared offset against 0/743 and 0/744 at the
+    rivals - `high` and `low` each match on 2 rows at a rival, which is two flat hours and is exactly
+    why a row counts as matched only when every comparable column agrees.
+
+    `value_columns` is pinned to the five PREFIXED names rather than left to default over the frame,
+    for the reason `admits_live_signal`'s fourth refusal exists: `CONTRACTS` is keyed by the prefixed
+    names, and a verification whose `compared_columns` did not contain `spot_close` would admit the
+    basis leaf on its neighbours' evidence - the defect that let four metrics columns pass M-011 on
+    comparisons that never touched them.  Defaulting would also sweep `open_time` in as a value column
+    and compare the stamp against itself.
+    """
+    return verify_stamp_offset(
+        SPOT,
+        spot_verification_frame(archive),
+        spot_verification_frame(rest),
+        value_columns=SPOT_COLUMNS,
+        min_overlap=min_overlap,
+    )
+
+
+def rederive_verdict(verification: Verification, *, min_overlap: int = SPOT_MIN_OVERLAP_BARS) -> tuple[str, str]:
+    """The verdict THESE counts support, whatever verdict somebody wrote down beside them.
+
+    A second implementation of `verify_stamp_offset`'s last twenty lines, and deliberately not a shared
+    helper the writer also calls: what is being checked is a record that arrived from somewhere else,
+    and a checker that reuses the writer's own conclusion checks nothing.  The cost of the copy is that
+    the two could drift, which is why `test_a_stored_verdict_is_re_derived_rather_than_believed` holds
+    them against each other over the same samples.
+    """
+    if verification.compared < min_overlap:
+        return UNVERIFIABLE, f"only {verification.compared} comparable rows, {min_overlap} required"
+    if verification.matched != verification.compared:
+        return FAIL, f"the declared offset holds on {verification.matched}/{verification.compared} rows"
+    if not verification.rivals:
+        return UNVERIFIABLE, "no rival offset was scored, so a match at the declared one shows nothing"
+    blind = [rival for rival in verification.rivals if rival.compared == 0 or rival.matched == rival.compared]
+    if blind:
+        return UNVERIFIABLE, "this sample cannot tell the declared offset apart from " + ", ".join(
+            f"{rival.rest_offset_ms} ms ({rival.matched}/{rival.compared})" for rival in blind
+        )
+    return PASS, f"{verification.matched}/{verification.compared} at the declared offset, " + ", ".join(
+        f"{rival.matched}/{rival.compared} at {rival.rest_offset_ms} ms" for rival in verification.rivals
+    )
+
+
+def verification_record(verification: Verification, meta: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The counts, the rivals and which columns carried them - everything `rederive_verdict` needs.
+
+    The verdict is written too, and it is the one field a reader may not trust.  It is there so a human
+    or a report can see what the run concluded; `read_spot_verification` re-derives it regardless.
+    """
+    return {
+        "contract": SPOT.name,
+        **dict(meta or {}),
+        "verification": {
+            "verdict": verification.verdict,
+            "reason": verification.reason,
+            "compared": verification.compared,
+            "matched": verification.matched,
+            "rivals": [
+                {"rest_offset_ms": rival.rest_offset_ms, "matched": rival.matched, "compared": rival.compared}
+                for rival in verification.rivals
+            ],
+            "compared_columns": list(verification.compared_columns),
+            "uncompared_columns": list(verification.uncompared_columns),
+        },
+    }
+
+
+def write_spot_verification(
+    root: str | Path, verification: Verification, meta: Mapping[str, Any] | None = None
+) -> Path:
+    """Persist the measurement beside the data it authorises, atomically, exactly as `spot_map.json` is."""
+    path = Path(root) / SPOT_VERIFICATION_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    payload = json.dumps(verification_record(verification, meta), indent=2, sort_keys=True) + "\n"
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def read_spot_verification(root: str | Path, *, min_overlap: int = SPOT_MIN_OVERLAP_BARS) -> Verification | None:
+    """The recorded spot measurement, re-derived from its own numbers, or `None` when none was taken.
+
+    `None` and a refusing `Verification` are different facts and both refuse one level up.  `None` means
+    nobody has measured this root - what an ingest that never ran looks like - and `admits_live_signal`
+    says exactly that.  A record that exists but cannot support its own verdict keeps its numbers and
+    loses its verdict, so the reason a reader sees names the counts rather than the file.
+    """
+    path = Path(root) / SPOT_VERIFICATION_FILE
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if str(payload.get("contract", "")) != SPOT.name:
+            return Verification(UNVERIFIABLE, f"{path} records {payload.get('contract')!r}, not {SPOT.name!r}", 0, 0)
+        recorded = dict(payload.get("verification") or {})
+        stated = Verification(
+            str(recorded.get("verdict", UNVERIFIABLE)),
+            str(recorded.get("reason", "")),
+            int(recorded.get("compared", 0)),
+            int(recorded.get("matched", 0)),
+            tuple(
+                Rival(int(rival["rest_offset_ms"]), int(rival["matched"]), int(rival["compared"]))
+                for rival in recorded.get("rivals") or ()
+            ),
+            tuple(str(column) for column in recorded.get("compared_columns") or ()),
+            tuple(str(column) for column in recorded.get("uncompared_columns") or ()),
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return Verification(UNVERIFIABLE, f"{path} is not a readable verification record: {exc!r}", 0, 0)
+    verdict, reason = rederive_verdict(stated, min_overlap=min_overlap)
+    disputed = "" if verdict == stated.verdict else f"; the record claims {stated.verdict}"
+    stamped = ", ".join(
+        f"{key}={payload[key]}" for key in ("symbol", "interval", "sample", "measured_at") if key in payload
+    )
+    return replace(stated, verdict=verdict, reason=f"{reason}{disputed}" + (f" [{stamped}]" if stamped else ""))

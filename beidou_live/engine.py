@@ -189,6 +189,7 @@ class LiveEngine:
         pool: UniverseProvider | None = None,
         universe_sink: Callable[[UniverseUpdate], None] | None = None,
         metrics_store: Any = None,
+        spot_verification: Verification | None = None,
         record_metrics: bool = True,
     ) -> None:
         self.config = config
@@ -248,10 +249,14 @@ class LiveEngine:
         # DL-L2: the error streak is a property of this process, not of the book.  Persisting it is what
         # made a tripped breaker trip again on the next start (L1-03 / KILL-R29).
         self.consecutive_errors = 0
-        # DL-D5: nothing produces a spot `Verification` yet, so this is the honest value and the gate
-        # below is shut.  Stated as `None` rather than defaulted around, because "nobody has shown the
-        # offset" and "the offset is wrong" are the same answer to "may a signal trade this".
-        self.spot_verification: Verification | None = None
+        # DL-D5: the spot stamp measurement `beidou data spot` took against the venue, read back off
+        # the data root by `live_cmd` and handed in here.  `None` is the honest default and stays the
+        # honest answer for every caller that has no root to read - a paper run, a test, `live flatten`
+        # - because "nobody has shown the offset" and "the offset is wrong" are the same answer to "may
+        # a signal trade this".  A parameter and not a config key, for the reason `_startup` states: an
+        # operator must not be able to open this gate by editing YAML, and the only thing that may set
+        # it is a `Verification` re-derived from the counts of a measurement somebody actually ran.
+        self.spot_verification: Verification | None = spot_verification
         self.missed_rebalances = 0
         self.startup_seconds = 0.0
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
@@ -1494,10 +1499,19 @@ def spot_refusal(*, needs_spot: Sequence[str], verification: Verification | None
     builds the RESEARCH panel too, and a gate there would have made the basis leaf unminable rather
     than untradeable, which is a different rule than the one anybody wrote down.
 
-    Fail-closed, and the closure is the current state rather than a placeholder: `beidou_data.spot`
-    records a real measurement (744/744 bars at lag 0, 0/743 one bar either way), but a sentence in a
-    docstring is not a `Verification`, and `admits_live_signal` is deliberately unable to read one.
-    The path to opening it is therefore a measurement someone runs, not an edit someone makes.
+    Fail-closed, and until 2026-09-09 permanently so: `beidou_data.spot` recorded a real measurement
+    (744/744 bars at lag 0, 0/743 one bar either way) and a sentence in a docstring is not a
+    `Verification`, which `admits_live_signal` is deliberately unable to read.  What opens it now is
+    still a measurement someone runs rather than an edit someone makes - `beidou data spot` re-takes it
+    against the venue and writes the counts to `spot_alignment.json`, and `alignment.read_spot_verification`
+    re-derives the verdict from those counts instead of believing the one written beside them.
+
+    What this gate does NOT assert, and the distinction matters because the two failures look alike from
+    here: that the LIVE panel carries a spot column at all.  `AlphaModel.targets` builds its panel from
+    the bars the market-data port supplies and nothing supplies spot to it, so a basis strategy that got
+    past this gate would raise `ExprError` from `_required_spot` on its first cycle.  Loud, immediate,
+    and at startup rather than at some later bar - which is why this refusal is about the offset and the
+    other half is a wiring job (DL-D5 block 4) rather than a second clause here that would have to guess.
 
     Only `spot_close` is asked about.  `Basis` is the sole spot reader and reads only the close, and
     admitting a column on its neighbours' evidence is precisely the fourth refusal `admits_live_signal`

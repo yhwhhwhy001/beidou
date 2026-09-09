@@ -22,6 +22,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, resolve_ledger_path
 from beidou_cli import live, report
+from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore
 from beidou_governance.policy import policy_digest
@@ -339,6 +340,12 @@ def live_run(
         # DL-Q6: the loop records the metrics it could read, which is what makes research and live one
         # source rather than two (KILL-Q11).
         metrics_store=MetricsStore(data_root, kind="metrics_snapshot"),
+        # DL-D5 / RISK-G3: the spot stamp measurement `beidou data spot` last wrote to THIS root, with
+        # its verdict re-derived from its own counts.  Read here rather than in the engine because the
+        # engine must not learn where data lives - and read from the data root rather than from the
+        # profile, so the loop is authorised by the same ingest that produced the bars it trades on.
+        # `None` when no measurement was ever taken here, which is the refusal `spot_refusal` prints.
+        spot_verification=read_spot_verification(data_root),
         # Read always, write only from the account's own process; see `trades_the_account`.
         record_metrics=trades_the_account(
             dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override

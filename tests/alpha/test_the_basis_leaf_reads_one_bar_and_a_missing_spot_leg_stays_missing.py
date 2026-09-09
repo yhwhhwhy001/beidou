@@ -278,7 +278,8 @@ def test_a_panel_counts_the_symbols_that_actually_have_a_spot_leg() -> None:
 
 
 def test_a_spot_reading_strategy_is_refused_at_startup_until_the_offset_has_been_shown() -> None:
-    """Fail-closed, and closed today: nothing produces a spot `Verification`, so the gate is shut.
+    """Fail-closed on a root nobody measured, which was every root until `beidou data spot` took the
+    measurement (see `tests/data/test_the_spot_stamp_measurement_is_taken_and_recorded.py`).
 
     "Nobody has shown the offset" and "the offset is wrong" are the same answer to "may this trade".
     """

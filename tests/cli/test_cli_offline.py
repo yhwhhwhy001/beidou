@@ -679,6 +679,121 @@ def test_mine_narrows_the_space_instead_of_searching_a_family_the_panel_cannot_a
     assert not any("basis" in row["expression"] for row in payload["candidates"])
 
 
+def _store_spot_from_fixtures(august_dir: Path, root: Path) -> None:
+    """The same August bars one market over, each symbol at its own discount, plus the map pairing them.
+
+    A DIFFERENT discount per symbol and not one shared constant: `basis` is a level whose zero
+    no-arbitrage fixes in the same place for every symbol, so a single ratio would make the leaf
+    identical across the panel and `cross_sectional_rank` would rank ties.  The family would enumerate
+    and score nothing, which looks from the report exactly like the defect these tests are about.
+    """
+    from beidou_data.spot import SpotMapping, write_spot_map
+    from beidou_data.store import SPOT_KLINE_KIND
+
+    store = KlineStore(root, kind=SPOT_KLINE_KIND)
+    for index, symbol in enumerate(SYMBOLS):
+        frame = pd.read_parquet(august_dir / symbol / "1h.parquet")
+        frame["close_time"] = frame["open_time"] + 3_600_000 - 1
+        for column in ("open", "high", "low", "close"):
+            frame[column] = frame[column] * (1.0 - 0.001 * (index + 1))
+        store.append(symbol, "1h", frame)
+    write_spot_map(root, {symbol: SpotMapping(symbol, symbol, 1.0) for symbol in SYMBOLS})
+
+
+def _basis_candidate() -> Candidate:
+    """The simplest shape that reads spot: `cs_rank(basis / vol(48))`, pinned by its own predicate."""
+    return next(c for c in enumerate_candidates(include_basis=True).candidates if c.expr.reads_spot())
+
+
+def test_mine_searches_the_basis_family_once_the_root_carries_spot(
+    tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path
+) -> None:
+    """The positive control for the narrowing above, and the DL-D5 defect stated as a test.
+
+    `searched_basis = panel.spot_symbols > 0` was right the whole time; what was wrong was that `_load`
+    built no spot store, so no panel `mine` could construct carried spot and the predicate answered
+    False on every run.  Eighteen shapes, never enumerated, and the artefact said so truthfully - which
+    is why it survived: `include_basis: false` reads as "the family lost", not as "nobody asked it".
+    """
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+    _store_spot_from_fixtures(august_dir, root)
+    out = tmp_path / "reports"
+
+    code, output, payload = _mine(root, out, "--no-funding", "--no-include-funding")
+
+    assert code == 0, output
+    assert payload["run"]["include_basis"] is True
+    assert payload["run"]["spot_symbols"] == len(SYMBOLS)
+    assert "the basis family is neither searched" not in output
+
+    # Charged as well as searched: the 18 shapes are hypotheses and they raise the bar for everything
+    # promoted out of this run.  Pinned to the enumerator, so "the family grew" cannot pass as "the
+    # panel changed".
+    without_basis = enumerate_candidates(include_funding=False, include_basis=False)
+    with_basis = enumerate_candidates(include_funding=False, include_basis=True)
+    assert payload["declared_trials"] == with_basis.evaluated
+    assert with_basis.evaluated - without_basis.evaluated == 18
+    scored = [row for row in payload["candidates"] if "basis" in row["expression"]]
+    assert scored, "the family was declared searched and left no row"
+    assert not any(row.get("error") for row in scored), [row.get("error") for row in scored]
+
+
+def test_validate_loads_spot_only_for_a_strategy_that_declares_it_reads_spot(
+    tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path
+) -> None:
+    """`validate` is where a mined candidate becomes evidence, so this is the seam the shortlist walks
+    into.  Both directions are asserted: the same command on a root with no spot must FAIL, because a
+    guard that cannot be observed to bite is one nobody can tell is wired."""
+    from beidou_cli.research_cmd import _wants_metrics, _wants_spot
+
+    basis = _basis_candidate()
+    _resolve_mined(f"mined_{basis.hash}", "")
+    assert _wants_spot(f"mined_{basis.hash}", {}) is True
+    assert _wants_metrics(f"mined_{basis.hash}", {}) is False, "spot must not drag the metrics alignment in"
+    assert _wants_spot("tsmom", {}) is False
+
+    def _validate(root: Path) -> tuple[int, str]:
+        result = CliRunner().invoke(
+            main,
+            [
+                "research",
+                "validate",
+                "--strategy",
+                f"mined_{basis.hash}",
+                "--root",
+                str(root),
+                "--symbols",
+                ",".join(SYMBOLS),
+                "--out",
+                str(tmp_path / "reports"),
+                "--no-funding",
+                "--folds",
+                "2",
+                "--min-train",
+                "300",
+                "--purge",
+                "5",
+                "--cpcv-groups",
+                "3",
+                "--min-history",
+                "0",
+            ],
+        )
+        return result.exit_code, str(result.output) + str(result.exception)
+
+    bare = tmp_path / "bare"
+    _store_from_fixtures(august_dir, bare)
+    code, output = _validate(bare)
+    assert code != 0 and "does not carry" in output, output
+
+    carrying = tmp_path / "carrying"
+    _store_from_fixtures(august_dir, carrying)
+    _store_spot_from_fixtures(august_dir, carrying)
+    code, output = _validate(carrying)
+    assert code == 0, output
+
+
 def _store_with_balanced_flow(august_dir: Path, root: Path) -> None:
     """The August bars plus a quote volume whose taker flow is exactly balanced.
 

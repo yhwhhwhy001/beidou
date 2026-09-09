@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ import click
 import pandas as pd
 
 from beidou_cli import data
+from beidou_data.alignment import verify_spot_contract, write_spot_verification
 from beidou_data.archive import ArchiveClient, Month
 from beidou_data.binance_public import AsyncPublicClient, PublicClient
 from beidou_data.metrics_archive import MetricsArchiveClient, sync_metrics
@@ -27,6 +29,7 @@ from beidou_data.pool import (
 from beidou_data.spot import (
     SPOT_MARKET,
     SpotClient,
+    SpotMapping,
     map_universe,
     measure_alignment,
     write_spot_map,
@@ -151,6 +154,62 @@ def data_metrics(root: str, symbols: str, start: str, end: str, workers: int) ->
         click.echo(f"{symbol}: {rows if rows is not None else store.load(symbol).shape[0]} rows stored, {moved}")
 
 
+def _record_spot_contract(
+    mappings: Mapping[str, SpotMapping],
+    *,
+    root: str,
+    interval: str,
+    now_ms: int,
+    archive: ArchiveClient,
+    public: SpotClient,
+) -> None:
+    """RISK-G3's measurement for the spot feed, written where the live loop looks for it (DL-D5).
+
+    ONE symbol and one complete month, not every symbol: the stamp convention is a property of the
+    FEED, and 362 pairs of downloads would say the same thing 362 times at 362 times the cost.  Which
+    symbol was measured goes into the file rather than being left to be guessed, and BTCUSDT is
+    preferred when it is mapped for the reason `verify_stamp_offset` answers UNVERIFIABLE on a flat
+    sample: the rival offsets have to be REFUTED, which takes a series that moves every bar, and the
+    deepest book is the one that always does.
+
+    The last COMPLETE month, because the current month's file does not exist yet - the archive is
+    published monthly, so sampling `Month.of_ms(now)` would 404 on every run and the record would never
+    be written at all.
+
+    A failure here is reported and never raises.  The ingest above has already been paid for, and a run
+    whose measurement could not be taken must leave the previous record alone rather than overwrite a
+    real measurement with a network error.  That cannot open anything it should not: fail-closed lives
+    at the READ side, where a root with no record refuses, so silence here only ever keeps a gate shut.
+    """
+    listed = sorted({mapping.spot for mapping in mappings.values() if mapping.spot is not None})
+    if not listed:
+        return
+    symbol = "BTCUSDT" if "BTCUSDT" in listed else listed[0]
+    month = Month.of_ms(Month.of_ms(now_ms).start_ms() - 1)
+    try:
+        archived = archive.fetch_month(symbol, interval, month, SPOT_MARKET)
+        if archived is None or archived.empty:
+            click.echo(f"spot contract: NOT MEASURED - the archive has no {symbol} {interval} for {month}")
+            return
+        sampled = public.klines_range(symbol, interval, month.start_ms(), month.end_ms())
+        verification = verify_spot_contract(archived, sampled)
+    except Exception as exc:
+        click.echo(f"spot contract: NOT MEASURED - {type(exc).__name__}: {exc}")
+        return
+    path = write_spot_verification(
+        root,
+        verification,
+        {
+            "symbol": symbol,
+            "interval": interval,
+            "sample": str(month),
+            "measured_at": datetime.fromtimestamp(now_ms / 1000, tz=UTC).isoformat(),
+            "measured_at_ms": now_ms,
+        },
+    )
+    click.echo(f"spot contract: {verification.verdict} - {verification.reason} ({symbol} {month}) -> {path}")
+
+
 @data.command("spot")
 @click.option("--universe", "universe_path", default="config/universe.yaml", show_default=True)
 @click.option("--root", default=".beidou/data", show_default=True, help="parquet store root")
@@ -168,6 +227,15 @@ def data_spot(universe_path: str, root: str, symbols: str, interval: str, start:
     The alignment check runs every time rather than behind a flag.  T-D5-1 is a claim about two live
     series ("same grid, no offset, right multiplier"), and a claim that is only tested against fixtures
     is a claim about the fixtures; this is the one place both real series are on disk together.
+
+    So is the OTHER check, and the two answer different questions about the same pair of markets.
+    ``measure_alignment`` asks whether this perpetual is paired with the right spot symbol at the right
+    unit - a per-symbol question about the mapping.  ``verify_spot_contract`` asks whether the spot
+    feed's own two sources agree about what their timestamps MEAN - one question about the feed, which
+    is RISK-G3's, and the one `beidou_live.engine.spot_refusal` holds a basis strategy to.  Both run
+    here because this command is the only place that has the archive and REST open at once; the second
+    lands in ``spot_alignment.json``, which is what turns a measurement into something the live loop
+    can read.  Without it that gate is shut, correctly, and no candidate reading spot can ever trade.
     """
     config = UniverseConfig.from_mapping(load_yaml(universe_path))
     history_start = Month.parse(start or config.history_start)
@@ -200,6 +268,7 @@ def data_spot(universe_path: str, root: str, symbols: str, interval: str, start:
             note = " NOT LISTED" if report.not_listed else ""
             scale = "" if mapping.multiplier == 1.0 else f" x{mapping.multiplier:g}"
             click.echo(f"{perp} -> {mapping.spot}{scale}: {report.total_rows} rows{note} {'; '.join(report.errors)}")
+        _record_spot_contract(mappings, root=root, interval=interval, now_ms=now_ms, archive=archive, public=client)
     for perp, mapping in sorted(mappings.items()):
         if mapping.spot is None:
             continue
