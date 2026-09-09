@@ -345,11 +345,11 @@ def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
     have edge; a candidate that fails has hit a wiring or venue problem, and reading that as evidence
     against the sleeve is the mistake this command's own docstring exists to prevent.
     """
-    shadow = load_jsonl(Path(shadow_dir) / "cycles.jsonl")
-    baseline = load_jsonl(Path(state_dir) / "cycles.jsonl")
+    shadow = _rows(Path(shadow_dir) / "cycles.jsonl")
+    baseline = _rows(Path(state_dir) / "cycles.jsonl")
     if not shadow:
         raise click.ClickException(f"no shadow record at {shadow_dir}/cycles.jsonl; run deploy/run_shadow.sh first")
-    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals)
+    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=CONSTRUCTION_ALIASES)
     for check in result.checks:
         click.echo(f"{'PASS' if check.passed else 'FAIL'}  {check.name:22s} {check.detail}")
     click.echo(f"{'HEALTHY' if result.healthy else 'UNHEALTHY'}  {result.soaked} cycles soaked")

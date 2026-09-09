@@ -215,3 +215,57 @@ def test_a_second_promotion_inside_one_window_is_still_refused() -> None:
     )
     assert not admission.allowed
     assert any("R4" in reason for reason in admission.reasons), admission.reasons
+
+
+# --- the command, because a command nothing exercises is the defect this file is about ----------
+
+
+def test_the_canary_command_reads_a_soak_and_says_pass_or_fail(tmp_path: Any) -> None:
+    """`governance canary` shipped broken on its first run: `load_jsonl` takes text, not a Path.
+
+    Nothing caught it, because adding a command to make a module reachable and then not exercising
+    the command is the same defect one level out.  So the command has a test, and the test drives it
+    the way the operator does - through the CLI, on files.
+    """
+    import json
+
+    from click.testing import CliRunner
+
+    from beidou_cli.governance_cmd import canary_cmd
+
+    shadow, live = tmp_path / "shadow", tmp_path / "live"
+    for directory in (shadow, live):
+        directory.mkdir()
+    rows = [
+        {"at": f"2026-10-01T{hour:02d}:00:00+00:00", "phase": "OK", "construction": "aaaa", "universe": ["BTCUSDT"]}
+        for hour in range(24)
+    ]
+    (live / "cycles.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    missing = CliRunner().invoke(canary_cmd, ["--shadow-dir", str(shadow), "--state-dir", str(live)])
+    assert missing.exit_code != 0 and "no shadow record" in missing.output + str(missing.exception)
+
+    # a short soak: every deployment check passes, and `soak` fails on the count alone
+    (shadow / "cycles.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    short = CliRunner().invoke(canary_cmd, ["--shadow-dir", str(shadow), "--state-dir", str(live)])
+    assert "FAIL  soak" in short.output and "24/168" in short.output
+    assert "UNHEALTHY" in short.output and short.exit_code == 1
+    assert short.output.count("PASS") == 6, short.output
+
+
+def test_a_renamed_field_does_not_fail_the_canary_for_a_deployment_that_did_not_change() -> None:
+    """`construction_stable` counted RAW digests, and a no-op rename moves the hash.
+
+    Measured 2026-09-09 against the armed loop's own record: 6 distinct digests raw, 3 canonical.
+    A canary that fails a candidate for `unit_mode` being renamed is the false negative KILL-AR-04
+    warns about, arriving from the other direction.
+    """
+    from beidou_governance.canary import evaluate as evaluate_canary
+
+    rows = [
+        {"at": f"2026-10-01T{hour:02d}:00:00+00:00", "phase": "OK", "construction": "old" if hour < 12 else "new"}
+        for hour in range(200)
+    ]
+    raw = {check.name: check.passed for check in evaluate_canary(rows, rows).checks}
+    aliased = {check.name: check.passed for check in evaluate_canary(rows, rows, aliases={"new": "old"}).checks}
+    assert not raw["construction_stable"] and aliased["construction_stable"]

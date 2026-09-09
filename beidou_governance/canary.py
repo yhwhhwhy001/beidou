@@ -63,15 +63,28 @@ def evaluate(
     soak_cycles: int = SOAK_CYCLES,
     gate_refusals: int = 0,
     max_error_streak: int = 2,
+    aliases: Mapping[str, str] | None = None,
 ) -> CanaryResult:
     """The six checks of §5's L4 row, in the order a deployment fails them.
 
     ``gate_refusals`` is supplied rather than recomputed: whether the candidate registry passed the
     startup gate is a fact about a process that already ran, and asking a second implementation would
     reintroduce the divergence `promote` was careful to avoid.
+
+    ``aliases`` is `CONSTRUCTION_ALIASES`, and `construction_stable` is wrong without it: the raw
+    digest has moved six times on the armed record since 2026-09-04 while the CANONICAL construction
+    moved once, because a renamed field changes the hash and nothing else.  Measured 2026-09-09 by
+    pointing this function at the armed loop's own cycles: 6 distinct digests, and a candidate would
+    have been called unhealthy for a deployment that never changed.  Passed in rather than imported
+    so the package stays free of `beidou_live`.
     """
+    resolve = dict(aliases or {})
     decided = [row for row in shadow if row.get("phase") not in ("ERROR", "SKIPPED")]
-    digests = {str(row.get("construction")) for row in decided if row.get("construction")}
+    digests = {
+        resolve.get(str(row.get("construction")), str(row.get("construction")))
+        for row in decided
+        if row.get("construction")
+    }
     base_guard_rate = _rate([r for r in baseline if r.get("phase") not in ("ERROR", "SKIPPED")], "guard_reasons")
     guard_rate = _rate(decided, "guard_reasons")
     streak = _longest_error_streak(shadow)

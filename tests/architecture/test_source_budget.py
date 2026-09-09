@@ -1702,6 +1702,12 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # `beidou_alpha` returns a degenerate result on it and only a time-series or interaction term can use
 # it at all.  That is a property of the data, it is asserted in a test rather than described, and it is
 # worth knowing before a leaf is written rather than after it is backtested.
+# 2026-09-09, +13 governance: `governance canary` shipped broken on its first real run -
+# `load_jsonl` takes text and it was handed a Path - and `canary.evaluate` counted RAW construction
+# digests, so a renamed field would have failed a candidate for a deployment that did not change
+# (6 distinct raw vs 3 canonical on the armed record).  Both are the same defect this whole day is
+# about, arriving in the fix for it: a command added to make a module reachable, and then not
+# exercised.  The lines are the alias parameter and the test that drives the command through the CLI.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
@@ -1709,7 +1715,7 @@ CEILING = {
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_373,
+    "beidou_governance": 2_386,
 }
 
 
