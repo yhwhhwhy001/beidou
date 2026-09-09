@@ -1594,11 +1594,11 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "covariance_halflife": config.portfolio.covariance_halflife,
             "min_asset_vol": config.portfolio.min_asset_vol,
             "max_scalar": config.portfolio.max_scalar,
-            # v4 (2026-09-09).  `AlphaModel.eligible` excludes any symbol with fewer than this many
-            # observed bars - "new listings are excluded", in its own words - so it decides WHICH
-            # SYMBOLS the book may hold, and a book holding different symbols is a different book.
-            # Found by asking whether the new-listing strategy (#27) was implementable: it is not
-            # without lowering this, and lowering it would have moved no digest.
+            # v4 (2026-09-09).  `AlphaModel.eligible` excludes any symbol with fewer than this many observed bars -
+            # "new listings are excluded", in its own words - so it decides WHICH SYMBOLS the book may hold, and a
+            # book holding different symbols is a different book; lowering it would have moved no digest.  Amended
+            # 2026-09-09: lowering it ALONE unblocks nothing (#27), because `universe.min_age_days` refuses to RANK
+            # a listing for 30 days first - measured, 0 of 799 listings are pool members inside their first 14 days.
             "min_history_bars": config.min_history_bars,
         },
         "guards": {
