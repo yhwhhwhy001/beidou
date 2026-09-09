@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      §5 L3's soak: a paper loop beside the armed one, for the seven days the
+      criterion asks for.  A soak that is not running accumulates nothing - on
+      2026-09-09 the record held two rows from one end-to-end run-through and
+      L3 had been open for a day.  A run-through is not a soak.
+      No credentials and no exchange writes: `--paper` matches in-process at
+      mainnet marks, and `--state-dir` (refused without `--dry-run`/`--paper`)
+      keeps this record out of the armed loop's.  KeepAlive for the same reason
+      the armed loop has it: a soak a crash interrupts should restart, not end.
+      Install: cp to ~/Library/LaunchAgents/ and
+      `launchctl load -w ~/Library/LaunchAgents/com.beidou.paper-l3.plist`.
+    -->
+    <key>Label</key>
+    <string>com.beidou.paper-l3</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/maguannan/beidou/deploy/run_paper_l3.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/maguannan/beidou</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/paper-l3.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/paper-l3.stderr.log</string>
+</dict>
+</plist>
