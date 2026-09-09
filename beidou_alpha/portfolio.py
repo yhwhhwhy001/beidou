@@ -20,7 +20,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import ewm_vol
+from beidou_alpha.features import ewm_vol, garch_forecast_vol
+
+VOL_MODELS = ("ewma", "garch")
+BUDGET_MODES = ("inverse_vol", "inverse_variance", "hrp")
 
 
 @dataclass(frozen=True)
@@ -34,12 +37,25 @@ class PortfolioParams:
     max_scalar: float = 3.0
     no_trade_band: float = 0.0
     no_trade_rel_band: float = 0.0
+    # Two construction OPTIONS, both off by default and both a Phase 4a change to turn on: switching
+    # either one moves every weight, so it is a construction change and resets M-010's 30-day window.
+    # They live here rather than behind a flag elsewhere so that `from_mapping` reaches them and the
+    # eventual adoption is a config edit plus evidence, not a code change under time pressure.
+    vol_model: str = "ewma"  # ewma | garch: what stage 1 divides by (#35)
+    garch_fit_bars: int = 8760  # trailing bars each GARCH re-fit sees
+    garch_refit_bars: int = 720  # bars between re-fits
+    budget_mode: str = "inverse_vol"  # inverse_vol (shipped) | inverse_variance (control) | hrp (#48)
+    hrp_refit_bars: int = 720  # bars between HRP re-clusterings
 
     def __post_init__(self) -> None:
         if self.vol_target <= 0 or self.min_asset_vol <= 0 or self.max_weight <= 0 or self.max_gross <= 0:
             raise ValueError("portfolio parameters must be positive")
         if self.no_trade_band < 0 or self.no_trade_rel_band < 0 or self.max_scalar <= 0:
             raise ValueError("no-trade bands must be >= 0 and max_scalar > 0")
+        if self.vol_model not in VOL_MODELS or self.budget_mode not in BUDGET_MODES:
+            raise ValueError(f"vol_model must be one of {VOL_MODELS} and budget_mode one of {BUDGET_MODES}")
+        if min(self.garch_fit_bars, self.garch_refit_bars, self.hrp_refit_bars) < 1:
+            raise ValueError("re-fit cadences must be at least one bar")
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> PortfolioParams:
@@ -65,22 +81,166 @@ def ewma_portfolio_vol(returns: pd.DataFrame, weights: pd.DataFrame, halflife: i
 
 
 def asset_vol(close: pd.DataFrame, params: PortfolioParams, bars_per_year: float) -> pd.DataFrame:
-    """Annualised per-symbol EWMA volatility, floored at ``min_asset_vol``: stage 1's divisor.
+    """Annualised per-symbol volatility, floored at ``min_asset_vol``: stage 1's divisor.
 
     Named rather than inlined so the live report can display the number the construction
     actually divided by.  A report that re-derives it is a report that can disagree with
     the book while both look right, and the question this exists to answer - "is sizing
     adapting to each symbol's market?" - is exactly the one a disagreement would corrupt.
+
+    ``vol_model="garch"`` swaps the EWMA level for a one-step-ahead GARCH(1,1) forecast (#35).  It
+    is off by default and the two are not the same quantity - see ``garch_forecast_vol``.
     """
-    return (ewm_vol(close, halflife=params.vol_halflife) * math.sqrt(bars_per_year)).clip(lower=params.min_asset_vol)
+    raw = (
+        garch_forecast_vol(close, fit_bars=params.garch_fit_bars, refit_bars=params.garch_refit_bars)
+        if params.vol_model == "garch"
+        else ewm_vol(close, halflife=params.vol_halflife)
+    )
+    return (raw * math.sqrt(bars_per_year)).clip(lower=params.min_asset_vol)
+
+
+def _quasi_diagonal_order(distance: np.ndarray) -> list[int]:
+    """Leaf order of a single-linkage tree - Lopez de Prado's ``getQuasiDiag``, without scipy.
+
+    ``beidou_alpha`` is pinned to numpy and pandas by ``test_import_rules``, so the linkage is
+    hand-rolled.  It is the naive O(n^3) agglomeration, which is fine here because it runs once per
+    re-cluster (720 bars apart by default) on at most a few hundred symbols, not once per bar.
+    """
+    members = {i: [i] for i in range(distance.shape[0])}
+    d = distance.astype(float).copy()
+    np.fill_diagonal(d, np.inf)
+    active = list(range(distance.shape[0]))
+    while len(active) > 1:
+        block = d[np.ix_(active, active)]
+        i, j = np.unravel_index(int(np.argmin(block)), block.shape)
+        keep, drop = active[i], active[j]
+        members[keep] = members[keep] + members[drop]
+        d[keep] = np.minimum(d[keep], d[drop])  # single linkage: nearest members define cluster distance
+        d[:, keep] = d[keep]
+        d[keep, keep] = np.inf
+        active.remove(drop)
+    return members[active[0]]
+
+
+def _cluster_variance(cov: np.ndarray, items: list[int]) -> float:
+    block = cov[np.ix_(items, items)]
+    inverse = 1.0 / np.maximum(np.diag(block), 1e-18)
+    weights = inverse / inverse.sum()
+    return float(weights @ block @ weights)
+
+
+def hrp_budget(cov: np.ndarray) -> np.ndarray:
+    """Hierarchical risk parity budget (non-negative, sums to 1) from one covariance matrix (#48).
+
+    Correlation -> distance sqrt((1-rho)/2) -> distance between those distance vectors -> single-linkage
+    order -> recursive bisection allocating between two halves by their inverse cluster variance.
+    """
+    std = np.sqrt(np.maximum(np.diag(cov), 0.0))
+    denominator = np.outer(std, std)
+    corr = np.clip(np.divide(cov, denominator, out=np.zeros_like(cov), where=denominator > 0), -1.0, 1.0)
+    d = np.sqrt(np.maximum(0.5 * (1.0 - corr), 0.0))
+    gram = d @ d.T
+    norms = np.diag(gram).copy()
+    order = _quasi_diagonal_order(np.sqrt(np.maximum(norms[:, None] + norms[None, :] - 2.0 * gram, 0.0)))
+    weights = np.ones(len(order))
+    groups = [list(range(len(order)))]
+    while groups:
+        following: list[list[int]] = []
+        for group in groups:
+            if len(group) < 2:
+                continue
+            left, right = group[: len(group) // 2], group[len(group) // 2 :]
+            variance_left = _cluster_variance(cov, [order[k] for k in left])
+            variance_right = _cluster_variance(cov, [order[k] for k in right])
+            total = variance_left + variance_right
+            share = 1.0 - variance_left / total if total > 0 else 0.5
+            weights[left] *= share
+            weights[right] *= 1.0 - share
+            following.extend([left, right])
+        groups = following
+    out = np.empty(len(order))
+    out[order] = weights
+    return out
+
+
+def _hrp_tilt(sigma: pd.DataFrame, returns: pd.DataFrame, params: PortfolioParams) -> pd.DataFrame:
+    """HRP's budget divided by the inverse-variance budget it would have used with no clustering.
+
+    Expressed as a tilt, not as a budget, because HRP changes TWO things against the shipped path and
+    a single number that moves both cannot say which one paid: it allocates on inverse VARIANCE where
+    stage 1 allocates on inverse VOL, and it then tilts that by the correlation clustering.  As a tilt
+    the clustering is separable, and ``budget_mode="inverse_variance"`` is the control arm with the
+    tilt held at exactly 1.
+
+    The CORRELATION is the same causal EWMA recursion ``ewma_portfolio_vol`` runs, so the clustering and
+    the stage-2 scalar cannot disagree about what co-moves with what.  The DIAGONAL is not: the block is
+    rebuilt as ``corr * outer(sigma, sigma)`` from the floored ``asset_vol``, for two reasons that turned
+    out to be the same reason.  Consistency - the tilt divides by the inverse-variance budget it is a
+    tilt on, and dividing by a different variance estimate than the one it multiplies is not a tilt at
+    all.  And arithmetic: measured on the point-in-time panel, the raw EWMA diagonal contains symbols
+    whose variance rounds to zero (a window with no price change at all), which handed one name ~100% of
+    the inverse-variance budget and produced tilts of 1e86 for everything else.  ``min_asset_vol`` is
+    already the construction's answer to "this number is too small to divide by"; HRP now uses it too.
+
+    Re-clustered every ``hrp_refit_bars``; between re-clusters the tilt is held while the
+    inverse-variance part it multiplies keeps updating every bar, so a symbol that lists mid-block is
+    sized (tilt 1) rather than dropped.
+    """
+    r = returns.fillna(0.0).to_numpy(dtype=float)
+    scale = sigma.to_numpy(dtype=float)
+    n_bars, n_symbols = r.shape
+    lam = math.exp(-math.log(2.0) / max(params.covariance_halflife, 1))
+    cov = np.zeros((n_symbols, n_symbols))
+    tilt = np.ones((n_bars, n_symbols))
+    current = np.ones(n_symbols)
+    for t in range(n_bars):
+        row = r[t]
+        cov = lam * cov + (1.0 - lam) * np.outer(row, row)
+        if t >= max(params.covariance_halflife, 2) and t % params.hrp_refit_bars == 0:
+            active = np.flatnonzero(np.isfinite(scale[t]) & (scale[t] > 0) & (np.diag(cov) > 0))
+            if len(active) >= 2:
+                block = cov[np.ix_(active, active)]
+                std = np.sqrt(np.diag(block))
+                width = scale[t][active]
+                inverse = 1.0 / width**2
+                current = np.ones(n_symbols)
+                current[active] = hrp_budget(block / np.outer(std, std) * np.outer(width, width)) / (
+                    inverse / inverse.sum()
+                )
+        tilt[t] = current
+    return pd.DataFrame(tilt, index=returns.index, columns=returns.columns)
+
+
+def risk_budget(sigma: pd.DataFrame, returns: pd.DataFrame, params: PortfolioParams) -> pd.DataFrame:
+    """Cross-sectional risk budget, rows summing to 1 over the symbols that have a volatility yet.
+
+    Stage 1's ``vol_target / sigma_i`` IS ``vol_target * b_i * sum_j(1 / sigma_j)`` with ``b`` the
+    normalised inverse-vol budget, so every mode below keeps stage 1's TOTAL budget and changes only
+    how it is split.  That is what makes the comparison a comparison: leave the total free and the two
+    arms differ in how often ``max_weight`` and ``max_gross`` bind, which is not what #48 is about.
+    """
+    inverse = 1.0 / sigma if params.budget_mode == "inverse_vol" else 1.0 / sigma.pow(2)
+    if params.budget_mode == "hrp":
+        inverse = inverse * _hrp_tilt(sigma, returns, params)
+    total = inverse.sum(axis=1)
+    return inverse.div(total.where(total > 0), axis=0)
 
 
 def build_weights(
     targets: pd.DataFrame, close: pd.DataFrame, bars_per_year: float, params: PortfolioParams
 ) -> pd.DataFrame:
     aligned = targets.reindex(index=close.index, columns=close.columns)
-    stage1 = (aligned.fillna(0.0) * (params.vol_target / asset_vol(close, params, bars_per_year))).fillna(0.0)
+    sigma = asset_vol(close, params, bars_per_year)
     returns = close.pct_change()
+    if params.budget_mode == "inverse_vol":
+        # Algebraically this is the general branch below with b = inverse-vol, and it is kept literal
+        # anyway: the two agree to about 1e-16 relative, not bit for bit, and the shipped construction
+        # is compared bit for bit against a frozen baseline.  A default that is "the same modulo
+        # rounding" is a default that has been changed.
+        stage1 = (aligned.fillna(0.0) * (params.vol_target / sigma)).fillna(0.0)
+    else:
+        budget = risk_budget(sigma, returns, params).mul((1.0 / sigma).sum(axis=1), axis=0)
+        stage1 = (aligned.fillna(0.0) * budget * params.vol_target).fillna(0.0)
     portfolio_vol = ewma_portfolio_vol(returns, stage1, params.covariance_halflife, bars_per_year)
     scalar = (params.vol_target / portfolio_vol.where(portfolio_vol > 1e-12)).clip(upper=params.max_scalar).fillna(0.0)
     stage2 = stage1.mul(scalar, axis=0).clip(-params.max_weight, params.max_weight)

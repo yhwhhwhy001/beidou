@@ -1447,8 +1447,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
 # against the other read a sleeve that WAS in the record as absent from it - the same book-vs-strategy
 # mismatch this command got wrong once already, in the other direction.
+# 2026-09-09, +256 alpha, and the sentence the rule requires: block 4's two construction options, P28's
+# GARCH(1,1) divisor (#35) in `features` and the HRP budget (#48) in `portfolio`, both default-off.  The
+# raise lands on `beidou_alpha`, which is the side the 90% effort target wants, and it buys the ability to
+# MEASURE two candidates rather than argue about them - `vol_target` sat unexamined for a year because
+# nothing could price the alternative.  Two thirds of the addition is docstring, and specifically the parts
+# a later reader would delete as ceremony: why the GARCH fit is a hand-rolled 2-parameter grid rather than
+# an `arch` dependency (`test_import_rules` pins this package to numpy and pandas); why the forecast is
+# NaN before the first re-fit boundary instead of being filtered with block 0's parameters; why HRP is
+# expressed as a TILT on an inverse-variance control arm instead of as a budget of its own (it changes two
+# things at once and one number cannot say which paid); and why `_hrp_tilt` rebuilds the covariance
+# diagonal from the floored `asset_vol` - the raw EWMA diagonal contains symbols whose variance rounds to
+# zero, which handed one name ~100% of the inverse-variance budget and produced tilts of 1e86.  Deleting
+# any of those four comments restores a bug that looks like a simplification.
 CEILING = {
-    "beidou_alpha": 7_150,
+    "beidou_alpha": 7_406,
     "beidou_live": 6_540,
     "beidou_cli": 4_264,
     "beidou_data": 1_889,
