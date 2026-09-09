@@ -69,6 +69,7 @@ from beidou_cli import research
 from beidou_data.manifest import build_manifest
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import FundingStore, KlineStore, MetricsStore
+from beidou_governance.policy import Policy
 from beidou_live.composition import (
     build_model,
     cost_model,
@@ -714,6 +715,17 @@ def research_validate(
     ).portfolio.__dict__
     ledger_path = resolve_ledger_path(out=out)
     ledger_lines = ledger_path.read_text(encoding="utf-8").splitlines() if ledger_path.exists() else []
+    # R0 is a CALIBER, not a number, so the field that names it has to be the thing this line obeys.
+    # `gate_scope` sat in `policy_digest()` - promising that an edit to it would be visible - while
+    # `ledger_scope` was called unconditionally, so editing it moved the digest and changed nothing.
+    # Refusing rather than silently falling back: the alternative caliber fails the incumbent on an
+    # honest grid (KILL-AR-01), which is a decision to take deliberately or not at all.
+    scope = Policy().gate_scope
+    if scope != "per_strategy_bucket":
+        raise click.ClickException(
+            f"policy.gate_scope is {scope!r} and this command only implements 'per_strategy_bucket'.  "
+            "Changing R0's caliber is a rule-version change with its own evidence, not a flag."
+        )
     prior_records = parse_ledger(ledger_lines, ledger_scope(strategy))
     # R0: the other caliber, reported and never applied.  The gate is the strategy bucket; this says what
     # the whole library would have asked for, so the choice stays arguable instead of merely stated.
@@ -763,6 +775,12 @@ def research_validate(
     # `decisions[best_key]`, not `results[best_key].weights.shift(-1)`: the executed frame is post-guard,
     # so inverting it would re-price a book the guards had already trimmed and then trim it again.
     best_weights = decisions[best_key]
+    # DL-C1, 2026-09-09: `impact=impact` here and in `slippage_stress` below.  Without it a report whose
+    # header says `impact_model: {capital: 100000}` had its walk-forward priced under the square-root law
+    # and `cost_stress` priced flat - and `cost_stress.x2` is a GATE that `verdict.decide` reads, so the
+    # artefact's own label did not describe the number the verdict turned on.  The error ran in the
+    # permissive direction (flat is cheaper than flat+impact), which is the direction that matters.
+    # The multiplier still scales `turnover_bps` alone: impact is not a fee and does not scale with one.
     stress = cost_stress(
         {
             multiplier: run_backtest(
@@ -771,6 +789,7 @@ def research_validate(
                 CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
                 execution=execution,  # type: ignore[arg-type]
                 guards=book_guards,
+                impact=impact,
             ).portfolio_net
             for multiplier in (1.0, 1.5, 2.0)
         },
@@ -789,6 +808,7 @@ def research_validate(
                 CostModel(total, cost.carry_bps_per_bar, cost.use_funding),
                 execution=execution,  # type: ignore[arg-type]
                 guards=book_guards,
+                impact=impact,
             ).portfolio_net
             for level, total in levels.items()
         },
@@ -858,8 +878,14 @@ def research_validate(
         # reads `oos_selection` and nothing else, and a test holds that.  Two numbers rather than one
         # because "which N" was the single most consequential open choice in the governance rules, and an
         # artefact that carries only the caliber that was chosen cannot be used to re-open the choice.
-        "oos_selection_whole_library": oos_selection_threshold(
-            wf.oos_returns.to_numpy(dtype=float), n_trials=whole_library, bars_per_year=bpy
+        **(
+            {
+                "oos_selection_whole_library": oos_selection_threshold(
+                    wf.oos_returns.to_numpy(dtype=float), n_trials=whole_library, bars_per_year=bpy
+                )
+            }
+            if Policy().report_whole_library_n
+            else {}
         ),
         "cpcv": cpcv,
         "multiple_testing": mt,

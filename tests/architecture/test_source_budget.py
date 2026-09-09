@@ -1403,14 +1403,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # disk - R9 put the number in every row to make a rule edit visible and nothing read it back.  It found
 # a real one on its first run: policy 0.3.0 landed 04:48Z, the loop kept reporting 0.2.0's
 # `753638a519ac`, and the restart that closed the gap at 05:08Z was for an unrelated reason.
+# 2026-09-09, +2 live / +26 cli / +15 gov: four MORE policy fields that nothing read.  A sweep of every
+# `Policy` field against the production tree - written after the R8 ladder turned out to have no caller -
+# found `gate_scope`, `report_whole_library_n`, `record_digest_every_cycle` and `no_decision_on_rebaseline`
+# in the same state.  None of them was a behaving bug: each hard-coded value happened to match its
+# declared one.  The hazard is what `policy_digest()` PROMISES - change a field and the record shows it -
+# which for these four was false in the worst direction: the digest moved, the operator read a rule
+# version bump, and the machine did exactly what it did before.  Now all four are consulted, and
+# `tests/governance/test_every_threshold_has_a_consumer.py` is the general guard, which is the part
+# worth the lines: it would have caught the ladder, and it catches the next one.
+# The cli growth also carries DL-C1's stress fix (`impact=impact` in `cost_stress`/`slippage_stress`) and
+# the gov growth the replay's capacity-arm attribution, so a report priced at 100k against an 11k book is
+# read as the sensitivity run it is rather than as a promotion the operator skipped.
 CEILING = {
     "beidou_alpha": 7_113,
-    "beidou_live": 6_507,
-    "beidou_cli": 4_224,
+    "beidou_live": 6_509,
+    "beidou_cli": 4_250,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_077,
+    "beidou_governance": 2_092,
 }
 
 

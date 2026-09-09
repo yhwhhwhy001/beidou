@@ -90,17 +90,21 @@ def _parsed(value: Any) -> datetime | None:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
-def flow_contaminated(row: Mapping[str, Any]) -> str | None:
+def flow_contaminated(row: Mapping[str, Any], policy: Policy | None = None) -> str | None:
     """Why this cycle's attributed P&L cannot be read as trading, or None when it can.
 
     Two independent signals, because they fail in different directions: a non-zero flow total means
     money entered or left inside the attributed window, and `rebaselined` means the engine itself
     decided the equity mark it was measuring against had moved.  Either one is enough.
+
+    The rebaseline clause reads `policy.no_decision_on_rebaseline` rather than assuming it: that field
+    is inside `policy_digest()`, so the digest promised an edit to it would be visible, and until this
+    argument existed an edit changed nothing at all.
     """
     flows = row.get("external_flows")
     if not isinstance(flows, Mapping):
         return None
-    if flows.get("rebaselined"):
+    if flows.get("rebaselined") and (policy or Policy()).no_decision_on_rebaseline:
         return "equity was rebaselined on an external flow"
     try:
         total = float(flows.get("total", 0.0) or 0.0)
@@ -204,7 +208,7 @@ def tenure(
             strategy = str(probe["strategy"])
         if stopped_at is not None or probe is None or not probe.get("stop"):
             continue
-        contamination = flow_contaminated(row)
+        contamination = flow_contaminated(row, policy)
         if contamination is not None:
             skipped.append(Skipped(at=str(row.get("at")), why=f"T-G6\u2032-3: {contamination}"))
             continue
