@@ -76,7 +76,7 @@ async def _run(panel: Panel, tmp_path: Path, *, loss: float | None, flows: dict 
             {"bar_open_ms": bar, "until_ms": clock.now_ms(), "by_strategy": {"breakout": loss, "tsmom": 40.0}}
         )
     market.cursor += 1
-    record = await engine.run_cycle(bar + 3_600_000)
+    await engine.run_cycle(bar + 3_600_000)
     if flows is not None:
         # Rewrite the PERSISTED row, not the dict `run_cycle` returned: the engine adds `at` when it
         # appends, so serialising the return value drops the timestamp and `tenure` then skips the row

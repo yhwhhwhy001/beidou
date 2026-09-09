@@ -456,7 +456,7 @@ def research_backtest(
         range_end=str(result.weights.index[-1]),
         symbols=len(panel.symbols),
         run_id="",
-        construction_digest=_construction_digest(report["portfolio"], cost, execution),
+        construction_digest=_construction_digest(report["portfolio"], cost, execution, impact),
         symbol_set_hash=_symbol_set_hash(panel.symbols),
         overlay_digest=_overlay_digest(book_guards),
     )
@@ -743,7 +743,7 @@ def research_validate(
         # than a signature matches nothing, which turns D-024's "a replay is one trial" into silent
         # double charging.
         current_context=(
-            _construction_digest(_run_portfolio, cost, execution),
+            _construction_digest(_run_portfolio, cost, execution, impact),
             # The overlay slot used to be a hardcoded "" because `validate` applied no overlays.  It does
             # now, so the exclusion has to name the same stack the ledger rows are written with - a
             # signature that does not match its own rows excludes nothing and charges the run twice.
@@ -980,7 +980,7 @@ def research_validate(
                     range_end=str(common_index[-1]),
                     symbols=len(panel.symbols),
                     run_id=path.stem,
-                    construction_digest=_construction_digest(_run_portfolio, cost, execution),
+                    construction_digest=_construction_digest(_run_portfolio, cost, execution, impact),
                     symbol_set_hash=_symbol_set_hash(panel.symbols),
                     search_space_version=_search_space_version(strategy, grids),
                     # D-024: the same params under a different overlay stack are a different trial, not a
@@ -1497,15 +1497,26 @@ def _preregistration(commit: str) -> dict[str, str] | None:
     return {"commit": sha, "committed_at": committed_at}
 
 
-def _construction_digest(portfolio: Mapping[str, Any], cost: Any, execution: str) -> str:
+def _construction_digest(portfolio: Mapping[str, Any], cost: Any, execution: str, impact: Any = None) -> str:
     """DL-K1: what turned a signal into weights, and what it cost to hold them.
 
     The research twin of D-026's live ``construction_fingerprint``, for the same reason it exists
     there: the same parameters under a different vol target, a different band or a different cost
     model are different trials, and the old signature could not tell them apart - so P10 cell B moving
     the band from 0.25 to 0.40 re-priced every weight in the book while the ledger recorded a replay.
+
+    ``impact`` joined it on 2026-09-09 and only when it is ON.  DL-C1's first two runs re-priced tsmom
+    under the square-root law and the ledger folded both onto the flat rows as replays: `spent` did not
+    move, so the DSR denominator did not either - and §19 had written down that adopting the cost model
+    would charge rows.  Running one configuration under two cost models and keeping whichever passes is
+    the selection DSR exists to expose, so it has to be counted.  Conditional because unconditional
+    would give every future FLAT run a signature no archived row shares, which would charge genuine
+    replays as new trials - the same shape, in the other direction.
     """
-    return _short_digest({"portfolio": dict(portfolio), "costs": dict(vars(cost)), "execution": execution})
+    payload: dict[str, Any] = {"portfolio": dict(portfolio), "costs": dict(vars(cost)), "execution": execution}
+    if impact is not None and getattr(impact, "enabled", False):
+        payload["impact"] = dict(vars(impact))
+    return _short_digest(payload)
 
 
 def _symbol_set_hash(symbols: Sequence[str]) -> str:

@@ -1436,6 +1436,12 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # would have vanished from the path, which understates the drawdown - the permissive direction.  Zero on
 # today's record, so this reports rather than fixes; "it is zero today" is not a property, and the day it
 # stops being zero has to be visible.
+# 2026-09-09, +11 cli: the impact model joined the ledger's trial signature, conditionally.  DL-C1's two
+# impact-priced tsmom runs folded onto the flat rows as replays - `window_spend().spent` never moved off
+# 169 - so the DSR denominator did not count them, while §19 had written down that adopting the cost
+# model would charge rows.  One configuration under two cost models, keeping whichever passes, is the
+# selection DSR exists to expose.  Conditional on `enabled` so an archived flat row keeps its signature;
+# unconditional would charge every genuine replay as a new trial, the same defect mirrored.
 # 2026-09-09, +3 cli: `governance tenure`'s "main -> probe cannot fire from the record" note was stale
 # for hours after the main book got a stop and started appearing in the record.  `books_in` is keyed on
 # the BOOK ("main") and `governance_state.json` on the entry id ("tsmom"), so comparing one namespace
@@ -1444,7 +1450,7 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 CEILING = {
     "beidou_alpha": 7_150,
     "beidou_live": 6_540,
-    "beidou_cli": 4_253,
+    "beidou_cli": 4_264,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

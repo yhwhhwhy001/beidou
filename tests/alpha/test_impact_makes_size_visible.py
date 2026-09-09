@@ -155,3 +155,25 @@ def test_the_stress_arms_carry_the_charge_the_headline_carries() -> None:
         for m in (1.0, 1.5, 2.0)
     ]
     assert max(charges) - min(charges) < 1e-9, f"the impact charge scaled with the fee multiplier: {charges}"
+
+
+def test_a_priced_run_is_a_different_trial_from_a_flat_one() -> None:
+    """The ledger folded DL-C1's impact-priced tsmom onto the flat rows as a replay, so `spent` never moved.
+
+    Running one configuration under two cost models and keeping whichever passes is the selection DSR
+    exists to expose, and §19 had already written down that adopting the cost model would charge rows.
+    Conditional on `enabled`, because an unconditional field would give every future FLAT run a
+    signature no archived row shares - charging genuine replays as new trials, the same defect mirrored.
+    """
+    from beidou_cli.research_cmd import _construction_digest
+
+    portfolio = {"vol_target": 0.30, "no_trade_band": 0.002}
+    cost = CostModel(turnover_bps=7.0)
+    flat = _construction_digest(portfolio, cost, "open_to_close")
+    off = _construction_digest(portfolio, cost, "open_to_close", ImpactModel(capital=0.0))
+    priced = _construction_digest(portfolio, cost, "open_to_close", ImpactModel(capital=100_000.0))
+    bigger = _construction_digest(portfolio, cost, "open_to_close", ImpactModel(capital=1_000_000.0))
+
+    assert off == flat, "an archived flat row must keep its signature, or every replay is charged as new"
+    assert priced != flat, "an impact-priced run is a different trial"
+    assert bigger != priced, "and so is the same law at a different size"
