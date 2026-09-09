@@ -1615,11 +1615,51 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # stdout that it narrowed.  Without that line the report would carry no `basis` rows for a reason it never
 # gives, which is not distinguishable from a family that ran and lost - the exact confusion that let DL-D4
 # survive two rounds.
+# 2026-09-09, +579 data, and the sentence the rule requires: `beidou_data/onchain.py`, block 1's #31.
+# Two of the five external-API columns were researched first, and the raise buys only one of them - #28
+# (token unlocks) ends as "不可得" with no code at all, for #19's reason and with its own measurement:
+# the only free unlock schedule is one continuously-overwritten document whose ALREADY-PAST values were
+# found changing by 5.75x between the two dated captures that exist anywhere.  Not writing that
+# downloader is the larger part of this entry.
+# What the 579 buy is the first thing in this repository that consults an event-time contract in
+# production, and one refusal `alignment.py` could not have predicted.  `verify_stamp_offset` settles
+# the stamp convention - Coin Metrics and blockchain.info are two independent computations of BTC daily
+# transactions, 355/355 at the declared day offset against 97/354 and 97/355 one day either side, at a
+# tolerance that is itself measured (2% fails on the declared offset, so 5% is a number and not a
+# preference).  It cannot see the defect this feed actually has: Coin Metrics publishes a
+# `<metric>-status-time` per CELL, and BTC's exchange inflow for 2024-03-01 carries 2026-04-09 while
+# ETH's for the same day carries 2024-03-02.  Same metric, same day, two assets, availability 769 days
+# apart - so a verified offset and correct values are still unreadable-at-the-time, and the fifth
+# refusal has to be separate from the four.  That is what makes the flow columns refused and the
+# counting columns admitted, per column, on the source's own testimony rather than on judgement.
+# Most of the addition is docstring, and these are the parts a later reader will want to delete: why
+# `available_offset_ms` is TWO days and not one (`AssetEODCompletionTime` puts the vendor's own
+# completion at 26.3-29.8 h after the day OPEN on 32 asset-days, so "+1 day" is a boundary the source
+# has never once met and declaring it carries 2.3-5.8 h of look-ahead every day); why the registry here
+# is separate from `alignment.CONTRACTS` rather than added to it (adding would break
+# `test_every_metrics_column_that_can_reach_the_panel_is_declared`'s "no strays" clause, and mutating
+# it at import time would make a governance verdict depend on import order - the copy that costs is
+# guarded by `test_the_two_registries_refuse_for_the_same_reasons`); why the witness is fetched at all
+# when nothing stores it; and why `align_daily_to_bars` keys on availability rather than on the day's
+# close.  Honest note on the target: this lands on `beidou_data`, so it moves the alpha share the wrong
+# way, and the column it enables covers 49 of 528 perpetuals - 9.3% against spot's 69%.  The coverage
+# number is the finding, not a disappointment: a fifth of the board is what any #31 leaf can rank, and
+# that is worth knowing before a leaf is written rather than after it is backtested.
+# 2026-09-09, +606 data: `beidou_data/onchain.py` - #31, and the module docstring is a measurement
+# record rather than an explanation, which is where most of the count goes.  The criterion it distilled
+# is worth more than the feed: **whether the source tells you when a value was written**.  Both #28 and
+# #31 have a free API, so "is there a free source" separates nothing.  Coin Metrics stamps every cell
+# with `-status-time` - BTC's 2024-03-01 inflow was written 2026-04-09, 769 days after the day it
+# describes, while ETH's same day was written the next morning - so backfill latency is a PER-CELL
+# property and no single `available_offset_ms` can be right.  The flow columns are therefore refused and
+# the count columns admitted, on the source's own testimony.  The declared availability is +2 days, not
+# the arithmetic +1: measured completion runs 2.3-5.8h past day close, so +1 is a bound the source has
+# never once met and declaring it would buy a daily lookahead.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
     "beidou_cli": 4_492,
-    "beidou_data": 3_669,
+    "beidou_data": 4_275,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,
