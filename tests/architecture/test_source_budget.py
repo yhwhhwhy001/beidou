@@ -1579,11 +1579,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # this search legitimately does, so nothing looked wrong.  Now it groups the distinct reasons and prints
 # them with counts - the difference between "these are illegal combinations" and "an entire family
 # cannot see its column" is one glance instead of one JSON file.
+# 2026-09-09, +307 data: `beidou_data/index_price.py` - #29, the first feed to enter the event-time
+# contract registry after metrics, which closes the debt `alignment.py` opened ("no production caller
+# yet").  Measured against the venue, not assumed: the daily index archive and /fapi/v1/indexPriceKlines
+# agree on 24/24 buckets of BTC/ETH/SOL for 2026-09-05 at a stamp offset of ZERO, and on 0/23 one bucket
+# either way - the opposite of the metrics feed's -1 bucket, which is exactly why each feed declares its
+# own offset instead of inheriting one.  The four volume/taker columns are identically zero and match
+# 23/23 at BOTH rivals, so they cannot refute anything and are deliberately NOT declared: a column that
+# passes every offset verifies nothing.  Columns are namespaced (`index_close`, not `close`) because
+# CONTRACTS is a flat global table and a bare name would hand the index contract to the perpetual's own
+# close.
 CEILING = {
     "beidou_alpha": 7_625,
     "beidou_live": 6_578,
     "beidou_cli": 4_470,
-    "beidou_data": 3_286,
+    "beidou_data": 3_593,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,

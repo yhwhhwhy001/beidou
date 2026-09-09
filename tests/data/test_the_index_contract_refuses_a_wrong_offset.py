@@ -48,8 +48,7 @@ from beidou_data.index_price import (
 HOUR_MS = 3_600_000
 START = pd.Timestamp("2026-09-05 00:00", tz="UTC").value // 1_000_000
 ARCHIVE_HEADER = (
-    "open_time,open,high,low,close,volume,close_time,quote_volume,count,"
-    "taker_buy_volume,taker_buy_quote_volume,ignore"
+    "open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore"
 )
 
 
@@ -129,9 +128,7 @@ def test_the_zero_volume_columns_cannot_carry_the_evidence_and_the_check_says_so
     rows = _rows(24)
     archive = pd.DataFrame({"open_time": [row[0] for row in rows], "volume": 0.0, "quote_volume": 0.0})
     rest = archive.copy()
-    verification = verify_stamp_offset(
-        index_contract("1h"), archive, rest, value_columns=("volume", "quote_volume")
-    )
+    verification = verify_stamp_offset(index_contract("1h"), archive, rest, value_columns=("volume", "quote_volume"))
     assert verification.verdict == UNVERIFIABLE
     assert "do not move enough" in verification.reason
     # And this is why they are not carried at all: the parser drops them before anyone can be tempted.
@@ -213,7 +210,7 @@ def test_a_perp_bar_reads_the_index_bar_with_the_same_open_time_and_never_a_late
 
 
 def test_a_hole_stays_a_hole_and_is_never_filled_forward_or_with_zero() -> None:
-    """"缺失必须表现为缺失".  A forward fill is the helpful change that turns a gap into a fake basis."""
+    """ "缺失必须表现为缺失".  A forward fill is the helpful change that turns a gap into a fake basis."""
     archive, _ = _pair(6)
     gapped = archive.drop(index=[2, 3]).reset_index(drop=True)
     bars = pd.DatetimeIndex(pd.to_datetime(archive["open_time"].to_numpy(), unit="ms", utc=True))
