@@ -26,6 +26,7 @@ import pandas as pd
 
 from beidou_alpha.mining.expr import (
     Abs,
+    Basis,
     Const,
     CrossSectional,
     Expr,
@@ -362,6 +363,79 @@ def _seasonality_family(
             yield Squash(Mul(Const(-1.0), interaction), interaction_scale)
 
 
+def _basis_family(
+    vol_window: int,
+    scales: Sequence[float],
+    horizons: Sequence[int],
+    interaction_scale: float,
+) -> Iterator[Expr]:
+    """DL-D5, block 2: the only family that reads `panel.spot` - how rich the perpetual is against spot.
+
+    `Basis` is a log price ratio, so it is RETURN and every shape divides it by `Vol` before `Squash`
+    or `Mul` will take it, exactly as `_funding_family` must.  The leaf's own docstring carries the
+    pre-registered choice of writing (log ratio, level, un-annualised, no window) and why the other
+    three were rejected; this docstring is about the family.
+
+    **The question that has to be answered before a hit here means anything: is this the carry family
+    wearing a different hat?**  Funding is the venue's instrument for pinning the perpetual to spot -
+    the two are the ends of one arbitrage relation, not two hypotheses - so a large correlation with
+    `_funding_family` is the EXPECTED outcome and not a surprise to be discovered in a report.  It is
+    pre-registered as a gate rather than argued away: the first run measures corr(basis leaf, funding
+    leaf) before it reads a Sharpe, and only the part funding cannot express is a new claim.  Mechanism
+    says where that part would live - funding is a clamped time-average, so it must saturate in the
+    tail and lag in time, while the basis does neither - but this repository has NOT measured that, and
+    an unmeasured mechanism is a hypothesis, which is why it is written here before the run.
+
+    **The residual shape is missing on purpose and it is the one a reader will want to add.**  The
+    orthogonal writing is `basis/vol - funding/vol`, and `Sum` is the only operator that can express it.
+    `Sum.evaluate` adds with `fill_value=0.0`, so a NaN term enters as a zero: on the 166 of 528
+    perpetuals with no spot leg, that shape evaluates to pure carry with nothing saying so - a signal
+    that scores the whole board while reading spot on two thirds of it.  Adding it before `Sum`
+    propagates missing values would put the exact substitution `align_spot_to_perp_bars` refuses back
+    into the pipeline one layer up.
+
+    **Both signs ship**, for the reason `_funding_family` records: `cross_sectional_rank` and `tanh`
+    are odd, so each short shape is the exact mirror of its long one and "a basis candidate ranked
+    first" is not information - only its margin over the baseline is.  Which sign is right is a real
+    open question here (does an un-charged premium mean-revert, or does it mark the crowd that is
+    about to keep being right?), and deciding it from the data that ranked it is what D-020 exists for.
+
+    **The universe is not the same universe, and that is this family's own confound.**  A basis
+    candidate can only score 362 of 528 perpetuals; every other family scores all of them.  So a
+    marginal over a `--baseline` book is measured across a smaller cross-section, and a Sharpe
+    difference that comes from holding a third fewer names is not an edge.  The falsifier for that is
+    in the pre-registration, not in the code.
+
+    Grid choice, pre-registered: no basis-specific value at all.  The leaf takes no window (see its
+    docstring), `vol_window` reuses `vol_windows[0]` as every other interaction family does, and the
+    momentum leg takes `horizons`, the general return-horizon dimension, so an operator rescaling the
+    search for another interval rescales it too.  That makes this the cheapest family in the module -
+    18 expressions - which is the right size for a hypothesis whose most likely verdict is "already
+    searched under another name".  Adding a value is a parameter; adding a fourth shape is a hypothesis
+    (KILL-P6).
+
+    Lookback is `Ret(max(horizons)) + 1` and nothing else: `Basis` reserves one bar and `Vol(48)`
+    twenty-five, so at the declared grid the family's deepest shape is 721 against `max_lookback`
+    1400.  Stated because `hod(60)` was not - it reserved 1464, and all eighteen of its shapes left as
+    `too_long` while the grid still claimed three windows.
+    """
+    carry = Ratio(Basis(), Vol(vol_window))
+    # The minus sign goes inside, never around a `CrossSectional`: negating a SCORE raises, and an
+    # `ExprError` closes this generator, which would truncate the rest of the family for one count.
+    short_carry = Mul(Const(-1.0), carry)
+    yield CrossSectional(carry, "rank")  # scale-free: ranking discards the magnitude
+    yield CrossSectional(short_carry, "rank")
+    for scale in scales:
+        yield Squash(carry, scale)
+        yield Squash(short_carry, scale)
+    for horizon in horizons:
+        momentum = Ratio(Ret(horizon), Vol(vol_window))
+        # One operand order only: `Mul.canonical` sorts by hash, so the reverse is the same tree.
+        interaction = Mul(momentum, carry)
+        yield Squash(interaction, interaction_scale)
+        yield Squash(Mul(Const(-1.0), interaction), interaction_scale)
+
+
 def _surprise_family(horizons: Sequence[int], z_windows: Sequence[int], scales: Sequence[float]) -> Iterator[Expr]:
     """How *far* a symbol moved, with the direction thrown away.
 
@@ -481,6 +555,12 @@ def enumerate_candidates(
     # #8, block 2.  Occurrences of the hour, not bars; see `HourOfDay`.
     include_seasonality: bool = True,
     hod_days: Sequence[int] = (14, 30, 56),
+    # DL-D5, block 2.  A search-space parameter for the same reason `include_funding` and
+    # `include_metrics` are: this function stays deterministic and data-free, and the caller narrows
+    # the space when its panel carries no spot.  Unlike those two, the narrowing is the COMMON case -
+    # RISK-G3 keeps the column out of any panel whose event-time contract is not verified, and 166 of
+    # 528 perpetuals have no spot leg even once it is.
+    include_basis: bool = True,
     include_panel_nodes: bool = True,
     max_complexity: int = 10,
     max_lookback: int = 1400,
@@ -558,6 +638,13 @@ def enumerate_candidates(
         # candidate's hash, but the order candidates are FIRST SEEN in decides which duplicate is
         # kept, and every id already in the ledger has to keep resolving (T-A1-3).
         families = (*families, _seasonality_family(hod_days, vol_windows[0], scales, horizons, funding_scale))
+    if include_basis:
+        # Appended last, and never interleaved, for the reason every block above it records: a family's
+        # position does not enter a candidate's hash, but the order candidates are FIRST SEEN in decides
+        # which duplicate is kept, and every id already in the ledger has to keep resolving (T-A1-3).
+        # Last specifically, and not merely appended: this is the newest family, so appending it here is
+        # the only position that leaves all six earlier append points reading exactly as they did.
+        families = (*families, _basis_family(vol_windows[0], scales, horizons, funding_scale))
     for family in families:
         while True:
             try:
