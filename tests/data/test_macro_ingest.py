@@ -9,6 +9,8 @@ and FRED's own error path carries the API key inside the URL.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pandas as pd
 import pytest
@@ -339,3 +341,109 @@ def test_the_macro_columns_are_registered_in_alignments_table_under_the_macro_co
     assert MACRO.stamp_offset_ms == 0
     assert MACRO.rival_rest_offsets() == (-MONTH_MS, MONTH_MS)
     assert MACRO.period_ms == 31 * DAY_MS, "the longest month, so a rival lands on a real month open"
+
+
+# --------------------------------------------------------------------------------------------------
+# The command.  #32 landed with no entry point at all, and an entry point nothing drives is the same
+# hole one level out - `governance canary` shipped broken on its first real run for exactly that reason.
+# --------------------------------------------------------------------------------------------------
+
+
+FAKE_KEY = "0123456789abcdef-not-a-real-fred-key"
+
+
+def _run_macro(monkeypatch, *, shift: int = 0, args: list[str] | None = None):  # type: ignore[no-untyped-def]
+    from click.testing import CliRunner
+
+    import beidou_cli.data_cmd as data_cmd
+
+    monkeypatch.setattr(
+        data_cmd,
+        "AlfredClient",
+        lambda key: AlfredClient(key, backoff=0.0, transport=_transport([_alfred_payload()])),
+    )
+    monkeypatch.setattr(
+        data_cmd,
+        "BlsWitnessClient",
+        lambda: BlsWitnessClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=_bls_payload(shift=shift)))
+        ),
+    )
+    return CliRunner().invoke(
+        data_cmd.data.commands["macro"],
+        args or ["--from", "2024-01-01", "--to", "2024-12-01", "--columns", COLUMN],
+    )
+
+
+def test_the_command_puts_httpx_at_warning_because_the_key_travels_in_the_query_string(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """FRED offers no header auth, and httpx logs the request URL at INFO.
+
+    `AlfredClient._get` already keeps the key out of its own exceptions; it cannot keep it out of a log
+    line it never writes.  Whoever turns logging up is the entry point, so the entry point is where the
+    level is pinned - and this asserts the pinning rather than trusting the comment above it.
+    """
+    monkeypatch.setenv(API_KEY_ENV, FAKE_KEY)
+    logger = logging.getLogger("httpx")
+    original = logger.level
+    logger.setLevel(logging.INFO)  # the state that would put the key in a log file
+    try:
+        result = _run_macro(monkeypatch)
+        assert result.exit_code == 0, result.output
+        assert logger.level == logging.WARNING
+    finally:
+        logger.setLevel(original)
+    assert FAKE_KEY not in result.output
+
+
+def test_the_command_reports_both_publishers_and_admits_a_clean_column(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The two refusals a macro column has to clear, printed on one run.
+
+    A PASS from BLS says the reference-period stamp means what it says; a clean leak says every value
+    a bar read had already been published.  Both, or the column does not reach live.
+    """
+    monkeypatch.setenv(API_KEY_ENV, FAKE_KEY)
+
+    result = _run_macro(monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert f"{COLUMN} ({SERIES.fred_id} vs BLS {SERIES.bls_id}): 12 releases over 12 reference months" in result.output
+    assert "12 witness months" in result.output
+    assert "contract: PASS" in result.output
+    assert "ADMITTED" in result.output
+    assert "none published later than its bar" in result.output
+
+
+def test_a_witness_that_disagrees_by_a_month_makes_the_command_refuse_the_column(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The gate has to be wired to the check rather than printing a verdict of its own.
+
+    The verdict here is UNVERIFIABLE and not FAIL, which is worth reading rather than asserting past:
+    shifting a twelve-month witness by one month leaves eleven comparable months, one below the
+    minimum, so the sample stops being able to answer before it can disagree.  Not-shown and
+    shown-false are both refusals, and only a command that prints the verdict it was handed can say
+    which one it got.
+    """
+    monkeypatch.setenv(API_KEY_ENV, FAKE_KEY)
+
+    result = _run_macro(monkeypatch, shift=1)
+
+    assert result.exit_code == 0, result.output
+    assert "contract: UNVERIFIABLE" in result.output
+    assert "REFUSED" in result.output and "ADMITTED" not in result.output
+
+
+def test_the_command_refuses_without_a_key_and_names_the_variable_rather_than_traceback(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The keyless query returns a complete, plausible, silently look-ahead frame (note 9).
+
+    So the command must not run at all without a key, and the operator must be told which variable and
+    how to load it - a traceback would say the same thing in a worse voice.
+    """
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    from click.testing import CliRunner
+
+    import beidou_cli.data_cmd as data_cmd
+
+    result = CliRunner().invoke(data_cmd.data.commands["macro"], [])
+
+    assert result.exit_code != 0
+    assert API_KEY_ENV in result.output and "keyless" in result.output
+    assert not isinstance(result.exception, FredApiKeyMissing), "a refusal, not an unhandled error"
