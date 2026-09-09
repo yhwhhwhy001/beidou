@@ -59,18 +59,36 @@ def test_r1_charges_a_mine_round_as_one_event_not_as_its_row_count() -> None:
     assert budget.spent == 0, "a mine round must not consume the row budget"
     assert budget.mined_rows == 514, "...but it is still reported, because it IS the DSR denominator"
     assert budget.mine_rounds == 1
-    assert not refusals(budget, 170), "a full row budget is still available after a mine round"
-    assert mine_refusals(budget), "and the round itself is now what a second mine is refused on"
+    assert not refusals(budget, Policy().max_ledger_rows_per_window), (
+        "a full row budget is still available after a mine round"
+    )
+    # ...and the round itself is what a LATER mine is refused on.  Read off the policy rather than
+    # written as a number: the allowance moved 1 -> 4 in 0.3.0 and this test is about the mechanism,
+    # not the value.  The value is pinned once, by the policy digest.
+    exhausted = window_spend(
+        [
+            _mine_row(WINDOW_START, f"r{r}", f"mine-shortlist-2026090{r}T000000Z")
+            for r in range(Policy().max_mine_rounds_per_window)
+        ],
+        window_start=WINDOW_START,
+    )
+    assert mine_refusals(exhausted)
 
 
-def test_a_second_mine_round_in_one_window_is_refused() -> None:
-    lines = [
-        _mine_row(WINDOW_START, "a", "mine-shortlist-20260907T000000Z"),
-        _mine_row(WINDOW_START, "b", "mine-shortlist-20260908T000000Z"),
-    ]
+def test_one_more_mine_round_than_the_window_allows_is_refused() -> None:
+    """Counted as ROUNDS - distinct `run_id`s - however many rows each one wrote."""
+    allowed = Policy().max_mine_rounds_per_window
+    lines = [_mine_row(WINDOW_START, f"c{r}", f"mine-shortlist-round-{r}") for r in range(allowed + 1)]
     budget = window_spend(lines, window_start=WINDOW_START)
-    assert budget.mine_rounds == 2
-    assert "already run 2 mine round(s) of 1" in mine_refusals(budget)[0]
+    assert budget.mine_rounds == allowed + 1
+    assert f"already run {allowed + 1} mine round(s) of {allowed}" in mine_refusals(budget)[0]
+
+
+def test_a_window_below_the_allowance_still_admits_another_mine() -> None:
+    """The half the old test could not express while the allowance was one."""
+    budget = window_spend([_mine_row(WINDOW_START, "a", "one-round")], window_start=WINDOW_START)
+    assert budget.mine_rounds == 1
+    assert not mine_refusals(budget), "0.3.0 allows four rounds a window; one used is not exhausted"
 
 
 def test_the_dsr_denominator_is_not_what_changed() -> None:

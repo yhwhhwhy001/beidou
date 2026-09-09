@@ -1354,6 +1354,15 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # firing main sleeve is DEMOTED and recounts.  So main's stop computes, records and alerts every
 # cycle and moves the lifecycle - it does not empty the book.  Making it a halt is one registry
 # field taken through a transaction by a person, which is the shape a decision that size deserves.
+# 2026-09-09, +25 governance: R1's budget opened by OPERATOR ruling, policy 0.2.0 -> 0.3.0.
+# The sentence the rule requires.  170 -> 1700 rows and 1 -> 4 mine rounds per 30-day window, and
+# the lines are the reasoning, written where the next reader will stand: R1's provenance is E5 - a
+# judgement call anchored on "one mine round cost 514 rows" - and it is a RATE limit, not the
+# multiple-testing control.  R0's quantile gate is that, every trial still enters the per-strategy N,
+# and the gate rises monotonically with N (measured at fixed Sharpe variance: 146 -> 0.1072,
+# 677 -> 0.1198, 3000 -> 0.1310), so searching more raises the bar by itself.  Opening R1 costs
+# statistical power and compute; it does not open a hole.  Finite rather than removed, because AC-G8
+# asks that an exhausted budget stop `validate`.
 CEILING = {
     "beidou_alpha": 6_998,
     "beidou_live": 6_232,
@@ -1361,7 +1370,7 @@ CEILING = {
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_052,
+    "beidou_governance": 2_077,
 }
 
 
