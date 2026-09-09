@@ -292,9 +292,7 @@ class Panel:
             reference=maybe(self.reference),
             # Carried through the slice, because a basis leaf is scored on `panel.slice(end=cutoff)` and
             # dropping it here would make the holdout split the thing that decides whether the leg
-            # exists.  `metrics` is NOT carried and predates this; it fails loudly (`_required_metric`
-            # raises) rather than scoring on nothing, so it is recorded here rather than changed under
-            # DL-D5's name.
+            # exists.  The same sentence is why `metrics` is carried above.
             spot=None if self.spot is None else {name: function(frame) for name, frame in self.spot.items()},
         )
 
