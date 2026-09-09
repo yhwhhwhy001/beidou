@@ -33,6 +33,10 @@ class LiveState:
     stopped_books: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )  # probe books closed by their stop rule (D-019)
+    # R8 / DL-G7: how many consecutive cycles the attributed drawdown has sat on a ladder rung, and
+    # whether the first crossing was already announced.  Persisted for the same reason `stopped_books`
+    # is: a restart must not hand the book a fresh two-cycle grace on a breach that never lifted.
+    risk_ladder: dict[str, Any] = field(default_factory=dict)
     last_clock_skew_ms: float | None = None  # venue time minus host time at the last cycle
     last_guard_reasons: list[str] = field(default_factory=list)  # edge-trigger for the guard alert
     # `consecutive_errors` deliberately absent (DL-L2): the streak belongs to the process, not to the

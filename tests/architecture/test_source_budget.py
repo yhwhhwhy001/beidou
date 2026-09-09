@@ -1389,10 +1389,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # out, `accepted_on` stays in - it decides where the trailing window starts), conditional so an
 # unprobed registry keeps its digest, and NOT in the construction fingerprint, because reviewing a
 # threshold must not reset M-010's 30-day clock.
+# 2026-09-09, +244 live / +15 cli: DL-G7 / R8 - the ladder had no caller and the digest had no reader.
+# `Policy.throttle_scalar` and `drawdown_grace_cycles` were written, versioned, hashed into
+# `policy_digest()` and recorded every cycle, and nothing in the tree consulted them: the fifth
+# instance today of a thing that looks like a control and controls nothing.  The growth is the wiring
+# plus `attributed_drawdown_state`, which is the whole point of the rule - `drawdown_state` reads venue
+# equity, 52% of this account is non-USDT collateral and 73% of its measured equity change was
+# repricing, so de-risking on that reading pays a real cost for a number that was never about the book.
+# On the live record the two rulers differ by 5.6x on the same days (equity -1.30%, attributed -0.23%),
+# which is why this is not a cosmetic choice.  `value` is the CURRENT distance below the running peak,
+# not the deepest ever: a ladder pinned to the worst hour the account ever had would never come back up.
+# The cli line is `live status --check` comparing the recorded governance digest against the module on
+# disk - R9 put the number in every row to make a rule edit visible and nothing read it back.  It found
+# a real one on its first run: policy 0.3.0 landed 04:48Z, the loop kept reporting 0.2.0's
+# `753638a519ac`, and the restart that closed the gap at 05:08Z was for an unrelated reason.
 CEILING = {
     "beidou_alpha": 7_113,
-    "beidou_live": 6_263,
-    "beidou_cli": 4_209,
+    "beidou_live": 6_507,
+    "beidou_cli": 4_224,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
     "beidou_shared": 289,

@@ -1013,7 +1013,10 @@ def daily_payload(
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "risk_budget": risk_budget_status(
-            _cycles(store), store.read_jsonl(store.trades_path), risk_budget or RiskBudgetParams()
+            _cycles(store),
+            store.read_jsonl(store.trades_path),
+            risk_budget or RiskBudgetParams(),
+            store.read_jsonl(store.attribution_path),
         ),
         # DL-D4 / M-011: do the T+1 archive and what the loop could actually read agree on the buckets
         # they share?  The whole same-source contract is this one number, and until now `metrics_parity`
