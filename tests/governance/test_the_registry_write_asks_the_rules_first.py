@@ -102,7 +102,7 @@ def test_three_sleeves_break_the_count_as_well_as_the_share() -> None:
 
 
 def test_the_canary_that_never_ran_is_not_a_canary_that_passed() -> None:
-    """"Could not be computed" is not "passed" - the rule the drawdown ladder already follows."""
+    """ "Could not be computed" is not "passed" - the rule the drawdown ladder already follows."""
     before = _registry({})
     after = _registry({"flow_short": 1 / 3})
     book = _book(candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)})
@@ -116,9 +116,7 @@ def test_a_promotion_inside_the_thirty_day_clock_is_refused(caplog: pytest.LogCa
     """K-EX14: the window a promotion resets has to have run out before the next one starts."""
     before, after = _registry({}), _registry({"flow_short": 1 / 3})
     book = _book(candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)})
-    admission = admit(
-        before, after, book=book, policy=POLICY, cycles=_cycles(11), shadow=_healthy_shadow(), now=NOW
-    )
+    admission = admit(before, after, book=book, policy=POLICY, cycles=_cycles(11), shadow=_healthy_shadow(), now=NOW)
     assert not admission.allowed
     assert any("K-EX14" in reason for reason in admission.reasons), admission.reasons
     assert admission.measured["clean_days"] == pytest.approx(11.0, abs=0.1)
@@ -144,9 +142,7 @@ def test_a_queue_with_no_recorded_order_refuses_rather_than_picking_one() -> Non
             "carry": Candidate("carry", State.QUEUED, fraction=1 / 3),
         }
     )
-    admission = admit(
-        before, after, book=book, policy=POLICY, cycles=_cycles(45), shadow=_healthy_shadow(), now=NOW
-    )
+    admission = admit(before, after, book=book, policy=POLICY, cycles=_cycles(45), shadow=_healthy_shadow(), now=NOW)
     assert any("head of the queue" in reason for reason in admission.reasons), admission.reasons
     assert "carry" in str(admission.measured["flow_queue"])
 
@@ -165,9 +161,7 @@ def test_a_clean_promotion_passes_every_layer() -> None:
     """The gate has to be able to say yes, or it is a stop sign rather than a rule."""
     before, after = _registry({}), _registry({"flow_short": 1 / 3})
     book = _book(candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)})
-    admission = admit(
-        before, after, book=book, policy=POLICY, cycles=_cycles(45), shadow=_healthy_shadow(), now=NOW
-    )
+    admission = admit(before, after, book=book, policy=POLICY, cycles=_cycles(45), shadow=_healthy_shadow(), now=NOW)
     assert admission.allowed, admission.reasons
     assert admission.promoting == ("flow",)
 
@@ -181,7 +175,9 @@ def test_the_window_rolls_on_the_calendar_rather_than_on_a_counter_nobody_increm
     Derived from the clock instead: a state that stopped being maintained in September cannot make a
     promotion in November look like the second one this window.
     """
-    stale = Book(window=0, promotions_this_window=1, candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)})
+    stale = Book(
+        window=0, promotions_this_window=1, candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)}
+    )
     later = datetime.fromisoformat(WINDOW_ANCHOR) + timedelta(days=95)
     admission = admit(
         _registry({}),

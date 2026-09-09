@@ -68,6 +68,9 @@ class Facts:
     is_queue_head: bool = False
     canary_healthy: bool = False
     clean_days_under_current_construction: int = 0
+    # probe -> main: R0 recomputed at today's bucket size (§3).  False by default like every other
+    # fact here - a window that could not ask the question does not get to answer it.
+    family_gate_still_passes: bool = False
     # a cycle that must not decide anything (KILL-AR-20)
     no_decision: bool = False
 
@@ -80,6 +83,12 @@ class Candidate:
     windows_survived: int = 0
     fraction: float = 0.0  # share of the main book this sleeve moves, 0 outside probe/main
     cooldown_until_window: int = -1
+    #: The last derived event this candidate has already absorbed, as the ISO instant the record
+    #: stamps it with.  Bookkeeping, never a rule: nothing in `evaluate` reads it.  It exists because
+    #: `probe_entries` is R7's LIFETIME count and `windows_survived` is monotone, so folding the same
+    #: `cycles.jsonl` twice would spend a life the sleeve never used.  Held per candidate rather than
+    #: per book because each sleeve's tenure starts and stops on its own clock.
+    folded_through: str = ""
 
 
 @dataclass(frozen=True)
@@ -193,6 +202,13 @@ def evaluate(book: Book, candidate: Candidate, event: Event, facts: Facts, polic
                 (
                     book.to_main_this_window < policy.max_probe_to_main_per_window,
                     "R4: a probe already reached main this window",
+                ),
+                # §3 lists three conditions on this edge and this one had no branch until 2026-09-09.
+                # It is the only one that can go the other way while the sleeve does nothing: the gate
+                # is a function of the bucket's trial count, which every search in the family raises.
+                (
+                    facts.family_gate_still_passes,
+                    "R0: the quantile gate no longer passes at today's bucket size (family_gate.recheck)",
                 ),
             ]
         )

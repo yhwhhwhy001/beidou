@@ -38,6 +38,7 @@ def dump(book: Book) -> dict[str, Any]:
                 "windows_survived": candidate.windows_survived,
                 "fraction": candidate.fraction,
                 "cooldown_until_window": candidate.cooldown_until_window,
+                "folded_through": candidate.folded_through,
             }
             for name, candidate in sorted(book.candidates.items())
         },
@@ -79,6 +80,14 @@ def load(payload: Any) -> Book:
             windows_survived=int(raw.get("windows_survived", 0)),
             fraction=float(raw.get("fraction", 0.0)),
             cooldown_until_window=int(raw.get("cooldown_until_window", -1)),
+            # A state written before `governance advance` existed carries no watermark, and an empty
+            # one means "nothing folded yet", so the first run folds the whole record.  That is safe
+            # HERE rather than in general: measured 2026-09-10, all 184 cycles of the armed record
+            # carry `stop: false` and no batch window has closed, so there is nothing to fold and no
+            # life to spend twice.  It stops being safe the moment a stop lands before a first
+            # `advance`; `--dry-run` is the default for exactly that reading, and the command prints
+            # each candidate's watermark as `(never folded)` so the operator sees it before writing.
+            folded_through=str(raw.get("folded_through", "")),
         )
     return Book(
         window=int(payload.get("window", 0)),

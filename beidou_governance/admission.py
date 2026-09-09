@@ -101,9 +101,7 @@ def grew(before: Registry, after: Registry) -> tuple[str, ...]:
     old, new = exposure(before), exposure(after)
     out = []
     for name, (_book, share) in sorted(new.items()):
-        if name not in old:
-            out.append(name)
-        elif share > old[name][1] + 1e-9:
+        if name not in old or share > old[name][1] + 1e-9:
             out.append(name)
     return tuple(out)
 
@@ -185,6 +183,18 @@ def window_index(policy: Policy, *, anchor: str = WINDOW_ANCHOR, now: datetime |
     moment = now or datetime.now(UTC)
     elapsed = moment - datetime.fromisoformat(anchor)
     return max(0, int(elapsed / timedelta(days=policy.window_days)))
+
+
+def window_start(policy: Policy, *, anchor: str = WINDOW_ANCHOR, now: datetime | None = None) -> datetime:
+    """When the current window opened.  R1's budget is counted from here, off the same calendar.
+
+    Here rather than in `budget.py` so there is exactly one calendar: R1 counts rows per window and
+    R4 counts promotions per window, and if those two ever disagreed about where a window begins the
+    disagreement would be invisible - each rule would keep passing its own tests.
+    """
+    return datetime.fromisoformat(anchor) + timedelta(days=policy.window_days) * window_index(
+        policy, anchor=anchor, now=now
+    )
 
 
 def rolled(book: Book, policy: Policy, *, anchor: str = WINDOW_ANCHOR, now: datetime | None = None) -> tuple[Book, str]:

@@ -1708,14 +1708,41 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (6 distinct raw vs 3 canonical on the armed record).  Both are the same defect this whole day is
 # about, arriving in the fix for it: a command added to make a module reachable, and then not
 # exercised.  The lines are the alias parameter and the test that drives the command through the CLI.
+# 2026-09-10, +243 cli and +518 governance: the governance line's WRITE side, which is §9A 1 and 2 of
+# the plan-vs-code audit and the heaviest thing left in it.  Two commands.
+# `governance next` assembles `scheduler.Context` out of the reports, the ledger and the state, and is
+# what takes `scheduler` (115 lines) and `budget` (112) out of the reachability guard's EXEMPT list -
+# 227 lines holding R1 and DL-G8 that no `beidou` command could reach, so AC-G8 could not be attempted
+# and R1 had no production reader at all.  `governance advance` folds the events `tenure` already
+# derived from `cycles.jsonl` through `lifecycle.apply` and writes the result, which is the first
+# production caller either that function or `state.write` has ever had: `governance_state.json` was
+# maintained by hand, one commit in `git log`, so R4's `promotions_this_window`, R5's
+# `consecutive_probe_stops` and R7's `probe_entries` were typed numbers no record had to agree with.
+# Where the governance lines went: 303 in `assemble.py`, 180 in `family_gate.py`, 35 across
+# `lifecycle`/`state`/`admission`.  The 180 are NOT new work - `family_gate.py` and the `lifecycle`
+# branch that reads it are the parallel session's, copied byte-identical from its tree because
+# `advance` has to supply `Facts.family_gate_still_passes` and reimplementing it would put a second
+# arithmetic into a number whose whole job is to isolate one variable.  Whoever merges the two should
+# expect this line to conflict and should count those 180 once.
+# The largest single piece is `assemble.py`, and most of it is about the fields it CANNOT read.  Every
+# count in `Context` has a `> 0` branch, so an unreadable field defaulted to 0 does not error - it
+# answers, one step further down the pipeline than the evidence supports, which is the empty-book
+# failure wearing a scheduler's clothes.  So a field carries its source, an unreadable one carries why,
+# and `load_bearing` asks whether the answer would have differed had it read the other way.  Measured
+# on this repository today: `search_space_digest` is unreadable, because every `mine-shortlist-*.json`
+# in the tree predates `run.include_basis` and a guessed knob and a widened space produce the same
+# disagreement - so R2 cannot be asked at all until the next round writes that field.
+# The honest note on the target: this lands on `beidou_cli` and `beidou_governance`, so it moves the
+# alpha share the wrong way and buys no leaf.  What it buys is that §3's rules now have a writer as
+# well as a refuser, which is the half AR-18's compensating controls were resting on.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
-    "beidou_cli": 4_588,
+    "beidou_cli": 4_831,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_386,
+    "beidou_governance": 2_904,
 }
 
 

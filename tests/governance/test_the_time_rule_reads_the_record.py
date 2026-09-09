@@ -207,11 +207,41 @@ def test_nine_survived_windows_are_what_the_state_machine_needs_for_main() -> No
     )
     assert out.windows_survived >= policy.windows_to_main
 
+    # §3 puts three conditions on this edge.  Nine windows and no stop are the two `tenure` can see;
+    # the third is R0 recomputed at today's bucket, which is a fact about the LEDGER and reaches the
+    # state machine as a fact rather than as an event (`family_gate.recheck`).  Both halves below,
+    # because the branch was added on 2026-09-09 and a test that only exercises the happy path would
+    # pass just as well with the condition deleted again.
+    surviving = Facts(family_gate_still_passes=True)
+    book = Book(candidates={"flow": Candidate(id="flow", state=State.PROBE, fraction=1 / 3)})
+    for event in out.events[: policy.windows_to_main]:
+        book, decision = apply(book, "flow", event.event, surviving, policy)
+        assert decision.allowed, decision.reasons
+    assert book.candidates["flow"].state is State.MAIN
+
+
+def test_nine_survived_windows_do_not_reach_main_on_a_gate_nobody_asked() -> None:
+    """The same nine windows, with the gate unmeasured: the sleeve stays in probe.
+
+    "Could not be computed" is not "passed" - the rule the drawdown ladder and the canary already
+    follow.  A probe that sits in probe costs a delayed promotion; a probe promoted on an unasked
+    question costs the thing R0 exists for.
+    """
+    policy = Policy()
+    rows = [_cycle(d * policy.window_days + 1) for d in range(policy.windows_to_main + 1)]
+    out = tenure(
+        rows,
+        book="flow_short",
+        started_at=START,
+        window_anchor=ANCHOR,
+        policy=policy,
+        now=_at(policy.window_days * 12),
+    )
     book = Book(candidates={"flow": Candidate(id="flow", state=State.PROBE, fraction=1 / 3)})
     for event in out.events[: policy.windows_to_main]:
         book, decision = apply(book, "flow", event.event, Facts(), policy)
-        assert decision.allowed, decision.reasons
-    assert book.candidates["flow"].state is State.MAIN
+    assert book.candidates["flow"].state is State.PROBE
+    assert any("quantile gate" in reason for reason in decision.reasons), decision.reasons
 
 
 def test_the_command_says_when_a_main_sleeve_cannot_be_seen_at_all(tmp_path: Any) -> None:
