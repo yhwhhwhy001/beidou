@@ -4767,3 +4767,47 @@ state SEEDED        -> refused: ('R3: probe budget share would exceed 1/3',)
    `probe_entries`（没有别的东西能重建它）一起带走了。改成只忽略 `governance/ENABLED`。
 
 commit：`be1432a`（tenure）、`681951e`（grandfather + 忽略规则）、`2e46c0a`（补测试 + 按 strategy 查状态）。
+
+## 2026-09-09 · L3 paper 端到端串跑，以及影子在写的第二份共享记录（当场撞见）
+
+§18 里 Phase 2 的收尾写着「paper 端到端串跑未做」。开跑之前先问了一句**「paper 还会写什么共享的东西」**
+——问出来一条，而且一小时后就在真实数据上撞见了它。
+
+### 先修的：`metrics_snapshot`
+
+`MetricsStore.append` 是读-改-写，而且每个 symbol 共用**一个** `.parquet.tmp`。两个写者不只是丢行：一个
+可以发布另一个还在写的那个文件。而 DL-Q6 说这个库装的是「循环能读到的指标」——**armed 循环**；一个 paper
+进程往里加行，会让 M-011 拿实盘判定去比一份没有任何实盘判定基于它做出的数据。
+
+影子仍然**读**（一旦启用需要 metrics 的策略，启动的覆盖闸就要读），只是不写，且**不写的周期记一句原因**。
+谓词同时改名 `may_rerank_shared_pool` → `trades_the_account`：它原来按自己的一个**后果**命名（重排池子），
+而现在有两个后果——按后果命名正是第一版把条件写错、漏掉裸 `--paper` 的原因（`3cfb946`）。
+
+### 然后：两条循环在同一根 K 线上相隔 3 秒
+
+串跑跑在 `.beidou/paper-l3`，`--cycles 1 --immediate`。立即那一跑正确地 `SKIPPED`（晚于收线 1694.9s，
+窗口 65s，「只对账不再平衡」）；等到 04:00Z 那根才是完整周期。而 armed 循环的同一根在 04:00:16Z。
+
+```
+ARMED  2026-09-09T04:00:16+00:00  stored=18 symbols  reason=None
+PAPER  2026-09-09T04:00:13+00:00  stored=0  symbols  reason=not the account's process; …
+```
+
+**相隔三秒，在同样那 18 个 parquet 上。** 没有那条修复，它们就会在这三秒里对同一批文件做读-改-写、走同一个
+临时路径。这不是推演出来的碰撞窗口，是它自己走到眼前的。
+
+### 串跑本身
+
+| | |
+| --- | --- |
+| 完整周期 | 18 targets / 18 orders（进程内撮合），`guard_reasons` 空，无 error |
+| registry | `1ad760a55e8f` —— 与 armed 循环同一份**钉住的** registry |
+| `pool_refresh` | **False** —— 共享 universe 未被重排 |
+| 共享 metrics | **未写**，原因记在周期里 |
+| 退出 | `completed 1 cycle(s) without error`，code 0 |
+
+**这不是 L3 通过。** L3 的判据是「7 天无 ERROR 相 + 事务日志闭合」，7 天软泡没跑。做完的是那条标着「未做」
+的**串跑**：整条链在没有场所的情况下自己走完了一遍，而且没碰 armed 循环的任何一份共享状态。
+
+DRILL-G2（连续两次 probe stop → 冻结 2 窗口；重基周期上的那次不计数）与 G6（503 风暴）的注入演练仍未做；
+G2 的「不计数」那半边现在有了可依托的东西——`tenure.py` 之前，根本没有任何东西从记录里推出 `PNL_STOP`。

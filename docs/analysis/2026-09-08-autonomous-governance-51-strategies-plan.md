@@ -172,7 +172,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 ```text
 Phase 0 回放 ✔（2026-09-08 完成）：A + B + D 已跑，AC-G0 通过（29 差异 / 0 未归因）；产物见 §18
 Phase 1 尺子（2–4 周，无重启）：**先做 DL-G9（两条判据可读）**，再 R0 报告口径、search_space_version 必填、budget / lifecycle / governance_digest、L1 属性测试；**并行 DL-C1 冲击成本模型**（不碰构造，不清零 M-010）
-Phase 2 ✔（2026-09-08）调度器 + 事务 + Canary，无重启。DRILL-G1/G4/G5 已作单元测试跑通（G1 用真闸 + 实盘 registry），G2/G3/G6 由属性测试与钉死的 policy digest 覆盖；**paper 端到端串跑未做**
+Phase 2 ✔（2026-09-08）调度器 + 事务 + Canary，无重启。DRILL-G1/G4/G5 已作单元测试跑通（G1 用真闸 + 实盘 registry），G2/G3/G6 由属性测试与钉死的 policy digest 覆盖；**paper 端到端串跑 ✔ 2026-09-09**（`--paper --state-dir .beidou/paper-l3`，完整周期 18 targets / 18 orders、`guard_reasons` 空、无 error，持钉住的 registry `1ad760a55e8f`；`pool_refresh=False`、共享 metrics 未写。**L3 的 7 天软泡仍未跑**——串跑 ≠ 通过判据）
 Phase 3 数据宽度 + 节点 + 手写含缠论（4–8 周，并行，无重启）
 Phase 4a 批次窗口 #1（构造）：块 4 必改项一次改完 → 重启 → 攒 30 天干净窗口（K-EX14）
 Phase 4b 批次窗口 #2（晋级）：队首候选 → Canary → 事务（机器 apply）→ 重启 → probe
@@ -449,5 +449,5 @@ L4**。这条不该由我裁。
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED（AR-08）· G4 PASS（Q8）· G5 PARTIAL · G6 PARTIAL · G7 PARTIAL |
 | 开放 | Q4（默认进）。**Q5 已答（§21，代价是 canary 需要交易凭据）；AR-17 已写（§21）**；审计三问③ 已裁（09-08） |
 | 治理线状态 | 自治 **ENABLED**；事务 3 行、链闭合；`governance_state.json` 已按 KILL-AR-06 落 grandfather（tsmom=main、flow=probe，R3 **1/2 位、1/3 预算已满**）；`flow_short` 时间规则 **0/9 窗口**（第一个批次窗口 2026-10-03 才关） |
-| 下一动作 | (a) metrics ingest 跑完（约 5 小时，82/204，可续跑）→ 用 OI/LS 叶做第一次 `mine`，**但本窗口的 mine 轮次已在 09-07 用掉**；(b) 块 2 挖掘节点；(c) DRILL-G1..G6 的 paper 端到端串跑。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟 |
+| 下一动作 | (a) metrics ingest 跑完（约 5 小时，82/204，可续跑）→ 用 OI/LS 叶做第一次 `mine`，**但本窗口的 mine 轮次已在 09-07 用掉**；(b) 块 2 挖掘节点；~~(c) paper 端到端串跑~~ ✔ 09-09；剩 L3 的 7 天软泡与 DRILL-G2/G6 的注入演练。真实资金五道门只剩 M-Q08 的成交积累与 M-010 的时钟 |
 | 待裁 | ① `probes_from_registry` 排除 main book，§3 却写着 main 保留 P&L stop——**main→probe 目前不可达**，关上它会改变什么可以叫停实盘主书；② probe→main 是 9 个月，改成 3 个月是拿过滤强度换速度（§3 注 2 有两个数），要作为规则版本变更记一笔；③ 拆研究机要不要多一台能下单的机器（§21 第 3 条） |
