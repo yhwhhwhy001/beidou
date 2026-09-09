@@ -278,9 +278,23 @@ def test_a_column_the_verification_never_compared_is_not_admitted_by_its_neighbo
 
 
 def test_every_metrics_column_that_can_reach_the_panel_is_declared() -> None:
-    """The columns `Panel` can carry are exactly the ones a contract must cover; no gaps, no strays."""
-    assert set(CONTRACTS) == set(VALUE_COLUMNS)
+    """The columns `Panel` can carry are exactly the ones a contract must cover; no gaps, no strays.
+
+    Stated as two assertions rather than one set equality, and the reason is worth recording: the
+    original was `set(CONTRACTS) == set(VALUE_COLUMNS)`, which quietly made `CONTRACTS` a metrics-only
+    table.  It is a REGISTRY - `contract_for` is the general refusal, and #29's index columns are the
+    second feed to enter it - so an equality here would have failed on the first one to arrive and the
+    obvious repair (delete the line) would have dropped the check that metrics has no gaps.
+
+    Both halves of "no gaps, no strays" survive, and the strays half is now the stronger statement: not
+    merely that nothing else is in the table, but that nothing else is under the METRICS CONTRACT.  A
+    new feed registering a bare name like "close" and inheriting metrics' five-minute offset is the
+    defect this catches, and the equality never could.
+    """
+    assert set(VALUE_COLUMNS) <= set(CONTRACTS), "a metrics column with no contract cannot reach live"
     assert all(contract_for(column) is METRICS for column in VALUE_COLUMNS)
+    strays = {column for column, contract in CONTRACTS.items() if contract is METRICS} - set(VALUE_COLUMNS)
+    assert not strays, f"these columns are not metrics but were declared under the metrics contract: {strays}"
 
 
 def test_the_contract_and_metrics_parity_reach_the_same_verdict_on_the_same_buckets() -> None:
