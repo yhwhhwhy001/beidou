@@ -1589,11 +1589,37 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # passes every offset verifies nothing.  Columns are namespaced (`index_close`, not `close`) because
 # CONTRACTS is a flat global table and a bare name would hand the index contract to the perpetual's own
 # close.
+# 2026-09-09, +262 alpha, +62 live, +76 data, +22 cli: DL-D5 block 2, the `basis` leaf and its family -
+# the first hypothesis that reads `panel.spot`, and the first thing that reads across two markets at all.
+# The alpha lines are mostly the two docstrings, and they are the deliverable rather than the packaging:
+# a basis can be written four ways (spread, simple ratio, annualised, net of funding) and three of them
+# are wrong for reasons that are not obvious - a spread is a price, the simple ratio breaks the mirror
+# symmetry every short arm in this module relies on, a perpetual has no maturity to annualise over, and
+# the residual would silently become pure carry on the 166 of 528 perpetuals with no spot leg because
+# `Sum` adds with `fill_value=0.0`.  The choice is recorded where the next reader will be tempted to
+# change it.  The measured numbers are there too, and they refuted the premise this family was written
+# under: funding and basis are the two ends of one arbitrage relation, so near-collinearity was expected,
+# and on 20 liquid perpetuals x 14,592 hourly bars the R^2 of basis/vol on funding/vol is 0.064 and the
+# per-bar cross-sectional Spearman of the two ranked shapes is +0.045.
+#
+# The live and data lines are the correction to the inherited WIP rather than new ground.  It had put the
+# RISK-G3 refusal in `composition._spot_columns`, where a spot frame becomes a panel field - which reads
+# right and is wrong, because `load_panel` builds the RESEARCH panel too, so the gate made the family
+# unminable rather than untradeable and turned two already-passing spot tests red.  RISK-G3's sentence is
+# "该列不进实盘".  The refusal is now `engine.spot_refusal` at startup, which also gives
+# `Expr.reads_spot` the caller the WIP never wrote: it defined the method and nothing asked it, which is
+# the same shape as `uses_funding` hardcoded to False (T-P17-06) and that one reached live.
+#
+# The cli lines are the second narrowing, in the shape the first one already had: `mine` searches what the
+# PANEL can answer (`Panel.spot_symbols`), never what a flag asked for, and says in the artefact and on
+# stdout that it narrowed.  Without that line the report would carry no `basis` rows for a reason it never
+# gives, which is not distinguishable from a family that ran and lost - the exact confusion that let DL-D4
+# survive two rounds.
 CEILING = {
-    "beidou_alpha": 7_625,
-    "beidou_live": 6_578,
-    "beidou_cli": 4_470,
-    "beidou_data": 3_593,
+    "beidou_alpha": 7_887,
+    "beidou_live": 6_640,
+    "beidou_cli": 4_492,
+    "beidou_data": 3_669,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,

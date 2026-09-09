@@ -26,6 +26,9 @@ from beidou_data.alignment import (
     FAIL,
     METRICS,
     PASS,
+    SPOT,
+    SPOT_BASIS_COLUMN,
+    SPOT_COLUMNS,
     UNVERIFIABLE,
     Stamp,
     UndeclaredColumn,
@@ -35,6 +38,7 @@ from beidou_data.alignment import (
     restamp,
     verify_stamp_offset,
 )
+from beidou_data.index_price import INDEX_PRICE, INDEX_VALUE_COLUMNS
 from beidou_data.metrics import (
     PERIOD_MS,
     VALUE_COLUMNS,
@@ -46,6 +50,7 @@ from beidou_data.metrics import (
     usable_from_ms,
 )
 from beidou_data.metrics_snapshot import metrics_parity
+from beidou_data.spot import SPOT_PANEL_COLUMNS
 
 FIVE_MIN_MS = PERIOD_MS["5m"]
 HOUR_MS = PERIOD_MS["1h"]
@@ -277,24 +282,49 @@ def test_a_column_the_verification_never_compared_is_not_admitted_by_its_neighbo
     assert admitted is False and "never compared count_long_short_ratio" in reason
 
 
-def test_every_metrics_column_that_can_reach_the_panel_is_declared() -> None:
+def test_every_foreign_column_that_can_reach_the_panel_is_declared() -> None:
     """The columns `Panel` can carry are exactly the ones a contract must cover; no gaps, no strays.
 
-    Stated as two assertions rather than one set equality, and the reason is worth recording: the
-    original was `set(CONTRACTS) == set(VALUE_COLUMNS)`, which quietly made `CONTRACTS` a metrics-only
-    table.  It is a REGISTRY - `contract_for` is the general refusal, and #29's index columns are the
-    second feed to enter it - so an equality here would have failed on the first one to arrive and the
-    obvious repair (delete the line) would have dropped the check that metrics has no gaps.
+    Both halves matter and they fail differently.  A MISSING key is refused by `contract_for`, so a gap
+    fails safe but invisibly - the column simply never reaches live and nobody is told which one.  A
+    STRAY key is worse: `CONTRACTS` is what answers "which contract governs this column", so a key
+    nothing carries is a contract nothing is held to, and the dangerous version of it is a new feed
+    registering a bare name like "close" and inheriting another feed's offset.
 
-    Both halves of "no gaps, no strays" survive, and the strays half is now the stronger statement: not
-    merely that nothing else is in the table, but that nothing else is under the METRICS CONTRACT.  A
-    new feed registering a bare name like "close" and inheriting metrics' five-minute offset is the
-    defect this catches, and the equality never could.
+    Three feeds now, and the equality is stated over their union rather than as a subset.  Two rewrites
+    of this test arrived on the same day from different directions - one made it a subset to survive new
+    feeds, one kept the equality and enumerated two of the three - and both were right about their own
+    half: the equality has to stay exact, AND it has to name every feed, which is precisely the edit a
+    fourth feed will be forced to make here.  That forcing is the feature.
+
+    Each feed's columns are also asserted to carry ITS OWN contract, because equality alone would be
+    satisfied by a table that had all the right keys pointing at the wrong contracts.
     """
-    assert set(VALUE_COLUMNS) <= set(CONTRACTS), "a metrics column with no contract cannot reach live"
+    declared = set(VALUE_COLUMNS) | set(SPOT_COLUMNS) | set(INDEX_VALUE_COLUMNS)
+    assert set(CONTRACTS) == declared, "every column a feed can put on the panel, and nothing else"
     assert all(contract_for(column) is METRICS for column in VALUE_COLUMNS)
-    strays = {column for column, contract in CONTRACTS.items() if contract is METRICS} - set(VALUE_COLUMNS)
-    assert not strays, f"these columns are not metrics but were declared under the metrics contract: {strays}"
+    assert all(contract_for(column) is SPOT for column in SPOT_COLUMNS)
+    assert all(contract_for(column) is INDEX_PRICE for column in INDEX_VALUE_COLUMNS)
+    # Derived, not listed: a sixth spot field would otherwise be carried by `Panel` and unknown to
+    # `CONTRACTS` - which fails safe, and invisibly.
+    assert tuple(f"spot_{field}" for field in SPOT_PANEL_COLUMNS) == SPOT_COLUMNS
+    assert SPOT_BASIS_COLUMN == "spot_close"
+
+
+def test_the_spot_contract_declares_a_zero_offset_and_still_names_two_rivals_to_refute() -> None:
+    """DL-D5.  A declared offset of zero is the case where "no offset" and "one bucket" look alike.
+
+    So the rivals matter more here, not less: with `archive` and `rest` both at 0 the naive-join rival
+    IS the declared offset and drops out, and what is left must still be the one bar either way that
+    `beidou_data.spot` note 4 refuted (744/744 at lag 0, 0/743 shifted).  A contract that ended up with
+    no rivals would report PASS on any sample at all, which is `verify_stamp_offset`'s UNVERIFIABLE
+    branch existing for nothing.
+    """
+    assert SPOT.stamp_offset_ms == 0
+    assert SPOT.rival_rest_offsets() == (-PERIOD_MS["1h"], PERIOD_MS["1h"])
+    # One bar, and it is the arithmetic boundary rather than an observed latency: the perp bar and the
+    # spot bar opening at t close at the same instant, so a same-bar read is available one bar on.
+    assert SPOT.available_from(0) == PERIOD_MS["1h"]
 
 
 def test_the_contract_and_metrics_parity_reach_the_same_verdict_on_the_same_buckets() -> None:

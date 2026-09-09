@@ -2426,6 +2426,12 @@ def research_mine(
     # was not.  `panel.settled_symbols` is the quantity that answers it, and `_require_funding` below is the
     # backstop for anything this narrowing lets through - a `--baseline` in particular.
     searched_funding = include_funding and panel.settled_symbols > 0
+    # DL-D5, the same narrowing one source over, and today it always narrows to False: `_load` does not
+    # build a spot store, so no panel this command can construct carries spot.  Written as the predicate
+    # rather than as a hardcoded False because that is the difference between "narrowed by what the panel
+    # holds" and "switched off by hand" - the day `_load` grows a spot store, this turns itself on, and
+    # until then the 18 basis shapes are never charged to `declared_trials` for a family nobody scored.
+    searched_basis = panel.spot_symbols > 0
     # Every grid is a bar COUNT, so the same search at another interval needs them rescaled: at 1d the
     # default `horizons` of 24..720 mean 24..720 DAYS, and `max_lookback` 1400 outruns the sample.  Keys
     # are checked against the signature rather than splatted blind - a typo would search the default
@@ -2449,6 +2455,15 @@ def research_mine(
             "no settlement in this panel: narrowing the search space, the carry family is neither searched "
             "nor charged to --prior-trials (pass --funding, or --no-include-funding to silence this)"
         )
+    if not searched_basis:
+        # Unconditional rather than behind a flag, because there is no flag to check: nothing builds a
+        # spot store for this command yet, so this line is the only place a reader learns that the basis
+        # family did not run.  Silence here is exactly the DL-D4 shape - a family absent from the report
+        # for a reason the report does not give.
+        click.echo(
+            "no spot leg in this panel: narrowing the search space, the basis family is neither searched "
+            "nor charged to --prior-trials (DL-D5; no panel carries spot yet)"
+        )
     baseline_net: pd.Series | None = None
     if baseline:
         _resolve_mined(baseline)  # a mined candidate is addressable by its hash, like any other id
@@ -2469,6 +2484,7 @@ def research_mine(
         max_complexity=max_complexity,
         max_lookback=max_lookback,
         include_funding=searched_funding,
+        include_basis=searched_basis,
         **grid_overrides,
     )
     click.echo(
@@ -2567,6 +2583,12 @@ def research_mine(
             # them is `funding_inputs.symbols_settled`, recorded once at the top level like every report.
             "include_funding": searched_funding,
             "include_funding_requested": include_funding,
+            # DL-D5.  Recorded even though it has no flag, and BECAUSE it has no flag: a reader who sees
+            # neither `basis` nor an explanation cannot tell "the family was searched and lost" from
+            # "the panel could not answer it", and those are the two readings DL-D4 spent two rounds
+            # apart.  `spot_symbols` is the count that decides it, stated beside the verdict.
+            "include_basis": searched_basis,
+            "spot_symbols": panel.spot_symbols,
             "execution": execution,
             "universe_mode": universe_mode,
             "min_tenure": min_tenure,

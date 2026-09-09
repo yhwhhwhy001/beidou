@@ -63,6 +63,13 @@ class SignalSpec:
     # archive and live can read only the 30-day REST window, so a signal that needs metrics must
     # say so and be refused at startup until the LIVE recording covers it (`metrics_refusal`).
     needs_metrics: FundingPredicate | None = None
+    # DL-D5 / RISK-G3, and the same question a third source over.  A signal that reads `panel.spot`
+    # is trading a cross-market price relation, and the two markets' bars are only comparable if the
+    # event-time contract between them has been MEASURED - `beidou_data.alignment` exists because the
+    # metrics stamp was one bucket out for every bucket while nothing raised.  Declared here rather
+    # than inferred at startup because the engine sees a compiled `SignalSpec` and cannot look inside
+    # the expression tree; `beidou_alpha.mining.search.to_signal` derives it from `Expr.reads_spot`.
+    needs_spot: FundingPredicate | None = None
     canonical: CanonicalFunction | None = None  # params with this signal's defaults applied
     # DL-K2 one level down.  A signal that picks WHICH combinations of the data to trade has made a
     # selection, and the DSR denominator has to be able to read it back.  A spec that declares the
