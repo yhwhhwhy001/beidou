@@ -44,6 +44,14 @@ class RiskBudgetParams:
     slippage_multiple: float = 2.0  # M-Q08's "2x"
     slippage_window_days: int = 30
     min_slippage_fills: int = 30
+    # M-Q03 (DL-L4 / RISK-P2).  Transcribed from the 2026-09-06 remediation plan's own row - baseline
+    # "稳态 0/8", bar "<= 5% / 0" - rather than chosen here, for the same reason `model_slippage_bps`
+    # is: the numbers existed, in force, in a document, with nothing reading them.  The share is
+    # counted PER CYCLE, which is the reading KILL-R6 explicitly allowed ("或至少按周期计") and the
+    # reading its own 0/8 baseline was taken in; the plan's preferred bar-hour weighting needs how long
+    # a late-entered position was HELD, and no file records that.  See `reports.restart_cost`.
+    max_late_cycle_share: float = 0.05
+    max_missed_rebalances: int = 0
     guard_window_days: int = 90
     bars_per_year: float = 8760.0
 
@@ -95,9 +103,16 @@ def collateral_drift(rows: Sequence[Mapping[str, Any]], attribution: Sequence[Ma
     5.2%, and the backtest models no collateral at all.
 
     An accepted risk with no instrument is a sentence, which is the failure this repository keeps
-    finding, so this is the instrument.  It measures and changes nothing.  Measured over the first 23
-    cycles that recorded a collateral reading (2026-09-07T15:00Z onward): equity -60.11, attributed
-    P&L -16.19, so 73% of the move was repricing.
+    finding, so this is the instrument.  It measures and changes nothing.
+
+    The reading is NOT a stable level, and saying so is the point of `direction` below.  Over the first
+    23 cycles that recorded a collateral reading (2026-09-07T15:00Z onward) it was 73% - equity -60.11
+    against attributed P&L -16.19 - and that number was written into this docstring, into the governance
+    plan's §12 and into a test's `assert 0.72 < share < 0.74` as though it described the account.  Over
+    the 47 cycles available on 2026-09-09 the same instrument reads 106.8%: equity +36.41 while the book
+    was DOWN 2.48.  Both readings are correct and they are not the same kind of statement, so what is
+    reported beside the number is which SIDE of 1.0 it sits on, which is a fact about signs rather than
+    a level: above 1 the account's equity direction no longer tells you the book's P&L direction.
 
     Reported, never subtracted.  Subtracting it would silently turn this into the USDT-denominator book
     the operator did not choose.
@@ -110,17 +125,49 @@ def collateral_drift(rows: Sequence[Mapping[str, Any]], attribution: Sequence[Ma
     since = int(priced[0].get("bar_open_ms") or 0)
     attributed = sum(float(row.get("total") or 0.0) for row in attribution if int(row.get("bar_open_ms") or 0) >= since)
     repriced = equity_change - attributed
+    # `None` rather than 0.0 or 1.0 on a flat window: a share of nothing is not a share, and zero
+    # would read as "none of it was collateral", which is the opposite of what it would mean.
+    share = None if equity_change == 0.0 else repriced / equity_change
+    direction = _drift_direction(share)
     return {
         "enforced": True,
         "cycles": len(priced),
         "equity_change": equity_change,
         "attributed_pnl": attributed,
         "collateral_repricing": repriced,
-        # `None` rather than 0.0 or 1.0 on a flat window: a share of nothing is not a share, and zero
-        # would read as "none of it was collateral", which is the opposite of what it would mean.
-        "repricing_share": None if equity_change == 0.0 else repriced / equity_change,
+        "repricing_share": share,
+        "direction": direction,
+        # The one thing a reader of the equity line needs to be told, and the only line this instrument
+        # draws.  It is definitional, not calibrated: see `ACCOUNT_MISLEADS_ABOVE`.
+        "account_misleads": direction == "book_opposed",
         "collateral_share": _latest_collateral_share(rows),
     }
+
+
+# The only boundary in this instrument, and there is nothing here to tune.  At `repricing_share` above
+# 1 the collateral moved further than the whole equity change, which is the same statement as "the
+# book's P&L and the account's equity have OPPOSITE signs" - so below it the equity line still tells a
+# reader which way the book went, and above it that reading is wrong.  Moving this off 1.0 would be
+# choosing a level, which is exactly the mistake the pinned "73%" made.
+ACCOUNT_MISLEADS_ABOVE = 1.0
+
+
+def _drift_direction(share: float | None) -> str:
+    """Which of the three things a window can be, by sign rather than by magnitude.
+
+    ``book_opposed`` is the flagged one because it is the only one that makes the account's own equity
+    line misleading about the book.  ``collateral_opposed`` (share below 0) is the other disagreement -
+    the book carried more than the whole move and the collateral pushed back - and it is deliberately
+    NOT flagged: the equity sign still tells you the book's sign there, so folding the two together
+    would leave the flag meaning "the parts disagree", which nobody can act on.
+    """
+    if share is None:
+        return "flat"
+    if share > ACCOUNT_MISLEADS_ABOVE:
+        return "book_opposed"
+    if share < 0.0:
+        return "collateral_opposed"
+    return "same_direction"
 
 
 def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
@@ -184,8 +231,11 @@ def attributed_drawdown_state(
     right denominator for P13's budget.  It is the wrong NUMERATOR for a rule that decides whether the
     book is losing money: 52% of this account is non-USDT collateral and, measured over the 23 cycles
     that carried a collateral reading, 73% of the equity change was repricing rather than trading
-    (KILL-AR-05).  A -35% equity drawdown can be bitcoin, and de-risking a book that never lost
-    anything is a real cost paid for a reading that was never about the book.
+    (KILL-AR-05).  Read that 73% as one window's reading and not as a property - on 2026-09-09 the same
+    instrument reports 106.8% over 47 cycles, i.e. the equity line was rising while the book lost money,
+    which strengthens this argument rather than weakening it.  A -35% equity drawdown can be bitcoin, and
+    de-risking a book that never lost anything is a real cost paid for a reading that was never about
+    the book.
 
     So the path here is ``base + cumsum(attributed P&L)``: it starts at the account's equity and moves
     only when the book realises something.  The high-water mark re-bases on the same event
@@ -453,8 +503,10 @@ def risk_budget_status(
 
 
 __all__ = [
+    "ACCOUNT_MISLEADS_ABOVE",
     "RiskBudgetParams",
     "attributed_drawdown_state",
+    "collateral_drift",
     "drawdown_state",
     "guard_firings",
     "realised_vol",

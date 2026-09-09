@@ -1708,9 +1708,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (6 distinct raw vs 3 canonical on the armed record).  Both are the same defect this whole day is
 # about, arriving in the fix for it: a command added to make a module reachable, and then not
 # exercised.  The lines are the alias parameter and the test that drives the command through the CLI.
+# 2026-09-09, +369 live: three metrics that were computed and read by nobody got readers.  The audit's
+# §8 table is the justification - it lists what each metric has and what consumes it - and this is the
+# only kind of growth that shrinks the gap between what this system measures and what it knows.
+#   * `collateral_drift` (RISK-G11) reached `reports/daily/*.json` and no further.  It is now rendered,
+#     and it carries a `direction` classification, because the reading is not a level: the "73%" pinned
+#     in its docstring, in the plan's §12 and in a test's `assert 0.72 < share < 0.74` reads 106.8% on
+#     the live record today.  ~55 lines of instrument, ~30 of renderer.
+#   * `restart_cost` (M-Q03) was rendered and compared to nothing, while its thresholds sat in the
+#     2026-09-06 plan ("<= 5% / 0").  Wiring them meant first fixing the count: reconstructing the
+#     engine's per-process running total read 1 on a day the record holds three miss rows.  ~50 lines.
+#   * M-G06 (§19 Q2's lagging criterion) was zero code, the audit's starkest row.  ~110 lines, and it
+#     will answer INSUFFICIENT_DATA until 2028-03-04, which is what it is for.
+# The alpha share moves the wrong way and that is stated rather than hidden; the alternative was three
+# more sentences in a plan, which is the thing this repository keeps finding it already has too many of.
 CEILING = {
     "beidou_alpha": 7_887,
-    "beidou_live": 6_640,
+    "beidou_live": 7_009,
     "beidou_cli": 4_588,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
