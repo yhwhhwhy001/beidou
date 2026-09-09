@@ -1645,11 +1645,21 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # way, and the column it enables covers 49 of 528 perpetuals - 9.3% against spot's 69%.  The coverage
 # number is the finding, not a disappointment: a fifth of the board is what any #31 leaf can rank, and
 # that is worth knowing before a leaf is written rather than after it is backtested.
+# 2026-09-09, +606 data: `beidou_data/onchain.py` - #31, and the module docstring is a measurement
+# record rather than an explanation, which is where most of the count goes.  The criterion it distilled
+# is worth more than the feed: **whether the source tells you when a value was written**.  Both #28 and
+# #31 have a free API, so "is there a free source" separates nothing.  Coin Metrics stamps every cell
+# with `-status-time` - BTC's 2024-03-01 inflow was written 2026-04-09, 769 days after the day it
+# describes, while ETH's same day was written the next morning - so backfill latency is a PER-CELL
+# property and no single `available_offset_ms` can be right.  The flow columns are therefore refused and
+# the count columns admitted, on the source's own testimony.  The declared availability is +2 days, not
+# the arithmetic +1: measured completion runs 2.3-5.8h past day close, so +1 is a bound the source has
+# never once met and declaring it would buy a daily lookahead.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
     "beidou_cli": 4_492,
-    "beidou_data": 3_669,
+    "beidou_data": 4_275,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 2_092,
