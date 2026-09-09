@@ -1720,10 +1720,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # term can move after the fact.  First real run: tsmom PASS 1.8087 vs 1.5149 at N=185, and flow
 # UNREADABLE - its registry evidence is a BOOK report, which carries no `oos_selection`, so §3's third
 # condition is not computable for the only probe running.  That is a finding, not a bug in the reader.
+# 2026-09-09, +146 live / +31 cli: `soak.py` and `live soak`.  §5 states L3's criterion twice and the
+# two disagree - the L3 row asks for '7 天无 ERROR 相', and two paragraphs later the same section says
+# an ERROR phase produces no governance decision because the path to the venue crosses a proxy that
+# 503s in bursts.  One counts ERROR cycles, the other is a claim about their consequences.  Nothing
+# computed either: the soak had been running since 03:28 against a rule that lived only in prose.
+# Measured on the armed record: 2 ERROR in 6.29 days (0.318/day), longest clean run 4.92 days, and
+# BOTH ERROR cycles decided nothing - no orders, nothing leaving, nothing quarantined, ladder untouched.
+# A Poisson fit puts seven consecutive clean days at 10.8%, fourteen at 1.2%, thirty at 0.03%, so the
+# literal reading is not a demanding criterion but a mostly unreachable one, and unreachable for the
+# reason §5 names itself.  Both readings are computed and printed; neither is ruled on here.  The lines
+# are the second reading and the ERROR-streak number that neither covers - one 503 is the proxy
+# blinking, six hours of them is the venue being gone, and only the second says anything about this
+# deployment.
 CEILING = {
     "beidou_alpha": 7_887,
-    "beidou_live": 6_640,
-    "beidou_cli": 4_633,
+    "beidou_live": 6_786,
+    "beidou_cli": 4_664,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,

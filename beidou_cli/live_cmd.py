@@ -405,6 +405,37 @@ def live_run(
         raise click.ClickException(f"{cycles - done} of {cycles} cycle(s) failed; see {store.heartbeat_path}")
 
 
+@live.command("soak")
+@click.option("--state-dir", default=".beidou/paper-l3", show_default=True, help="Which soak to score.")
+@click.option("--days", default=7.0, show_default=True, help="§5 L3's window.")
+@click.option("--root", default=".", help="Checkout to read the transaction log from.")
+@click.option("--check", is_flag=True, help="Exit non-zero when the no-decision reading fails.")
+def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
+    """L3's criterion, computed - and computed twice, because §5 states it two ways that disagree.
+
+    "7 天无 ERROR 相" counts ERROR cycles; "ERROR 相不产生任何治理决定" is a claim about their
+    consequences.  On the armed record the second holds and the first cannot: 0.318 ERROR/day gives a
+    10.8% chance of seven consecutive clean days, and the cause is the proxy §5 names itself.  Nothing
+    computed either reading until now, so the soak ran for a criterion that lived in prose.
+
+    `--check` gates on the no-decision reading, because that is the one this deployment can both fail
+    and pass on its own merits.  The literal reading is printed beside it and gates nothing until the
+    operator rules; the ruling is theirs, and a command that quietly picked one would be making it.
+    """
+    from beidou_governance.promote import closed, read_log
+    from beidou_live.soak import render, score
+
+    path = Path(state_dir) / "cycles.jsonl"
+    if not path.exists():
+        raise click.ClickException(f"no soak record at {path}")
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    log = read_log(Path(root).resolve() / "governance" / "transactions.jsonl")
+    reading = score(rows, required_days=days, transactions_closed=closed(log) if log else None)
+    click.echo(render(reading))
+    if check and not reading.no_decision_pass:
+        raise SystemExit(1)
+
+
 @live.command("status")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--paper", is_flag=True, help="inspect the paper-mode state directory instead")

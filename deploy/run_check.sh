@@ -59,4 +59,17 @@ else
   failed=1
   notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
 fi
+# L3's criterion, which nothing computed until 2026-09-09: the soak ran for a rule that lived in prose.
+# REPORTED, NOT GATED, and the distinction is deliberate.  L3 is a criterion that accumulates over seven
+# days, so it is FALSE for the first six by construction; wiring it into `failed` would page the operator
+# hourly for a week and teach them that this alert means nothing.  So it prints and `$failed` is left
+# alone.  The command's own `--check` does gate - on the no-decision reading, not the literal one - and
+# is there for whatever finally consumes this (a promotion gate, a weekly report), not for the hourly.
+if [ -f "$REPO/.beidou/paper-l3/cycles.jsonl" ]; then
+  if output="$("$REPO/.venv/bin/beidou" live soak --check 2>&1)"; then
+    echo "[$(stamp)] ok   soak"
+  else
+    echo "[$(stamp)] soak not yet passing:"; echo "$output" | sed "s/^/           /"
+  fi
+fi
 exit "$failed"
