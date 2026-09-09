@@ -1399,12 +1399,43 @@ def registry_digest(model: Any) -> str:
         except KeyError:
             return dict(entry.params)
 
+    def stop_of(entry: Any) -> Mapping[str, Any] | None:
+        """The stop rule this entry gives the loop, or None when it gives none.
+
+        Built through `ProbeParams` rather than by reading the YAML, so the digest covers exactly the
+        fields the loop acts on and cannot drift from them: prose (`reason`, `accepted_by`) stays out,
+        and `accepted_on` stays IN because it decides where the trailing window starts.
+        """
+        probe = getattr(entry, "probe", None)
+        if not probe:
+            return None
+        params = ProbeParams.from_entry(str(getattr(entry, "book", "main")), str(entry.id), probe)
+        return {
+            "window_days": params.window_days,
+            "max_loss": params.max_loss,
+            "review_after_days": params.review_after_days,
+            "accepted_on": params.accepted_on,
+            "halts": params.halts,
+        }
+
     payload = {
         "strategies": {
             str(entry.id): {
                 "book": str(getattr(entry, "book", "main")),
                 "weight": float(getattr(entry, "weight", 1.0)),
                 "params": canonical(entry),
+                # 2026-09-09.  The threshold that STOPS A BOOK was in no digest at all - not this one,
+                # not `construction_fingerprint`, not `registry_fingerprint`.  Measured: the shipped
+                # registry, the same registry with tsmom's stop deleted, and the same registry with
+                # `max_loss` tightened sixty-fold all produced the identical three digests.  So a probe's
+                # stop could be relaxed, tightened until it fired daily, or removed, and `live status
+                # --check` would keep reporting "registry：与正在运行的循环一致".
+                #
+                # KILL-Q15's shape on a risk control, which is worse than on the universe: that one
+                # changes WHAT is traded, this one changes whether a book gets halted at all.
+                # Conditional, for the reason the universe key is: a strategy that declares no probe
+                # adds no key, so every registry without one keeps the digest it has.
+                **({"probe_stop": stop} if (stop := stop_of(entry)) is not None else {}),
             }
             for entry in getattr(model, "entries", ())
         },
