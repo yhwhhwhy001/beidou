@@ -1708,14 +1708,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # (6 distinct raw vs 3 canonical on the armed record).  Both are the same defect this whole day is
 # about, arriving in the fix for it: a command added to make a module reachable, and then not
 # exercised.  The lines are the alias parameter and the test that drives the command through the CLI.
+# 2026-09-09, +190 governance / +45 cli: `family_gate.py` and `governance gate` - §3's third condition
+# on `probe -> main`, which had a definition, a handler, and no producer.  The `WINDOW_SURVIVED` branch
+# checked R4 and stopped, so a probe reached main on two of the three conditions §3 names, and the
+# missing one is the only one that can turn against a sleeve while the sleeve does nothing: the D-028
+# gate is a function of N, and N grows whenever anybody searches in the family.  Searching more retires
+# your own incumbents.  Holding everything but N at the report's values - including the annualisation
+# scale, backed out of the report's own threshold/quantile pair - is what makes any movement
+# attributable to the denominator alone.  N is NOT the bucket count: `dsr_inputs` builds it as ledger +
+# grid + declared prior, so tsmom's 183 is 86 + 2 + 95 while its bucket reads 88, and only the first
+# term can move after the fact.  First real run: tsmom PASS 1.8087 vs 1.5149 at N=185, and flow
+# UNREADABLE - its registry evidence is a BOOK report, which carries no `oos_selection`, so §3's third
+# condition is not computable for the only probe running.  That is a finding, not a bug in the reader.
 CEILING = {
     "beidou_alpha": 7_887,
     "beidou_live": 6_640,
-    "beidou_cli": 4_588,
+    "beidou_cli": 4_633,
     "beidou_data": 5_119,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 2_386,
+    "beidou_governance": 2_576,
 }
 
 

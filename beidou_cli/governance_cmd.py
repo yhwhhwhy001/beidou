@@ -19,9 +19,12 @@ import click
 import yaml
 
 from beidou_alpha.registry import parse_registry
+from beidou_alpha.validation.ledger import resolve_ledger_path
 from beidou_cli import main
 from beidou_governance.admission import Admission, admit
 from beidou_governance.canary import evaluate as evaluate_canary
+from beidou_governance.family_gate import failures as gate_failures
+from beidou_governance.family_gate import recheck as recheck_gate
 from beidou_governance.lifecycle import State
 from beidou_governance.policy import Policy
 from beidou_governance.promote import apply as apply_transaction
@@ -327,6 +330,48 @@ def plan_cmd(
     )
     click.echo(json.dumps(json.loads(transaction.to_json()), indent=2, ensure_ascii=False))
     if transaction.reasons or not admission.allowed:
+        raise SystemExit(1)
+
+
+@governance.command("gate")
+@click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
+@click.option("--root", default=".", help="Checkout to read the trials ledger and reports from.")
+@click.option("--check", is_flag=True, help="Exit non-zero if any running strategy fails at today's N.")
+def gate_cmd(registry_path: str, root: str, check: bool) -> None:
+    """R0 recomputed at today's bucket size - §3's third condition on `probe -> main`.
+
+    The gate is `max_sharpe_quantile(N, variance, alpha)` and N is the strategy's ledger bucket, which
+    is append-only.  So the threshold a strategy was adopted against is not the one it faces today, and
+    §3 says a probe may only reach main if it still clears the recomputed one.  That condition had no
+    branch in the state machine and no producer anywhere until 2026-09-09.
+
+    Everything except N is held at the values the evidence report recorded, including the annualisation
+    scale, which is backed out of the report's own threshold/quantile pair.  Any movement here is
+    therefore attributable to the denominator and to nothing else - which is the honest form of
+    "searching more retires your own incumbents".
+
+    Read-only.  A FAIL is an event for the state machine (`FAMILY_GATE_FAILED` -> retired), and nothing
+    on this path retires anything: `lifecycle.apply` still has no production caller, so the operator
+    sees the reading and decides.
+    """
+    checkout = Path(root).resolve()
+    registry = parse_registry(load_yaml(registry_path))
+    ledger = resolve_ledger_path(root=checkout)
+    lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
+
+    def read_report(path: str) -> dict[str, Any]:
+        return json.loads((checkout / path).read_text(encoding="utf-8"))
+
+    readings = recheck_gate(registry, read_report, lines)
+    for reading in readings:
+        click.echo(f"{reading.status:10s} {reading.strategy:22s} {reading.why}")
+    failed = gate_failures(readings)
+    unreadable = [r for r in readings if r.status == "UNREADABLE"]
+    click.echo(
+        f"{len(readings)} strategies: {len(readings) - len(failed) - len(unreadable)} pass, "
+        f"{len(failed)} fail, {len(unreadable)} unreadable (ledger {ledger})"
+    )
+    if check and failed:
         raise SystemExit(1)
 
 
