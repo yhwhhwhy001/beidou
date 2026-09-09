@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from beidou_alpha.validation.multiple_testing import SELECTION_GATE
@@ -294,8 +295,10 @@ def _facts_for(
     )
     suspended: list[str] = []
     prereg = report.get("preregistration")
-    if isinstance(prereg, Mapping) and prereg.get("committed_at"):
-        prereg_ok = str(prereg["committed_at"]) < str(report.get("generated_at") or "")
+    committed = _instant(prereg.get("committed_at")) if isinstance(prereg, Mapping) else None
+    generated = _instant(report.get("generated_at"))
+    if committed is not None and generated is not None:
+        prereg_ok = committed < generated
     else:
         prereg_ok = True
         suspended.append("DL-K3 预登记早于报告")
@@ -315,6 +318,33 @@ def _facts_for(
         ),
         tuple(suspended),
     )
+
+
+def _instant(value: Any) -> datetime | None:
+    """One ISO stamp as an instant, or None when it cannot be read as one.
+
+    DL-K3 used to compare these as STRINGS.  `git` writes `committed_at` with the COMMITTER's local
+    offset and a report writes `generated_at` in UTC, so the two are routinely in different zones and
+    the comparison was answering a question about text.
+
+    It failed both ways, and the second way is the one that matters.  Measured 2026-09-09 on the
+    pointer the live registry cites: prereg `2026-09-09T02:18:34+08:00`, report
+    `2026-09-08T18:22:04Z` - the pre-registration is 211 seconds EARLIER and the string compare said
+    it was later, so valid evidence was refused.  Turn the offset around and it lets a forgery
+    through: a "pre-registration" committed `2026-09-08T20:00:00-05:00` is 30 minutes AFTER a report
+    generated `2026-09-09T00:30:00+00:00`, and sorts before it as text.  DL-K3 is the rule that stops
+    a result being registered after it is known; a `<` on strings is not that rule.
+
+    Unreadable is None rather than a guess, so the caller suspends the condition instead of deciding
+    it - an artefact that cannot answer is not an artefact that answers "no".
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
 def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) -> Difference:

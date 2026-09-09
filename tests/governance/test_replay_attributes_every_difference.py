@@ -44,6 +44,11 @@ ADOPTIONS = {
     "reports/research/tsmom-validation-20260906T093705Z.json": "2026-09-06",  # has the block, unnamed gate
     "reports/research/book-tsmom-flow-20260908T105322Z.json": "2026-09-08",  # book, acknowledged REJECT
     "reports/research/tsmom-validation-20260908T105259Z.json": "2026-09-08",  # names its gate
+    # 2026-09-09 (`aed1066`), the pointer the registry cites NOW.  It was missing until DL-K3 stopped
+    # comparing timestamps as strings: while that bug refused this report, "the rules say no" and
+    # "history never adopted it" agreed, and the agreement was hiding a stale list.  One bug was
+    # masking another, and the masked one is the kind that makes an adoption history quietly wrong.
+    "reports/research/tsmom-validation-20260908T182204Z.json": "2026-09-09",  # carries a preregistration block
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
@@ -89,11 +94,20 @@ def test_an_evidence_gap_without_a_fix_is_not_attributed() -> None:
     assert closed.attributed
 
 
-def test_the_one_report_that_names_its_gate_is_the_one_the_rules_admit() -> None:
-    """The replay's sharpest single finding, pinned so it cannot quietly become "all of them"."""
+def test_only_the_reports_that_name_their_gate_are_the_ones_the_rules_admit() -> None:
+    """The replay's sharpest finding, pinned so it cannot quietly become "all of them".
+
+    Two, not one, since 2026-09-09: the re-run tsmom evidence cleared the gate after it was made
+    stricter, and it is the first report to carry a `preregistration` block, so DL-K3 can be decided
+    on the artefact instead of suspended.  The set is named rather than counted - a count would pass
+    while the wrong report joined it.
+    """
     result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
-    admitted = [line.split("：")[0] for line in result.reproduced if "规则同意采纳（validate" in line]
-    assert admitted == ["tsmom-validation-20260908T105259Z.json"]
+    admitted = sorted(line.split("：")[0] for line in result.reproduced if "规则同意采纳（validate" in line)
+    assert admitted == [
+        "tsmom-validation-20260908T105259Z.json",
+        "tsmom-validation-20260908T182204Z.json",
+    ]
 
 
 def test_a_suspended_condition_says_what_would_make_it_readable() -> None:
