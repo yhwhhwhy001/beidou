@@ -27,6 +27,18 @@ class ProbeParams:
     max_loss: float = 0.01  # trailing attributed net P&L <= -max_loss x equity stops the book (0 = any loss)
     review_after_days: int = 90
     accepted_on: str = ""
+    halts: bool = True
+    """Whether firing removes the book from the model, or only reports.
+
+    §3 gives the two transitions different channels on purpose: `probe -> retired` is "快：
+    `stopped_books`" and `main -> probe` is not.  A probe is an unproven sleeve and halting it is the
+    control; the main book carries `fraction` 1.0, so halting it is switching the strategy off, and
+    §3 says a stopped main is DEMOTED and recounts - it never says it stops trading.
+
+    So the main book's stop is computed, recorded and alerted every cycle, and moves the lifecycle;
+    it does not empty the book.  Turning that into a halt is one field, taken through a governance
+    transaction by a person, which is the right shape for a decision of that size.
+    """
 
     def __post_init__(self) -> None:
         if self.window_days <= 0 or self.review_after_days <= 0:
@@ -35,7 +47,7 @@ class ProbeParams:
             raise ValueError("probe max_loss must be in [0, 1]")
 
     @classmethod
-    def from_entry(cls, book: str, strategy: str, probe: Mapping[str, Any]) -> ProbeParams:
+    def from_entry(cls, book: str, strategy: str, probe: Mapping[str, Any], *, halts: bool = True) -> ProbeParams:
         raw_stop = probe.get("stop")
         stop: Mapping[str, Any] = raw_stop if isinstance(raw_stop, Mapping) else {}
         return cls(
@@ -45,14 +57,26 @@ class ProbeParams:
             max_loss=float(stop.get("max_loss", 0.01)),
             review_after_days=int(probe.get("review_after_days", 90)),
             accepted_on=str(probe.get("accepted_on", "") or ""),
+            # The registry may ask for a halt explicitly; otherwise the book decides (see `halts`).
+            halts=bool(stop.get("halts", halts)),
         )
 
 
 def probes_from_registry(registry: Registry) -> tuple[ProbeParams, ...]:
+    """Every enabled sleeve that carries a stop block - the main book included, since 2026-09-09.
+
+    It used to exclude `MAIN_BOOK` unconditionally, with no comment and no test.  §3 says main KEEPS
+    its P&L stop, so the exclusion made `main -> probe` unreachable from the record: no cycle ever
+    reported a stop for a main sleeve, and the trailing attributed P&L of the book that carries the
+    whole `fraction` was not merely un-acted-on, it was never COMPUTED.  What a rule cannot see it
+    cannot bound.
+
+    A main sleeve without a stop block is still skipped: absent knowledge is not a threshold.
+    """
     return tuple(
-        ProbeParams.from_entry(entry.book, entry.id, entry.probe)
+        ProbeParams.from_entry(entry.book, entry.id, entry.probe, halts=entry.book != MAIN_BOOK)
         for entry in registry.enabled
-        if entry.probe and entry.book != MAIN_BOOK
+        if entry.probe and (entry.probe.get("stop") or entry.book != MAIN_BOOK)
     )
 
 

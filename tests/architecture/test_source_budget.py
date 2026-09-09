@@ -1343,9 +1343,20 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # It was also masking a stale fixture: while it refused that report, "the rules say no" and "history
 # never adopted it" agreed, and the agreement hid an adoption list that had not been updated when the
 # registry changed pointers on 2026-09-09.  One bug covering another is why AC-G0 read as passing.
+# 2026-09-09, +35 live: the main book had no P&L stop and nothing computed one.  The sentence the
+# rule requires, and it is an operator ruling ("主账本必须要有止损"), assessed before it was built.
+# `probes_from_registry` excluded `MAIN_BOOK` unconditionally with no comment and no test, so the
+# book carrying the whole `fraction` had its 30-day trailing attributed P&L not merely un-acted-on
+# but never CALCULATED - what a rule cannot see it cannot bound.
+# The +35 is `ProbeParams.halts` and the branch behind it, because §3 gives the two transitions
+# different channels: `probe -> retired` is "快：stopped_books" and `main -> probe` is not.  Halting
+# a probe IS the control; halting a fraction-1.0 book is switching the strategy off, and §3 says a
+# firing main sleeve is DEMOTED and recounts.  So main's stop computes, records and alerts every
+# cycle and moves the lifecycle - it does not empty the book.  Making it a halt is one registry
+# field taken through a transaction by a person, which is the shape a decision that size deserves.
 CEILING = {
     "beidou_alpha": 6_998,
-    "beidou_live": 6_197,
+    "beidou_live": 6_232,
     "beidou_cli": 4_209,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
