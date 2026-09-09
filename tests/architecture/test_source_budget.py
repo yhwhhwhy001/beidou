@@ -1376,9 +1376,22 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # tally is not a failure.  A grid reporting three windows while searching two is a pre-registration
 # that is not true.  The frozen-hash guard caught the family the same run - the candidate list is
 # sorted BY HASH, so a new expression sorting into the middle shifts every index after it.
+# 2026-09-09, +31 live: the number that STOPS A BOOK was in no digest at all.  The sentence the rule
+# requires, and it was found by verifying the restart that armed the main book's stop - the expected
+# digest came back byte-identical to the one before the stop existed.  Measured across all three
+# hashers: the shipped registry, the same registry with tsmom's stop deleted, and the same registry
+# with `max_loss` tightened sixty-fold gave IDENTICAL digests in `registry_digest`,
+# `construction_fingerprint` and `registry_fingerprint`.  So a probe's stop could be relaxed,
+# tightened until it fired daily, or removed, and `live status --check` would keep reporting
+# "registry：与正在运行的循环一致".  KILL-Q15's shape on a risk control, and worse than on the
+# universe: that one decides WHAT is traded, this one decides whether a book gets halted at all.
+# Built through `ProbeParams` so the digest covers exactly the fields the loop acts on (prose stays
+# out, `accepted_on` stays in - it decides where the trailing window starts), conditional so an
+# unprobed registry keeps its digest, and NOT in the construction fingerprint, because reviewing a
+# threshold must not reset M-010's 30-day clock.
 CEILING = {
     "beidou_alpha": 7_113,
-    "beidou_live": 6_232,
+    "beidou_live": 6_263,
     "beidou_cli": 4_209,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
