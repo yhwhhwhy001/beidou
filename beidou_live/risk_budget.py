@@ -247,6 +247,10 @@ def attributed_drawdown_state(
             "base": base,
             "baseline_at": baseline_at,
         }
+    # Attribution that landed on a bar no priced cycle covers is P&L this path never saw, and dropping
+    # it silently would understate the drawdown - the permissive direction.  Zero on the live record as
+    # of 2026-09-09; reported rather than assumed, because "it is zero today" is not a property.
+    orphaned = sum(by_bar.values())
     action: str | None = None
     if current <= -params.rollback_at:
         action = f"vol_target -> {params.rollback_to}"
@@ -271,6 +275,8 @@ def attributed_drawdown_state(
         "rows": used,
         "deescalate_at": -params.deescalate_at,
         "rollback_at": -params.rollback_at,
+        "orphaned_rows": len(by_bar),
+        "orphaned_pnl": orphaned,
         "action": action,
     }
 

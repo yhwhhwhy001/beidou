@@ -177,3 +177,22 @@ async def test_a_reading_that_cannot_be_taken_does_not_lift_a_standing_action(tm
     block = await LiveEngine._risk_ladder(engine, bar)
     assert not block["enforced"] and block["acting"] and block["scalar"] == pytest.approx(0.75)
     assert block["held_blind"] and "realised nothing" in block["why"]
+
+
+def test_pnl_that_lands_on_no_priced_cycle_is_reported_rather_than_dropped(tmp_path: Path) -> None:
+    """The path is built off priced cycles, so attribution on an unpriced bar would vanish silently.
+
+    Vanishing understates the drawdown, which is the permissive direction, and "it is zero on today's
+    record" is not a property.  Zero on the live record as of 2026-09-09 - measured, and reported so the
+    day it stops being zero is visible.
+    """
+    store = StateStore(tmp_path)
+    bar = _cycle(store, 0, 10_000.0)
+    _attribute(store, bar, -100.0)
+    _attribute(store, bar + 99 * BAR, -5_000.0)  # a bar no cycle ever priced
+    reading = attributed_drawdown_state(
+        store.read_jsonl(store.cycles_path), store.read_jsonl(store.attribution_path), RiskBudgetParams()
+    )
+    assert reading["enforced"] and reading["rows"] == 1
+    assert reading["orphaned_rows"] == 1 and reading["orphaned_pnl"] == pytest.approx(-5_000.0)
+    assert reading["value"] == pytest.approx(-0.01), "the orphan is not silently folded in either"

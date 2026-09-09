@@ -1432,9 +1432,13 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # be wrong about.  `AlphaModel.without_symbols` mirrors `without_books`, and the pinned case alerts,
 # because under a pin the daily re-rank adopts nothing and the symbol does not come back without a
 # restart: a machine departing from a governed decision may not do it quietly.
+# 2026-09-09, +6 live: self-review of the ladder.  Attribution landing on a bar no priced cycle covers
+# would have vanished from the path, which understates the drawdown - the permissive direction.  Zero on
+# today's record, so this reports rather than fixes; "it is zero today" is not a property, and the day it
+# stops being zero has to be visible.
 CEILING = {
     "beidou_alpha": 7_150,
-    "beidou_live": 6_534,
+    "beidou_live": 6_540,
     "beidou_cli": 4_250,
     "beidou_data": 1_889,
     "beidou_exchange": 611,
