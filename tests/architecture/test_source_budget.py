@@ -1815,11 +1815,35 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # as admission.  The counterweight is that this grows non-alpha again, which the plan's budget already
 # records as breached; the alternative was leaving three modules unreachable, which is the state this
 # whole day's work exists to end.
-CEILING = {
-    "beidou_alpha": 8_071,
-    "beidou_live": 6_797,
-    "beidou_cli": 5_441,
-    "beidou_data": 5_119,
+# 2026-09-09, +169 data / +125 cli / +14 live, and the sentence the rule requires: DL-D5's two open
+# ends, joined.  Nothing new was invented here - the store, the ingest command, the mapping file, the
+# event-time contract, the `basis` leaf, `load_panel`'s `spot_store` parameter and `mine`'s narrowing on
+# `Panel.spot_symbols` all already existed, and the feed was dead at both ends anyway.  That is the
+# finding, and it is a different shape from a missing feature: EVERY PART OF A PATH CAN EXIST AND THE
+# PATH STILL NOT EXIST.  Both ends failed silently and in the direction that reads as success.
+# The research end: `research_cmd._load` built a `KlineStore`, a `FundingStore` and a `MetricsStore`,
+# and no spot store.  So `Panel.spot_symbols` was 0 on every panel `mine` could construct,
+# `searched_basis = panel.spot_symbols > 0` was False on every run, and the 18 basis shapes were never
+# enumerated - while the artefact recorded `include_basis: false` truthfully.  A reader cannot tell that
+# from a family that ran and lost, which is exactly the confusion DL-D4 took two rounds to escape, and
+# it is why this one survived a round longer than DL-D4 did: the metrics leaves at least ERRORED 90
+# times per round.  The cli lines are that wiring plus `_wants_spot`, the `needs_spot` twin of
+# `_wants_metrics`, so `validate` carries the columns for a mined basis id and only for one.
+# The live end: `engine.spot_refusal` asked `admits_live_signal` at startup and `self.spot_verification`
+# was assigned `None` in the constructor with nothing able to set it, so the gate could not be opened by
+# any measurement, right or wrong.  The data lines are `verify_spot_contract` (the SPOT contract held
+# against two independent renderings - measured against the venue today on BTCUSDT 2026-08: 744/744 at
+# the declared offset, 0/743 and 0/744 one bar either way, all five panel columns compared) and the
+# record it writes.  `read_spot_verification` is the part worth defending against a later simplifier:
+# it RE-DERIVES the verdict from the record's own counts instead of parsing the one written beside them,
+# because `spot_alignment.json` sits in a directory an operator can edit and `LiveEngine.__init__` says
+# no edit may open this gate.  Deleting that re-derivation turns a measurement back into a config key.
+# What the raise does NOT buy, stated because the next reader will assume otherwise from the gate being
+# open: the live panel still carries no spot column at all.  `AlphaModel.targets` builds its panel from
+# the market-data port's bars and nothing supplies spot to it, so a basis strategy that passed this gate
+# would raise `ExprError` from `_required_spot` on its first cycle.  Loud rather than silent, and at the
+# first cycle rather than at some later bar, which is why the refusal was left to be about the offset
+# alone.  Two open ends became one.
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 3_182,

@@ -78,7 +78,7 @@ from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_e
 from beidou_cli import research
 from beidou_data.manifest import build_manifest
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
-from beidou_data.store import FundingStore, KlineStore, MetricsStore
+from beidou_data.store import SPOT_KLINE_KIND, FundingStore, KlineStore, MetricsStore
 from beidou_governance.policy import Policy
 from beidou_live.composition import (
     build_model,
@@ -252,14 +252,29 @@ def _load(
     end: str | None,
     funding: bool,
     metrics: bool = False,
+    spot: bool = False,
 ) -> Panel:
-    """The research panel.  ``metrics`` is opt-in and defaults off, deliberately.
+    """The research panel.  ``metrics`` and ``spot`` are opt-in and default off, deliberately.
 
-    Loading it means reading a parquet per symbol and aligning every bucket, which is real work for a
+    Loading them means reading a parquet per symbol and aligning every bucket, which is real work for a
     run whose signals read none of it - and the alignment is where the only look-ahead in this data
     lives, so a run that does not need the columns is better off not carrying them at all.  Callers
-    turn it on when a strategy declares `needs_metrics`, and `research mine` turns it on always,
-    because the candidates it is about to enumerate are exactly what decides the answer.
+    turn them on when a strategy declares `needs_metrics` / `needs_spot`, and `research mine` turns both
+    on always, because the candidates it is about to enumerate are exactly what decides the answer.
+
+    ``spot`` was the missing half of DL-D5 until 2026-09-09 and the shape of the miss is worth keeping:
+    every part of the spot path existed - the store, the ingest command, the alignment contract, the
+    `basis` leaf, `load_panel`'s own `spot_store` parameter, and `mine`'s narrowing on
+    `Panel.spot_symbols` - and nothing built the store here, so `spot_symbols` was 0 on every panel this
+    module could construct and the narrowing switched the family off on every run.  Eighteen shapes,
+    zero enumerated, and the artefact said `include_basis: false` truthfully.  That is the same defect
+    DL-D4 had one feed over, arriving through the panel rather than through the flag.
+
+    What is still NOT wired, named rather than left for the next reader to discover: `backtest`, `book`,
+    `diagnose`, `correlate` and `overlay` pass neither `metrics` nor `spot`, so a mined `oi`, `lsr` or
+    `basis` candidate that survives `validate` cannot yet be run through them.  One predicate per site
+    fixes it; it is a separate change because it is the metrics feed's gap too and the two should move
+    together rather than leave the pipeline half-asymmetric in a new place.
     """
     store = KlineStore(root)
     return load_panel(
@@ -268,6 +283,7 @@ def _load(
         interval,
         funding_store=FundingStore(root) if funding else None,
         metrics_store=MetricsStore(root) if metrics else None,
+        spot_store=KlineStore(root, kind=SPOT_KLINE_KIND) if spot else None,
         start=start,
         end=end,
     )
@@ -285,6 +301,22 @@ def _wants_metrics(strategy: str, params: Mapping[str, Any]) -> bool:
     except (KeyError, ValueError):
         return False
     predicate = getattr(spec, "needs_metrics", None)
+    return bool(predicate(params)) if predicate is not None else False
+
+
+def _wants_spot(strategy: str, params: Mapping[str, Any]) -> bool:
+    """Does this strategy declare it reads `panel.spot` (DL-D5)?  Unknown ids answer no, not crash.
+
+    A second function rather than a parameterised one, exactly as `LiveEngine` keeps
+    `strategies_needing_metrics` and `strategies_needing_spot` apart: the two answer for different
+    stores and a caller that asked for "the extra columns" would carry a metrics alignment it never
+    reads on every basis run, and vice versa.
+    """
+    try:
+        spec = get_signal(strategy)
+    except (KeyError, ValueError):
+        return False
+    predicate = getattr(spec, "needs_spot", None)
     return bool(predicate(params)) if predicate is not None else False
 
 
@@ -646,13 +678,22 @@ def research_validate(
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
-    # DL-D4: carry the metrics columns only when this strategy declares it reads them, so a run
-    # that reads none does not pay for the alignment - and does not carry the one place a
-    # look-ahead could enter data it never uses.
+    # DL-D4 and DL-D5: carry the metrics or spot columns only when this strategy declares it reads
+    # them, so a run that reads none does not pay for the alignment - and does not carry the one place
+    # a look-ahead could enter data it never uses.
     # `_entry` above already ran `_resolve_mined` + `get_signal`, so a mined id is registered by now
-    # and answers for itself.  Params are deliberately not passed: `needs_metrics` is derived from the
-    # expression tree, so it cannot depend on which grid cell is being scored.
-    panel = _load(root, chosen, interval, start, end, funding, metrics=_wants_metrics(strategy, {}))
+    # and answers for itself.  Params are deliberately not passed: both predicates are derived from the
+    # expression tree, so they cannot depend on which grid cell is being scored.
+    panel = _load(
+        root,
+        chosen,
+        interval,
+        start,
+        end,
+        funding,
+        metrics=_wants_metrics(strategy, {}),
+        spot=_wants_spot(strategy, {}),
+    )
     # KILL-006: the reserved tail is cut here, before folds, membership or costs touch it, so nothing in this
     # run can see it.  It is recorded in the report, which is what makes the reservation checkable later:
     # a promise in prose is not a holdout, and every OOS number produced without one has been selected on.
@@ -2490,9 +2531,9 @@ def research_decompose(
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
-    # DL-D4: always, because the candidates about to be enumerated are what decides whether the
-    # columns are needed, and enumeration happens after the panel exists.
-    panel = _load(root, chosen, interval, start, end, funding, metrics=True)
+    # DL-D4 and DL-D5: always, because the candidates about to be enumerated are what decides whether
+    # the columns are needed, and enumeration happens after the panel exists.
+    panel = _load(root, chosen, interval, start, end, funding, metrics=True, spot=True)
     _require_funding([entry], panel)
     membership = _membership(root, universe_mode, panel, min_tenure)
     model = _model(entry, profile_payload, interval, min_history)
@@ -2609,7 +2650,13 @@ def research_mine(
     # 2026-09-09 across two rounds, `outcomes.errored = 90` both times, and the 90 are exactly the 54
     # `oi` plus 36 `lsr`.  The rows carry the reason - `error: ExprError: ... does not carry` - and only
     # the count reached the summary, so it read as a family that ran and lost.
-    panel = _load(root, chosen, interval, start, end, funding, metrics=True)
+    #
+    # DL-D5: `spot=True` for the same reason and with the opposite symptom, which is why it survived a
+    # round longer.  The metrics leaves were enumerated against a panel that could not answer them and
+    # errored 90 times; the basis leaves were narrowed away by `searched_basis` below and errored zero
+    # times, so the run was clean and the family was never searched at all.  A quiet defect outlives a
+    # noisy one - the narrowing is right, and what was wrong was the panel it narrowed on.
+    panel = _load(root, chosen, interval, start, end, funding, metrics=True, spot=True)
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     portfolio = portfolio_params(profile_payload)
@@ -2629,11 +2676,13 @@ def research_mine(
     # was not.  `panel.settled_symbols` is the quantity that answers it, and `_require_funding` below is the
     # backstop for anything this narrowing lets through - a `--baseline` in particular.
     searched_funding = include_funding and panel.settled_symbols > 0
-    # DL-D5, the same narrowing one source over, and today it always narrows to False: `_load` does not
-    # build a spot store, so no panel this command can construct carries spot.  Written as the predicate
-    # rather than as a hardcoded False because that is the difference between "narrowed by what the panel
-    # holds" and "switched off by hand" - the day `_load` grows a spot store, this turns itself on, and
-    # until then the 18 basis shapes are never charged to `declared_trials` for a family nobody scored.
+    # DL-D5, the same narrowing one source over.  It narrowed to False on every run until 2026-09-09,
+    # not because a flag said so but because `_load` built no spot store, so no panel this command could
+    # construct carried spot and the 18 basis shapes were never charged to `declared_trials` for a
+    # family nobody scored.  Writing it as the predicate rather than as a hardcoded False is what let it
+    # turn itself on the day the store arrived - the difference between "narrowed by what the panel
+    # holds" and "switched off by hand".  It still narrows on an unsynced root, which is the honest
+    # answer there: `beidou data spot` has to have run for this root before a basis shape can be scored.
     searched_basis = panel.spot_symbols > 0
     # Every grid is a bar COUNT, so the same search at another interval needs them rescaled: at 1d the
     # default `horizons` of 24..720 mean 24..720 DAYS, and `max_lookback` 1400 outruns the sample.  Keys
