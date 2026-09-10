@@ -18,7 +18,22 @@ rules on neither: `literal_pass` and `no_decision_pass`, side by side, with the 
 
 A third number is reported because neither reading covers it: the longest ERROR STREAK.  One 503 is
 the proxy blinking; six hours of them is the venue being unreachable, and only the second is a fact
-about whether this deployment works.  It is reported, not gated, until somebody rules on it.
+about whether this deployment works.
+
+**Ruled 2026-09-10.**  The gate is the no-decision reading AND a bar on that streak; the literal count
+stays computed and printed and gates nothing.
+
+Why the no-decision reading, stated so it is not mistaken for picking the criterion that passes: only
+one of the two sentences has a mechanism behind it.  `no_decision_phases` exists, is enforced, and is
+falsifiable per cycle - an ERROR cycle that placed an order, quarantined a sleeve or moved the ladder
+fails it and the row says so.  The literal count has no mechanism; it tallies a phase whose meaning is
+"the loop declined to act on bad data", which is the loop working.  The contradiction in §5 predates
+every measurement here.
+
+And the criterion is made HARDER where it was blind.  Six hours of 503s decide nothing either, so the
+no-decision reading alone cannot see an outage.  The streak bar is `STUCK_IN_ERROR_STREAK` - the same
+3 that `live status --check` already pages on - rather than a number chosen here: a week that held an
+incident the hourly check was alerting about is not a week that proved unattended operation.
 """
 
 from __future__ import annotations
@@ -27,6 +42,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+
+from beidou_live.health import STUCK_IN_ERROR_STREAK
 
 #: What a cycle must not have done to count as having decided nothing.  Each is a governance action
 #: the loop can take on its own; an ERROR cycle that took one would be KILL-AR-20 failing in practice.
@@ -41,6 +58,7 @@ class SoakReading:
     error_cycles: int = 0
     skipped_cycles: int = 0
     longest_error_streak: int = 0
+    max_error_streak: int = STUCK_IN_ERROR_STREAK
     longest_clean_days: float = 0.0
     deciding_errors: tuple[str, ...] = ()
     transactions_closed: bool | None = None
@@ -59,6 +77,16 @@ class SoakReading:
     def no_decision_pass(self) -> bool:
         """§5's Testnet clause: seven days in which no ERROR cycle decided anything."""
         return self.long_enough and not self.deciding_errors and self.transactions_closed is not False
+
+    @property
+    def streak_pass(self) -> bool:
+        """No run of ERROR cycles long enough for the hourly check to have called the loop stuck."""
+        return self.longest_error_streak < self.max_error_streak
+
+    @property
+    def passes(self) -> bool:
+        """L3 as ruled on 2026-09-10.  This is the one `--check` gates on."""
+        return self.no_decision_pass and self.streak_pass
 
 
 def _decided(row: Mapping[str, Any]) -> tuple[str, ...]:
@@ -125,7 +153,12 @@ def score(
     notes: list[str] = []
     if errors and not deciding:
         notes.append(f"{len(errors)} ERROR cycles, none of which decided anything (KILL-AR-20's shape)")
-    if longest > 1:
+    if longest >= STUCK_IN_ERROR_STREAK:
+        notes.append(
+            f"longest ERROR streak {longest} >= {STUCK_IN_ERROR_STREAK}: this is the run `live status "
+            "--check` calls the loop stuck, and L3 does not pass a week that held one"
+        )
+    elif longest > 1:
         notes.append(f"longest ERROR streak {longest}: a run is the venue being unreachable, not a blink")
     return SoakReading(
         cycles=len(cycles),
@@ -147,8 +180,11 @@ def render(reading: SoakReading) -> str:
         f"phases   ERROR {reading.error_cycles}, SKIPPED {reading.skipped_cycles}, "
         f"longest ERROR streak {reading.longest_error_streak}",
         f"clean    longest run without an ERROR: {reading.longest_clean_days:.2f} days",
-        f"§5 L3 字面   {'PASS' if reading.literal_pass else 'FAIL'}  (7 天无 ERROR 相)",
+        f"§5 L3 字面   {'PASS' if reading.literal_pass else 'FAIL'}  (7 天无 ERROR 相；已裁定不作门，仍照报)",
         f"§5 no-decision {'PASS' if reading.no_decision_pass else 'FAIL'}  (7 天内没有 ERROR 周期做过决定)",
+        f"ERROR 连段   {'PASS' if reading.streak_pass else 'FAIL'}  "
+        f"(最长 {reading.longest_error_streak} < {reading.max_error_streak}，与 live status --check 同一条)",
+        f"L3 判据     {'PASS' if reading.passes else 'FAIL'}  (2026-09-10 裁定：no-decision + 连段)",
     ]
     if reading.transactions_closed is not None:
         lines.append(f"事务链     {'closed' if reading.transactions_closed else 'BROKEN'}")

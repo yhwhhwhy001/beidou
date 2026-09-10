@@ -30,6 +30,32 @@ from beidou_live.reports import restart_cost
 from beidou_live.risk_budget import RiskBudgetParams
 
 MISSED = "restart outside the rebalance window"
+HOUR_MS = 3_600_000
+BAR = 1_789_016_400_000  # 2026-09-10T05:00:00Z
+
+# 2026-09-10: `restart_cost` stopped reading the late share off `late_seconds` (which only restart rows
+# ever carried, so a metric named "迟到周期占比" was reporting restart frequency) and now computes each
+# SCHEDULED cycle's wake-up from the `at` and `bar_open_ms` every row has always written.  The fixtures
+# below carry those fields for that reason; a row of `{"bar": "t1"}` no longer describes anything the
+# engine writes.  See test_the_late_share_measures_wake_ups_not_restarts.py.
+
+
+def _iso(ms: int) -> str:
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
+
+
+def _cycle(index: int, woke_seconds_after_close: float = 14.0, window: float = 73.7) -> dict[str, Any]:
+    """A completed cycle as the engine writes it, punctual unless told otherwise."""
+    bar = BAR + index * HOUR_MS
+    return {
+        "bar": _iso(bar),
+        "bar_open_ms": bar,
+        "at": _iso(bar + HOUR_MS + int(woke_seconds_after_close * 1000)),
+        "window_seconds": window,
+        "skip": False,
+    }
 
 
 def _miss(bar: str, late: float, counter: int, window: float = 73.7) -> dict[str, Any]:
@@ -45,7 +71,7 @@ def _miss(bar: str, late: float, counter: int, window: float = 73.7) -> dict[str
 
 
 def test_a_clean_day_costs_nothing() -> None:
-    cost = restart_cost([{"bar": "t1", "skip": False}, {"bar": "t2", "skip": False}])
+    cost = restart_cost([_cycle(0), _cycle(1)])
 
     assert cost["missed_rebalances"] == 0
     assert cost["skipped_bars"] == 0
@@ -58,24 +84,32 @@ def test_a_clean_day_costs_nothing() -> None:
 
 def test_a_late_restart_is_counted_not_assumed() -> None:
     """The real row from restart #1: 972.8s after the close, one rebalance skipped."""
-    rows = [{"bar": "t1", "skip": False}, _miss("t2", 972.814, 1)]
+    rows = [_cycle(0), _miss("t2", 972.814, 1)]
 
     cost = restart_cost(rows)
 
     assert cost["missed_rebalances"] == 1
     assert cost["skipped_bars"] == 1
-    assert cost["worst_late_seconds"] == 972.814
-    assert cost["late_bars"] == 1
+    # 2026-09-10: a restart's lateness is reported under its own name.  It was never a late WAKE-UP -
+    # nobody scheduled it - and while it shared `worst_late_seconds` with the wake-ups, that field
+    # could hold nothing else, which is how the share came to measure restart frequency.
+    assert cost["worst_restart_late_seconds"] == 972.814
+    assert cost["restarts"] == 1
+    assert cost["late_bars"] == 0
 
 
 def test_a_prompt_restart_is_late_but_not_missed() -> None:
-    """Restart #2 landed inside the window: late, and it still traded.  Both facts are kept."""
-    rows = [{"bar": "t1", "late_seconds": 7.4}]
+    """Restart #2 landed inside the window, so it traded and the engine wrote it as an ordinary cycle.
 
-    cost = restart_cost(rows)
+    2026-09-10: the row this used to assert on - `{"bar": "t1", "late_seconds": 7.4}` - is not a shape
+    the engine produces.  A restart inside the window takes the normal path and writes a normal cycle;
+    only one outside it goes through `_record_missed_rebalance`.  The fixture now says that, and the
+    claim is unchanged: prompt is not missed, and being 7.4s after the close is not being late.
+    """
+    cost = restart_cost([_cycle(0, woke_seconds_after_close=7.4)])
 
-    assert cost["late_bars"] == 1
-    assert cost["worst_late_seconds"] == 7.4
+    assert cost["late_bars"] == 0
+    assert cost["worst_late_seconds"] is None
     assert cost["missed_rebalances"] == 0
     assert cost["skipped_bars"] == 0
 
@@ -100,7 +134,7 @@ def test_three_processes_that_each_missed_one_are_three_and_not_one() -> None:
     cost = restart_cost(rows)
 
     assert cost["missed_rebalances"] == 3
-    assert cost["worst_late_seconds"] == 2_115.631
+    assert cost["worst_restart_late_seconds"] == 2_115.631
 
 
 def test_a_process_that_spans_midnight_does_not_charge_today_with_yesterdays_misses() -> None:
@@ -126,7 +160,7 @@ def test_a_guard_skipped_cycle_is_not_a_missed_rebalance() -> None:
 
 def test_the_plans_bar_of_zero_missed_rebalances_is_enforced() -> None:
     """ "<= 5% / 0" - the second half is exactly zero, so one miss is a breach."""
-    rows = [{"bar": f"t{i}", "skip": False} for i in range(40)] + [_miss("t40", 972.814, 1)]
+    rows = [_cycle(i) for i in range(40)] + [_miss("t40", 972.814, 1)]
 
     cost = restart_cost(rows, params=RiskBudgetParams())
 
@@ -137,21 +171,30 @@ def test_the_plans_bar_of_zero_missed_rebalances_is_enforced() -> None:
 
 
 def test_the_late_share_is_judged_per_cycle_against_the_five_percent_bar() -> None:
-    """2026-09-09's shape: three restarts in one morning, against a bar of 5% of the day's cycles.
+    """2026-09-09's shape: three restarts in one morning, and fifteen cycles that woke on time.
 
-    The day itself kept running after this was measured (18 cycles then, 19 an hour later, 15.8%), which
-    is why the fixture is a fixed 18 and the assertion is the arithmetic rather than the live reading -
-    the mistake the collateral instrument's pinned "73%" made two files over.
+    2026-09-10 changed what this asserts, and the change is the ruling.  It used to read 16.7% -
+    3 restart rows over 18 total rows - and call the day late.  Fifteen of those cycles woke within
+    seconds of their close; not one of them was late.  What the day actually held was three restarts,
+    one of which cost a rebalance, and M-Q03's two halves now say exactly that: `missed_rebalances` 3
+    breaches the zero bar, and the share over SCHEDULED wake-ups is 0%.
+
+    The old reading was not merely generous, it was unfalsifiable in the wrong direction: with the
+    numerator restricted to restart rows and the denominator every row, running the loop MORE lowered
+    the number, and a genuinely late wake-up could not raise it at all.
     """
-    rows = [{"bar": f"t{i}", "skip": False} for i in range(15)]
+    rows = [_cycle(i) for i in range(15)]
     rows += [_miss("t15", 527.484, 1), _miss("t16", 1_114.144, 1), _miss("t17", 2_115.631, 1)]
 
     cost = restart_cost(rows, params=RiskBudgetParams())
 
     assert cost["cycles"] == 18
-    assert round(cost["late_cycle_share"], 4) == 0.1667
+    assert cost["restarts"] == 3
+    assert cost["late_cycle_share"] == 0.0
+    assert cost["missed_rebalances"] == 3
     assert cost["status"] == "ALERT"
-    assert any("16.7%" in reason for reason in cost["reasons"])
+    assert any("漏掉 3 次再平衡" in reason for reason in cost["reasons"])
+    assert not any("迟到周期占比" in reason for reason in cost["reasons"])
 
 
 def test_no_cycles_reports_no_share_rather_than_a_clean_zero() -> None:
@@ -186,12 +229,26 @@ def _store_with_a_missed_rebalance(tmp_path: Path) -> Any:
 
     base = 1_756_800_000_000  # 2025-09-02T08:00Z
     store = StateStore(tmp_path)
+    # `at` is set explicitly.  `StateStore._append` stamps `utc_now_iso()` unless the record carries
+    # one, so a fixture with a 2025 `bar_open_ms` and no `at` describes a cycle that woke a year after
+    # its bar - which read as 32,221,562s of lateness the moment the share started reading these two
+    # fields.  The engine writes both from the same cycle, so the fixture must too.
     store.append_cycle(
-        {"bar_open_ms": base, "equity": 10_000.0, "skip": False, "guard_reasons": [], "targets": {}, "orders": []}
+        {
+            "bar_open_ms": base,
+            "at": _iso(base + HOUR_MS + 14_000),
+            "window_seconds": 73.7,
+            "equity": 10_000.0,
+            "skip": False,
+            "guard_reasons": [],
+            "targets": {},
+            "orders": [],
+        }
     )
     store.append_cycle(
         {
             "bar_open_ms": base + 3_600_000,
+            "at": _iso(base + 2 * HOUR_MS + 972_814),
             "equity": 10_000.0,
             "skip": False,
             "guard_reasons": [],
@@ -210,7 +267,7 @@ def test_the_daily_report_carries_it(tmp_path: Path) -> None:
     payload = daily_payload(_store_with_a_missed_rebalance(tmp_path), "2025-09-02", {})
 
     assert payload["restarts"]["missed_rebalances"] == 1
-    assert payload["restarts"]["worst_late_seconds"] == 972.814
+    assert payload["restarts"]["worst_restart_late_seconds"] == 972.814
     text = daily_markdown(payload)
     assert "missed_rebalances" in text
     assert "972.8" in text

@@ -50,7 +50,7 @@ from beidou_live.engine import (
     registry_digest,
     release_kill_switches,
 )
-from beidou_live.health import cycle_health
+from beidou_live.health import STUCK_IN_ERROR_STREAK, cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
@@ -416,18 +416,23 @@ def live_run(
 @click.option("--state-dir", default=".beidou/paper-l3", show_default=True, help="Which soak to score.")
 @click.option("--days", default=7.0, show_default=True, help="§5 L3's window.")
 @click.option("--root", default=".", help="Checkout to read the transaction log from.")
-@click.option("--check", is_flag=True, help="Exit non-zero when the no-decision reading fails.")
+@click.option("--check", is_flag=True, help="Exit non-zero when L3 as ruled fails.")
 def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
-    """L3's criterion, computed - and computed twice, because §5 states it two ways that disagree.
+    """L3's criterion, computed - and computed three ways, because §5 states it two that disagree.
 
     "7 天无 ERROR 相" counts ERROR cycles; "ERROR 相不产生任何治理决定" is a claim about their
     consequences.  On the armed record the second holds and the first cannot: 0.318 ERROR/day gives a
     10.8% chance of seven consecutive clean days, and the cause is the proxy §5 names itself.  Nothing
-    computed either reading until now, so the soak ran for a criterion that lived in prose.
+    computed either reading until 2026-09-09, so the soak ran for a criterion that lived in prose.
 
-    `--check` gates on the no-decision reading, because that is the one this deployment can both fail
-    and pass on its own merits.  The literal reading is printed beside it and gates nothing until the
-    operator rules; the ruling is theirs, and a command that quietly picked one would be making it.
+    **Ruled 2026-09-10**: `--check` gates on the no-decision reading AND a bar on the longest ERROR
+    streak.  The no-decision sentence is the one with a mechanism behind it - `no_decision_phases` is
+    enforced and falsifiable per cycle - while the literal count tallies a phase that means the loop
+    declined to act on bad data.  The streak bar closes what neither reading covered: six hours of 503s
+    decide nothing either.  It is `STUCK_IN_ERROR_STREAK`, the same 3 this file's `status --check`
+    already pages on, so the two cannot disagree about what "stuck" means.
+
+    The literal reading is still computed and printed.  Ruling it out of the gate is not deleting it.
     """
     from beidou_governance.promote import closed, read_log
     from beidou_live.soak import render, score
@@ -439,7 +444,7 @@ def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
     log = read_log(Path(root).resolve() / "governance" / "transactions.jsonl")
     reading = score(rows, required_days=days, transactions_closed=closed(log) if log else None)
     click.echo(render(reading))
-    if check and not reading.no_decision_pass:
+    if check and not reading.passes:
         raise SystemExit(1)
 
 
@@ -538,7 +543,7 @@ def live_status(
             age = float("inf")
         if age > threshold:
             problems.append(f"心跳已过期 {age:.0f}s（> {threshold:.0f}s）")
-        if heartbeat.get("phase") == "ERROR" and int(heartbeat.get("consecutive_errors", 0)) >= 3:
+        if heartbeat.get("phase") == "ERROR" and (int(heartbeat.get("consecutive_errors", 0)) >= STUCK_IN_ERROR_STREAK):
             problems.append(f"循环处于报错状态：{heartbeat.get('error')}")
     # M-001: what share of the loop's own cycles completed, from the append-only log rather than the heartbeat
     health = cycle_health(

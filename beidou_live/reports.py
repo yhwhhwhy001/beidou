@@ -954,11 +954,17 @@ def _restart_cost_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "status": block.get("status"),
         "missed_rebalances": f"{block.get('missed_rebalances')} (M-Q03 阈值 {limits.get('missed_rebalances')})",
         "late_cycle_share": (
-            "no cycle ran"
+            "无可判周期（没有周期记下它当时的窗口）"
             if share is None
-            else f"{share:.1%} of {block.get('cycles')} (M-Q03 阈值 {float(limits.get('late_cycle_share', 0.0)):.0%})"
+            else f"{share:.1%} of {block.get('scheduled_cycles_measurable')} 个已排定周期 "
+            f"(M-Q03 阈值 {float(limits.get('late_cycle_share', 0.0)):.0%}；重启不计)"
         ),
         "worst_late_seconds": _fmt_num(block.get("worst_late_seconds")),
+        # Restarts are reported under their own name rather than inside the lateness they used to be
+        # the whole of.  Both facts stay visible; only the arithmetic stopped mixing them.
+        "restarts": block.get("restarts"),
+        "worst_restart_late_seconds": _fmt_num(block.get("worst_restart_late_seconds")),
+        "unreadable_wakes": block.get("unreadable_wakes"),
         "widest_rebalance_window_seconds": _fmt_num(block.get("widest_window_seconds")),
         # the half M-Q03 is named for, reported without a bar - see `restart_cost`
         "worst_late_fill_seconds": _fmt_num(block.get("worst_late_fill_seconds")),
@@ -1103,10 +1109,34 @@ def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"blocking": list(block.get("blocking", [])), "advisory": list(block.get("advisory", []))}
 
 
+def _woke_seconds_after_close(row: Mapping[str, Any], interval_ms: int) -> float | None:
+    """How late a scheduled cycle woke, from what the row already carries.
+
+    No new field was needed for this: every cycle row has written `at` and `bar_open_ms` from the
+    beginning (202 of 202 on the live record).  The lateness of every cycle was recorded and only the
+    reader was missing, which is this repository's most-repeated defect in its most literal form.
+
+    `None` when the row cannot say - a torn write, or a row from before these fields existed.  An
+    unreadable row is a cycle whose punctuality is unknown, not a punctual cycle, so it is counted
+    apart rather than folded into either side.
+    """
+    bar = row.get("bar_open_ms")
+    at = row.get("at")
+    if not isinstance(bar, int | float) or not isinstance(at, str):
+        return None
+    try:
+        woke_ms = datetime.fromisoformat(at).timestamp() * 1000.0
+    except ValueError:
+        return None
+    return max(0.0, (woke_ms - (float(bar) + interval_ms)) / 1000.0)
+
+
 def restart_cost(
     rows: Sequence[Mapping[str, Any]],
     trades: Sequence[Mapping[str, Any]] = (),
     params: RiskBudgetParams | None = None,
+    *,
+    interval_ms: int = 3_600_000,
 ) -> dict[str, Any]:
     """M-Q03 / AC-L4 / RISK-P2: what the day's restarts cost, counted AND judged rather than assumed.
 
@@ -1139,40 +1169,66 @@ def restart_cost(
     held.  KILL-R6 named the per-cycle share as the acceptable reading and that is what is judged.
     """
     params = params or RiskBudgetParams()
-    missed = 0
-    late: list[float] = []
+    missed = restarts = unreadable = 0
     windows: list[float] = []
+    wakes: list[float] = []  # how late each SCHEDULED cycle woke, from its own row
+    restart_late: list[float] = []
     for row in rows:
         reason = row.get("reason")
         skipped = row.get("phase") == "SKIPPED" or reason == MISSED_REBALANCE_REASON
-        # A bar that was already rebalanced cannot have had its rebalance missed.  The row is still a
-        # skip and still carries the window the engine allowed, so `widest_window_seconds` and the late
-        # share below both keep it; only the miss COUNT declines to charge it.
-        if skipped and reason != ALREADY_REBALANCED_REASON:
-            missed += 1
-        if skipped and isinstance(window := row.get("window_seconds"), int | float):
+        if skipped:
+            restarts += 1
+            # A bar that was already rebalanced cannot have had its rebalance missed.  The row still
+            # carries the window the engine allowed, so `widest_window_seconds` keeps it; only the miss
+            # COUNT declines to charge it.
+            if reason != ALREADY_REBALANCED_REASON:
+                missed += 1
+            if isinstance(window := row.get("window_seconds"), int | float):
+                windows.append(float(window))
+            if isinstance(value := row.get("late_seconds"), int | float):
+                restart_late.append(float(value))
+            continue
+        # The bar is per row when the row carries it (every completed cycle does, from 2026-09-10) and
+        # falls back to the widest the engine allowed that day, for rows written before it did.
+        if isinstance(window := row.get("window_seconds"), int | float):
             windows.append(float(window))
-        if isinstance(value := row.get("late_seconds"), int | float):
-            late.append(float(value))
+        woke = _woke_seconds_after_close(row, interval_ms)
+        if woke is None:
+            unreadable += 1
+        else:
+            wakes.append((woke, float(window) if isinstance(window, int | float) else None))
     fills = [float(t["late_seconds"]) for t in trades if isinstance(t.get("late_seconds"), int | float)]
-    # `None` rather than 0.0 on a day the loop never ran: a day with no cycles is not a day nothing was
-    # late on, and zero here would read as a pass.  The same refusal the rest of this module makes.
-    share = (len(late) / len(rows)) if rows else None
+    # The bar is the window the ENGINE allowed, read off the rows rather than recomputed here - the
+    # same refusal `widest_window_seconds` already makes.  With no window in the record there is
+    # nothing to measure against, and `None` says so; a day with nothing to compare is not a day
+    # nothing was late on, and a zero here would read as a pass.
+    widest = max(windows) if windows else None
+    judged = [(value, bar if bar is not None else widest) for value, bar in wakes]
+    late = [value for value, bar in judged if bar is not None and value > bar]
+    measurable = [value for value, bar in judged if bar is not None]
+    share = (len(late) / len(measurable)) if measurable else None
     reasons: list[str] = []
     if missed > params.max_missed_rebalances:
+        worst_restart = max(restart_late) if restart_late else 0.0
         reasons.append(
             f"漏掉 {missed} 次再平衡（M-Q03 阈值 {params.max_missed_rebalances}）；"
-            f"最迟的一次在 bar 收盘后 {max(late) if late else 0.0:.0f} 秒；失败动作：查重启原因"
+            f"最迟的一次在 bar 收盘后 {worst_restart:.0f} 秒；失败动作：查重启原因"
         )
     if share is not None and share > params.max_late_cycle_share:
         reasons.append(
             f"迟到周期占比 {share:.1%} 高于 M-Q03 的 {params.max_late_cycle_share:.0%}"
-            f"（{len(late)}/{len(rows)} 个周期在再平衡窗口外醒来）"
+            f"（{len(late)}/{len(measurable)} 个已排定周期在再平衡窗口外醒来；重启不计）"
         )
     return {
         "cycles": len(rows),
         "missed_rebalances": missed,
         "skipped_bars": missed,
+        # Restarts are counted and named rather than folded into the lateness they used to inflate.
+        "restarts": restarts,
+        "worst_restart_late_seconds": max(restart_late) if restart_late else None,
+        "unreadable_wakes": unreadable,
+        "scheduled_cycles": len(wakes),
+        "scheduled_cycles_measurable": len(measurable),
         "worst_late_seconds": max(late) if late else None,
         "late_bars": len(late),
         "late_cycle_share": share,

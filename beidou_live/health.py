@@ -22,6 +22,14 @@ from typing import Any
 
 from beidou_shared.types import Position
 
+#: When a run of ERROR cycles stops being the proxy blinking and becomes an incident.  `live status
+#: --check` fails on `phase == "ERROR" and consecutive_errors >= 3`, which is the alarm that pages the
+#: operator, and §5 L3's streak bar is the same number by construction: a week that contained an
+#: incident the hourly check was paging about is not a week that proved unattended operation.  Defined
+#: here rather than as a literal in each reader so the two cannot drift apart - if L3 and the hourly
+#: check ever disagree about what "stuck" means, one of them has invented a number (KILL-R6).
+STUCK_IN_ERROR_STREAK = 3
+
 
 @dataclass(frozen=True)
 class CycleHealth:

@@ -1873,10 +1873,27 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # re-calibrating a metric because today's reading was inconvenient is the move the pre-registrations
 # forbid.  This changes one thing: a bar that was already rebalanced cannot have had its rebalance
 # missed.
+#
+# 2026-09-10 (second), `beidou_live` 7,218 -> 7,328 (+110), `beidou_cli` 5,565 -> 5,574 (+9).  The
+# operator ruled the four questions the audit had left with them, and two of the four are code:
+#   * §5 L3's contradiction.  The gate is now the no-decision reading AND a bar on the longest ERROR
+#     streak, and the bar is `STUCK_IN_ERROR_STREAK` - the same 3 `live status --check` already pages
+#     on, moved into `health` so L3 and the hourly check cannot drift apart about what "stuck" means.
+#     ~35 lines across `soak`, `health` and the command.
+#   * M-Q03's late half.  It could only ever see restarts: `late_seconds` is written in exactly one
+#     place, `_record_missed_rebalance`, so a metric named 迟到周期占比 was reporting restart frequency
+#     over a denominator of every cycle - it FELL when the loop ran more, and a genuinely late wake-up
+#     could not raise it at all (the audit counted 33 such cycles in the record; none were in it).  The
+#     share is now over scheduled wake-ups, computed from the `at` and `bar_open_ms` every row has
+#     always carried, against the window the ENGINE states - which it now writes onto every cycle row
+#     instead of computing at startup and throwing away.  ~75 lines across `engine` and `reports`.
+# Both are the same defect this ratchet's earlier entries keep paying for: the fact was recorded and
+# nothing read it.  Neither raises a threshold; one resolves a contradiction that predates every
+# measurement, the other fixes a denominator.
 CEILING = {
     "beidou_alpha": 8_071,
-    "beidou_live": 7_218,
-    "beidou_cli": 5_565,
+    "beidou_live": 7_328,
+    "beidou_cli": 5_574,
     "beidou_data": 5_288,
     "beidou_exchange": 611,
     "beidou_shared": 289,

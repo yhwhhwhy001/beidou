@@ -261,6 +261,12 @@ class LiveEngine:
         self.spot_verification: Verification | None = spot_verification
         self.missed_rebalances = 0
         self.startup_seconds = 0.0
+        #: The rebalance window this process allows, written onto every cycle row.  Until 2026-09-10 it
+        #: was computed for the startup check and thrown away, so the only rows carrying it were the
+        #: restart misses - and M-Q03's "迟到周期占比" therefore had a numerator that could contain
+        #: nothing but restarts.  The bar a scheduled cycle should be judged against is this same one,
+        #: and it is the engine's to state rather than the reporter's to invent (KILL-R6).
+        self.rebalance_window: float | None = None
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
@@ -472,13 +478,14 @@ class LiveEngine:
         """Run ``cycles`` bar cycles (forever when None).  Returns the number of cycles that completed without error."""
         await self.startup()
         attempted = succeeded = 0
+        self.rebalance_window = rebalance_window_seconds(
+            grace_seconds=self.config.grace_seconds,
+            throttle_interval=self.config.throttle_interval_seconds,
+            startup_seconds=self.startup_seconds,
+        )
         if immediate:
             bar = last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms)
-            window = rebalance_window_seconds(
-                grace_seconds=self.config.grace_seconds,
-                throttle_interval=self.config.throttle_interval_seconds,
-                startup_seconds=self.startup_seconds,
-            )
+            window = self.rebalance_window
             age = late_seconds(bar, self.config.interval_ms, at_ms=self.clock.now_ms())
             if within_rebalance_window(seconds_since_close=age, window_seconds=window):
                 attempted += 1
@@ -563,6 +570,7 @@ class LiveEngine:
                     "phase": "ERROR",
                     "error": f"{type(exc).__name__}: {exc}",
                     "consecutive_errors": self.consecutive_errors,
+                    "window_seconds": self.rebalance_window,
                     "targets": dict(self.state.last_targets),
                     "orders": [],
                     "dry_run": self.config.dry_run,
@@ -1352,6 +1360,8 @@ class LiveEngine:
         self.state.last_equity = float(record["equity"])
         self.state.cycles += 1
         self.store.save(self.state)
+        if self.rebalance_window is not None:
+            record["window_seconds"] = self.rebalance_window
         self.store.append_cycle(record)
         self.store.heartbeat(
             {

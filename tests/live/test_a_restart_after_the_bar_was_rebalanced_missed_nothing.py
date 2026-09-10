@@ -75,8 +75,11 @@ def test_the_restart_on_an_already_rebalanced_bar_is_late_but_not_missed() -> No
 
     assert cost["missed_rebalances"] == 0
     assert cost["skipped_bars"] == 0
-    assert cost["worst_late_seconds"] == 125.1, "the lateness is still a fact and is still reported"
-    assert cost["late_bars"] == 1
+    # Reported under its own name since the same day's second ruling: a restart's lateness is a fact
+    # about a restart, not about a wake-up.  See test_the_late_share_measures_wake_ups_not_restarts.py.
+    assert cost["worst_restart_late_seconds"] == 125.1, "the lateness is still a fact and is still reported"
+    assert cost["restarts"] == 1
+    assert cost["late_bars"] == 0
 
 
 def test_the_real_miss_still_counts() -> None:
@@ -99,7 +102,8 @@ def test_both_restarts_in_one_day_are_told_apart() -> None:
     cost = restart_cost(rows)
 
     assert cost["missed_rebalances"] == 1
-    assert cost["worst_late_seconds"] == 3_135.4
+    assert cost["restarts"] == 2
+    assert cost["worst_restart_late_seconds"] == 3_135.4
     # The window is read off the rows rather than recomputed, and both rows carry a real one.
     assert cost["widest_window_seconds"] == 106.1
 
