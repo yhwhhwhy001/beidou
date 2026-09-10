@@ -63,3 +63,24 @@ def late_seconds(bar_open_ms: int, interval_ms: int, *, at_ms: int) -> float:
     """How long after its bar closed something happened.  Never negative: earliness is not lateness."""
     close_ms = int(bar_open_ms) + int(interval_ms)
     return round(max(0.0, (int(at_ms) - close_ms) / 1000.0), 3)
+
+
+#: What a restart that woke outside the rebalance window actually did.  Two reasons, not one, because
+#: the two are different events with the same symptom: on 2026-09-10 a proxy 503 killed `exchangeInfo`
+#: at startup and the loop woke 3135s after a close whose rebalance never happened, while ninety minutes
+#: later an operator restart woke 125s after a close that had already been rebalanced with 18 fills.
+#: M-Q03 counted both, so its `查重启原因` fired on a restart with no reason to look into.
+MISSED_REBALANCE_REASON = "restart outside the rebalance window"
+ALREADY_REBALANCED_REASON = "restart outside the rebalance window; this bar was already rebalanced"
+
+
+def restart_reason(*, bar_open_ms: int, last_traded_bar_ms: int | None) -> str:
+    """Which of the two a late restart is, decided by the record rather than by the clock.
+
+    Equality only.  `None` is a loop with no history - a first start, or a state file that lost its
+    bar - and a later bar in state means the two disagree about which bar this is; neither is evidence
+    that THIS bar was traded, and absent knowledge does not excuse a miss.
+    """
+    if last_traded_bar_ms is not None and int(last_traded_bar_ms) == int(bar_open_ms):
+        return ALREADY_REBALANCED_REASON
+    return MISSED_REBALANCE_REASON

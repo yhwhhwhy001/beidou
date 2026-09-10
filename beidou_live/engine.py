@@ -48,9 +48,11 @@ from beidou_live.reconciler import Snapshot, is_own_order, startup_reconcile, ta
 from beidou_live.reports import collateral_share
 from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state
 from beidou_live.scheduler import (
+    ALREADY_REBALANCED_REASON,
     last_closed_bar_open_ms,
     late_seconds,
     rebalance_window_seconds,
+    restart_reason,
     wait_for_bar_close,
     within_rebalance_window,
 )
@@ -486,7 +488,16 @@ class LiveEngine:
                 # Reconciliation already ran in startup(); what is skipped is only the rebalance, and
                 # the skip is recorded rather than inferred - L1-01's error was counting the fills that
                 # happened instead of the ones that should not have (KILL-R6).
-                self._record_missed_rebalance(bar, age, window)
+                #
+                # Whether it is a MISS is a separate question from whether it is LATE, and the record
+                # answers it: an operator restart a minute after this bar was rebalanced skipped a
+                # second rebalance of a bar already traded, which is what anyone would want, while a
+                # restart onto a bar the loop never traded skipped the only one it was going to get.
+                # Both were charged to M-Q03 until 2026-09-10, so `查重启原因` fired on restarts with
+                # nothing to look into.
+                self._record_missed_rebalance(
+                    bar, age, window, reason=restart_reason(bar_open_ms=bar, last_traded_bar_ms=self.state.last_bar_ms)
+                )
         stop = stop or StopRequested()
         while cycles is None or attempted < cycles:
             if stop.requested:
@@ -501,14 +512,17 @@ class LiveEngine:
                 succeeded += 1
         return succeeded
 
-    def _record_missed_rebalance(self, bar_open_ms: int, age_seconds: float, window_seconds: float) -> None:
-        self.missed_rebalances += 1
+    def _record_missed_rebalance(
+        self, bar_open_ms: int, age_seconds: float, window_seconds: float, *, reason: str
+    ) -> None:
+        if reason != ALREADY_REBALANCED_REASON:
+            self.missed_rebalances += 1
         self.store.append_cycle(
             {
                 "bar_open_ms": bar_open_ms,
                 "bar": datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).isoformat(),
                 "phase": "SKIPPED",
-                "reason": "restart outside the rebalance window",
+                "reason": reason,
                 "late_seconds": age_seconds,
                 "window_seconds": window_seconds,
                 "missed_rebalances": self.missed_rebalances,

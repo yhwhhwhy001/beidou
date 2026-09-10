@@ -1858,9 +1858,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 #     will answer INSUFFICIENT_DATA until 2028-03-04, which is what it is for.
 # The alpha share moves the wrong way and that is stated rather than hidden; the alternative was three
 # more sentences in a plan, which is the thing this repository keeps finding it already has too many of.
+#
+# 2026-09-10, `beidou_live` 7,180 -> 7,218 (+38).  M-Q03 charged an operator restart with a missed
+# rebalance on a bar that had already been rebalanced.  Measured that morning: the 05:00 bar was
+# rebalanced at 06:00:27Z with 18 fills, the operator restarted at 06:01:28Z, the new process woke at
+# 06:02:05Z outside its 71.6s window and wrote a miss row - and the same day's OTHER restart, at 04:52,
+# woke 3135s after a close whose rebalance never happened, from a proxy 503 killing `exchangeInfo`.
+# One number covered both, so M-Q03's `查重启原因` fired on a restart with nothing to look into, which
+# is KILL-R6's lesson in its loud form: an alarm that always fires is the same defect as one that never
+# does.  The +38 is a two-reason predicate in `scheduler` (a leaf, so both sides can import it, and it
+# also removes the duplicated reason literal that had one copy in the engine and one in the reporter),
+# the branch in `engine.run`, and the count in `restart_cost`.  The LATE half is untouched on purpose:
+# whether a startup reconciliation belongs in that denominator is a question about M-Q03's caliber, and
+# re-calibrating a metric because today's reading was inconvenient is the move the pre-registrations
+# forbid.  This changes one thing: a bar that was already rebalanced cannot have had its rebalance
+# missed.
 CEILING = {
     "beidou_alpha": 8_071,
-    "beidou_live": 7_180,
+    "beidou_live": 7_218,
     "beidou_cli": 5_565,
     "beidou_data": 5_288,
     "beidou_exchange": 611,

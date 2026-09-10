@@ -28,6 +28,7 @@ from beidou_data.store import KlineStore, MetricsStore
 from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, risk_budget_status
+from beidou_live.scheduler import ALREADY_REBALANCED_REASON, MISSED_REBALANCE_REASON
 from beidou_live.state import StateStore
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
@@ -1102,9 +1103,6 @@ def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"blocking": list(block.get("blocking", [])), "advisory": list(block.get("advisory", []))}
 
 
-MISSED_REBALANCE_REASON = "restart outside the rebalance window"
-
-
 def restart_cost(
     rows: Sequence[Mapping[str, Any]],
     trades: Sequence[Mapping[str, Any]] = (),
@@ -1145,10 +1143,15 @@ def restart_cost(
     late: list[float] = []
     windows: list[float] = []
     for row in rows:
-        if row.get("phase") == "SKIPPED" or row.get("reason") == MISSED_REBALANCE_REASON:
+        reason = row.get("reason")
+        skipped = row.get("phase") == "SKIPPED" or reason == MISSED_REBALANCE_REASON
+        # A bar that was already rebalanced cannot have had its rebalance missed.  The row is still a
+        # skip and still carries the window the engine allowed, so `widest_window_seconds` and the late
+        # share below both keep it; only the miss COUNT declines to charge it.
+        if skipped and reason != ALREADY_REBALANCED_REASON:
             missed += 1
-            if isinstance(window := row.get("window_seconds"), int | float):
-                windows.append(float(window))
+        if skipped and isinstance(window := row.get("window_seconds"), int | float):
+            windows.append(float(window))
         if isinstance(value := row.get("late_seconds"), int | float):
             late.append(float(value))
     fills = [float(t["late_seconds"]) for t in trades if isinstance(t.get("late_seconds"), int | float)]
