@@ -7411,3 +7411,89 @@ flow 的证据报告没有 `oos_selection` 块，D-028 的门根本问不出来�
 **期限记在这里**：flow 的第九个存活窗口在 **2027-06**。在那之前它的证据必须带上一个在当时生效的门
 下写出的 `oos_selection` 块（`research validate` 会产出），否则 flow 出不了 probe。这是给操作者的
 到期日，不是今天的缺陷——循环正在朝安全方向拒绝。
+
+
+## 2026-09-10 · 预登记：本窗口第 5 轮 mine（basis 族的第一次打分）
+
+**先写后跑。** 本条在运行之前提交，commit 哈希即预登记指针。
+
+### 一、为什么会有第 5 轮，以及为什么这不是"预算用完就调大预算"
+
+09-09 那轮的 `include_basis=false` 不是选择，是**赛跑输了**：
+
+| 时刻（UTC） | 事件 |
+| --- | --- |
+| 17:20:15 | launchd 的 `com.beidou.data` 起跑，开始写 `spot_klines` |
+| ~17:21 | `research mine` 载入面板，`searched_basis = panel.spot_symbols > 0` 读到 **False** |
+| 17:25:41 | shortlist 写出。153 个 spot parquet 里只有 10 个存在，18 个 universe 标的**一个都没有** |
+| 17:25:50 | ADAUSDT 落地——比报告晚 9 秒 |
+| 19:04 | 全部写完，`spot_alignment.json` 判 **PASS**（744/744，±1 小时各 0/744） |
+
+18 个 basis 形状因此**从未被枚举、也从未计过账**。这与 OI/LS 那次不同（那 90 个是计了账又 errored），
+所以**不援引 K-EX07**：这不是补偿一次浪费的收费，是一次新的收费。理由只是"这一族本该在上一轮里，
+没进去的原因与假设本身无关"。
+
+**不改成常设 5 轮。** policy 0.3.1 把 `max_mine_rounds_per_window` 4 → 5，并且**这句"只此一次"
+带执行检查**：`SINGLE_WINDOW_MINE_OPENING_ENDS = 2026-10-03`，到期后
+`test_the_single_window_mine_opening_is_returned` 每次运行都失败，直到有人把它改回 4。
+写在文档里的"只此一次"是承诺，本次对账数了一整天的就是被当成控制的承诺。
+
+**并且这一轮是在真闸下跑的。** 同日发现 `research mine` **从未问过 R1**——`mine_refusals` 写好了、
+`governance next` 把 `4/4` 印出来了、`scheduler.next_action` 消费了它，而唯一能花掉一轮的那个命令
+两样都没 import。所以 R1 的轮次限制一直是**通告，不是闸**。今天把它接上了（在载入面板之前问，
+不允许发生的运行不该先把它不被允许打的分打完），所以本轮是**被授权**，不是**被漏网**。
+
+### 二、跑哪个空间，以及它的价钱（跑之前定死）
+
+枚举器没有单族模式，所以任何含 basis 的空间都要陪跑已经打过分的形状。三个选项事前定价：
+
+| | 候选 | 含 basis | digest | mined N | 门 |
+| --- | --- | --- | --- | --- | --- |
+| 不跑 | — | — | — | 2,488 | 1.7990 |
+| **B（选它）** | **243** | 18 | `27ef8627ecd468b2` | 2,731 | **1.8085** |
+| B′ 只关 metrics+hod | 532 | 18 | `d82f93ea…` | 3,020 | 1.8186 |
+| A 整空间 | 676 | 18 | `c05284a5…` | 3,164 | 1.8233 |
+
+B 的 243 个里 **225 个是 09-09 已打过分的**，照价再计一次账。**不折叠、不打折**：枚举了 243 个假设
+就记 243 行，假装只花了 18 行是账本朝着对自己有利的方向撒谎。
+
+三个 digest 都不是 `cd69f82a8bdd356d`，R2 三个都放行；B 也不需要 `--reauthorize`。
+
+### 三、协议（跑之前逐字写死）
+
+```
+beidou research mine --strategy tsmom --baseline tsmom --interval 1h --from 2021-01-01 \
+  --funding --no-include-funding --max-complexity 10 --max-lookback 1400 --top 12 \
+  --grids '{"include_metrics": false, "include_seasonality": false, "include_panel_nodes": false}'
+```
+
+`--funding` 留着（面板与成本模型与 09-09 一致），`--no-include-funding` 只关掉 funding **那一族的候选**。
+排序仍是 `baseline_marginal_sharpe`。**grid 一个都不动**——basis 的原始预登记写死了"grid 不为本族特设"。
+
+### 四、判据与 falsifier：**沿用 2026-09-09 basis 叶预登记的 A/B/C，不新造**
+
+1. **第一道看的数不是 Sharpe，是相关。** 与在跑的书 `corr < 0.5`。原预登记说这条"要在第一次 shortlist
+   上补，且补之前不读 Sharpe"——本轮就是那第一次。
+2. **falsifier A（本族独有的混淆）**：basis 候选只能给约三分之二的截面打分（原预登记实测 362/528）。
+   若边际为正，**必须同时给出把 baseline 限制在同一截面上重算的边际**，两者符号不一致即 **REFUTED**。
+3. **falsifier B（水平臂）**：`squash` 臂若入围，对照**恒定持仓**而不是 baseline 书；跑不赢即判为方向性
+   押注，不算基差假设。LS 叶昨天正是死在这个形状上（4 个为正全在 squash，32 个 cs_rank 无一为正）。
+4. **falsifier C（对齐）**：任何阳性结果的第一反应是**回去核对齐**，不是写 book 报告。核
+   `measure_alignment` 的 `best_lag == 0` 与乘子。
+5. **真正的门**：mined 桶的 R0 分位数门，本轮计入后 **N=2,731 → 1.8085**。进 shortlist ≠ 任何裁定。
+6. **RISK-G3**：现货 `Verification` 今天已 PASS，所以这条闸不再是关的——但它管的是**进实盘**，
+   本轮不产生任何晋级。
+
+### 五、预期（写下来是为了事后不能改口，按惯例写阴性）
+
+**基准预期是阴性**，且原预登记已经写下了**事前认为最可能的死因**，本条不改口：不是"和 carry 重复"
+（R² 0.064 已排除），而是**基差的截面离散太小、被成本吃掉**——样本里 basis 的截面标准差
+**0.000525（约 5bp）**，而它在 `Squash` 前还要除以 `Vol(48)`。
+
+**不预测符号。** 原预登记记的 24 小时前瞻 IC 是 `basis/vol(48)` −0.0163、`funding(72)/vol(48)` −0.0249，
+两个都近乎噪声，且样本不是研究面板，**不构成方向证据**。
+
+### 六、明写不做
+
+不因为结果不好就换排序、换基准、换网格、缩样本，或者再开第 6 轮。跑完之后无论阴阳，
+`max_mine_rounds_per_window` 到 2026-10-03 都必须回到 4——那不是我的自觉，是那条会失败的测试。

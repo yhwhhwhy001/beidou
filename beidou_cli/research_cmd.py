@@ -2642,6 +2642,31 @@ def research_mine(
     shared options and ignored here; the candidates are the strategies.
     """
     profile_payload = load_yaml(profile)
+    # R1, asked BEFORE anything is loaded.  `mine_refusals` and `admission.window_start` were both
+    # written and both unread here: `governance next` printed "4/4 mine rounds" and `scheduler
+    # .next_action` consumed the refusal, while this command - the only thing that can spend a round -
+    # imported neither and had never asked.  So the round limit was advisory, which is the shape the
+    # 2026-09-09 audit is named for; R2 next door has refused in this very function all along.
+    #
+    # Before the panel rather than beside R2's check, because R2 needs `search.space_digest` and this
+    # needs only the ledger: a run that is not allowed to happen should not first score the space it
+    # is not allowed to score.  `--reauthorize` carries the operator past both, and is recorded in the
+    # shortlist report either way - one override, so a run cannot slip past R1 while looking untouched
+    # to R2.
+    if not reauthorize:
+        from beidou_governance.admission import window_start as _window_start
+        from beidou_governance.budget import mine_refusals, window_spend
+
+        _ledger = resolve_ledger_path(out=out)
+        _lines = _ledger.read_text(encoding="utf-8").splitlines() if _ledger.exists() else []
+        _policy = Policy()
+        _refusals = mine_refusals(window_spend(_lines, window_start=_window_start(_policy), policy=_policy))
+        if _refusals:
+            raise click.ClickException(
+                f"{'; '.join(_refusals)}.  R1 bounds how many SELECTIONS a window makes, and one mine "
+                "round is one selection however wide the space.  Wait for the next window, or pass "
+                "--reauthorize '<D-decision and reason>'; the reason is recorded in the shortlist report."
+            )
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     # DL-D4: `metrics=True`, for the reason `research decompose` states one function up - enumeration
     # happens after the panel exists, so the panel cannot be conditioned on what will be enumerated.

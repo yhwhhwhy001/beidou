@@ -1890,14 +1890,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # Both are the same defect this ratchet's earlier entries keep paying for: the fact was recorded and
 # nothing read it.  Neither raises a threshold; one resolves a contradiction that predates every
 # measurement, the other fixes a denominator.
+#
+# 2026-09-10 (third), `beidou_cli` 5,574 -> 5,599 (+25), `beidou_governance` 3,182 -> 3,215 (+33).
+# R1's mine-round limit was advisory: `mine_refusals` existed, `governance next` printed "4/4 mine
+# rounds", `scheduler.next_action` consumed the refusal - and `research mine`, the only command that
+# can spend a round, imported none of it and had never asked.  R2 has refused in that same function
+# all along, which is the contrast: one rule was a gate and the neighbouring one was a printout.  The
+# +25 in `cli` is the check, placed before the panel loads rather than beside R2's (R2 needs the space
+# digest; R1 needs only the ledger, and a run that may not happen should not first score the space it
+# may not score).  The +33 in `governance` is 0.3.1's note and the two constants that let a dated
+# reversion be a test instead of a promise.
 CEILING = {
     "beidou_alpha": 8_071,
     "beidou_live": 7_328,
-    "beidou_cli": 5_574,
+    "beidou_cli": 5_599,
     "beidou_data": 5_288,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 3_182,
+    "beidou_governance": 3_215,
 }
 
 

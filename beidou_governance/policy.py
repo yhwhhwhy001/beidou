@@ -28,8 +28,31 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.3.0"
-"""0.3.0 (2026-09-09): R1's budget opened, by operator ruling.  0.2.0's note follows below.
+POLICY_VERSION = "0.3.1"
+"""0.3.1 (2026-09-10): ONE extra mine round, for the window 2026-09-03..2026-10-03 only.
+
+4 -> 5 rounds.  Not a standing increase, and the difference is enforced rather than promised: the
+reversion has a date and a test that fails on it (`test_the_single_window_mine_opening_is_returned`).
+A "just this once" with no executing check is the thing the 2026-09-09 audit spent a day counting.
+
+Why the round: the 09-09 round enumerated 658 shapes with `include_basis=False`, not by choice but
+because `com.beidou.data` started writing `spot_klines` at 17:20:15Z and `research mine` loaded its
+panel about a minute later - so `searched_basis = panel.spot_symbols > 0` read False, and the 18 basis
+shapes were never enumerated.  The first of the run's own 18 universe symbols got its spot parquet at
+17:25:50Z, nine seconds after the shortlist was written.  The two jobs raced; the mine won.
+
+What it costs, priced before the ruling rather than after: 243 candidates (the space with `metrics`,
+`funding`, `seasonality` and `panel_nodes` off, which is the narrowest space the enumerator can make
+that still holds all 18 basis shapes), so the `mined` bucket goes 2,488 -> 2,731 and the D-028 gate at
+that bucket goes 1.7990 -> 1.8085.  225 of the 243 were scored on 09-09 and are charged again; the
+enumerator has no single-family mode, and pretending 18 rows were spent when 243 hypotheses were
+enumerated would be the ledger lying in the direction that flatters us.
+
+R1 also became a real gate the same day.  `research mine` had never asked it - `mine_refusals` existed,
+`governance next` printed the number, and the only command that can spend a round imported neither.
+So this opening is what authorises the run, rather than a gap being what permits it.
+
+0.3.0 (2026-09-09): R1's budget opened, by operator ruling.  0.2.0's note follows below.
 
 The ruling ("放开限制") is legitimate on R1's own terms and it is worth saying why, because the
 first thing I told the operator about it was wrong.  I called loosening R1 "relaxing a threshold to
@@ -68,6 +91,11 @@ question really is "best of how many", and that number really is 514.
 """
 
 
+#: What `max_mine_rounds_per_window` goes back to when the 0.3.1 opening expires, and when.
+STANDING_MINE_ROUNDS = 4
+SINGLE_WINDOW_MINE_OPENING_ENDS = "2026-10-03T00:00:00+00:00"
+
+
 @dataclass(frozen=True)
 class Policy:
     """R0-R10.  Frozen: a rule set that can be mutated after a decision is not a rule set."""
@@ -92,7 +120,12 @@ class Policy:
     # the top k by marginal is ONE choice, however wide the space was.  One per window until 0.3.0,
     # four after it - roughly weekly inside a monthly window.  R2 still refuses a space that has not
     # changed, so four rounds cannot become the same round four times.
-    max_mine_rounds_per_window: int = 4
+    #
+    # 5 for the window ending `SINGLE_WINDOW_MINE_OPENING_ENDS` only; see 0.3.1 at POLICY_VERSION for
+    # the reason and the price.  Return it to `STANDING_MINE_ROUNDS` when that window closes - a test
+    # fails from that date until somebody does, because "just this once" without an executing check is
+    # a promise, and this repository has spent a day counting promises that were taken for controls.
+    max_mine_rounds_per_window: int = 5
 
     # R2: `research mine` runs only when the search space changed.  Re-running the same space and
     # keeping the rows charges the family twice for one hypothesis (the 2026-09-08 incident).

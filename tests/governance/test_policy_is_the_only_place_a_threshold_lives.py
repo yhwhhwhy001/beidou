@@ -24,7 +24,13 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # judgement call anchored on "one mine round cost 514 rows"), and it is a RATE limit, not the
 # multiple-testing control - R0's quantile gate is that, and it rises monotonically with N, so
 # searching more raises the bar by itself.  R2/R3/R4/R5 untouched.
-PINNED_DIGEST = "35e749f7fc0c"
+# 0.3.0 was "35e749f7fc0c" -> 0.3.1 (2026-09-10): 4 -> 5 mine rounds, for the window ending
+# 2026-10-03 ONLY, by operator ruling.  The 09-09 round raced `com.beidou.data` and loaded its panel
+# before any spot parquet landed, so `searched_basis` read False and the 18 basis shapes were never
+# enumerated; this buys the round that enumerates them, priced at 243 candidates and a `mined` bucket
+# of 2,488 -> 2,731 (D-028 gate 1.7990 -> 1.8085).  What makes "one window" more than a sentence is
+# `test_the_single_window_mine_opening_is_returned`, which fails from that date until it goes back.
+PINNED_DIGEST = "08dcceaa6bee"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:
