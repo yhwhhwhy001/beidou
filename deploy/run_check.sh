@@ -50,6 +50,34 @@ for check in status verify; do
     notify "$check" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
   fi
 done
+# The plists launchd actually reads.  `deploy/com.beidou.paper-l3.plist` carried `--paper` inside an XML
+# comment for a day: two dashes end a comment, so the file was not well-formed XML.  launchd took it
+# anyway (CFPropertyList is more forgiving than expat) and the soak ran, so nothing said a word - but a
+# file that loads only because of one parser's tolerance stops loading the day that changes, and the L3
+# soak is a seven-day accumulator that dies silently.  The suite checks the repo copies; it may not
+# resolve the real home (test_tests_never_touch_the_real_app_support.py forbids it, correctly), so the
+# installed copies are checked here.  Gated, unlike the soak line below: this is a static file that is
+# either valid or is not, the fix is one edit, and there is no window over which it is expected to fail.
+if output="$("$REPO/.venv/bin/python" -c '
+import plistlib, sys
+from pathlib import Path
+bad = []
+for path in sorted((Path.home() / "Library" / "LaunchAgents").glob("com.beidou.*.plist")):
+    try:
+        payload = plistlib.loads(path.read_bytes())
+    except Exception as error:
+        bad.append(f"{path.name}: {error}")
+        continue
+    if not payload.get("Label") or not payload.get("ProgramArguments"):
+        bad.append(f"{path.name}: parses but names no Label/ProgramArguments")
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+' 2>&1)"; then
+  echo "[$(stamp)] ok   plists"
+else
+  failed=1
+  notify "plists" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+fi
 # The drift verdict used to be computed and then discarded: nothing ever sent it anywhere.  `report daily
 # --check` exits non-zero on an ALERT - equity drift, per-strategy income drift (M-002/M-010), or more
 # construction changes in a week than the plan allows.

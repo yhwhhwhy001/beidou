@@ -7,10 +7,14 @@
       criterion asks for.  A soak that is not running accumulates nothing - on
       2026-09-09 the record held two rows from one end-to-end run-through and
       L3 had been open for a day.  A run-through is not a soak.
-      No credentials and no exchange writes: `--paper` matches in-process at
-      mainnet marks, and `--state-dir` (refused without `--dry-run`/`--paper`)
+      No credentials and no exchange writes: the `paper` flag matches in-process
+      at mainnet marks, and `state-dir` (refused without `dry-run` or `paper`)
       keeps this record out of the armed loop's.  KeepAlive for the same reason
       the armed loop has it: a soak a crash interrupts should restart, not end.
+      The flags are written here without their leading dashes on purpose: two
+      dashes in a row end an XML comment, and this file spent a day being
+      invalid XML that CFPropertyList happened to accept.  See
+      tests/architecture/test_every_launchd_plist_is_valid_xml.py.
       Install: cp to ~/Library/LaunchAgents/ and
       `launchctl load -w ~/Library/LaunchAgents/com.beidou.paper-l3.plist`.
     -->
