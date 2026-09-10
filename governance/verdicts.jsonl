@@ -1,1 +1,2 @@
 {"at": "2026-09-09T16:21:23.207185+00:00", "id": "e892991381b7", "kind": "family_gate", "reasons": ["OOS 1.8087 vs 1.5149 at N=185 (adopted against 1.5136 at N=183)"], "review": "", "review_why": "", "reviewed_at": "", "ruling": "allow", "subject": "tsmom"}
+{"at": "2026-09-10T05:45:22.232066+00:00", "id": "554601916944", "kind": "family_gate", "reasons": ["OOS 1.8087 vs 1.5149 at N=185 (adopted against 1.5136 at N=183)"], "review": "", "review_why": "", "reviewed_at": "", "ruling": "allow", "subject": "tsmom"}
