@@ -372,6 +372,68 @@ def plan_cmd(
         raise SystemExit(1)
 
 
+@governance.command("reopen")
+@click.option("--root", default=".", help="Checkout holding the list, the live record and the data store.")
+@click.option("--state-dir", default=".beidou/live", show_default=True, help="Live record, for the facts.")
+@click.option("--data-root", default=".beidou/data", show_default=True, help="Data store, for the columns.")
+@click.option("--all", "show_all", is_flag=True, help="Include RESOLVED entries.")
+def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> None:
+    """Which closed hypotheses could be looked at again - the thirteen 「重开条件」 with a reader.
+
+    They were written carefully and read by nothing: a full-tree grep for `REFUTED` and `reopen` across
+    the governance package returned zero before 2026-09-10.  So a hypothesis whose reopen condition had
+    come true stayed closed by neglect rather than by evidence.
+
+    Nine of the thirteen cannot be asked of a machine and are reported as NEEDS A PERSON, counted in the
+    summary every time.  This command reopens nothing; reopening is a named ruling, and a command that
+    could do it on its own would be the thing R10 forbids.
+    """
+    from beidou_governance.reopen import LIST, load, render, survey
+
+    checkout = Path(root).resolve()
+    entries = load(checkout / LIST)
+    if not show_all:
+        entries = [entry for entry in entries if entry.check != "resolved"]
+
+    equity = None
+    heartbeat = checkout / state_dir / "heartbeat.json"
+    if heartbeat.exists():
+        try:
+            equity = json.loads(heartbeat.read_text(encoding="utf-8")).get("equity")
+        except ValueError:
+            equity = None
+    if equity is None:
+        # The heartbeat is overwritten by a SKIPPED restart row, which carries no equity.  Fall back to
+        # the append-only record rather than reporting "no equity" an hour after every restart.
+        cycles = checkout / state_dir / "cycles.jsonl"
+        if cycles.exists():
+            for line in reversed(cycles.read_text(encoding="utf-8").splitlines()):
+                try:
+                    value = json.loads(line).get("equity")
+                except ValueError:
+                    continue
+                if isinstance(value, int | float):
+                    equity = float(value)
+                    break
+
+    store = checkout / data_root
+    columns = {
+        name
+        for name, probe in (
+            ("oi", "metrics"),
+            ("lsr", "metrics"),
+            ("basis", "spot_klines"),
+            ("index", "index_klines"),
+            ("onchain", "onchain"),
+            ("macro", "macro"),
+            ("liquidations", "liquidations"),
+        )
+        if (store / probe).is_dir() and any((store / probe).iterdir())
+    }
+
+    click.echo(render(survey(entries, {"equity": equity, "columns": columns, "now": datetime.now(UTC)})))
+
+
 @governance.command("gate")
 @click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
 @click.option("--root", default=".", help="Checkout to read the trials ledger and reports from.")

@@ -1,0 +1,147 @@
+# 已判负的假设，和它们各自的重开条件。
+#
+# 2026-09-09 的对账查到：RESEARCH_LOG 里写了十三处「重开条件」，措辞都很正经，而
+# `beidou_governance/` 与 `governance_cmd.py` 全量搜 REFUTED / reopen **零命中**。没有任何代码读它们、
+# 跟踪它们、或在条件成立时说一声。所以那不是机制，是惯例——一条被判负的假设即使重开条件已经成立，
+# 也只会因为无人重读日志而一直关着。这份文件是那十三处的清单，`beidou governance reopen` 是它的读者。
+#
+# `check` 是这条条件能不能被机器问。三个值：
+#   一个具名判据      机器能答，答案在下面的 args 里定死
+#   operator          机器**答不了**：需要一次具名裁定、一次付费决定、或一次新的研究
+#   resolved          已经重开过了，留在这里是为了记录，不再计入待办
+# 把 operator 那类硬凑成一个判据，就是这份文件本来要解决的那个毛病换个地方再犯一次。
+#
+# `condition` 逐字引自 RESEARCH_LOG，不改写。改写一条重开条件等于替操作者松口或收紧。
+
+entries:
+  - id: flow-short-book
+    subject: flow 空头小书
+    ruled: 2026-09-03
+    verdict: 不启用（信号级 FAIL，DSR p 0.81）
+    condition: >-
+      二选一：(a) 实盘 tsmom 归因积累 >= 30 天后，把"卖出流条件下的空头侧倾斜"作为 tsmom 的一个修饰项
+      单独预登记验证；(b) 操作者明确接受"小书 = demo 上的有界实验"并在 registry 里以显式例外标注。
+    check: resolved
+    note: 操作者 2026-09-04 选了 (b)，作为探针书 D-019 上线；flow 至今在 probe。
+    log: 2026-09-03 第五轮
+
+  - id: fifteen-minute-features
+    subject: 15m 辅助特征
+    ruled: 2026-09-04
+    verdict: 移出范围（证据方向相反，不是没来得及做）
+    condition: >-
+      任一成立即重开，不需要新的授权：(1) IC-周期曲线在短端出现上翘——某次消融里 24h 以下的横截面 IC
+      高于 168h，且 NW t >= 2；(2) 有人提出一个周期确实在日内的策略（不是把周级信号跑得更频繁），
+      并预登记了它自己的验收规则。明写**不构成**重开理由的：滑点。
+    check: operator
+    log: 2026-09-04 15m 辅助特征移出范围
+
+  - id: listing-events-27
+    subject: "#27 上新事件"
+    ruled: 2026-09-09
+    verdict: 不写这条信号（量完样本的结论）
+    condition: >-
+      三者同时满足才允许跑，缺一不跑：(1) 为缺 1h 数据的约 615 次上新补齐 1h klines，得到没有前视选择的
+      n≈799 事件样本；(2) 事件研究在 research 侧完成，不碰实盘、不改构造；(3) 6 个格子每格各计一次先验试验。
+    check: operator
+    note: 网格与主格已在 2026-09-09 预登记里钉死，重开时没有挑规则的余地。
+    log: 2026-09-09 块 3「上新」(#27)
+
+  - id: vwap-42
+    subject: "#42 VWAP 执行层"
+    ruled: 2026-09-09
+    verdict: 不做（REFUTED）
+    condition: >-
+      任一成立即重新判定：(1) 权益 >= 100 万 USDT；(2) 系数变得可校准——成交大到模型预测值超过滑点仪器的
+      2xSE（按当前仪器精度约需 230 万 USDT）；(3) 冲击模型不再是 sqrt-凹的。
+    check: equity_at_least
+    args: {usdt: 1000000}
+    note: 第 (1) 条能被机器问，(2)(3) 不能；命中 (1) 时先查 min-notional 地板，不是先建 VWAP。
+    log: 2026-09-09 块 4 #42
+
+  - id: throttle-with-exits
+    subject: 回撤节流叠在退出层上
+    ruled: 2026-09-09
+    verdict: 不重跑（缺口量级小于要填的坑）
+    condition: >-
+      只有当有人先证明「退出层 ⊕ 节流」的联合效应与两者单独之和相差 >= 0.3 Sharpe 时，这条才值得再跑一次。
+    check: operator
+    log: 2026-09-09 块 6 重测预登记
+
+  - id: regime-47
+    subject: "#47 regime 门控"
+    ruled: 2026-09-09
+    verdict: 结项，不实现（相关按构造过不了 0.5）
+    condition: >-
+      需要块 1 的数据宽度（OI / 多空比 / 基差 / 清算流）定义一把波动率以外的尺子，并走新预登记。
+    check: data_columns
+    args: {columns: [oi, lsr, basis, liquidations]}
+    log: 2026-09-09 块 6 重测预登记
+
+  - id: carry
+    subject: carry
+    ruled: 2026-09-09
+    verdict: 重测 FAIL，REFUTED 维持
+    condition: >-
+      新的信息，不是新的网格。明写不做：不加宽、不重开 0.7 那一臂、不改 entry_threshold。
+    check: operator
+    note: >-
+      机器能报的只有"自裁定以来这个 store 多了哪些列"，那是操作者判断"新信息"的输入，不是判断本身。
+    log: 2026-09-09 块 6 裁决之二
+
+  - id: residual
+    subject: residual
+    ruled: 2026-09-09
+    verdict: 重测 FAIL（差 0.01），REFUTED 维持
+    condition: 与 carry 同形——新的信息，不是新的网格。不加宽、不收窄、不重开。
+    check: operator
+    log: 2026-09-09 块 6 裁决之三
+
+  - id: social-30
+    subject: "#30 社交情绪"
+    ruled: 2026-09-09
+    verdict: 不可得（无 vintage / as-of，point-in-time 不可核）
+    condition: >-
+      其中一条：拿到一个带 vintage 接口的付费源（操作者决定是否付费）；或 alternative.me 提供 as-of 查询。
+    check: operator
+    log: 2026-09-09 块 1 #30
+
+  - id: unlocks-28
+    subject: "#28 代币解锁"
+    ruled: 2026-09-09
+    verdict: 不可得（数据只有一个持续被改写的版本）
+    condition: >-
+      任一：出现按日期发布快照（或带 as-of 参数）的免费源；我们自己开始逐日归档那份 CDN 文档（但那样只能
+      从归档那天往后可用，永远补不回去）；换一个不依赖计划表的代理量——链上实际流通供给（#31 的 SplyCur）。
+    check: operator
+    log: 2026-09-09 块 1 #28
+
+  - id: funding-arb-14-and-basis-39
+    subject: "#14 资金费套利 / #39 期现"
+    ruled: 2026-09-10
+    verdict: 不可执行（执行栈无现货下单路径）
+    condition: 一次「本系统要不要拥有现货执行面」的具名裁定。那是块 0 级别的范围变更。
+    check: operator
+    log: 2026-09-10 #14 / #39
+
+  - id: ls-leaf
+    subject: LS（多空比）叶
+    ruled: 2026-09-10
+    verdict: 不证伪、未晋级（4/36 边际为正，但全在 squash 水平臂）
+    condition: >-
+      先答"那 4 个是不是在赌方向"（basis 叶 falsifier B 的形状：水平臂对照恒定持仓，不是 baseline 书）；
+      且 R1 本窗口 4/4 已用尽，下一窗口 2026-10-03 开。
+    check: date_after
+    args: {date: "2026-10-03T00:00:00+00:00"}
+    note: 日期只是必要条件。到期不等于该跑——上面那个方向性问题仍要先答。
+    log: 2026-09-10 上一条预登记的答案
+
+  - id: oi-leaf
+    subject: OI（持仓量）叶
+    ruled: 2026-09-10
+    verdict: REFUTED（54 个形状 0 个边际为正，最好 -0.546）
+    condition: >-
+      这一叶按预登记的 falsifier 收口，没有留重开条件。要重开需要一条新假设与它自己的预登记，
+      而不是同一族的又一次搜索。
+    check: operator
+    log: 2026-09-10 上一条预登记的答案

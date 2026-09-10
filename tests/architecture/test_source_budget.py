@@ -1900,14 +1900,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # digest; R1 needs only the ledger, and a run that may not happen should not first score the space it
 # may not score).  The +33 in `governance` is 0.3.1's note and the two constants that let a dated
 # reversion be a test instead of a promise.
+#
+# 2026-09-10 (fourth), `beidou_cli` 5,599 -> 5,661 (+62), `beidou_governance` 3,215 -> 3,383 (+168).
+# The reopen conditions got a reader.  `RESEARCH_LOG.md` carries `REFUTED` 69 times and thirteen blocks
+# headed 「重开条件」, each naming what would have to become true for a closed hypothesis to be looked
+# at again - and a full-tree grep for `REFUTED`/`reopen` across the governance package returned nothing.
+# So a condition that came true would never be noticed and the hypothesis would stay closed by neglect
+# rather than by evidence.  Measured the moment the reader existed: regime (#47) was closed needing
+# "块 1 的数据宽度（OI / 多空比 / 基差 / 清算流）" and three of those four have landed since.
+# Nine of the thirteen cannot be asked of a machine and are reported as NEEDS A PERSON, counted in the
+# summary every time; giving each a checkable proxy so the list looked complete is the move this whole
+# ratchet's history is a record of not making.
 CEILING = {
     "beidou_alpha": 8_071,
     "beidou_live": 7_328,
-    "beidou_cli": 5_599,
+    "beidou_cli": 5_661,
     "beidou_data": 5_288,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 3_215,
+    "beidou_governance": 3_383,
 }
 
 
