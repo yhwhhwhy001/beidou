@@ -286,3 +286,51 @@ collateral_repricing +38.89   repricing_share 1.0682   collateral_share 0.5179
 但它读的是 `spec.default_params` 的 warmup。实测 tsmom 默认 warmup **101**、registry 实参 **721**；
 flow 是 **49** 对 **721**。**因果性、有界性、非空转三条检查一直在检验一个这个系统在第 6 轮就否掉的
 配置，而实际在交易的那组从未被检验过。** 现在两组都跑，实参那组通过。
+
+---
+
+## 10. 收口（2026-09-10）
+
+操作者要求「将方案审查文档里出现的问题全部处理」。逐条对回 §9。
+
+### A. 能靠干活关掉的 —— 9/9 关闭
+
+| # | 事项 | 关闭方式 | 现在能验的东西 |
+| --- | --- | --- | --- |
+| 1 | `lifecycle.apply` + `state.write` 的生产调用者 | `governance advance`：从 `cycles.jsonl` 派生事件、过 `lifecycle.apply`、落 `governance_state.json`，带水位线幂等 | `governance advance --dry-run` |
+| 2 | `governance next` 的装配器 | 已装 | `governance next` → `scheduler VALIDATE  8 shortlisted candidates are unvalidated` |
+| 3 | book 报告补三个字段 | `slippage_stress` / `baseline_correlation` / `turnover_ratio_to_main`（门 3.0×）都进了报告 | 门一有字段就抓到了 `book-tsmom-mined_594a12f9307a15d9` 的 **4.35× 换手** |
+| 4 | 家族门重算 | `beidou_governance/family_gate.py`，`Facts.family_gate_still_passes` 进状态机，`advance` 喂给它 | `governance gate` → tsmom PASS 1.8087 vs 1.5149 at N=185 |
+| 5 | 现货 store 接进 `_load` + 现货 `Verification` | `_load(..., metrics=True, spot=True)`；`beidou data spot` 进 `run_data.sh` | 153 个 spot parquet；`spot_alignment.json` **PASS**（744/744，±1 小时各 0/744） |
+| 6 | `data onchain` / `data index` | 连同 `data macro`、`data spot` 一起落地 | `beidou data --help` |
+| 7 | `collateral_drift` 进日报 + assert 改钉方向 | 日报有 RISK-G11 段；断言钉的是 `direction`，不是那个一天内漂 0.24 的水平值 | 今日 `repricing_share 26.3% / direction same_direction` |
+| 8 | M-G05 / M-G06 的落盘格式 | `beidou_governance/verdicts.py`（append-only，未复核记 `pending` 不记缺席，未到 quorum 报 `None` 不报 0%）；M-G06 进日报 | `governance divergence` → 2 待复核；M-G06 `5.71/547 天，最早可判 2028-03-04` |
+| 9 | 那一轮 mine | 已跑，`errored=0`，90/90 第一次被打分 | **OI 叶 54 个形状 0 个边际为正 → REFUTED**；LS 叶 4/36 为正但全在 squash 臂、水平低于自己的门。见 RESEARCH_LOG 2026-09-10 |
+
+### B. 只能等的 —— 按定义没动，只更新读数
+
+| 项 | 09-09 | 09-10 |
+| --- | --- | --- |
+| M-Q08 滑点 | 7/30 笔 | **27/30 笔**（06:00 那次全书重建一口气加了 18 笔，见下） |
+| M-010 / M-G06 构造不变 | 5.00/30 天 | **5.71/547 天**（canonical `0dcd044d0158`，未因本次重启断掉） |
+| probe→main | 0/9 窗口 | 0/9 |
+| L3 软泡 | 0.44/7 天 | 1.06/7 天 |
+| P13 已实现波动 | — | 185/240 根 bar，仍 BLIND |
+
+### C. 要操作者裁定的 —— 3/4 已裁，1 条仍在你那儿
+
+| # | 事项 | 状态 |
+| --- | --- | --- |
+| 2 | 那 658 行怎么记 | **已裁：留**（K-EX07 先例；理由记在 RESEARCH_LOG） |
+| 3 | 家族门实现还是删 | **已裁：实现**（见 A4） |
+| 4 | 一批文档更正 | **已改**，每条带「2026-09-10 更正」标注，含 AR-15 → CLOSED、C-G2′ → MITIGATED |
+| 1 | **L3 的 ERROR 口径** | **仍未裁。** 两种读法都算出来了，`beidou live soak` 并排报，谁也不当门：字面读法（7 天零 ERROR 相）与 no-decision 读法（7 天内没有 ERROR 周期做过决定）。按 armed 记录的 0.318/天，连续 7 天干净约 10.8%、14 天 1.2%、30 天 0.03%——**字面判据不是严格，是基本达不到，而达不到的原因写在 §5 自己下面两段**。第三个数也报了、也没人裁：最长 ERROR 连段（一次 503 是代理眨眼，六小时是场所不可达）。 |
+
+### 本次收口新查出的两条（不在 09-09 那份清单里）
+
+1. **`deploy/com.beidou.paper-l3.plist` 不是合法 XML**——`--paper` 写在 XML 注释里。launchd 收，
+   plistlib 拒。L3 是七天累积判据，plist 哪天不再被接受，soak 就静默停摆。已修，两侧都盖。
+2. **M-Q03 把「已经再平衡过的 bar 上的重启」也算成漏掉再平衡**——于是它分不出今早那两次重启
+   （一次真漏 3135 秒，一次什么也没漏）。已修，且明写不动 `late_cycle_share` 那一半的口径。
+
+两条都是同一个形状的第 18、19 次：**看起来在管事、实际管的不是那件事。**

@@ -389,9 +389,13 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     therefore attributable to the denominator and to nothing else - which is the honest form of
     "searching more retires your own incumbents".
 
-    Read-only.  A FAIL is an event for the state machine (`FAMILY_GATE_FAILED` -> retired), and nothing
-    on this path retires anything: `lifecycle.apply` still has no production caller, so the operator
-    sees the reading and decides.
+    Read-only, and it stays read-only after the merge that gave `lifecycle.apply` a production caller.
+    A FAIL is an event for the state machine (`FAMILY_GATE_FAILED` -> retired), and `governance advance`
+    is what folds events into `governance_state.json` - this command hands it the reading through
+    `Facts.family_gate_still_passes` and retires nothing itself.  The sentence here used to say
+    `lifecycle.apply` had no production caller at all; that was true in the branch this command was
+    written in and false the moment `advance` landed beside it, which is why it is corrected rather
+    than quietly deleted.
     """
     checkout = Path(root).resolve()
     registry = parse_registry(load_yaml(registry_path))
