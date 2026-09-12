@@ -170,6 +170,12 @@ async def test_the_score_behind_every_position_survives_in_the_append_only_log(
     for symbol, (_bar, _strategy, score, weight) in traced.items():
         assert score != 0.0 and weight is not None, symbol
     assert set(row["contributions"]) == set(first["contributions"])
+    # And which BOOK each of those strategies belongs to (2026-09-12).  `contributions` keys by
+    # strategy, and two instruments that ask a question about one book - M-015's compression and
+    # M-Q08's slippage - were both answering it on the sum of two because no reader has the registry.
+    assert row["books"], "a completed cycle records the strategy -> book map it ran under"
+    assert set(row["books"]) >= set(row["contributions"]), "every scoring strategy names its book"
+    assert all(isinstance(book, str) and book for book in row["books"].values())
 
 
 async def test_failed_cycles_back_off_exponentially_up_to_an_hour(august_panel: Panel, tmp_path: Path) -> None:
