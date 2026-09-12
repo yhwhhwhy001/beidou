@@ -30,7 +30,12 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # enumerated; this buys the round that enumerates them, priced at 243 candidates and a `mined` bucket
 # of 2,488 -> 2,731 (D-028 gate 1.7990 -> 1.8085).  What makes "one window" more than a sentence is
 # `test_the_single_window_mine_opening_is_returned`, which fails from that date until it goes back.
-PINNED_DIGEST = "08dcceaa6bee"
+# Moved 2026-09-12 (0.3.1 -> 0.3.2): `queue_order = "fifo"`.  Not a threshold - it is the ordering
+# §3's `queued -> probe` means by "队首", which the state did not record at all, so `queue_head`
+# refused outright whenever two candidates were queued.  FIFO needs no further judgement; every
+# alternative is a selection rule needing its own pre-registration.  Recorded in policy so that
+# changing it later is a rule version change rather than an edit.
+PINNED_DIGEST = "5200c9c98136"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:

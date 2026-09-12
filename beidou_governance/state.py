@@ -39,6 +39,7 @@ def dump(book: Book) -> dict[str, Any]:
                 "fraction": candidate.fraction,
                 "cooldown_until_window": candidate.cooldown_until_window,
                 "folded_through": candidate.folded_through,
+                "queued_at": candidate.queued_at,
             }
             for name, candidate in sorted(book.candidates.items())
         },
@@ -88,6 +89,9 @@ def load(payload: Any) -> Book:
             # `advance`; `--dry-run` is the default for exactly that reading, and the command prints
             # each candidate's watermark as `(never folded)` so the operator sees it before writing.
             folded_through=str(raw.get("folded_through", "")),
+            # Absent in every state written before 2026-09-12, and an empty stamp sorts LAST in
+            # `Book.queue` - an unknown arrival is not a claim to the front.
+            queued_at=str(raw.get("queued_at", "")),
         )
     return Book(
         window=int(payload.get("window", 0)),

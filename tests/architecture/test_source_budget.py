@@ -1955,7 +1955,12 @@ CEILING = {
     "beidou_data": 5_365,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 3_420,
+    # +65 governance: §3's `queued -> probe` requires "队首" and the state recorded no order at all, so
+    # `queue_head` refused outright whenever two candidates were queued - a gate that can never open
+    # rather than one that is strict, and the half-transition the 2026-09-09 audit counted as missing.
+    # `Candidate.queued_at` stamped where the transition happens, `Book.queue` FIFO over it, and
+    # `Policy.queue_order` so changing the order is a rule version change (0.3.1 -> 0.3.2).
+    "beidou_governance": 3_485,
 }
 
 

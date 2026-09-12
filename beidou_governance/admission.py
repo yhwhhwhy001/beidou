@@ -36,7 +36,7 @@ from typing import Any
 
 from beidou_alpha.registry import MAIN_BOOK, Registry
 from beidou_governance.canary import evaluate as evaluate_canary
-from beidou_governance.lifecycle import Book, Candidate, Event, Facts, State, evaluate
+from beidou_governance.lifecycle import Book, Candidate, Event, Facts, evaluate
 from beidou_governance.policy import Policy
 
 
@@ -212,16 +212,30 @@ def rolled(book: Book, policy: Policy, *, anchor: str = WINDOW_ANCHOR, now: date
 
 
 def queue_head(book: Book, candidate_id: str) -> tuple[bool, str]:
-    """§3's queue head, without inventing an order the state does not store.
+    """§3's queue head, in the order the state now records (`Candidate.queued_at`, FIFO).
 
-    Contention is refused rather than resolved: two queued candidates and no recorded order is a
-    ruling for the operator, and a tie broken by dictionary order would be a rule nobody wrote.
+    Until 2026-09-12 the state stored no order at all, so this refused outright whenever two
+    candidates were queued - honest about not inventing an order, but the consequence was a gate that
+    could never open rather than one that was strict.  `apply` now stamps the arrival where the
+    transition happens and `Book.queue` orders by it; `Policy.queue_order` records that the order is
+    FIFO so that changing it is a rule version change (R10).
+
+    The refusal is KEPT for the one case that still cannot be ordered: two or more queued candidates
+    that all predate the stamp.  A tie broken by dictionary order would be the rule nobody wrote.
     """
-    queued = sorted(name for name, c in book.candidates.items() if c.state is State.QUEUED)
-    others = [name for name in queued if name != candidate_id]
+    queue = book.queue
+    others = [c.id for c in queue if c.id != candidate_id]
     if not others:
         return True, "no other candidate is queued"
-    return False, f"§3: {len(others)} other candidates are also queued ({', '.join(others)}); no order is recorded"
+    if all(c.queued_at == "" for c in queue):
+        return False, (
+            f"§3: {len(others)} other candidates are also queued ({', '.join(sorted(others))}); "
+            "none carries an arrival stamp, so no order is recorded"
+        )
+    if queue[0].id == candidate_id:
+        return True, f"head of {len(queue)} queued, arrived {queue[0].queued_at}"
+    ahead = [c.id for c in queue if c.id != candidate_id][:3]
+    return False, f"§3: not at the head of the queue; ahead of it: {', '.join(ahead)}"
 
 
 def admit(

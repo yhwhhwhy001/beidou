@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from beidou_governance.policy import Policy
@@ -89,6 +90,13 @@ class Candidate:
     #: `cycles.jsonl` twice would spend a life the sleeve never used.  Held per candidate rather than
     #: per book because each sleeve's tenure starts and stops on its own clock.
     folded_through: str = ""
+    #: When this candidate entered QUEUED, as an ISO instant.  §3's `queued -> probe` requires it to be
+    #: "队首", and until 2026-09-12 nothing recorded an order at all - `queue_head` therefore refused
+    #: outright whenever two candidates were queued, which is a gate that can never open rather than one
+    #: that is strict.  Empty for a candidate that is not queued, and for any state written before this
+    #: field existed; an unknown entry time sorts LAST, because "I do not know when it arrived" is not a
+    #: claim to the front of a queue.
+    queued_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,21 @@ class Book:
     @property
     def probes(self) -> tuple[Candidate, ...]:
         return tuple(c for c in self.candidates.values() if c.state is State.PROBE)
+
+    @property
+    def queue(self) -> tuple[Candidate, ...]:
+        """Queued candidates in the order §3's "队首" means: the order they arrived.
+
+        FIFO is chosen because it is the definitional reading of a queue, and because every
+        alternative - by marginal Sharpe, by evidence date, by fraction - is a SELECTION rule that
+        would need its own pre-registration and would let a candidate improve its place by being
+        re-scored.  `Policy.queue_order` records the choice so that changing it is a rule version
+        change (R10) rather than an edit.
+
+        Candidates with no recorded arrival sort last, then by id so the order is total and stable.
+        """
+        queued = [c for c in self.candidates.values() if c.state is State.QUEUED]
+        return tuple(sorted(queued, key=lambda c: (c.queued_at == "", c.queued_at, c.id)))
 
     @property
     def probe_fraction(self) -> float:
@@ -228,7 +251,15 @@ def evaluate(book: Book, candidate: Candidate, event: Event, facts: Facts, polic
     return Decision(False, candidate.state, (f"§3: {event.value} is not a legal event in {candidate.state.value}",))
 
 
-def apply(book: Book, candidate_id: str, event: Event, facts: Facts, policy: Policy) -> tuple[Book, Decision]:
+def apply(
+    book: Book,
+    candidate_id: str,
+    event: Event,
+    facts: Facts,
+    policy: Policy,
+    *,
+    now: datetime | None = None,
+) -> tuple[Book, Decision]:
     """Evaluate, then fold the consequence into the book's counters.
 
     The counters are the reason this is not simply `evaluate` plus a dict write.  R4 counts
@@ -257,6 +288,14 @@ def apply(book: Book, candidate_id: str, event: Event, facts: Facts, policy: Pol
 
     if decision.allowed and decision.state is not candidate.state:
         updated = replace(updated, state=decision.state)
+        # The arrival stamp §3's "队首" needs.  Written where the transition happens, so the order is
+        # a fact of the record rather than of whoever reads it later; cleared on the way out, so a
+        # candidate that leaves the queue and comes back takes its place at the BACK - which is what
+        # R7's "three lives" would otherwise quietly hand back as a front-of-queue seat.
+        if decision.state is State.QUEUED:
+            updated = replace(updated, queued_at=(now or datetime.now(UTC)).isoformat())
+        elif candidate.state is State.QUEUED:
+            updated = replace(updated, queued_at="")
         if decision.state is State.PROBE and candidate.state is State.QUEUED:
             promotions += 1
             updated = replace(updated, probe_entries=candidate.probe_entries + 1, windows_survived=0)

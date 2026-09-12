@@ -28,7 +28,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.3.1"
+POLICY_VERSION = "0.3.2"
 """0.3.1 (2026-09-10): ONE extra mine round, for the window 2026-09-03..2026-10-03 only.
 
 4 -> 5 rounds.  Not a standing increase, and the difference is enforced rather than promised: the
@@ -137,6 +137,14 @@ class Policy:
 
     # R4: promotions per window.  One in, one up: the binding constraint is R3's two probe slots.
     max_queued_to_probe_per_window: int = 1
+    #: How §3's "队首" is decided.  FIFO by the instant a candidate entered QUEUED, which is the
+    #: definitional reading of a queue and the only one that needs no further judgement: ordering by
+    #: marginal Sharpe, by evidence date or by fraction is a SELECTION rule, would need its own
+    #: pre-registration, and would let a candidate improve its place by being re-scored.  Recorded
+    #: here rather than left implicit in `Book.queue` so that changing it is a rule version change
+    #: (R10) with a moved digest, not an edit.  Until 2026-09-12 no order was stored at all and the
+    #: gate refused outright whenever two candidates were queued.
+    queue_order: str = "fifo"
     max_probe_to_main_per_window: int = 1
 
     # R5: consecutive stopped probes that freeze promotion, and for how long.  Six windows is the

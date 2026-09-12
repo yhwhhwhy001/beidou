@@ -55,12 +55,28 @@ def test_the_rehearsal_rows_already_in_the_ledger_stay_where_they_are(tmp_path: 
     """
     path = _ledger(tmp_path)
     rows = [
-        {"id": "a", "at": "2026-09-12T13:17:09+00:00", "kind": "admission",
-         "subject": "alpha_registry.candidate.drill.yaml", "ruling": "allow", "reasons": [],
-         "review": "", "review_why": "", "reviewed_at": ""},
-        {"id": "b", "at": "2026-09-12T13:17:23+00:00", "kind": "admission",
-         "subject": "DRILL-G1-20260912", "ruling": "allow", "reasons": [],
-         "review": "", "review_why": "", "reviewed_at": ""},
+        {
+            "id": "a",
+            "at": "2026-09-12T13:17:09+00:00",
+            "kind": "admission",
+            "subject": "alpha_registry.candidate.drill.yaml",
+            "ruling": "allow",
+            "reasons": [],
+            "review": "",
+            "review_why": "",
+            "reviewed_at": "",
+        },
+        {
+            "id": "b",
+            "at": "2026-09-12T13:17:23+00:00",
+            "kind": "admission",
+            "subject": "DRILL-G1-20260912",
+            "ruling": "allow",
+            "reasons": [],
+            "review": "",
+            "review_why": "",
+            "reviewed_at": "",
+        },
     ]
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     loaded = read(path)
