@@ -335,6 +335,13 @@ def _log_admission(root: Path, admission: Admission, subject: str) -> None:
 
     Recorded by the gate rather than by whoever remembers: a sample of remembered decisions is
     selected by how memorable they were, and the memorable ones are the surprising ones.
+
+    **Called from `apply` only.**  `plan` asks the same question without making a ruling - its own
+    docstring is "what `apply` would do, without doing it" - and it used to record one anyway.
+    Measured 2026-09-12 during the DRILL-G1 production run: four `plan`/`apply` invocations left four
+    rows, three of them rehearsals, and `governance divergence` went from 1 pending to 5.  Ten quiet
+    rehearsals would carry Pre-A′'s only falsifier to its quorum of 10 without a decision being made -
+    the same shape found on `family_gate` the same morning, on the other gate, one command away.
     """
     record_verdict(
         root / VERDICTS,
@@ -373,7 +380,7 @@ def plan_cmd(
         err=True,
     )
     _report_admission(admission)
-    _log_admission(Path(root).resolve(), admission, Path(proposed).name)
+    # No `_log_admission` here: a dry run is not a ruling.  See that function's docstring.
     transaction = plan_transaction(
         Path(registry_path),
         Path(proposed).read_text(encoding="utf-8"),

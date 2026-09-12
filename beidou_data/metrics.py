@@ -46,14 +46,35 @@ ARCHIVE_COLUMNS = (
 )
 VALUE_COLUMNS = tuple(c for c in ARCHIVE_COLUMNS if c not in ("create_time", "symbol"))
 
-# REST spells the same quantities in camelCase, and only some of them.
-REST_TO_ARCHIVE = {
-    "sumOpenInterest": "sum_open_interest",
-    "sumOpenInterestValue": "sum_open_interest_value",
-    "longShortRatio": "count_long_short_ratio",
-    "longAccount": "count_toptrader_long_short_ratio",
-    "buySellRatio": "sum_taker_long_short_vol_ratio",
-}
+# REST spells the same quantities in camelCase, ACROSS FIVE ENDPOINTS, and the same key means a
+# different column depending on which one answered.  A flat map cannot express that, and the flat map
+# this replaces had two consequences, both measured 2026-09-12:
+#
+# 1. `snapshot_metrics` polled `/futures/data/openInterestHist` alone, which serves only the two open
+#    interest fields - so the four ratio columns were NaN in EVERY live snapshot row while the research
+#    archive had them.  That is why #17 read "research yes, live no": a plumbing gap, not evidence.
+# 2. `longAccount` was mapped to `count_toptrader_long_short_ratio`, and it is the wrong quantity -
+#    `longAccount` is the long ACCOUNT SHARE (0.6298 live right now) while that archive column is a
+#    RATIO (BTCUSDT median 1.5249, range 0.4993-5.3241).  It never fired only because the endpoint that
+#    returns `longAccount` was never polled.  Verified against the archive before the change:
+#      count_toptrader_long_short_ratio  <- topLongShortAccountRatio.longShortRatio    1.7012
+#      sum_toptrader_long_short_ratio    <- topLongShortPositionRatio.longShortRatio   2.1974
+#      count_long_short_ratio            <- globalLongShortAccountRatio.longShortRatio 1.6323
+#      sum_taker_long_short_vol_ratio    <- takerlongshortRatio.buySellRatio           0.3691
+#    each of which lands inside its own column's archived range and outside the others'.
+REST_SOURCES: tuple[tuple[str, dict[str, str]], ...] = (
+    (
+        "/futures/data/openInterestHist",
+        {"sumOpenInterest": "sum_open_interest", "sumOpenInterestValue": "sum_open_interest_value"},
+    ),
+    ("/futures/data/topLongShortAccountRatio", {"longShortRatio": "count_toptrader_long_short_ratio"}),
+    ("/futures/data/topLongShortPositionRatio", {"longShortRatio": "sum_toptrader_long_short_ratio"}),
+    ("/futures/data/globalLongShortAccountRatio", {"longShortRatio": "count_long_short_ratio"}),
+    ("/futures/data/takerlongshortRatio", {"buySellRatio": "sum_taker_long_short_vol_ratio"}),
+)
+
+#: Kept for the one caller that reads a single open-interest page; see `REST_SOURCES` for the rest.
+REST_TO_ARCHIVE = dict(REST_SOURCES[0][1])
 
 PERIOD_MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000}
 
@@ -117,15 +138,27 @@ def parse_archive_csv(text: str) -> pd.DataFrame:
     return _frame(rows)
 
 
-def parse_rest_rows(rows: Iterable[Mapping[str, Any]], period: int) -> pd.DataFrame:
-    """A REST page, in the same canonical shape, with the close-stamp converted once and here."""
+def parse_rest_rows(
+    rows: Iterable[Mapping[str, Any]],
+    period: int,
+    mapping: Mapping[str, str] | None = None,
+    *,
+    symbol: str = "",
+) -> pd.DataFrame:
+    """A REST page, in the same canonical shape, with the close-stamp converted once and here.
+
+    ``mapping`` says which of THIS endpoint's keys are which archive column; the default is the open
+    interest page, which is what every caller before 2026-09-12 meant.  ``symbol`` is needed because
+    `/futures/data/takerlongshortRatio` is the one page that does not echo it back.
+    """
+    columns = dict(mapping or REST_TO_ARCHIVE)
     out = []
     for row in rows:
-        values = {archive: row.get(rest) for rest, archive in REST_TO_ARCHIVE.items()}
+        values = {archive: row.get(rest) for rest, archive in columns.items()}
         out.append(
             {
                 "open_time": bucket_open_from_rest(int(row["timestamp"]), period),
-                "symbol": str(row.get("symbol", "")),
+                "symbol": str(row.get("symbol") or symbol),
                 **{c: values.get(c) for c in VALUE_COLUMNS},
             }
         )

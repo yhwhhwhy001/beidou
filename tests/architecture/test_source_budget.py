@@ -1935,11 +1935,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # re-fetching a settled bar at +15/+60/+300/+600s returned byte-identical fields.  `SETTLE_SECONDS`
 # carries both measurements and puts the sentence into the alert; it gates nothing and widens no
 # tolerance, and `last_scored_cycle` keeps the lag off the restart rows that have no contributions.
+#
+# Fifth raise, +16 live / +14 cli / +77 data: the 2026-09-12 operator rulings again.  "One machine
+# only" unblocked L4, and starting the soak for the first time found `run_shadow.sh` writing
+# `.beidou/live-shadow-dry-run` while all three of its readers defaulted to `.beidou/live-shadow` -
+# so `store_directory` is now the single definition both sides use.  And #17's "research yes, live no"
+# turned out to be plumbing: the recorder polled one of the five endpoints that serve the six metrics
+# columns, leaving four of them NaN in every row since the store existed, with `longAccount` mapped to
+# a ratio column it is not.  `REST_SOURCES` is per endpoint, the poll is bounded-concurrent (4.7s for
+# 18 symbols against 28.6s serial, on a cycle that takes twenty).
 CEILING = {
     "beidou_alpha": 8_071,
-    "beidou_live": 7_665,
-    "beidou_cli": 5_681,
-    "beidou_data": 5_288,
+    "beidou_live": 7_681,
+    # +7 more cli: `governance plan` was recording an admission ruling into M-G05's ledger, and a dry
+    # run is not a ruling - found during the DRILL-G1 production run, four invocations leaving four
+    # rows and divergence going 1 -> 5 pending.  Same defect as `family_gate`'s date key, same morning,
+    # one command away; the lines are the docstring carrying both measurements.
+    "beidou_cli": 5_702,
+    "beidou_data": 5_365,
     "beidou_exchange": 611,
     "beidou_shared": 289,
     "beidou_governance": 3_420,

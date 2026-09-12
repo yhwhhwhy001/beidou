@@ -20,15 +20,17 @@ same rows recorded at instants no decision was made at.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 import pandas as pd
 
-from beidou_data.metrics import parse_rest_rows, period_ms
+from beidou_data.metrics import REST_SOURCES, parse_rest_rows, period_ms
 from beidou_data.store import MetricsStore
 
-METRICS_PATH = "/futures/data/openInterestHist"
+#: Kept so anything naming the open-interest page by hand still resolves; the poll uses `REST_SOURCES`.
+METRICS_PATH = REST_SOURCES[0][0]
 
 
 class _Getter(Protocol):
@@ -42,6 +44,7 @@ async def snapshot_metrics(
     *,
     period: str = "5m",
     limit: int = 12,
+    concurrency: int = 6,
 ) -> dict[str, Any]:
     """Record the metrics buckets this loop could read, symbol by symbol.
 
@@ -50,15 +53,56 @@ async def snapshot_metrics(
     """
     step = period_ms(period)
     stored: dict[str, int] = {}
-    try:
-        for symbol in symbols:
-            rows = await client.get(METRICS_PATH, {"symbol": symbol, "period": period, "limit": int(limit)})
+    missing: dict[str, list[str]] = {}
+    # Five endpoints x eighteen symbols is ninety requests, and serially that measured 28.6s against a
+    # cycle that takes about twenty - which would push every rebalance a half-minute later and move
+    # M-Q08's own reference (adverse fill vs the DECISION CLOSE) by that much.  Bounded rather than
+    # unbounded: this runs beside the loop's own market-data fetches on a proxy path that intermittently
+    # 503s, and a burst of ninety is how a shared route starts refusing the requests that matter.
+    gate = asyncio.Semaphore(concurrency)
+
+    async def one(symbol: str) -> tuple[str, pd.DataFrame | None, list[str]]:
+        frame: pd.DataFrame | None = None
+        absent: list[str] = []
+        for path, mapping in REST_SOURCES:
+            async with gate:
+                rows = await client.get(path, {"symbol": symbol, "period": period, "limit": int(limit)})
             if not rows:
+                # Recorded per endpoint rather than folded into the row count: an endpoint that stops
+                # answering leaves its columns NaN, and NaN in this store is exactly what
+                # `metrics_parity` cannot see (it skips NaN pairs and calls that agreement).
+                absent.append(path.rsplit("/", 1)[-1])
                 continue
-            stored[symbol] = store.append(symbol, parse_rest_rows(rows, step))
+            page = parse_rest_rows(rows, step, mapping, symbol=symbol)
+            frame = page if frame is None else _merge(frame, page, mapping.values())
+        return symbol, frame, absent
+
+    try:
+        for symbol, frame, absent in await asyncio.gather(*(one(symbol) for symbol in symbols)):
+            if absent:
+                missing[symbol] = absent
+            if frame is not None:
+                # The store is read-modify-write per symbol, so the writes stay serial here even though
+                # the fetches did not (DL-Q6: two writers can publish a file one was still writing).
+                stored[symbol] = store.append(symbol, frame)
     except Exception as exc:
-        return {"stored": stored if stored else {}, "error": f"{type(exc).__name__}: {exc}"}
-    return {"stored": stored}
+        return {"stored": stored, "missing": missing, "error": f"{type(exc).__name__}: {exc}"}
+    return {"stored": stored, **({"missing": missing} if missing else {})}
+
+
+def _merge(frame: pd.DataFrame, page: pd.DataFrame, columns: Any) -> pd.DataFrame:
+    """Fold one endpoint's columns onto the bucket rows already collected for this symbol.
+
+    Aligned on ``open_time``, which every page carries after `parse_rest_rows` converts the stamp -
+    so an endpoint whose window is one bucket short contributes what it has and leaves the rest NaN,
+    rather than shifting its values onto the wrong buckets.
+    """
+    indexed = page.set_index("open_time")
+    out = frame.set_index("open_time")
+    for column in columns:
+        if column in indexed:
+            out[column] = indexed[column].reindex(out.index)
+    return out.reset_index()
 
 
 def metrics_parity(snapshot: pd.DataFrame, archive: pd.DataFrame, *, tolerance: float = 1e-6) -> dict[str, Any]:

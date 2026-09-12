@@ -7991,3 +7991,100 @@ C-G1 的 falsifier（「一个 probe 在 stop 前造成 > 2% 权益损失」）�
 不动。乙把阈值调到能响，响的却是平仓节奏；丙才是去修那个"不同频"。
 
 **明写不做**：本条不改 `max_loss`、不改 R5、不改停损口径。三项都要它自己的预登记（R10）。
+
+
+## 2026-09-12 · 操作者裁定：只用本机；于是 L4 有了归处，而首次启动就查出浸泡写的目录没人读
+
+### 一、裁定：不增加能下单的机器（Q5 / AR-17 / §21.5）
+
+§21 第 3 条是 09-09 核出来的那个真实代价：`run_shadow.sh` 走 `--dry-run`，而 `--dry-run` 仍然
+`build_venue`、仍然读 `BEIDOU_BINANCE_API_KEY/SECRET`，所以 **§5 的 L4 放不进一台只有数据权限的
+研究机**。两条路都要付钱：研究机也持有交易凭据，或者 canary 留在交易机上而"两机图"要改。
+
+**操作者裁定：只用本机。** 于是第二条自动成立，代价是零——凭据本来就在这台机器上。连带三件事：
+
+- **AR-17 由 OPEN 转 CLOSED**，Q5 由 OPEN 转已裁；
+- `com.beidou.research.plist` / `run_research.sh` 判**明写不做**（不是欠账，是被回答过的问题）；
+- **L4 浸泡当天 13:21Z 启动**：`deploy/com.beidou.shadow.plist`，168 周期，约 2026-09-19 结束。
+  它同时是 AC-G5、M-G03 与 DRILL-G4 的唯一样本来源，而这三条此前都是"无样本"。
+
+浸泡的候选是 `config/alpha_registry.candidate.yaml`，**与在跑的 registry 只差一段注释、语义完全相同**，
+这是有意的：canary 是部署健康检查不是 alpha 闸（KILL-AR-04），而它一次都没跑过，所以它首先欠一个
+**正向控制**——一份本该通过的 registry，通过。没有这一半，将来任何一次 canary 失败都分不清是候选的
+问题还是这台仪器根本不会通过。负向控制是 DRILL-G4，单独跑。语义不同的候选考虑过并按证据排除：今天
+合法的形状要么需要一份不存在的 book 报告（`fraction` 1/3→1/6，§3 写的那条），要么需要一个带
+PASS/WEAK_PASS 证据却处于停用状态的策略——而五个停用的全带 FAIL 证据。**造一个出来，等于让 canary
+去给闸正在正确拒绝的候选背书。**
+
+### 二、启动第一行就查出：浸泡写的目录，三个读它的命令都不去那里
+
+```
+run_shadow.sh       --state-dir .beidou/live-shadow
+build_store         .beidou/live-shadow  ->  .beidou/live-shadow-dry-run     ← 后缀在这里加的
+governance canary   --shadow-dir 默认 .beidou/live-shadow
+governance plan     --shadow-dir 默认 .beidou/live-shadow
+governance apply    --shadow-dir 默认 .beidou/live-shadow
+```
+
+五行**各自都是对的**。合起来：浸泡会跑满 168 小时，而每一个读者从头到尾说「L4: no shadow record」，
+**然后 AC-G5 会以一个与候选毫无关系的理由失败**。后缀原本只活在 `build_store` 内部，于是每个读者
+都得凭记忆知道这条规则——而 canary 的读者不知道。
+
+改法是这个仓库的老规矩：**一个定义，两边都读它**。`store_directory(directory, *, dry_run)` 从
+`build_store` 里提出来，读者侧一并改用；未加后缀的目录仍然接受（记录也可能是人手搬过来的），
+但加了后缀的那份优先——在跑的浸泡是权威，一份过期的手抄本不能盖住它。
+
+同一形状的**第 27 次**：生产者与消费者各自给同一个东西起了名字，各自都对。
+
+### 三、#17 多空比「研究可用、实盘不可用」是管道漏了，不是证据问题
+
+09-09 的对账写的是「四列在实盘 snapshot 全 NaN，按列被拒」。今天量了生产 store：
+
+```
+sum_open_interest / sum_open_interest_value     NaN 0%
+count_toptrader_long_short_ratio                NaN 100%
+sum_toptrader_long_short_ratio                  NaN 100%
+count_long_short_ratio                          NaN 100%
+sum_taker_long_short_vol_ratio                  NaN 100%
+```
+
+病因：`snapshot_metrics` 只轮询 `/futures/data/openInterestHist` 一个端点，而那一页只提供两列持仓量。
+四个比率各来自**另外四个端点**。`alignment.py` 的 docstring 早在 09-09 就写下了这件事，
+**而没有任何东西让那句话变成假**——`metrics_parity` 跳过 NaN 对，于是它在从未比较过的数据上读出
+`differing: 0`，M-011 的平价闸报"已满足"。
+
+改的时候查出第二处：旧的 `REST_TO_ARCHIVE` 把 `longAccount` 映到 `count_toptrader_long_short_ratio`，
+**量纲就不对**——`longAccount` 是多头账户占比（实测 0.6298），那一列在归档里是比率（BTC 中位数 1.5249，
+范围 0.4993–5.3241）。它一直没出事，只是因为返回 `longAccount` 的那个端点从来没被轮询过。
+四条映射在改之前逐个对着归档区间验过：
+
+| 归档列 | 端点 | 字段 | 实测值 |
+| --- | --- | --- | ---: |
+| `count_toptrader_long_short_ratio` | topLongShortAccountRatio | longShortRatio | 1.7012 |
+| `sum_toptrader_long_short_ratio` | topLongShortPositionRatio | longShortRatio | 2.1974 |
+| `count_long_short_ratio` | globalLongShortAccountRatio | longShortRatio | 1.6323 |
+| `sum_taker_long_short_vol_ratio` | takerlongshortRatio | buySellRatio | 0.3691 |
+
+每个值都落在自己那一列的归档区间内、落在其余三列之外。
+
+**代价量过再改**：五端点 × 18 币 = 90 次请求，串行实测 **28.6 秒**，而一个周期总共约 20 秒——
+那会把每次再平衡推后半分钟，而 M-Q08 的滑点参照正是决策 bar 的收盘价。改成有界并发（6），
+实测 **4.7 秒**。有界而不是无界：这条路上有个间歇 503 的代理，一次 90 连发正是让共享通道开始
+拒绝要紧请求的方式。
+
+
+### 四、同一天、同一个问题、另一道闸：`governance plan` 也在记机器裁定
+
+今天早上把 `family_gate` 的账本从"按日去重"改成"按裁定去重"，理由是它数的是有人跑了几天命令。
+下午跑 DRILL-G1 的时候，M-G05 的待复核从 **1 条变成 5 条**——四分钟里四次 `plan`/`apply`，
+留下四行，**其中三行是演练**。
+
+`plan` 自己的 docstring 写着「What `apply` would do, **without doing it**」，然后它调了
+`_log_admission`。于是每一次排练都在 Pre-A′ 唯一 falsifier 的样本里留一行 pending。
+十次安静的排练就够到 quorum 10——**一次决策都没发生**。
+
+**两道闸，相隔一个命令，同一个问题——"再问一次算不算一个新答案"——两次都答错了。**
+
+改法：`plan` 不再记裁定，调用点留一行注释说明为什么。已有的四行**原样留着**（账本只追加），
+其中 `DRILL-G1-20260912` 那一行是 `apply` 记的、是真裁定；另外三行是排练。**复核它们是操作者的事**：
+`governance review` 是 M-G05 的人工那一半，机器复核自己的裁定等于在量它跟自己有多一致。

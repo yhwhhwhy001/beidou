@@ -28,9 +28,7 @@ from beidou_live.config import build_store, store_directory
 
 def _write(directory: Path, rows: list[dict]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "cycles.jsonl").write_text(
-        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
-    )
+    (directory / "cycles.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 
 
 def test_the_store_and_the_reader_agree_on_one_name(tmp_path: Path) -> None:
