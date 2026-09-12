@@ -224,7 +224,7 @@ def margin_mode_problems(
 #      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
 #      may be held at all, so changing it changes the book - found while asking whether the
 #      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
-CONSTRUCTION_PAYLOAD_VERSION = 4
+CONSTRUCTION_PAYLOAD_VERSION = 5
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
@@ -252,6 +252,15 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # reset M-010's 30-day window - which has been running unbroken since 2026-09-04T15:02Z - for a
     # book that is byte-identical.
     "dd32720d3faf5ab0e6a2934a76e9d26489095d7b5a7d19d537bcef44751a7cf6": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v5 (+ portfolio.sleeve_max_gross), 2026-09-12 (P30).  Declared before it is ever written, on the
+    # same proof as v3 and v4: recomputed against the shipped profile the value is 0.0 on both sides of
+    # the change - the profile does not name the key and 0.0 is off - so only the shape of what is
+    # hashed moved.  `cap_gross(x, 0.0)` returns `x` and the main book is passed 0.0 regardless, which a
+    # test asserts on the two-book path rather than leaving to this comment.  Without the alias the next
+    # restart would reset M-010's window for a book that is byte-identical.
+    "ab3cb75fb2f8d94813aa44c5b6d869c34bf82bcc78757bf1fcfa0bba4e16e1b3": (
         "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
     ),
 }

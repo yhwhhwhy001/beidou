@@ -1952,14 +1952,22 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
-    "beidou_alpha": 8_094,
-    "beidou_live": 7_814,
+    # +39 alpha / +18 live / +35 cli (P30, 2026-09-12): `sleeve_max_gross`, a per-bar gross cap on a
+    # non-main book applied before its fraction.  P21 rejected `594a12f9` on drawdown alone and named
+    # the cause as exposure rather than parameters - the sleeve averages 1.372 gross against tsmom's
+    # 0.859 - so a third of it was never a third of the risk budget.  The alpha lines are `cap_gross`
+    # (one row-wise cap, now also the one `combine_books` calls, so the two cannot drift) plus the
+    # field; live is the fingerprint entry and its alias, because a knob the record cannot see is the
+    # other half of D-036; cli is the flag, the report's `sleeve_gross` block and the comments that say
+    # why the cap sits before the fraction and outside the standalone verdict.
+    "beidou_alpha": 8_133,
+    "beidou_live": 7_832,
     # +7 more cli: `governance plan` was recording an admission ruling into M-G05's ledger, and a dry
     # run is not a ruling - found during the DRILL-G1 production run, four invocations leaving four
     # rows and divergence going 1 -> 5 pending.  Same defect as `family_gate`'s date key, same morning,
     # one command away; the lines are the docstring carrying both measurements.
     # +22 more cli: `governance window`, the reader for §8's Phase 4a list (see the governance note).
-    "beidou_cli": 5_724,
+    "beidou_cli": 5_759,
     "beidou_data": 5_365,
     "beidou_exchange": 611,
     "beidou_shared": 289,

@@ -26,7 +26,7 @@ from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
 from beidou_alpha.panel import Panel, interval_seconds
-from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, combine_books
+from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, cap_gross, combine_books
 from beidou_alpha.registry import StrategyEntry, evidence_construction_digest, registry_fingerprint
 from beidou_alpha.report import canonical_json, render_markdown
 from beidou_alpha.signals import SIGNALS, get_signal
@@ -1837,10 +1837,15 @@ def _evaluate_book(
     main_result = run_backtest(panel, main_decision, cost)
     sleeve_decision = banded(w_sleeve)
     sleeve_result = run_backtest(panel, sleeve_decision, cost)
+    # P30's cap applies to the sleeve AS IT ENTERS THE BOOK, before the fraction, and deliberately not
+    # to `sleeve_decision` above: that block is the signal-level evidence (D-020's verdict, its own DSR)
+    # and has to stay comparable with the runs that came before this knob existed.  F5 of the
+    # pre-registration is exactly this line - the standalone block must come out bit-identical.
+    w_sleeve_in_book = cap_gross(w_sleeve, portfolio.sleeve_max_gross)
     totals: dict[float, tuple[BacktestResult, dict[str, float]]] = {}
     decisions: dict[float, pd.DataFrame] = {}
     for fraction in fractions:
-        combined, binding = _combine_books(w_main, w_sleeve * fraction, portfolio)
+        combined, binding = _combine_books(w_main, w_sleeve_in_book * fraction, portfolio)
         decisions[fraction] = combined
         totals[fraction] = (run_backtest(panel, combined, cost), binding)
     index = main_result.portfolio_net.index
@@ -1876,7 +1881,10 @@ def _evaluate_book(
             "cap_binding": binding,
             "marginal": marginal_metrics(total_metrics, main_metrics),
         }
-    sleeve_scaled = run_backtest(panel, banded(w_sleeve * fractions[0]), cost)
+    sleeve_scaled = run_backtest(panel, banded(w_sleeve_in_book * fractions[0]), cost)
+    raw_gross = w_sleeve.abs().sum(axis=1)
+    in_book_gross = w_sleeve_in_book.abs().sum(axis=1)
+    decided = raw_gross[w_sleeve.notna().any(axis=1)]
     payload: dict[str, Any] = {
         "universe_mode": universe_mode,
         "symbols": panel.symbols,
@@ -1884,11 +1892,24 @@ def _evaluate_book(
         "main_only": {**main_metrics, "summary": main_result.summary()},
         "sleeve_standalone": standalone,
         "sleeve_scaled_summary": sleeve_scaled.summary(),
+        # P30.  The quantity the cap acts on, reported whether or not a cap is set, because F2 asks
+        # whether the cap bought anything a uniform fraction would not: the exposure-matched fraction is
+        # `mean_capped / mean_raw` times this run's fraction, and it cannot be read off a Sharpe.
+        "sleeve_gross": {
+            "cap": portfolio.sleeve_max_gross,
+            "mean_raw": float(decided.mean()),
+            "mean_in_book": float(in_book_gross[decided.index].mean()),
+            "p95_raw": float(decided.quantile(0.95)),
+            "binding_share": float((decided > portfolio.sleeve_max_gross).mean())
+            if portfolio.sleeve_max_gross
+            else 0.0,
+            "exposure_matched_fraction": float(fractions[0] * in_book_gross[decided.index].mean() / decided.mean()),
+        },
         "correlation": {
             "full": float(main_net.corr(sleeve_net)),
             "oos": float(main_net.iloc[oos_start:].corr(sleeve_net.iloc[oos_start:])),
         },
-        "netting": _netting(w_main, w_sleeve * fractions[0]),
+        "netting": _netting(w_main, w_sleeve_in_book * fractions[0]),
         "by_fraction": by_fraction,
         "yearly_marginal": {
             year: {"main": main_row["return"], "total": total_row["return"], "sleeve_alone": sleeve_row["return"]}
@@ -2180,6 +2201,15 @@ def _record_trial(ledger_path: Path, record: TrialRecord) -> bool:
 @click.option("--purge", default=50, show_default=True)
 @click.option("--cpcv-groups", default=6, show_default=True)
 @click.option(
+    "--sleeve-max-gross",
+    default=None,
+    type=float,
+    help=(
+        "P30: cap the sleeve's own sum |w| per bar, BEFORE --fraction (0 = off). "
+        "Defaults to the profile's portfolio.sleeve_max_gross so the live construction is the default."
+    ),
+)
+@click.option(
     "--prior-trials",
     default=0,
     show_default=True,
@@ -2208,6 +2238,7 @@ def research_book(
     min_train: int,
     purge: int,
     cpcv_groups: int,
+    sleeve_max_gross: float | None,
     prior_trials: int,
 ) -> None:
     """Evidence for running SLEEVE as an independent small book next to MAIN (D-018).
@@ -2222,6 +2253,10 @@ def research_book(
     fractions = [fraction, *[f for f in extra if f != fraction]]
     profile_payload = load_yaml(profile)
     portfolio = portfolio_params(profile_payload)
+    if sleeve_max_gross is not None:
+        if sleeve_max_gross < 0:
+            raise click.ClickException("--sleeve-max-gross must be >= 0 (0 disables it)")
+        portfolio = replace(portfolio, sleeve_max_gross=sleeve_max_gross)
     history = (
         min_history
         if min_history is not None

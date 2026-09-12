@@ -198,6 +198,10 @@ CONSTRUCTION_KEYS: tuple[str, ...] = (
     "max_scalar",
     "no_trade_band",
     "no_trade_rel_band",
+    # P30.  Reports record `model.portfolio.__dict__`, so this key appears from the first report run
+    # under the new code; older reports simply do not carry it and are skipped, which is the same rule
+    # that let the `portfolio` block be introduced at all.
+    "sleeve_max_gross",
 )
 
 
