@@ -5,3 +5,4 @@
 {"at": "2026-09-12T13:17:23.888525+00:00", "id": "2de493cca1ce", "kind": "admission", "reasons": [], "review": "", "review_why": "", "reviewed_at": "", "ruling": "allow", "subject": "DRILL-G1-20260912"}
 {"at": "2026-09-12T13:18:01.877431+00:00", "id": "3e04c3d0170d", "kind": "admission", "reasons": [], "review": "", "review_why": "", "reviewed_at": "", "ruling": "allow", "subject": "alpha_registry.candidate.control.yaml"}
 {"at": "2026-09-12T13:20:44.006506+00:00", "id": "3fe2ea2d88ee", "kind": "admission", "reasons": [], "review": "", "review_why": "", "reviewed_at": "", "ruling": "allow", "subject": "alpha_registry.candidate.yaml"}
+{"at": "2026-09-12T13:55:04.171083+00:00", "id": "0935c24b51b0", "kind": "admission", "reasons": [], "review": "", "review_why": "", "reviewed_at": "", "ruling": "allow", "subject": "DRILL-G4-20260912"}

@@ -8120,3 +8120,54 @@ return False, f"§3: {len(others)} other candidates are also queued; no order is
 - **离开队列时戳被清掉**：R7 给三次命，它不该顺带把队首的位置也还回来。
 
 戳跟着 `governance_state.json` 一起落盘——一个不能往返的顺序，就是每次进程重启都重排一次的顺序。
+
+
+## 2026-09-12 · AC-G4 与 DRILL-G4 的生产实证，以及 AC-G8 能满足的那个形式
+
+### AC-G4 / DRILL-G1（操作者授权后执行）
+
+方案 §5 的 DRILL-G1 写的是：「事务写入一份 sha256 不符的 evidence → 启动闸拒绝 → 自动回滚 →
+重启成功 → 事务日志记 ROLLBACK」。**跑之前把预期写下来**，然后跑：
+
+```
+候选      与在跑的 registry 只差 1 个字符（evidence sha256 的一位十六进制 d→e）
+plan      restart_required=false
+          reasons: tsmom: evidence digest mismatch for reports/research/tsmom-validation-20260908T182204Z.json
+apply     ROLLBACK   before 651545b3d2af -> after 651545b3d2af
+          registry md5 d874ed84895cb9f1f96bfe59ff8f6669（与跑之前逐字节相同，注释也在）
+          git diff config/alpha_registry.yaml 为空
+正向控制  同一份 registry 只加一行注释 → 同一道闸 reasons: []，restart_required=true
+```
+
+**正向控制是这次的关键**，不是装饰：没有它，那次拒绝可能来自任何别的原因。加了它，拒绝只可能
+来自那一位十六进制。
+
+事务链从 4 行全 APPLY 变成 6 行含 2 行 ROLLBACK——`promote.py` 写了四天，**回滚这一支在生产里
+第一次真的走过**。
+
+### DRILL-G4：浸泡在跑的时候注入
+
+```
+跑之前  armed registry md5 d874ed…  shadow pid 56447  armed pid 57523
+注入    浸泡中的候选，evidence sha256 改坏一位 → governance apply
+跑之后  ROLLBACK；armed registry md5 不变、git diff 为空
+        shadow pid 56447（没动）   armed pid 57523（没动）
+        governance status: probes 1/2，无新 probe，候选未晋级
+```
+
+「候选回队列，不触碰 armed 循环」两半都验到了：候选没有变成 probe，而实盘与浸泡两个进程**连
+pid 都没换**。
+
+### AC-G8：三条期望，两条已验，第三条今天落地
+
+方案 §10 给 AC-G8 的客观预期是「空间未变零 mine；预算耗尽零 validate；队列有序」。
+
+1. **空间未变零 mine** —— 今天生产**连跑 3 轮**，`budget`、`search_space_digest`、
+   `scheduler` 三行读数逐字相同，零 mine（空间未变 + 轮次 5/5 用尽）。
+2. **预算耗尽零 validate** —— `test_t_g8_2_an_exhausted_budget_stops_validate_rather_than_truncating_it`
+   对着真的 `LedgerBudget` 验过，返回 WAIT 且理由以 `R1` 开头。**生产演示做不到，而且理由不是
+   "没时间"**：要演示它，得先花掉它保护的那 1,519 行账本——为了看闸关上而把闸守的东西用光。
+3. **队列有序** —— 今天落地（`Candidate.queued_at` / `Book.queue` / `Policy.queue_order`）。
+
+所以 AC-G8 记 **✔（能满足的形式）**，与 AC-G9 同一种处置：字面形式不可满足时，写清能满足的那个
+形式和为什么，而不是把它挂在 ◐ 上不动。
