@@ -60,6 +60,18 @@ def compare_targets(
     weight_diffs = _diff(state.last_targets, targets.weights)
     worst_weight = max(weight_diffs.values(), default=0.0)
     ok = matched and worst_contribution <= tolerance and not missing
+    # The offenders, ranked, in a field the alert path can quote in one line.  Six of these fired
+    # between 2026-09-10 and 2026-09-12 and not one left a recoverable diff: `run_check.sh` pages with
+    # `tail -n 3` of pretty-printed sorted JSON, whose last three lines are `"tolerance": 1e-09` and
+    # the closing brace.  A monitor that cannot say WHAT stopped reproducing has not reported anything.
+    offenders = sorted(
+        (
+            {"strategy": strategy, "symbol": symbol, "diff": value}
+            for strategy, diffs in contributions.items()
+            for symbol, value in diffs.items()
+        ),
+        key=lambda row: -float(row["diff"]),
+    )[:5]
     return {
         "as_of_ms": as_of_ms,
         "state_bar_ms": state.last_bar_ms,
@@ -71,6 +83,7 @@ def compare_targets(
         "strategies_not_in_state": missing,
         "max_target_diff": worst_weight,
         "target_diffs": {symbol: value for symbol, value in weight_diffs.items() if value > tolerance},
+        "worst_contributions": offenders,
         "tolerance": tolerance,
         "ok": ok,
         "note": (
@@ -78,7 +91,8 @@ def compare_targets(
             if ok
             else "state.json 属于另一根 K 线；请等下一个周期完成后重跑"
             if not matched
-            else "模型已无法复现上一周期的 contributions（配置、代码或数据发生了变化）"
+            else "模型已无法复现上一周期的 contributions（配置、代码或数据发生了变化）："
+            + "，".join(f"{row['strategy']}/{row['symbol']} 差 {row['diff']:.3e}" for row in offenders[:3])
         ),
         "clock_note": (
             None

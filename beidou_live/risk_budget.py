@@ -369,8 +369,71 @@ def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) ->
     }
 
 
-def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, *, latest_ms: int) -> dict[str, Any]:
+def books_by_symbol(cycle: Mapping[str, Any] | None) -> dict[str, frozenset[str]]:
+    """Which books carry each symbol, from one cycle record.  ``{}`` when the record cannot say.
+
+    `contributions` keys by STRATEGY; `books` (written since 2026-09-12) maps strategy -> book.  A
+    record from before that field exists answers "I cannot tell", and every caller then reports one
+    undivided population rather than guessing that the strategy id and the book name are the same
+    thing - they are not, and assuming so is how a reading about one book gets taken on two.
+    """
+    books = cycle.get("books") if cycle else None
+    if not isinstance(books, Mapping) or not books:
+        return {}
+    out: dict[str, set[str]] = {}
+    for strategy, scores in (cycle.get("contributions") or {}).items():
+        book = books.get(strategy)
+        if book is None or not isinstance(scores, Mapping):
+            continue
+        for symbol, value in scores.items():
+            if value:
+                out.setdefault(str(symbol), set()).add(str(book))
+    return {symbol: frozenset(names) for symbol, names in out.items()}
+
+
+def _weighted(values: Sequence[float], sizes: Sequence[float]) -> dict[str, Any]:
+    """Notional-weighted mean with the standard error the point estimate never carried.
+
+    `n_eff` is Kish's effective sample size: a weighted mean of 34 fills whose notionals differ by
+    6x does not carry 34 fills' worth of information, and dividing by the raw count would understate
+    the error bar of the number the alert quotes.
+    """
+    total = sum(sizes)
+    if not values or total <= 0:
+        return {"value": None, "fills": len(values), "notional": total, "se": None}
+    mean = sum(v * w for v, w in zip(values, sizes, strict=True)) / total
+    n_eff = total**2 / sum(w * w for w in sizes)
+    variance = sum(w * (v - mean) ** 2 for v, w in zip(values, sizes, strict=True)) / total
+    return {
+        "value": mean,
+        "fills": len(values),
+        "notional": total,
+        "n_eff": n_eff,
+        "sd": math.sqrt(variance),
+        "se": math.sqrt(variance / n_eff) if n_eff > 0 else None,
+    }
+
+
+def slippage_bps(
+    trades: Sequence[Mapping[str, Any]],
+    params: RiskBudgetParams,
+    *,
+    latest_ms: int,
+    books: Mapping[str, frozenset[str]] | None = None,
+) -> dict[str, Any]:
     """Notional-weighted adverse fill vs the DECISION BAR CLOSE, against M-Q08's "2x model" bar.
+
+    ``books`` (from `books_by_symbol`) splits the reading by how many books carry the symbol.  The
+    2026-09-12 ALERT is why: 5.47 bps against a 4 bps bar, which is neither book's number.  The
+    fourteen names only the main book holds filled at **0.80 bps**; the four the flow probe adds
+    filled at **16.18** (t = 2.31 against the bar, the only one of the three readings that clears
+    its own error bar).  An aggregate over two populations describes neither, and this one was about
+    to fail a demo-phase success criterion on behalf of a 1/3-fraction probe book.
+
+    The gate is NOT moved here - `inside` still reads the combined number, because which book M-Q08
+    judges is an operator's ruling and a criterion that re-points itself when it fires is the shape
+    R10 forbids.  What changes is that the split and the error bar are on the page when that ruling
+    is made.
 
     The reference is the decision bar's close because that is what the backtest enters at: weights
     decided on bar t are executed over bar t+1 at its open (`decided.shift(1)` with `open_to_close`),
@@ -381,8 +444,12 @@ def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, 
     `without_reference` and excluded.  Falling back to the mark is exactly how the wrong number
     would come back, and history is not backfilled."""
     cutoff = latest_ms - params.slippage_window_days * DAY_MS
-    weighted = notional = 0.0
-    fills = without_reference = 0
+    carried = dict(books or {})
+    values: list[float] = []
+    sizes: list[float] = []
+    groups: dict[str, tuple[list[float], list[float]]] = {"main_only": ([], []), "overlaid": ([], [])}
+    by_symbol: dict[str, tuple[list[float], list[float]]] = {}
+    without_reference = 0
     for row in trades:
         if int(row.get("bar_open_ms") or 0) < cutoff or row.get("flatten"):
             continue
@@ -402,9 +469,18 @@ def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, 
         sign = 1.0 if str(row.get("side", "")).upper() == "BUY" else -1.0
         adverse = sign * (filled - reference) / reference * 10_000.0
         size = filled * quantity
-        weighted += adverse * size
-        notional += size
-        fills += 1
+        values.append(adverse)
+        sizes.append(size)
+        symbol = str(row.get("symbol") or "")
+        by_symbol.setdefault(symbol, ([], []))
+        by_symbol[symbol][0].append(adverse)
+        by_symbol[symbol][1].append(size)
+        if carried:
+            key = "overlaid" if len(carried.get(symbol, frozenset())) > 1 else "main_only"
+            groups[key][0].append(adverse)
+            groups[key][1].append(size)
+    fills = len(values)
+    notional = sum(sizes)
     if fills < params.min_slippage_fills or notional <= 0:
         return {
             "value": None,
@@ -415,13 +491,31 @@ def slippage_bps(trades: Sequence[Mapping[str, Any]], params: RiskBudgetParams, 
             "why": f"只有 {fills} 笔成交，需要 {params.min_slippage_fills} 笔"
             + (f"；其中 {without_reference} 笔没有 decision_close" if without_reference else ""),
         }
-    value = weighted / notional
+    whole = _weighted(values, sizes)
+    value = float(whole["value"])
+    se = whole["se"]
+    # Whether the breach can be told from the noise, reported beside the breach rather than instead
+    # of it.  On 2026-09-12 the combined reading is 5.47 against 4.0 with se 2.59 - 0.57 SE, which is
+    # not a measurement of anything.  `min_slippage_fills` counts fills; it has never asked how much
+    # they disagree, and 34 fills with a 12.7 bps spread answer this question no better than 3 do.
+    decisive = None if se is None else abs(value - params.max_slippage_bps) > 2.0 * se
     return {
         "value": value,
         "limit": params.max_slippage_bps,
         "fills": fills,
         "without_reference": without_reference,
         "notional": notional,
+        "se": se,
+        "sd": whole.get("sd"),
+        "n_eff": whole.get("n_eff"),
+        "decisive": decisive,
+        "by_group": {name: _weighted(*group) for name, group in groups.items() if group[0]},
+        "worst_symbols": [
+            {"symbol": symbol, **_weighted(*rows)}
+            for symbol, rows in sorted(by_symbol.items(), key=lambda item: -abs(_weighted(*item[1])["value"] or 0.0))[
+                :5
+            ]
+        ],
         "enforced": True,
         "inside": value <= params.max_slippage_bps,
     }
@@ -472,7 +566,9 @@ def risk_budget_status(
     # R8 acts on the second one; this block is where a reader can see why that choice is not cosmetic.
     attributed = attributed_drawdown_state(rows, attribution, params)
     volatility = realised_vol(rows, params)
-    slippage = slippage_bps(trades, params, latest_ms=_latest_ms(rows))
+    slippage = slippage_bps(
+        trades, params, latest_ms=_latest_ms(rows), books=books_by_symbol(rows[-1] if rows else None)
+    )
     guards = guard_firings(rows, params)
     reasons: list[str] = []
     if attributed["enforced"] and attributed["action"]:
@@ -484,7 +580,21 @@ def risk_budget_status(
         low, high = volatility["band"]
         reasons.append(f"实现波动率 {volatility['value']:.1%} 已跑出 {low:.0%}-{high:.0%} 区间")
     if slippage["enforced"] and not slippage["inside"]:
-        reasons.append(f"滑点 {slippage['value']:.1f} bps 高于假设的 {slippage['limit']:.0f} bps")
+        # The breach, its error bar and its split, in the line that pages.  Quoting the point estimate
+        # alone is how "5.5 > 4" read as a finding for two days while it sat 0.57 SE from the bar and
+        # the main book - the one M-Q08 was written about - filled at 0.80.
+        detail = ""
+        if slippage.get("se"):
+            detail = f"（±{slippage['se']:.1f}，{'可分辨' if slippage.get('decisive') else '与噪声不可分辨'}）"
+        split = "；".join(
+            f"{'主书独有' if name == 'main_only' else '两本书共载'} {group['value']:.1f} bps/{group['fills']} 笔"
+            for name, group in (slippage.get("by_group") or {}).items()
+            if group.get("value") is not None
+        )
+        reasons.append(
+            f"滑点 {slippage['value']:.1f} bps 高于假设的 {slippage['limit']:.0f} bps{detail}"
+            + (f"；分书读：{split}" if split else "")
+        )
     unreadable = [
         {"metric": name, "why": str(block.get("why", ""))}
         for name, block in (("realised_vol", volatility), ("slippage", slippage))
@@ -506,6 +616,7 @@ __all__ = [
     "ACCOUNT_MISLEADS_ABOVE",
     "RiskBudgetParams",
     "attributed_drawdown_state",
+    "books_by_symbol",
     "collateral_drift",
     "drawdown_state",
     "guard_firings",

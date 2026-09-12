@@ -1349,6 +1349,13 @@ class LiveEngine:
             strategy: {symbol: float(value) for symbol, value in values.items() if value}
             for strategy, values in contributions.items()
         }
+        # Which book each of those strategies belongs to.  `contributions` keys by STRATEGY, and two
+        # instruments that ask a question about ONE book were both answering it on the sum of two:
+        # M-015's `compression` (the 2026-09-12 alert: 0.96 combined, 0.1195 on the main book alone)
+        # and M-Q08's slippage (5.47 bps combined; 0.80 main-only, 16.18 on the four names the probe
+        # adds).  Neither reader has the registry, so neither could tell the books apart.  One line of
+        # fact, written where the cycle already writes what it ran - not a new measurement.
+        record["books"] = {entry.id: entry.book for entry in self.model.entries}
         self.state.last_bar_ms = int(record["bar_open_ms"])
         self.state.last_targets = dict(record["targets"])
         # per-strategy memory for the hold seed (D-005): symbols that left the managed set keep their last

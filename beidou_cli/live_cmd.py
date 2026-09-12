@@ -622,6 +622,17 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
     result["last_cycle_clock"] = cycle_clock(last_cycle(store))
     click.echo(json.dumps(result, indent=2, sort_keys=True, default=str))
     if check and not result.get("ok"):
+        # Keep the evidence before raising.  Six of these fired between 2026-09-10 and 2026-09-12 and
+        # every one of them was unrecoverable an hour later: the check job pages with the last three
+        # lines of this JSON, stdout rolls, and the state the diff describes is overwritten by the next
+        # cycle.  Append-only, beside the other cross-process state; a failure that leaves no trace is
+        # indistinguishable from one that never happened.
+        try:
+            APP_SUPPORT.mkdir(parents=True, exist_ok=True)
+            with (APP_SUPPORT / "verify-failures.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"at": datetime.now(UTC).isoformat(), **result}, default=str) + "\n")
+        except OSError as error:  # never let the record-keeping swallow the failure it is recording
+            click.echo(f"（写不下 verify-failures.jsonl：{error}）", err=True)
         raise click.ClickException(str(result.get("note")))
 
 

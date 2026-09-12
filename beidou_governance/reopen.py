@@ -146,7 +146,7 @@ def survey(entries: Iterable[Entry], facts: Mapping[str, Any]) -> list[Status]:
     return [evaluate(entry, facts) for entry in entries]
 
 
-def render(statuses: Sequence[Status]) -> str:
+def render(statuses: Sequence[Status], hidden: int = 0) -> str:
     order = {MET: 0, NOT_MET: 1, UNREADABLE: 2, NEEDS_A_PERSON: 3, RESOLVED: 4}
     lines: list[str] = []
     for status in sorted(statuses, key=lambda s: (order.get(s.state, 9), s.entry.id)):
@@ -157,9 +157,14 @@ def render(statuses: Sequence[Status]) -> str:
             lines.append(f"{'':15s} 注：{status.entry.note}")
         lines.append("")
     counts = {state: sum(1 for s in statuses if s.state == state) for state in order}
+    # `hidden` is the RESOLVED entries the caller filtered out before surveying.  Without it the
+    # summary read "12 条 ... RESOLVED 0" over a file holding thirteen, one of them resolved - a count
+    # that is true of what was surveyed and false of what exists, which is the one thing a summary
+    # line must not be.
     lines.append(
-        f"{len(statuses)} 条：MET {counts[MET]}, NOT MET {counts[NOT_MET]}, "
-        f"NEEDS A PERSON {counts[NEEDS_A_PERSON]}, RESOLVED {counts[RESOLVED]}, UNREADABLE {counts[UNREADABLE]}"
+        f"{len(statuses) + hidden} 条：MET {counts[MET]}, NOT MET {counts[NOT_MET]}, "
+        f"NEEDS A PERSON {counts[NEEDS_A_PERSON]}, RESOLVED {counts[RESOLVED] + hidden}, "
+        f"UNREADABLE {counts[UNREADABLE]}" + (f"（其中 {hidden} 条 RESOLVED 未列出，用 --all 看）" if hidden else "")
     )
     if counts[NEEDS_A_PERSON]:
         # Said every time, because it is the number that decides whether this command is worth reading:

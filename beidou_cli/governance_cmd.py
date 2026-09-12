@@ -392,8 +392,11 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
 
     checkout = Path(root).resolve()
     entries = load(checkout / LIST)
+    hidden = 0
     if not show_all:
-        entries = [entry for entry in entries if entry.check != "resolved"]
+        kept = [entry for entry in entries if entry.check != "resolved"]
+        hidden = len(entries) - len(kept)
+        entries = kept
 
     equity = None
     heartbeat = checkout / state_dir / "heartbeat.json"
@@ -431,7 +434,7 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
         if (store / probe).is_dir() and any((store / probe).iterdir())
     }
 
-    click.echo(render(survey(entries, {"equity": equity, "columns": columns, "now": datetime.now(UTC)})))
+    click.echo(render(survey(entries, {"equity": equity, "columns": columns, "now": datetime.now(UTC)}), hidden))
 
 
 @governance.command("gate")

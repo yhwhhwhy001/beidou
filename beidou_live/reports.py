@@ -27,7 +27,7 @@ from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
 from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
-from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, risk_budget_status
+from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, MISSED_REBALANCE_REASON
 from beidou_live.state import StateStore
 
@@ -167,17 +167,55 @@ def evidence_window(store: StateStore) -> dict[str, Any]:
 
 
 def _series_by_strategy(store: StateStore, since_ms: int | None) -> dict[str, list[tuple[int, float]]]:
-    out: dict[str, list[tuple[int, float]]] = {}
+    """Attributed P&L per strategy, ON THE CYCLE GRID - one point per completed cycle, zero where
+    that cycle attributed nothing to that strategy.
+
+    An attribution row is written only by a cycle that had income, and both readers of this series
+    (`income_drift` for M-002/M-010, `long_run_attribution` for M-G06) annualise it at 8760 bars a
+    year and read its length as `size / 24` days.  Measured 2026-09-12 over the 214 cycles the
+    attribution record spans: 41 rows for tsmom (19% of cycles) and 25 for flow (12%).  So the series
+    was 5x shorter than the hours it covered and every gap - a true zero, since these rows carry only
+    realised P&L, commission and funding - had been deleted from it:
+
+        tsmom   days read 1.71 against 8.92 actual;  annualised Sharpe -15.84 against -6.78 (2.33x)
+        flow    days read 1.04 against 8.92 actual;  annualised Sharpe  -2.38 against -0.77 (3.08x)
+
+    The inflation is exactly sqrt(cycles/rows) (2.28 and 2.93 predicted): dropping the zeros leaves the
+    sum alone and shrinks the count, so the mean rises faster than the standard deviation.  The sign is
+    untouched, which is why M-G06 - a point estimate >= 0 and nothing else - would have ruled the same
+    either way; M-010 compares against a FIXED expected Sharpe, and that comparison was not safe.
+
+    The grid is bounded by the attribution record's own span.  Zero-filling back to the first cycle
+    would assert "no income" over a period when nothing was writing income rows at all.
+    """
+    attributed: dict[str, dict[int, float]] = {}
+    covered: list[int] = []
     for row in store.read_jsonl(store.attribution_path):
         bar = row.get("bar_open_ms")
-        if not isinstance(bar, int | float) or (since_ms is not None and int(bar) < since_ms):
+        if not isinstance(bar, int | float):
             continue
+        covered.append(int(bar))
         for strategy, value in (row.get("by_strategy") or {}).items():
             try:
-                out.setdefault(str(strategy), []).append((int(bar), float(value)))
+                attributed.setdefault(str(strategy), {})[int(bar)] = float(value)
             except (TypeError, ValueError):
                 continue
-    return out
+    if not attributed or not covered:
+        return {}
+    first, last = min(covered), max(covered)
+    grid = sorted(
+        {
+            int(row["bar_open_ms"])
+            for row in store.read_jsonl(store.cycles_path)
+            if not row.get("dry_run")
+            and isinstance(row.get("bar_open_ms"), int | float)
+            and first <= int(row["bar_open_ms"]) <= last
+            and (since_ms is None or int(row["bar_open_ms"]) >= since_ms)
+        }
+    )
+    if not grid:  # a record with attribution but no readable cycle rows: report what there is
+        grid = sorted({bar for bars in attributed.values() for bar in bars if since_ms is None or bar >= since_ms})
+    return {strategy: [(bar, bars.get(bar, 0.0)) for bar in grid] for strategy, bars in sorted(attributed.items())}
 
 
 def income_drift(
@@ -1006,11 +1044,31 @@ def _risk_adaptation_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     venue = f"{leverages} distinct value(s) across the book" if leverages else "nothing set yet"
     if not block.get("enforced"):
         return {"status": f"not enforced ({block.get('reason', 'no reason recorded')})", "exchange leverage": venue}
+    combined, alone, overlaid = block.get("combined") or {}, block.get("single_book") or {}, block.get("overlaid") or {}
+
+    def reading(name: str, entry: Mapping[str, Any]) -> str:
+        if entry.get("compression") is None:
+            return f"{name}: {entry.get('why', 'no reading')}"
+        return (
+            f"{name}: compression {entry['compression']:.4f} "
+            f"(vol {entry['vol_spread']:.1f}x -> risk {entry['risk_spread']:.4f}x over {entry['symbols']} names)"
+        )
+
     return {
         "status": f"{block.get('status')} - stage 1 removes {1.0 - float(block['compression']):.0%} of the "
-        f"market's dispersion (compression {block['compression']:.2f}, alert above {block['limit']:.2f})",
+        f"market's dispersion (compression {block['compression']:.2f}, alert above {block['limit']:.2f}, "
+        f"judged on the {block.get('judged', 'combined')} reading)",
         "market vol spread": f"{block['vol_spread']:.1f}x across {block['symbols']} held symbols",
         "risk contribution spread": f"{block['risk_spread']:.1f}x - this is what sizing equalises",
+        # Both readings, always, whichever one the gate took: the combined book is what is actually
+        # held and the single-book one is what stage 1 promises.  The gap between them IS the finding.
+        "single book (judged)": reading("single", alone),
+        "combined book (reported)": reading("combined", combined),
+        "carried by two books": (
+            f"{', '.join(overlaid.get('names') or [])} via {', '.join(overlaid.get('books') or [])}"
+            + (f"; risk spread {overlaid['risk_spread']:.1f}x among them" if overlaid.get("risk_spread") else "")
+        )
+        or "none",
         "exchange leverage": f"{venue}; carries no risk here (D-037)",
         "by symbol": json_dumps(
             {
@@ -1080,17 +1138,52 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
     if len(held) < 3:
         reason = f"only {len(held)} symbols carry a weight; a spread over that is noise"
         return {**refused, "reason": reason, "rows": rows}
-    sigmas = [row["annual_vol"] for row in held]
-    vol_spread = max(sigmas) / min(sigmas)
-    risk_spread = held[-1]["risk"] / held[0]["risk"]
-    compression = risk_spread / vol_spread if vol_spread > 0 else None
+
+    def spread(entries: list[dict[str, Any]]) -> dict[str, Any]:
+        ordered = sorted(entries, key=lambda row: row["risk"])
+        if len(ordered) < 3:
+            return {"symbols": len(ordered), "compression": None, "why": "fewer than 3 names; a spread is noise"}
+        sigmas = [row["annual_vol"] for row in ordered]
+        vol = max(sigmas) / min(sigmas)
+        risk = ordered[-1]["risk"] / ordered[0]["risk"]
+        return {
+            "symbols": len(ordered),
+            "vol_spread": vol,
+            "risk_spread": risk,
+            "compression": risk / vol if vol > 0 else None,
+        }
+
+    # The books each name is carried by (2026-09-12).  The docstring below this one already said what
+    # to do the first time a cancellation set this off - "measure the main book separately, NOT raise
+    # this a second time" - and until `books` was written into the cycle there was nothing to measure
+    # it with.  Today: combined 0.96 (ALERT), single-book 0.1195, and the single-book risk spread is
+    # 1.000000 to six figures across fourteen names.  Stage 1 is not the thing that moved.
+    carried = books_by_symbol(last)
+    single = [row for row in held if len(carried.get(row["symbol"], frozenset())) == 1] if carried else []
+    overlaid = [row for row in held if len(carried.get(row["symbol"], frozenset())) > 1] if carried else []
+    combined = spread(held)
+    alone = spread(single) if carried else {"symbols": 0, "compression": None, "why": "this cycle records no books"}
+    # The gate follows the reading that answers stage 1's question.  Where the record cannot split the
+    # books it falls back to the combined number rather than to silence: an unreadable split is not a
+    # pass.  The combined reading is computed and printed either way (the L3 shape: moving a reading
+    # out of the gate is not deleting it).
+    judged = alone if alone.get("compression") is not None else combined
+    compression = judged.get("compression")
     return {
         "enforced": True,
         "reason": None,
-        "symbols": len(held),
-        "vol_spread": vol_spread,
-        "risk_spread": risk_spread,
+        "symbols": judged.get("symbols", len(held)),
+        "vol_spread": judged.get("vol_spread"),
+        "risk_spread": judged.get("risk_spread"),
         "compression": compression,
+        "judged": "single_book" if judged is alone else "combined",
+        "combined": combined,
+        "single_book": alone,
+        "overlaid": {
+            **spread(overlaid),
+            "names": [row["symbol"] for row in overlaid],
+            "books": sorted({book for row in overlaid for book in carried.get(row["symbol"], frozenset())}),
+        },
         "limit": RISK_COMPRESSION_LIMIT,
         "status": "ALERT" if compression is not None and compression > RISK_COMPRESSION_LIMIT else "OK",
         "leverage_distinct": distinct_leverage,
@@ -1408,9 +1501,15 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         # carried it over faithfully as "不再按波动率缩放" - a conclusion the statistic cannot
         # support, and wrong the first time it fired: `compression` is measured AFTER
         # `combine_books` sums the books, so a second book disagreeing reads as stage 1 failing.
+        # Since 2026-09-12 the number quoted is the reading the gate took, and the line says which one
+        # and what the other reads.  The old text told the operator to "check the probe/main overlap"
+        # and gave them nothing to check it with; now the overlap is measured and sits beside it.
+        combined = (adaptation.get("combined") or {}).get("compression")
         alerts.append(
-            f"风险自适应告警：压缩度 {adaptation.get('compression'):.2f} > "
-            f"{adaptation.get('limit'):.2f}；风险贡献相互拉开——查第一层，以及探针书与主书的重叠"
+            f"风险自适应告警：压缩度 {adaptation.get('compression'):.2f} > {adaptation.get('limit'):.2f}"
+            f"（{adaptation.get('judged', 'combined')} 读法）"
+            + (f"；合并两本书读 {combined:.2f}" if combined is not None else "")
+            + "；风险贡献相互拉开——查第一层"
         )
     notices: list[str] = []
     if str(budget.get("status")) == "BLIND":

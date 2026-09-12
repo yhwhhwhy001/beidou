@@ -105,6 +105,16 @@ def read(path: Path) -> list[Verdict]:
     return list(latest.values())
 
 
+def ruling_key(verdict: Verdict) -> tuple[str, str, str, tuple[str, ...]]:
+    """What makes two rows the SAME machine ruling: the gate, the subject, the call and the reasons.
+
+    Deliberately not the date.  `reasons` carries the numbers the gate ruled on ("OOS 1.8087 vs
+    1.5149 at N=185"), so a genuinely new ruling - a moved ledger, a flipped gate - differs here and
+    lands as its own row; re-asking a question nobody has changed the answer to does not.
+    """
+    return (verdict.kind, verdict.subject, verdict.ruling, verdict.reasons)
+
+
 def record(
     path: Path,
     *,
@@ -114,19 +124,28 @@ def record(
     reasons: Sequence[str] = (),
     now: datetime | None = None,
 ) -> Verdict:
-    """Append one machine ruling.  Idempotent within a day: the same ruling twice is one row.
+    """Append one machine ruling.  The same ruling twice is one row, whenever the second one happens.
 
-    Idempotence is by (kind, subject, ruling, reasons, DATE) rather than by timestamp, because the
-    gates are cheap to re-run - `governance plan` is meant to be run repeatedly - and a denominator
-    that counts how often somebody typed a read-only command is not measuring the machine.
+    Idempotence was by (kind, subject, ruling, reasons, DATE) for exactly the reason stated here -
+    "a denominator that counts how often somebody typed a read-only command is not measuring the
+    machine" - and the date left the hole open one day wide.  Measured 2026-09-12: three rows in this
+    ledger, byte-identical reasons, one per day somebody ran `governance gate`, all three pending
+    review, `governance divergence` reporting "3 pending".  Ten such days would carry M-G05 to its
+    quorum of 10 on ten re-readings of one ruling - Pre-A′'s only falsifier, satisfied without a
+    single decision having been made.  The day is now out of the key.
     """
     moment = now or datetime.now(UTC)
-    day = moment.date().isoformat()
-    identifier = verdict_id(kind, subject, ruling, tuple(reasons), day)
-    existing = {verdict.id for verdict in read(path)}
-    verdict = Verdict(identifier, moment.isoformat(), kind, subject, ruling, tuple(reasons))
-    if identifier in existing:
-        return verdict
+    verdict = Verdict(
+        verdict_id(kind, subject, ruling, tuple(reasons), moment.date().isoformat()),
+        moment.isoformat(),
+        kind,
+        subject,
+        ruling,
+        tuple(reasons),
+    )
+    for existing in read(path):
+        if ruling_key(existing) == ruling_key(verdict):
+            return existing
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(verdict.to_json() + "\n")
@@ -208,7 +227,20 @@ class Divergence:
 
 
 def divergence(verdicts: Iterable[Verdict], *, quorum: int = 10, threshold: float = 0.20) -> Divergence:
-    """M-G05 over a set of verdicts - the caller picks the period, this counts what it is given."""
+    """M-G05 over a set of verdicts - the caller picks the period, this counts what it is given.
+
+    One ruling counts once, however many rows carry it.  The ledger is append-only, so the three
+    identical `family_gate` rows written on 2026-09-09/10/12 stay where they are; what changes is
+    that a re-reading of a ruling is no longer a second sample of the machine's judgement.  A row
+    somebody has reviewed wins over an identical one nobody has, so collapsing can only shrink
+    `pending`, never hide a review.
+    """
+    collapsed: dict[tuple[str, str, str, tuple[str, ...]], Verdict] = {}
+    for verdict in verdicts:
+        key = ruling_key(verdict)
+        if key not in collapsed or (collapsed[key].pending and not verdict.pending):
+            collapsed[key] = verdict
+    verdicts = list(collapsed.values())
     reviewed = [verdict for verdict in verdicts if not verdict.pending]
     pending = sum(1 for verdict in verdicts if verdict.pending)
     allowed_refused = sum(1 for v in reviewed if v.ruling == ALLOW and v.review == DISAGREE)

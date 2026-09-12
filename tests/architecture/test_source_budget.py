@@ -1911,14 +1911,27 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # Nine of the thirteen cannot be asked of a machine and are reported as NEEDS A PERSON, counted in the
 # summary every time; giving each a checkable proxy so the list looked complete is the move this whole
 # ratchet's history is a record of not making.
+# 2026-09-12: +193 live, +14 cli, +6 governance.  Three alarms that were each firing on a mixture of
+# two populations, none of which could be split without one new fact - which book carries a symbol:
+# `books` on the cycle row (engine, 1 line), `books_by_symbol` + the per-book/error-bar split in
+# `slippage_bps` (M-Q08 read 5.47 bps combined; 0.80 main-only, 16.18 on the probe's four names), the
+# single-book/combined split in `risk_adaptation` (0.96 combined, 0.1195 single-book), and the
+# offender list on `compare_targets` so a KILL-027 failure survives `tail -n 3`.  cli: persisting the
+# verify payload the pager truncates.  governance: the reopen summary counting the entries it hides.
+#
+# Second raise the same day, +38 live / +31 governance, and the same defect twice more: M-002/M-010/
+# M-G06 annualising an attributed series at 8760 bars a year that had 81% of its hours deleted (a row
+# is written only by a cycle with income), and M-G05's ledger keying idempotence on the DATE, so ten
+# quiet days of running `governance gate` would have carried Pre-A′'s only falsifier to its quorum of
+# 10 on ten re-readings of one ruling.  Both are docstrings carrying the measurement, not new machinery.
 CEILING = {
     "beidou_alpha": 8_071,
-    "beidou_live": 7_328,
-    "beidou_cli": 5_661,
+    "beidou_live": 7_559,
+    "beidou_cli": 5_675,
     "beidou_data": 5_288,
     "beidou_exchange": 611,
     "beidou_shared": 289,
-    "beidou_governance": 3_383,
+    "beidou_governance": 3_420,
 }
 
 
