@@ -30,6 +30,8 @@ from beidou_live.health import (
 BEFORE = "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
 AFTER = "b441ea62d02184bfb6292ec1033f20482bc9c7c0a2c6ebfcc14623241b967417"
 AFTER_P23 = "c0e5c49c5a4acb1d0e5bb709873ce38b0674c10a027405d5269dbb724d734d1c"
+AFTER_MIN_HISTORY = "dd32720d3faf5ab0e6a2934a76e9d26489095d7b5a7d19d537bcef44751a7cf6"
+AFTER_P30 = "ab3cb75fb2f8d94813aa44c5b6d869c34bf82bcc78757bf1fcfa0bba4e16e1b3"
 
 
 def test_the_restart_5_digest_resolves_to_the_book_it_actually_is() -> None:
@@ -81,6 +83,7 @@ EXPECTED_FIELDS = {
         "max_scalar",
         # v4 (2026-09-09): it decides WHICH SYMBOLS may be held, so it decides the book.
         "min_history_bars",
+        "sleeve_max_gross",
     },
     "guards": {"max_gross", "max_weight", "daily_loss_pause", "stale_bars_max"},
     "rebalance": {"no_trade_band", "no_trade_rel_band", "max_participation", "max_order_notional"},
@@ -116,8 +119,13 @@ def test_changing_the_hashed_field_set_fails_here_instead_of_silently_resetting_
 
 
 def test_every_definitional_digest_so_far_resolves_to_the_one_book() -> None:
-    """v1 22 fields, v2 +unit_mode, v3 +4 regime_* - one book, measured three ways."""
-    for digest in (BEFORE, AFTER, AFTER_P23):
+    """v1 22 fields, v2 +unit_mode, v3 +4 regime_*, v4 +min_history_bars, v5 +sleeve_max_gross.
+
+    One book, measured five ways.  Every one of the four additions was a field the record needed and a
+    value that had not moved; the alias is what keeps "the fingerprint learned to say something" from
+    reading as "the book changed".
+    """
+    for digest in (BEFORE, AFTER, AFTER_P23, AFTER_MIN_HISTORY, AFTER_P30):
         assert canonical_construction(digest) == BEFORE
 
 

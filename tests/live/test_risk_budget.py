@@ -51,6 +51,7 @@ def test_the_digest_moves_when_the_vol_target_moves(tmp_path: Path) -> None:
         "min_asset_vol",
         "max_scalar",
         "min_history_bars",  # v4 (2026-09-09): it decides which symbols may be held
+        "sleeve_max_gross",  # v5 (P30, 2026-09-12): how big a non-main book may run before its fraction
     }
 
 

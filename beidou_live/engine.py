@@ -1737,6 +1737,14 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # 2026-09-09: lowering it ALONE unblocks nothing (#27), because `universe.min_age_days` refuses to RANK
             # a listing for 30 days first - measured, 0 of 799 listings are pool members inside their first 14 days.
             "min_history_bars": config.min_history_bars,
+            # v5 (P30, 2026-09-12).  A per-bar gross cap on each non-main book, applied before its
+            # fraction.  It is 0.0 - off - in the shipped profile and in every profile that does not
+            # name it, so this field's arrival moves the digest without moving a weight; the alias in
+            # `health.CONSTRUCTION_ALIASES` is declared with that proof, same as v3 and v4.  It belongs
+            # in the fingerprint rather than only in the research CLI because turning it on WOULD change
+            # every weight of a book the loop holds, and D-036's other half was `LiveConfig` not
+            # carrying `vol_target`: a knob the record cannot see is a knob that moves silently.
+            "sleeve_max_gross": config.portfolio.sleeve_max_gross,
         },
         "guards": {
             "max_gross": config.guards.max_gross,
@@ -1806,6 +1814,7 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
             "max_gross": config.guards.max_gross,
             "no_trade_band": config.rebalance.no_trade_band,
             "no_trade_rel_band": config.rebalance.no_trade_rel_band,
+            "sleeve_max_gross": config.portfolio.sleeve_max_gross,
         },
         "book_guards": {
             "max_weight": config.guards.max_weight,

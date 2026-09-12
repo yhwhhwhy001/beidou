@@ -14,6 +14,9 @@ LIVE = {
     "max_scalar": 3.0,
     "no_trade_band": 0.005,
     "no_trade_rel_band": 0.40,
+    # P30.  Non-zero in the fixture on purpose: the loop below proves each key is compared by doubling
+    # it, and doubling the shipped 0.0 is still 0.0.  The shipped value gets its own test underneath.
+    "sleeve_max_gross": 0.86,
 }
 ENTRY = StrategyEntry("tsmom", params={"horizons": [168, 336, 720]})
 
@@ -30,6 +33,19 @@ def test_a_matching_construction_is_silent_and_every_weight_bearing_key_is_cover
     for key in CONSTRUCTION_KEYS:
         drifted = {**LIVE, key: (LIVE[key] * 2 if isinstance(LIVE[key], int | float) else LIVE[key])}
         assert construction_problems(ENTRY, {"portfolio": drifted}, LIVE), f"{key} must be compared"
+
+
+def test_a_sleeve_cap_in_the_evidence_that_the_loop_does_not_run_is_caught() -> None:
+    """The shipped value is 0.0, and 0.0 is the one value the doubling loop above cannot test.
+
+    It is also the asymmetry that matters in practice: evidence produced under a cap describes a book
+    whose sleeve was held smaller than the one the loop would trade, which is P10 cell B's shape one
+    layer down - the direction that flatters the evidence.
+    """
+    off = {**LIVE, "sleeve_max_gross": 0.0}
+    problems = construction_problems(ENTRY, {"portfolio": dict(LIVE)}, off)
+    assert problems == ["tsmom: portfolio sleeve_max_gross is 0.0 live but 0.86 in the cited evidence"]
+    assert construction_problems(ENTRY, {"portfolio": off}, off) == []
 
 
 def test_values_that_crossed_a_yaml_json_boundary_still_compare_equal() -> None:

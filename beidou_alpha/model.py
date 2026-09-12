@@ -16,7 +16,7 @@ import pandas as pd
 
 from beidou_alpha.ensemble import TargetWeights, combine_targets, snapshot
 from beidou_alpha.panel import Panel
-from beidou_alpha.portfolio import PortfolioParams, asset_vol, build_weights, combine_books
+from beidou_alpha.portfolio import PortfolioParams, asset_vol, build_weights, cap_gross, combine_books
 from beidou_alpha.registry import MAIN_BOOK, Registry, StrategyEntry
 from beidou_alpha.signals import get_signal, scores_to_targets
 
@@ -229,10 +229,20 @@ class AlphaModel:
     def book_weights(
         self, per_strategy: Mapping[str, pd.DataFrame], close: pd.DataFrame, bars_per_year: float
     ) -> dict[str, pd.DataFrame]:
-        """Each book vol-targeted on its own (no band) and scaled by its fraction."""
+        """Each book vol-targeted on its own (no band), gross-capped if it is a sleeve, then scaled by its fraction.
+
+        The cap (P30) belongs here rather than inside ``build_weights`` because ``build_weights`` is
+        book-agnostic - it does not know whether what it is sizing is the main book - and the rule is
+        about which book this is.  Order is load-bearing and pre-registered: cap, then fraction.  The
+        other order is a different book, and one in which the two knobs stop being separable.
+        """
         bare = replace(self.portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
         return {
-            book: build_weights(conviction, close, bars_per_year, bare) * self.fraction(book)
+            book: cap_gross(
+                build_weights(conviction, close, bars_per_year, bare),
+                0.0 if book == MAIN_BOOK else self.portfolio.sleeve_max_gross,
+            )
+            * self.fraction(book)
             for book, conviction in self.book_targets(per_strategy).items()
         }
 

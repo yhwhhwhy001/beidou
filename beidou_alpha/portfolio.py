@@ -46,12 +46,21 @@ class PortfolioParams:
     garch_refit_bars: int = 720  # bars between re-fits
     budget_mode: str = "inverse_vol"  # inverse_vol (shipped) | inverse_variance (control) | hrp (#48)
     hrp_refit_bars: int = 720  # bars between HRP re-clusterings
+    # P30 (2026-09-12), pre-registered before this line existed.  A per-bar gross cap on each NON-main
+    # book, applied BEFORE its fraction, so that `fraction` keeps D-019's meaning - a proportion of the
+    # main book's risk budget - rather than a proportion of however big that sleeve happens to run.
+    # P21 rejected `594a12f9` on drawdown alone and diagnosed the cause as exposure: the sleeve averages
+    # 1.372 gross against tsmom's 0.859, so a third of it is closer to half a main book.  0 is off, and
+    # off is bit-identical - the knob ships into a loop that is holding positions.
+    sleeve_max_gross: float = 0.0
 
     def __post_init__(self) -> None:
         if self.vol_target <= 0 or self.min_asset_vol <= 0 or self.max_weight <= 0 or self.max_gross <= 0:
             raise ValueError("portfolio parameters must be positive")
         if self.no_trade_band < 0 or self.no_trade_rel_band < 0 or self.max_scalar <= 0:
             raise ValueError("no-trade bands must be >= 0 and max_scalar > 0")
+        if self.sleeve_max_gross < 0:
+            raise ValueError("sleeve_max_gross must be >= 0 (0 disables it)")
         if self.vol_model not in VOL_MODELS or self.budget_mode not in BUDGET_MODES:
             raise ValueError(f"vol_model must be one of {VOL_MODELS} and budget_mode one of {BUDGET_MODES}")
         if min(self.garch_fit_bars, self.garch_refit_bars, self.hrp_refit_bars) < 1:
@@ -277,6 +286,26 @@ def apply_no_trade_band(weights: pd.DataFrame, band: float, relative: float = 0.
     return pd.DataFrame(out, index=weights.index, columns=weights.columns)
 
 
+def cap_gross(weights: pd.DataFrame, max_gross: float) -> pd.DataFrame:
+    """Scale each row down to ``sum |w| <= max_gross``; never up, and never below.  ``0`` disables.
+
+    One row-wise gross cap, used in two places: on the combined total (``combine_books``, where it is
+    ``max_gross``) and on a non-main book before its fraction (``AlphaModel.book_weights``, where it is
+    ``sleeve_max_gross``).  They are the same operation on different books, so they are the same
+    function - D-036's rule, arrived at there by finding two copies of the guard semantics that had
+    drifted apart.
+
+    A row with no decision yet is all-NaN: its gross sums to zero, the factor is one, and the NaNs
+    survive multiplication.  That matters because the caller uses NaN to mean "before this book's
+    warmup", not "flat".
+    """
+    if max_gross <= 0:
+        return weights
+    gross = weights.abs().sum(axis=1)
+    factor = (max_gross / gross.where(gross > max_gross)).fillna(1.0).clip(upper=1.0)
+    return weights.mul(factor, axis=0)
+
+
 def combine_books(books: Mapping[str, pd.DataFrame], params: PortfolioParams) -> pd.DataFrame:
     """Sum independently built books, then the per-symbol cap, the gross cap and the no-trade band on the total.
 
@@ -298,9 +327,7 @@ def combine_books(books: Mapping[str, pd.DataFrame], params: PortfolioParams) ->
         valid = valid | frame.notna().any(axis=1)
         total = total + frame.fillna(0.0)
     clipped = total.clip(-params.max_weight, params.max_weight)
-    gross = clipped.abs().sum(axis=1)
-    factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
-    weights = clipped.mul(factor, axis=0).where(valid, other=np.nan)
+    weights = cap_gross(clipped, params.max_gross).where(valid, other=np.nan)
     if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
         weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band)
     return weights
