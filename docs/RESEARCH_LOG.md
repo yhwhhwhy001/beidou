@@ -8358,3 +8358,134 @@ M-G05  3/10 reviewed this period; below quorum the rate is not reported
 `2bc44f56397c` / `3e04c3d0170d` / `3fe2ea2d88ee` 三条 subject 是文件名的，是 `governance plan`
 （只读演练）在被修掉之前记下的，**它们记录的不是决策**。复核它们会往 M-G05 的分母里加三个非决策样本。
 我的看法是不复核；这是操作者的判断。
+
+## 2026-09-12 · 操作者裁定：接受「第二本书」为目标；09-10 的循环外平仓是操作者本人
+
+`docs/analysis/2026-09-12-fill-frequency-deep-analysis.md` §13.8 的四问全部有了答案。
+
+| 问 | 裁定 |
+| --- | --- |
+| Q-CRITICAL′ 接受用「第二本独立的书」替代「更快的书」 | **是** |
+| Q5 路线 | **(a)+(c)**：给合成器加 sleeve 敞口上限（代码不存在，进构造指纹），重跑 book |
+| Q6 治理 §3.6 的 3× 换手门 | **愿意**为这个候选单独预登记一次 R10 规则变更 |
+| Q7 真钱前提 | **接受**它在冲击可测之前只是一本 demo 书 |
+| §12 Q4（上一轮开着的） | **09-10T06:00Z 的循环外整本平仓是操作者本人做的** |
+
+**Q4 关闭 K-FQ09 / GAP-FQ02。** 那一周期 `attribution.jsonl` 的 `foreign` 段有 REALIZED_PNL 行、
+`external_flows` 0 行、`gross_before` 0、当天无 `bdflat` 单——形状与 D-032（2026-09-04 那次人工平仓）
+相同，因此按 D-032 处理：那笔已实现盈亏是真金白银、留在账本里，但不进 `by_strategy` / `by_symbol`，
+06:00Z 之后那 18 单是循环按目标重建仓位，**不计入稳态订单/天**（M-FQ01 的口径已按此写）。
+M-010 的窗口不因此中断——构造指纹没动。
+
+**一处我欠操作者的更正，在它影响决定之前说清。** §13.6 给 (a) 路线的价钱里写了「flow 探针的 book
+证据在新合成器下重出」。**这一条在 cap 默认关闭时不成立**：cap 为 0 时 `combine_books` 的每一步逐位不变，
+flow 的 09-08 报告（`book-tsmom-flow-20260908T105322Z`）继续有效，**不需要重出**；需要重出的只有
+「将来真的给 flow_short 也套一个 cap」那一天。所以这条路线比我报的便宜一项。构造指纹那一项**仍然要付**
+（新字段进 payload），但它由 `CONSTRUCTION_ALIASES` 在读取侧化解，与 v3 / v4 同一形状——值两侧都是「关」，
+只有被哈希的形状动了，所以 M-010 不重置。
+
+**排序**：先 book，再谈 §3.6。若 book 仍被 D-018 的回撤门拒，那道换手门根本不会绑定，
+现在去改它就是为一个不存在的晋级松闸（K-FQ14 的形状，只是换了个方向）。
+
+
+## 2026-09-12 · P30 预登记：给合成器加 sleeve 敞口上限，重跑 `594a12f9` 的 book（先写后跑）
+
+P21 判 `mined_594a12f9307a15d9` **REJECT**，六项检查只挂一项：`oos_mdd_worsening` **4.98pp** 对门 **1pp**
+（`delta_oos_sharpe` +0.2366、`fold_win_rate` 0.80、`robustness_delta` +0.27、`cpcv_negative` 0.00、
+`cost_x2_sharpe` 过）。P21 自己的诊断是**构造问题不是参数问题**：sleeve 的平均绝对敞口 **1.372** 对
+tsmom 的 **0.859**，「一个跑着 1.6 倍敞口的 sleeve 按 1/3 预算加进来，回撤按敞口走而不是按预算走」。
+
+本节按操作者裁定的 (a)+(c) 路线预登记那次重跑。**写在跑之前，也写在代码之前。**
+
+### 一、cap 是什么（语义先定死，因为它决定了这次测的是不是一件新事）
+
+`sleeve_max_gross`：**在 sleeve 自己的书上、按 fraction 缩放之前**，对每一根 bar 的 `sum |w|` 取上限——
+与 `max_gross` 对总书做的事逐字相同（行级 `factor = min(1, cap / gross)`，只缩不放），因此它复用同一个
+函数而不是写第二份（D-036 的规矩：一份语义一份实现）。`cap = 0` 表示关闭。
+
+三件必须同时说清的事：
+
+1. **它只作用于非主书。** 主书自己的 gross 由 `max_gross` 管，两者不叠。
+2. **它在 fraction 之前。** 这样 `fraction` 才保住 D-019 声称的含义（「主书风险预算的比例」）；
+   放在 fraction 之后等价于改 fraction。
+3. **它不进 sleeve 的 standalone 评分。** standalone 块是**信号级**证据（D-020 判定），要与 P21 那份
+   逐位可比；cap 是**这本书如何加入**的组合层选择。这条同时是本次实现的自检，见 F5。
+
+落点：`PortfolioParams.sleeve_max_gross` → `AlphaModel.book_weights`（实盘与研究同一入口）与
+`research book` 的合并路径；`construction_fingerprint` 新增 `portfolio.sleeve_max_gross`，
+配一条 `CONSTRUCTION_ALIASES`（值两侧都是 0.0，只有被哈希的形状动了，M-010 不重置）。
+
+### 二、cap 取什么值——两个值，各有自己的先验，**都取自已发表的描述统计，不看任何 P&L**
+
+| 臂 | cap | 先验理由（写在跑之前） |
+| --- | ---: | --- |
+| A | **0.86** | P21 发表的 tsmom 平均绝对敞口 0.859，四舍五入。命题：「sleeve 不许比主书还大」 |
+| B | **1.37** | P21 发表的 sleeve 自己的平均绝对敞口 1.372，四舍五入。命题：「只削尖峰，不动中位」 |
+
+`--fraction` 保持预登记值 **1/3**，不是网格。`--sensitivity 0.2,0.5` 保持上下文行，
+按代码注释「never a decision input and never a ledger trial」——本次**唯一**的例外是 F2 把它们当尺子用
+（见下），那是判读不是选择，不新增格子。
+
+**为什么不先量 sleeve 的 gross 分位数再定 cap**：那会让 cap 的取值依赖一次新测量，而测量与结果之间只隔
+一步。取两个**已经印在 P21 里**的数，任何人都能事后核对它们早于本次运行存在。
+
+### 三、判定规则：D-018 的六项，一个字不改
+
+`BOOK_RULE` 已经写死在代码里（`min_delta_oos_sharpe` 0.10 / `max_oos_mdd_worsening` 0.01 /
+`min_fold_win_rate` 0.6 / `max_cpcv_negative` 0.10 / `min_cost_x2_sharpe` 0.5 / `min_robustness_delta` 0.0），
+本节引用它而不是新定。**ACCEPT 的含义仍然只是「可以按 D-019 作为探针书提案」，不是晋级**；
+晋级还要过 plan §3 的 `slippage_stress` 5.5 档、与**每本**在跑的书 corr < 0.5（对 flow_short 的相关
+**从未量过**，P20 只量了 tsmom）、治理 §3.6 的换手 ≤ 3×（4.35×，需 Q6 那次 R10 变更）、
+R4 每窗口 ≤ 1 次 queued→probe（10-03 已有 LS 叶排队）。
+
+### 四、五条 falsifier，事前写死
+
+- **F1（最硬的一条，实现自检）**：`sleeve_max_gross = 0` 时，`AlphaModel.weights_from` 与
+  `combine_books` 的输出必须与改动前**逐位相同**。不相同就**立刻停手**——这一步必须是纯增量的，
+  改变了在跑的书就不是同一件事（2026-09-12 `book_weights` 落盘那次 F1 的同一形状）。
+- **F2（「换个名字的 fraction」）**：cap 买到的 MDD 改善，必须**超过**把 sleeve 平均敞口压到同一水平的
+  uniform fraction 所买到的，**至少 0.5pp**。机制命题是「回撤集中在 sleeve 的高敞口 bar 上，所以只削尖峰
+  比整体缩小更划算」；若两者在 0.5pp 以内，**结论写成「cap 等价于一次 fraction 变更」，不采纳**，
+  因为那正是 P21 §三 禁止的那件事（在结果上挑 fraction）。匹配用的是已经在算的 0.20 / 0.50 上下文行，
+  按实测平均敞口插值，不新增格子。
+- **F3（剂量反应）**：若 B（1.37，几乎不绑定）已经拿到 A 的大部分 MDD 改善 → 效应由尖峰驱动；
+  若 B 什么也没拿到 → 效应是均匀的，回到 F2 的怀疑。两种读法事前都写下来，事后不许挑。
+- **F4（成本不因削峰而好看）**：capped 臂的 `cost_x2_sharpe` 必须仍然过 0.5。削掉高敞口 bar 会同时削掉
+  换手，**成本门变好看不等于候选变好**；若 `cost_x2_sharpe` 的改善幅度大于 `delta_oos_sharpe` 的下降幅度，
+  在报告里明写「这一项是削峰的副产品」。
+- **F5（没有泄漏到别处）**：capped 运行的 `sleeve_standalone` 块必须与 `book-tsmom-mined_594a12f9307a15d9-20260907T043802Z.json`
+  的同一块**逐位相同**（同一 sleeve 参数、同一 universe、同一区间）。不同就说明 cap 漏进了信号级评分，
+  §一 第 3 条被违反，本次运行作废。
+
+### 五、预期，写在前面
+
+**A（cap 0.86）最可能的结果是仍然不过。** 算术：sleeve 平均敞口 1.372，cap 0.86 只削上半部分，
+`E[min(gross, 0.86)]` 大概落在 0.75–0.85，除以 3 得平均贡献 0.25–0.28；而 uniform fraction **0.20** 的平均贡献
+是 1.372 × 0.20 = **0.274**，两者几乎相等——**而 0.20 那一行实测 `oos_mdd_worsening` 是 +1.30pp，仍然超 1pp 门**。
+所以 A 要过门，必须靠 F2 说的那个机制（削尖峰比整体缩小更划算）额外买到 **0.3pp 以上**。
+我认为它买得到一部分但不一定够：09-07 报告里总书的 `gross_cap_share` 是 5.3%，说明敞口尖峰确实存在，
+但 5.3% 的 bar 要扛起 4pp 的回撤差距，是个不小的要求。
+
+**B（cap 1.37）预期接近 uncapped**（+4.98pp），作为剂量反应的另一端。
+
+**两侧都算成功**（P20/P21 的原文口径）：阳性 → 候选有了一条可提案的形态，进 §六 的排队；
+阴性 → 「构造问题不是参数问题」这个诊断本身被证伪一半，`594a12f9` 按现有形态结项，
+操作者的「第二本书」目标回到 `6986a4d8`（P25 已预登记未跑）或新候选上。
+
+### 六、账本与明确不做
+
+- **构造参数不进 `param_key`**（D-039 / P26 先例），所以两个 cap 臂是**手工申报**的格子：
+  **新增 2 个**，下一次相关 `validate` 的 `--prior-trials` 相应 +2。
+- sleeve 的 standalone 重跑按 (param_key, range, symbols) **去重**，预期新增 **0 行**；
+  跑完核对 `ledger_trials`，不符就在裁决里写明。
+- **不改 `config/live.demo.yaml` 的任何一行**（profile 里 `sleeve_max_gross` 不出现即 0.0，
+  K-EX14 的窗口纪律不动）。
+- **不改治理 §3.6**：排在 book 裁决之后，见上一条日志。
+- **不动 registry**，不把候选写进任何书。
+- 命令（跑完把实际命令与报告名回填到裁决节）：
+
+```
+research book --main tsmom --sleeve mined_594a12f9307a15d9 --universe pit --robustness static
+  --fraction 0.3333 --sleeve-max-gross {0.86, 1.37} --folds 5 --min-train 4000 --purge 50
+  --cpcv-groups 6 --prior-trials 60 --funding --interval 1h --out reports/research
+```
