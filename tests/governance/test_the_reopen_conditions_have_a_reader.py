@@ -51,9 +51,14 @@ def _entry(check: str, **args: object) -> Entry:
 
 
 def test_every_condition_in_the_log_is_in_the_list() -> None:
-    """13 blocks were counted on 2026-09-10.  A block added to the log and not here is a silent gap."""
+    """13 blocks were counted on 2026-09-10; P30 ruled a 14th on 2026-09-12.
+
+    The number is a ratchet, not a fact about the world: a condition written into RESEARCH_LOG and not
+    into the list is the exact gap this file exists to close, and the only way to notice it is for the
+    count to be pinned.  Raise it in the commit that adds the entry, never to make a red test green.
+    """
     entries = load(ROOT / LIST)
-    assert len(entries) == 13, f"the list holds {len(entries)}; the audit counted 13 in RESEARCH_LOG"
+    assert len(entries) == 14, f"the list holds {len(entries)}; the audit counted 13 in RESEARCH_LOG plus P30's"
 
 
 def test_every_entry_quotes_its_condition_and_cites_the_log() -> None:
