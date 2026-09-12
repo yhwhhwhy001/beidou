@@ -104,10 +104,11 @@ def probe_rows(
     if not probes:
         return []
     attributions = store.read_jsonl(store.attribution_path)
+    cycles = store.read_jsonl(store.cycles_path)  # `book_weights` + `closes`, for the second caliber
     stopped = store.load().stopped_books
     rows: list[dict[str, Any]] = []
     for probe in probes:
-        status = probe_status(probe, attributions, equity=equity, now_ms=now_ms)
+        status = probe_status(probe, attributions, equity=equity, now_ms=now_ms, cycles=cycles)
         if probe.book in stopped:
             status = {**status, "status": "STOPPED", "stopped": stopped[probe.book]}
         rows.append(status)
@@ -2050,6 +2051,15 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                         # correlates closely with the main book is a tilt whose separate risk budget
                         # is a fiction.  2026-09-12: tsmom~flow 0.80 over 148 bars, review due 10-02.
                         + _probe_correlation_note(payload, str(row.get("strategy") or ""))
+                        # The caliber the stop will read from the next batch window on, printed beside
+                        # the one it reads today.  They differ by 17x in sigma, so the gap between the
+                        # two numbers is the finding rather than a rounding detail.
+                        + (
+                            f" | 盯市 {row['marked_pnl_pct']:+.2%}/{row.get('marked_bars')} bars"
+                            + ("（该口径下已越线）" if row.get("marked_would_stop") else "")
+                            if row.get("marked_pnl_pct") is not None
+                            else f" | 盯市读不出（{row.get('marked_why')}）"
+                        )
                     )
                     for row in (payload.get("probes") or [])
                 }

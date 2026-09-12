@@ -758,7 +758,9 @@ class LiveEngine:
         if breach is not None:
             await self.alerts.send(breach, key="liquidation-distance")
         if decision.skip_cycle:
-            self._finish_cycle(record, targets.contributions)
+            self._finish_cycle(
+                record, targets.contributions, getattr(targets, "book_weights", None), latest_closes(usable)
+            )
             return record
         liquidity = self._liquidity(usable) if config.rebalance.max_participation > 0 else None
         decision_closes = latest_closes(usable)
@@ -818,7 +820,7 @@ class LiveEngine:
             record["orders"].append(report.to_dict())
         record["quarantined"] = await self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
-        self._finish_cycle(record, targets.contributions)
+        self._finish_cycle(record, targets.contributions, getattr(targets, "book_weights", None), latest_closes(usable))
         return record
 
     async def flatten(self) -> list[ExecutionReport]:
@@ -1280,7 +1282,14 @@ class LiveEngine:
             if stopped is not None:
                 statuses.append({"book": probe.book, "strategy": probe.strategy, "status": "STOPPED", **stopped})
                 continue
-            status = probe_status(probe, rows, equity=self.state.last_equity, now_ms=now)
+            status = probe_status(
+                probe,
+                rows,
+                equity=self.state.last_equity,
+                now_ms=now,
+                # the second caliber's inputs; see `probe.marked_pnl`
+                cycles=self.store.read_jsonl(self.store.cycles_path),
+            )
             if status["stop"]:
                 reason = (
                     f"近 {probe.window_days} 天归因盈亏 {status['pnl']:.2f}"
@@ -1336,7 +1345,13 @@ class LiveEngine:
         logger.warning("guard state changed: %s -> %s", self.state.last_guard_reasons, reasons)
         self.state.last_guard_reasons = reasons
 
-    def _finish_cycle(self, record: dict[str, Any], contributions: Mapping[str, Mapping[str, float]]) -> None:
+    def _finish_cycle(
+        self,
+        record: dict[str, Any],
+        contributions: Mapping[str, Mapping[str, float]],
+        book_weights: Mapping[str, Mapping[str, float]] | None = None,
+        closes: Mapping[str, float] | None = None,
+    ) -> None:
         # Reaching here means the cycle completed (a guard skip is a completed cycle too), so the error streak
         # is over.  The count used to live on the persisted state and had to be cleared before the save, or a
         # restart in the gap loaded a phantom error; since DL-L2 it is a process attribute and that whole class
@@ -1356,6 +1371,21 @@ class LiveEngine:
         # adds).  Neither reader has the registry, so neither could tell the books apart.  One line of
         # fact, written where the cycle already writes what it ran - not a new measurement.
         record["books"] = {entry.id: entry.book for entry in self.model.entries}
+        # Each book's own weights before `combine_books` sums them (2026-09-12 pre-registration).
+        # A sleeve's mark-to-market P&L - the quantity its evidence is in, and the one the probe stop
+        # is calibrated against - cannot be computed from anything else the record holds:
+        # `contributions` is per strategy and pre-sizing, and `targets` is already the sum.
+        if book_weights:
+            record["book_weights"] = {
+                book: {symbol: float(value) for symbol, value in weights.items() if value}
+                for book, weights in book_weights.items()
+            }
+        if closes:
+            # The bar's own closes, so a per-book mark-to-market P&L is computable from the RECORD
+            # rather than from a store that syncs on its own schedule.  Eighteen floats a cycle, and
+            # it is the fact rather than the conclusion: a derived scalar would answer only the
+            # question asked today, and the probe stop is the second caliber question this month.
+            record["closes"] = {symbol: float(value) for symbol, value in closes.items()}
         self.state.last_bar_ms = int(record["bar_open_ms"])
         self.state.last_targets = dict(record["targets"])
         # per-strategy memory for the hold seed (D-005): symbols that left the managed set keep their last

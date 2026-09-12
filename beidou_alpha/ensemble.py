@@ -20,6 +20,12 @@ class TargetWeights:
     # require it): the stage-1 sizing divisor at this bar, so a report can say what each symbol's
     # market was doing when the weight was chosen instead of re-deriving it from a separate archive.
     asset_vol: dict[str, float] = field(default_factory=dict)
+    # Observability, same standing as `asset_vol`: each BOOK's own weights at this bar, before
+    # `combine_books` sums them.  The probe stop is calibrated against a mark-to-market P&L and reads
+    # a realised-income series instead (2026-09-12: 30-day sigma 0.137% against the 2.34% its own
+    # evidence is in), and a sleeve's mark-to-market P&L cannot be computed at all without these -
+    # `contributions` is per STRATEGY and pre-sizing, and `weights` is already the sum.
+    book_weights: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 def combine_targets(
@@ -59,6 +65,7 @@ def snapshot(
     combined: pd.DataFrame,
     targets_by_strategy: Mapping[str, pd.DataFrame],
     asset_vol: pd.Series | None = None,
+    book_weights: Mapping[str, pd.DataFrame] | None = None,
 ) -> TargetWeights:
     """Latest row of the model outputs with NaN treated as flat."""
     as_of = pd.Timestamp(weights.index[-1])
@@ -74,4 +81,10 @@ def snapshot(
         asset_vol={}
         if asset_vol is None
         else {str(symbol): float(value) for symbol, value in asset_vol.dropna().items()},
+        book_weights={}
+        if book_weights is None
+        else {
+            str(book): {str(symbol): float(value) for symbol, value in frame.iloc[-1].fillna(0.0).items()}
+            for book, frame in book_weights.items()
+        },
     )

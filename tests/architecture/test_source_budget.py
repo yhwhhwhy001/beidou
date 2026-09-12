@@ -1944,9 +1944,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # columns, leaving four of them NaN in every row since the store existed, with `longAccount` mapped to
 # a ratio column it is not.  `REST_SOURCES` is per endpoint, the poll is bounded-concurrent (4.7s for
 # 18 symbols against 28.6s serial, on a cycle that takes twenty).
+#
+# Sixth raise, +23 alpha / +133 live: the probe stop's caliber (operator ruling 2026-09-12, option C).
+# The stop reads realised attributed income (30-day sigma 0.137% of equity) while the sleeve's evidence
+# is a mark-to-market P&L (3.239%, recomputed over the validated panel), so -2% sits at 14.6 sigma of
+# one and 0.62 of the other.  `book_weights` and `closes` on the cycle row make the second caliber
+# computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
+# lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
-    "beidou_alpha": 8_071,
-    "beidou_live": 7_681,
+    "beidou_alpha": 8_094,
+    "beidou_live": 7_814,
     # +7 more cli: `governance plan` was recording an admission ruling into M-G05's ledger, and a dry
     # run is not a ruling - found during the DRILL-G1 production run, four invocations leaving four
     # rows and divergence going 1 -> 5 pending.  Same defect as `family_gate`'s date key, same morning,

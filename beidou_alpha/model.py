@@ -321,7 +321,17 @@ class AlphaModel:
             membership[named] = True
         weights, combined, per_strategy = self.evaluate(panel, membership, previous=previous, band=False)
         # The same panel and the same params the weights were just built from, so the recorded
-        # divisor cannot describe a different bar than the weight it explains.
+        # divisor cannot describe a different bar than the weight it explains.  `book_weights` is
+        # recomputed rather than returned by `evaluate` deliberately: `evaluate` is the BACKTEST's hot
+        # loop and this is the live entry point, so the cost lands where there is one call an hour.
+        # It is the same pure function `weights_from` sums, so `combine_books` of these IS `weights` -
+        # asserted in `test_recording_the_book_weights_changes_no_weight`, which is falsifier F1 of
+        # the 2026-09-12 pre-registration: an observability field that moved a traded weight would not
+        # be observability.
         return snapshot(
-            weights, combined, per_strategy, asset_vol(panel.close, self.portfolio, panel.bars_per_year).iloc[-1]
+            weights,
+            combined,
+            per_strategy,
+            asset_vol(panel.close, self.portfolio, panel.bars_per_year).iloc[-1],
+            self.book_weights(per_strategy, panel.close, panel.bars_per_year),
         )
