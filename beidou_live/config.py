@@ -298,5 +298,21 @@ def build_store(profile: dict[str, Any], *, dry_run: bool) -> StateStore:
     actually rehearses.
     """
     paths = profile.get("paths", {}) or {}
-    directory = Path(paths.get("state_dir", ".beidou/live"))
-    return StateStore(directory.with_name(directory.name + "-dry-run") if dry_run else directory)
+    return StateStore(store_directory(Path(paths.get("state_dir", ".beidou/live")), dry_run=dry_run))
+
+
+def store_directory(directory: Path, *, dry_run: bool) -> Path:
+    """Where a run with this flag actually writes, for everyone who has to find it afterwards.
+
+    The suffix used to live only inside `build_store`, so every READER of a dry run's record had to
+    know the rule by heart - and the canary's readers did not.  Measured 2026-09-12 when the L4 soak
+    was started for the first time: `run_shadow.sh` passes `--state-dir .beidou/live-shadow`, the loop
+    wrote `.beidou/live-shadow-dry-run`, and `governance canary` / `plan` / `apply` all default to
+    `.beidou/live-shadow`.  The soak would have run its full 168 hours and every reader would have
+    said "L4: no shadow record" the whole time - and AC-G5 would then have failed for a reason with
+    nothing to do with the candidate.
+
+    One definition, both sides.  A producer and a consumer that each name the same directory correctly
+    on their own is this repository's most frequent defect; this is the 27th time it has been found.
+    """
+    return directory.with_name(directory.name + "-dry-run") if dry_run else directory

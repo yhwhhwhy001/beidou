@@ -45,7 +45,7 @@ from beidou_governance.verdicts import read as read_verdicts
 from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
-from beidou_live.config import registry_evidence_problems
+from beidou_live.config import registry_evidence_problems, store_directory
 from beidou_live.health import CONSTRUCTION_ALIASES
 from beidou_shared.config import load_yaml
 
@@ -297,6 +297,19 @@ def _rows(path: Path) -> list[dict[str, Any]]:
     return load_jsonl(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
+def _shadow_rows(shadow_dir: str) -> list[dict[str, Any]]:
+    """The canary soak's cycles, found where a dry run actually writes them.
+
+    `run_shadow.sh` passes `--state-dir .beidou/live-shadow`; `build_store` appends `-dry-run` to it.
+    Every reader here defaulted to the un-suffixed name, so on 2026-09-12 - the first time the soak was
+    ever started - the record went to one directory and all three readers looked in another.  Resolved
+    through the same function the store uses rather than by writing the suffix out a second time.  The
+    un-suffixed directory is still accepted, because a record can also be handed over by hand.
+    """
+    suffixed = _rows(store_directory(Path(shadow_dir), dry_run=True) / "cycles.jsonl")
+    return suffixed or _rows(Path(shadow_dir) / "cycles.jsonl")
+
+
 def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, shadow_dir: str) -> Admission:
     """R3/R4/R5/R7 and K-EX14, asked of the change before the bytes move.
 
@@ -310,7 +323,7 @@ def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, sh
         book=read_state(root / STATE),
         policy=Policy(),
         cycles=_rows(Path(state_dir) / "cycles.jsonl"),
-        shadow=_rows(Path(shadow_dir) / "cycles.jsonl"),
+        shadow=_shadow_rows(shadow_dir),
         # K-EX14's clock reads the canonical construction, not the raw digest: three of the raw
         # changes since 09-04 altered no behaviour and were declared equivalent here on the read side.
         aliases=CONSTRUCTION_ALIASES,
@@ -572,10 +585,11 @@ def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
     have edge; a candidate that fails has hit a wiring or venue problem, and reading that as evidence
     against the sleeve is the mistake this command's own docstring exists to prevent.
     """
-    shadow = _rows(Path(shadow_dir) / "cycles.jsonl")
+    shadow = _shadow_rows(shadow_dir)
     baseline = _rows(Path(state_dir) / "cycles.jsonl")
     if not shadow:
-        raise click.ClickException(f"no shadow record at {shadow_dir}/cycles.jsonl; run deploy/run_shadow.sh first")
+        looked = store_directory(Path(shadow_dir), dry_run=True)
+        raise click.ClickException(f"no shadow record at {looked}/cycles.jsonl; run deploy/run_shadow.sh first")
     result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=CONSTRUCTION_ALIASES)
     for check in result.checks:
         click.echo(f"{'PASS' if check.passed else 'FAIL'}  {check.name:22s} {check.detail}")
