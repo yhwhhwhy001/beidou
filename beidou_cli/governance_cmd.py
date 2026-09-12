@@ -457,6 +457,28 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
     click.echo(render(survey(entries, {"equity": equity, "columns": columns, "now": datetime.now(UTC)}), hidden))
 
 
+@governance.command("window")
+@click.option("--root", default=".", help="Checkout holding the queue.")
+def window_cmd(root: str) -> None:
+    """Construction changes waiting for a batch window - §8's Phase 4a list, which never existed.
+
+    "块 4 必改项一次改完" presumes a list of construction changes applied together in one window.  Each
+    was decided in a log entry, the log has no reader, and so on the day a window opens nothing tells
+    anybody what it was supposed to carry.  Same shape as the thirteen reopen conditions, pointed the
+    other way: not a closed hypothesis nobody reopens, but an open decision nobody applies.
+
+    Applies nothing.  A window is an operator running `governance apply` through a transaction, and a
+    command that could apply its own queue on a date is the shape R10 forbids.
+    """
+    from beidou_governance.window_changes import LIST as WINDOW_LIST
+    from beidou_governance.window_changes import load as load_window
+    from beidou_governance.window_changes import render as render_window
+    from beidou_governance.window_changes import survey as survey_window
+
+    changes = load_window(Path(root).resolve() / WINDOW_LIST)
+    click.echo(render_window(survey_window(changes, datetime.now(UTC))))
+
+
 @governance.command("gate")
 @click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
 @click.option("--root", default=".", help="Checkout to read the trials ledger and reports from.")

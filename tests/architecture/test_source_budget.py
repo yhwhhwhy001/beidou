@@ -1958,7 +1958,8 @@ CEILING = {
     # run is not a ruling - found during the DRILL-G1 production run, four invocations leaving four
     # rows and divergence going 1 -> 5 pending.  Same defect as `family_gate`'s date key, same morning,
     # one command away; the lines are the docstring carrying both measurements.
-    "beidou_cli": 5_702,
+    # +22 more cli: `governance window`, the reader for §8's Phase 4a list (see the governance note).
+    "beidou_cli": 5_724,
     "beidou_data": 5_365,
     "beidou_exchange": 611,
     "beidou_shared": 289,
@@ -1967,7 +1968,12 @@ CEILING = {
     # rather than one that is strict, and the half-transition the 2026-09-09 audit counted as missing.
     # `Candidate.queued_at` stamped where the transition happens, `Book.queue` FIFO over it, and
     # `Policy.queue_order` so changing the order is a rule version change (0.3.1 -> 0.3.2).
-    "beidou_governance": 3_485,
+    # +158 governance: §8's Phase 4a says "块 4 必改项一次改完", which presumes a LIST of construction
+    # changes applied together in one window - and that list never existed.  Each was decided in a log
+    # entry, the log has no reader, so on the day a window opens nothing says what it was supposed to
+    # carry.  Same shape as the thirteen reopen conditions, pointed the other way: not a closed
+    # hypothesis nobody reopens, but an open decision nobody applies.  It applies nothing itself.
+    "beidou_governance": 3_643,
 }
 
 
