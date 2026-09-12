@@ -11,11 +11,42 @@ engine uses), seeds the hold with the state's own contributions and compares:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
 from beidou_live.inputs import model_inputs
 from beidou_live.ports import MarketData, SignalModel, TargetSet
 from beidou_live.state import LiveState, StateStore
+
+#: Seconds after a bar closes within which the venue was still aggregating it, measured rather than
+#: assumed.  Six KILL-027 failures between 2026-09-10T18:10Z and 2026-09-12T09:10Z were reproduced
+#: exactly by replaying 56 cycles offline against freshly fetched klines: every one a single symbol in
+#: the `flow` book (3.3e-8 to 8.5e-7 against a 1e-9 tolerance), and `flow` is the only book that reads
+#: `taker_buy_quote` / `quote_volume` - the two kline fields the exchange finalises last.
+#:
+#: Two measurements bracket the window.  Re-fetching the bar that closed at 2026-09-12T12:00Z at +15s,
+#: +60s, +300s and +600s over six symbols returned byte-identical values on every field: the kline is
+#: settled by +15s.  And of the 57 replayed cycles, all six failures fetched within 14s of the close,
+#: while 0 of the 22 that fetched later than 14s failed.  So the loop can read a bar the venue has not
+#: finished aggregating, and the window is roughly the first fifteen seconds.
+#:
+#: This number DIAGNOSES; it gates nothing and widens no tolerance.  A cycle inside the window still
+#: fails to reproduce, and still says so - it just also says why.
+SETTLE_SECONDS = 15.0
+
+
+def fetch_lag_seconds(cycle: Mapping[str, Any] | None) -> float | None:
+    """Seconds between a bar closing and the cycle that traded it writing its row (``at``)."""
+    if not cycle:
+        return None
+    bar, at = cycle.get("bar_open_ms"), cycle.get("at")
+    if not isinstance(bar, int | float) or not isinstance(at, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(at)
+    except ValueError:
+        return None
+    return stamp.timestamp() - (float(bar) + 3_600_000.0) / 1000.0
 
 
 def _diff(reference: Mapping[str, float], candidate: Mapping[str, float]) -> dict[str, float]:
@@ -28,6 +59,7 @@ def compare_targets(
     state: LiveState,
     tolerance: float = 1e-9,
     recorded_as_of_ms: int | None = None,
+    fetch_lag: float | None = None,
 ) -> dict[str, Any]:
     """Diff a freshly computed ``TargetSet`` against the persisted state of the last cycle.
 
@@ -84,6 +116,8 @@ def compare_targets(
         "max_target_diff": worst_weight,
         "target_diffs": {symbol: value for symbol, value in weight_diffs.items() if value > tolerance},
         "worst_contributions": offenders,
+        "fetch_lag_seconds": fetch_lag,
+        "fetched_before_the_bar_settled": None if fetch_lag is None else fetch_lag < SETTLE_SECONDS,
         "tolerance": tolerance,
         "ok": ok,
         "note": (
@@ -93,6 +127,15 @@ def compare_targets(
             if not matched
             else "模型已无法复现上一周期的 contributions（配置、代码或数据发生了变化）："
             + "，".join(f"{row['strategy']}/{row['symbol']} 差 {row['diff']:.3e}" for row in offenders[:3])
+            + (
+                # Not an excuse and not a tolerance: the cycle still failed to reproduce.  It is the
+                # sentence six identical alerts could not say, and it points at the wake time rather
+                # than at the model.
+                f"；该周期在收盘后 {fetch_lag:.0f} 秒取数，落在场所仍在聚合该 K 线的 "
+                f"{SETTLE_SECONDS:.0f} 秒内（2026-09-12 实测）"
+                if fetch_lag is not None and fetch_lag < SETTLE_SECONDS
+                else ""
+            )
         ),
         "clock_note": (
             None
@@ -107,6 +150,19 @@ def last_cycle(store: StateStore) -> Mapping[str, Any] | None:
     """The newest non-dry-run cycle record, or ``None`` when the loop has not completed one."""
     for record in reversed(store.read_jsonl(store.cycles_path)):
         if not record.get("dry_run"):
+            return record
+    return None
+
+
+def last_scored_cycle(store: StateStore) -> Mapping[str, Any] | None:
+    """The newest cycle that actually ran the model - the one whose contributions ``state.json`` holds.
+
+    Not ``last_cycle``: a restart writes a SKIPPED row with no contributions, and reading the lag off
+    that one measures how long after the bar somebody restarted the process, which is a different
+    number about a different event (the 12:04:40Z restart on 2026-09-12 read 280s).
+    """
+    for record in reversed(store.read_jsonl(store.cycles_path)):
+        if not record.get("dry_run") and record.get("contributions"):
             return record
     return None
 
@@ -183,6 +239,7 @@ async def verify_live_targets(
     tolerance: float = 1e-9,
     recorded_as_of_ms: int | None = None,
     reference_symbols: Sequence[str] | None = None,
+    fetch_lag: float | None = None,
 ) -> dict[str, Any]:
     """``reference_symbols``: the cross-sectional population the cycle declared (P1-01 / DL-Q1).
 
@@ -199,15 +256,21 @@ async def verify_live_targets(
         funding_history=inputs.funding_history,
         reference_symbols=reference_symbols,
     )
-    return {"inputs": inputs.to_dict(), **compare_targets(targets, state, tolerance, recorded_as_of_ms)}
+    return {
+        "inputs": inputs.to_dict(),
+        **compare_targets(targets, state, tolerance, recorded_as_of_ms, fetch_lag=fetch_lag),
+    }
 
 
 __all__ = [
+    "SETTLE_SECONDS",
     "compare_targets",
     "cycle_clock",
+    "fetch_lag_seconds",
     "last_cycle",
     "last_recorded_as_of_ms",
     "last_recorded_governance_digest",
     "last_recorded_registry_digest",
+    "last_scored_cycle",
     "verify_live_targets",
 ]

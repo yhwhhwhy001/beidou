@@ -1929,10 +1929,16 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # reads BLIND at 19/30 fills, not PASS - the ruling was taken with that cost stated) and keeps the
 # combined reading printed; and M-014's correlation is rendered onto the probe's own 30-day review
 # line, because the one moment it decides anything is that review and it had no reader at all.
+#
+# Fourth raise, +63 live / +6 cli: KILL-027's cause, measured.  Six failures in 48h all came from
+# cycles that read the bar within 14s of its close, while 0 of the 22 that waited longer failed, and
+# re-fetching a settled bar at +15/+60/+300/+600s returned byte-identical fields.  `SETTLE_SECONDS`
+# carries both measurements and puts the sentence into the alert; it gates nothing and widens no
+# tolerance, and `last_scored_cycle` keeps the lag off the restart rows that have no contributions.
 CEILING = {
     "beidou_alpha": 8_071,
-    "beidou_live": 7_602,
-    "beidou_cli": 5_675,
+    "beidou_live": 7_665,
+    "beidou_cli": 5_681,
     "beidou_data": 5_288,
     "beidou_exchange": 611,
     "beidou_shared": 289,

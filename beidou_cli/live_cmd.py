@@ -71,10 +71,12 @@ from beidou_live.scheduler import SystemClock
 from beidou_live.state import StateStore
 from beidou_live.verify import (
     cycle_clock,
+    fetch_lag_seconds,
     last_cycle,
     last_recorded_as_of_ms,
     last_recorded_governance_digest,
     last_recorded_registry_digest,
+    last_scored_cycle,
     verify_live_targets,
 )
 from beidou_shared.config import env_secret
@@ -611,6 +613,10 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
                 state,
                 tolerance,
                 recorded_as_of_ms=last_recorded_as_of_ms(store),
+                # How long after the bar closed the cycle being checked actually read it.  Six
+                # KILL-027 failures in 48h all came from cycles that fetched inside the venue's
+                # settle window; without this the alert could only say "it no longer reproduces".
+                fetch_lag=fetch_lag_seconds(last_scored_cycle(store)),
                 # P1-01: rank against the names the cycle itself declared (state.universe), not
                 # against `universe`, which adds the `leaving` symbols this reproduction fetches.
                 reference_symbols=list(state.universe) or universe,
