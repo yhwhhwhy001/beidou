@@ -1038,6 +1038,19 @@ def _long_run_sharpe_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     return lines
 
 
+def _probe_correlation_note(payload: Mapping[str, Any], strategy: str) -> str:
+    """The M-014 pair involving this probe, rendered onto its review line (empty when unreadable)."""
+    pairs = [
+        (pair, row)
+        for pair, row in (payload.get("probe_correlation") or {}).items()
+        if strategy and pair.endswith(f"~{strategy}") and row.get("correlation") is not None
+    ]
+    if not pairs:
+        return ""
+    pair, row = max(pairs, key=lambda item: abs(float(item[1]["correlation"])))
+    return f" corr({pair})={float(row['correlation']):+.2f} over {row.get('bars')} bars"
+
+
 def _risk_adaptation_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     """Same rule as `_risk_budget_lines`: a spread that could not be computed says why, not "n/a"."""
     leverages = block.get("leverage_distinct")
@@ -2031,6 +2044,12 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                         f"pnl_{row.get('window_days')}d={_fmt_num(row.get('pnl'))} "
                         f"({_fmt_pct(row.get('pnl_pct'))} of equity, stop at -{_fmt_pct(row.get('max_loss'))}) "
                         f"days={_fmt_num(row.get('days_running'))}/{row.get('review_after_days')}"
+                        # M-014 beside the countdown it belongs to.  The correlation was computed
+                        # every day and read by nothing, and the one moment it decides anything is
+                        # this review - `probe_correlation`'s own docstring says a sleeve that
+                        # correlates closely with the main book is a tilt whose separate risk budget
+                        # is a fiction.  2026-09-12: tsmom~flow 0.80 over 148 bars, review due 10-02.
+                        + _probe_correlation_note(payload, str(row.get("strategy") or ""))
                     )
                     for row in (payload.get("probes") or [])
                 }

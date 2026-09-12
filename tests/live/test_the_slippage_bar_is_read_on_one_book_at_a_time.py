@@ -11,10 +11,15 @@ The combined 5.47 is a mixture that describes neither population, and its own er
 into scheduled cycles) and M-015's compression (two books summed before the spread was taken): an
 aggregate over two populations, presented as a reading of one.
 
-The gate is deliberately NOT re-pointed here.  Which book M-Q08 judges is an operator's ruling, and a
-criterion that re-points itself the first time it fires is exactly what R10 forbids.  What these tests
-hold is that the split and the error bar exist, that they are right, and that a record which cannot
-name the books says so instead of inventing one population.
+**Operator ruling 2026-09-12: M-Q08 judges the main book.**  Its clause is about the execution fidelity
+of the book the demo phase is testing, and the probe sleeve already has its own bar for this - `§3
+滑点压力 5.5 档` in `validation/book_limits.py`.  The ruling was made with its cost stated: the main
+book holds 19 of the 34 fills, so M-Q08 goes from a FAIL it could not support to a BLIND that says how
+many fills short it is.  The combined number stays computed and printed either way - the shape of the
+2026-09-10 L3 ruling and of M-015's split on the same day.
+
+A record that cannot name the books is judged on the combined reading, not excused: every trade row
+written before 2026-09-12 is that case, and an unreadable split is not a pass.
 """
 
 from __future__ import annotations
@@ -52,16 +57,19 @@ def test_the_two_populations_are_reported_separately() -> None:
     assert abs(groups["main_only"]["value"] - 1.0) < 1e-6
     assert abs(groups["overlaid"]["value"] - 21.0) < 1e-6
     assert groups["main_only"]["fills"] == 1 and groups["overlaid"]["fills"] == 1
-    # and the combined number, which is neither of them, is still what `inside` reads
+    # the bar is taken on the main book: 1 bps, inside 4
+    assert result["judged"] == "main_only" and abs(result["value"] - 1.0) < 1e-6
+    assert result["inside"] is True
+    # and the combined number, which is neither population's, is still computed and still printed
     # (notional-weighted, so it lands a hair above the midpoint - the larger fill is the worse one)
-    assert abs(result["value"] - 11.0) < 0.05
-    assert result["inside"] is False
+    assert abs(result["combined"]["value"] - 11.0) < 0.05
 
 
 def test_a_record_that_cannot_name_the_books_reports_one_population_rather_than_guessing() -> None:
     """No `books` in the cycle -> no split.  Absent knowledge is not a reading (the house rule)."""
     fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.01)]
-    assert slippage_bps(fills, _params(), latest_ms=NOW, books=None)["by_group"] == {}
+    blind = slippage_bps(fills, _params(), latest_ms=NOW, books=None)
+    assert blind["by_group"] == {} and blind["judged"] == "combined"
     assert books_by_symbol({"contributions": {"tsmom": {"MAINONLYUSDT": 1.0}}}) == {}
     assert books_by_symbol(None) == {}
 
@@ -120,3 +128,33 @@ def test_the_worst_symbols_are_named_so_a_breach_can_be_chased() -> None:
     worst = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)["worst_symbols"]
     assert worst[0]["symbol"] == "OVERLAIDUSDT"
     assert abs(worst[0]["value"] - 50.0) < 1e-6
+
+
+def test_the_probes_names_can_no_longer_fail_the_main_books_bar() -> None:
+    """The 2026-09-12 shape, scaled down: the main book inside 4, the probe's names four times it."""
+    fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.008)] * 2
+    fills += [_fill("OVERLAIDUSDT", decision_close=100.0, avg_price=100.162)] * 2
+    result = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)
+    assert result["judged"] == "main_only"
+    assert result["inside"] is True, "the main book fills at 0.8 bps"
+    assert result["combined"]["value"] > result["limit"], "and the book as traded is still over the bar"
+    assert result["by_group"]["overlaid"]["value"] > 4.0 * result["limit"]
+
+
+def test_a_main_book_that_really_is_slow_still_fails() -> None:
+    """The falsifier.  Re-pointing the bar must not be a way of never failing it."""
+    fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.09)] * 2
+    result = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)
+    assert result["judged"] == "main_only" and result["inside"] is False
+    assert abs(result["value"] - 9.0) < 1e-6
+
+
+def test_too_few_main_book_fills_is_blind_and_says_how_many_short() -> None:
+    """M-Q08's own "≥ 30 fills" now applies to the book it judges - 19 of 34, on 2026-09-12."""
+    fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.01)] * 2
+    fills += [_fill("OVERLAIDUSDT", decision_close=100.0, avg_price=100.2)] * 40
+    result = slippage_bps(fills, RiskBudgetParams(min_slippage_fills=30), latest_ms=NOW, books=BOOKS)
+    assert result["enforced"] is False and result["value"] is None
+    assert result["fills"] == 2 and result["fills_all_books"] == 42
+    assert "主书只有 2 笔" in result["why"]
+    assert result["by_group"]["overlaid"]["fills"] == 40, "the probe's fills are reported, just not judged"

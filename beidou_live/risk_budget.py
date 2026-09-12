@@ -481,19 +481,38 @@ def slippage_bps(
             groups[key][1].append(size)
     fills = len(values)
     notional = sum(sizes)
-    if fills < params.min_slippage_fills or notional <= 0:
+    whole = _weighted(values, sizes)
+    by_group = {name: _weighted(*group) for name, group in groups.items() if group[0]}
+    # 2026-09-12 operator ruling: M-Q08 judges the MAIN BOOK.  Its clause is about the execution
+    # fidelity of the book whose evidence the demo phase is testing, and a 1/3-fraction probe sleeve
+    # already has its own bar for this - `§3 滑点压力 5.5 档` in `validation/book_limits.py`.  The
+    # combined number stays computed and printed (the L3 / M-015 shape); what changes is which one
+    # `inside` reads.  Where the record cannot split the books the combined reading is judged
+    # instead - an unreadable split is not a pass, and every row written before 2026-09-12 is that case.
+    judged_name = "main_only" if "main_only" in by_group else "combined"
+    judged = by_group.get("main_only") or whole
+    judged_fills = int(judged["fills"])
+    # `is None`, not falsiness: a notional-weighted slippage of exactly 0.0 is a reading, not a gap.
+    if judged_fills < params.min_slippage_fills or judged.get("value") is None or notional <= 0:
+        # The ruling's honest cost, said in the same breath as the refusal: the main book holds 19 of
+        # the 34 fills, so M-Q08 moves from a FAIL it could not support to a BLIND that says how far
+        # off an answer is.  BLIND deliberately does not page; it clears itself when the fills arrive.
         return {
             "value": None,
             "limit": params.max_slippage_bps,
-            "fills": fills,
+            "fills": judged_fills,
+            "fills_all_books": fills,
+            "judged": judged_name,
+            "by_group": by_group,
+            "combined": whole,
             "without_reference": without_reference,
             "enforced": False,
-            "why": f"只有 {fills} 笔成交，需要 {params.min_slippage_fills} 笔"
+            "why": f"{'主书' if judged_name == 'main_only' else '全书'}只有 {judged_fills} 笔成交，"
+            f"需要 {params.min_slippage_fills} 笔"
             + (f"；其中 {without_reference} 笔没有 decision_close" if without_reference else ""),
         }
-    whole = _weighted(values, sizes)
-    value = float(whole["value"])
-    se = whole["se"]
+    value = float(judged["value"])
+    se = judged["se"]
     # Whether the breach can be told from the noise, reported beside the breach rather than instead
     # of it.  On 2026-09-12 the combined reading is 5.47 against 4.0 with se 2.59 - 0.57 SE, which is
     # not a measurement of anything.  `min_slippage_fills` counts fills; it has never asked how much
@@ -501,15 +520,19 @@ def slippage_bps(
     decisive = None if se is None else abs(value - params.max_slippage_bps) > 2.0 * se
     return {
         "value": value,
+        "judged": judged_name,
         "limit": params.max_slippage_bps,
-        "fills": fills,
+        "fills": judged_fills,
+        "fills_all_books": fills,
         "without_reference": without_reference,
-        "notional": notional,
+        "notional": judged.get("notional"),
         "se": se,
-        "sd": whole.get("sd"),
-        "n_eff": whole.get("n_eff"),
+        "sd": judged.get("sd"),
+        "n_eff": judged.get("n_eff"),
         "decisive": decisive,
-        "by_group": {name: _weighted(*group) for name, group in groups.items() if group[0]},
+        # The whole book as traded, always, whichever reading the bar was taken on.
+        "combined": whole,
+        "by_group": by_group,
         "worst_symbols": [
             {"symbol": symbol, **_weighted(*rows)}
             for symbol, rows in sorted(by_symbol.items(), key=lambda item: -abs(_weighted(*item[1])["value"] or 0.0))[
@@ -592,7 +615,8 @@ def risk_budget_status(
             if group.get("value") is not None
         )
         reasons.append(
-            f"滑点 {slippage['value']:.1f} bps 高于假设的 {slippage['limit']:.0f} bps{detail}"
+            f"滑点（{'主书' if slippage.get('judged') == 'main_only' else '全书合并'}）"
+            f"{slippage['value']:.1f} bps 高于假设的 {slippage['limit']:.0f} bps{detail}"
             + (f"；分书读：{split}" if split else "")
         )
     unreadable = [

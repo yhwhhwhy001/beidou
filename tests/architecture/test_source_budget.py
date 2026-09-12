@@ -1924,9 +1924,14 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # is written only by a cycle with income), and M-G05's ledger keying idempotence on the DATE, so ten
 # quiet days of running `governance gate` would have carried Pre-A′'s only falsifier to its quorum of
 # 10 on ten re-readings of one ruling.  Both are docstrings carrying the measurement, not new machinery.
+#
+# Third raise, +43 live: the 2026-09-12 operator rulings.  M-Q08's bar moves to the main book (which
+# reads BLIND at 19/30 fills, not PASS - the ruling was taken with that cost stated) and keeps the
+# combined reading printed; and M-014's correlation is rendered onto the probe's own 30-day review
+# line, because the one moment it decides anything is that review and it had no reader at all.
 CEILING = {
     "beidou_alpha": 8_071,
-    "beidou_live": 7_559,
+    "beidou_live": 7_602,
     "beidou_cli": 5_675,
     "beidou_data": 5_288,
     "beidou_exchange": 611,
