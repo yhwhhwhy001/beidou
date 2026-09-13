@@ -17,10 +17,20 @@ from beidou_shared.types import InstrumentRules, Position, Side
 
 @dataclass(frozen=True)
 class RebalanceParams:
+    """``exempt_reductions`` must be flipped together with ``beidou_alpha.backtest.ParticipationModel``.
+
+    The two halves replay the same cap and only agree because they are written to the same rule.  Flip
+    one and the backtest scores a book live cannot execute, or refuses turnover live would have sent -
+    KILL-027's shape, where a live-only guardrail made the two halves quietly different instruments.
+    """
+
     no_trade_band: float = 0.005
     no_trade_rel_band: float = 0.0
     max_order_notional: float | None = None
     max_participation: float = 0.0  # cap on a risk-adding order: fraction of the symbol's average hourly quote volume
+    # False = today's scope, where only a full close escapes the cap.  True = the scope the line above
+    # has always claimed: every ``reduce_only`` order (full close AND pure reduction) escapes it.
+    exempt_reductions: bool = False
     tag: str = "bd"
 
 
@@ -151,7 +161,15 @@ def plan_rebalance(
                 continue
         note = ""
         cap = (liquidity or {}).get(symbol)
-        if params.max_participation > 0 and cap is not None and cap > 0 and not closing:
+        # T-S03's cap and the scope it actually has.  The field's comment has always read "risk-adding
+        # order", but the exemption here was `closing` alone, so a 15% -> 5% pure reduction was
+        # truncated by `max_participation x trailing volume` - a cap that shrinks with the same volume
+        # curve that dries up in the bar where getting smaller matters most (2026-09-13 review, second
+        # pass: the exit channel contracts with liquidity).  Widening it is a live behaviour change and
+        # moves every backtest number, so it is a knob, off by default, and the backtest half carries
+        # the same one under the same name.
+        exempt_from_cap = reduce_only if params.exempt_reductions else closing
+        if params.max_participation > 0 and cap is not None and cap > 0 and not exempt_from_cap:
             allowed = params.max_participation * float(cap)
             if float(quantity) * price > allowed:
                 quantity = quantize_qty(allowed / price, rule)
