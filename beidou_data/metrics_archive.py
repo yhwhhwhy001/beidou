@@ -59,9 +59,9 @@ class MetricsArchiveClient:
     ) -> None:
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport, follow_redirects=True)
         # A seam, not a knob - the one `onchain.CommunityClient` already carries, for the same reason.
-        # Two tests here exercise the 5xx path and paid its 1+2+4 seconds of real sleeping each; that is
-        # 14s on the laptop and ~42s on CI, against a suite whose ceiling names "a sleep" as the step
-        # change it exists to catch.  Tests pass 0; nothing else should.
+        # Two tests here exercise the 5xx path and really slept 1+2+4s each - 14.0s, the same on both
+        # boxes, because a sleep is the one cost that never shrinks on faster hardware.  That is why
+        # `suite_duration.py` names it as the step change its ceiling exists to catch.  Tests pass 0.
         self._backoff = backoff
 
     def close(self) -> None:
