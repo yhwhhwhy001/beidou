@@ -197,6 +197,7 @@ class LiveEngine:
         record_metrics: bool = True,
         dropped_after: int = 3,
         order_concurrency: int = 1,
+        state: LiveState | None = None,
     ) -> None:
         self.config = config
         self.model = model
@@ -224,7 +225,15 @@ class LiveEngine:
         # A construction can only change at startup (the engine builds its model once - KILL-Q15), so
         # writing it on this process's first cycle records every change exactly once.
         self._construction_recorded = False
-        self.state: LiveState = store.load()
+        # `state` is the way in for a caller that must run WITHOUT a readable state file.
+        # `store.load()` refuses a corrupt one on purpose (it is the only copy of the income
+        # watermark, the equity high-water mark and the exit anchors), and `beidou live run`
+        # must inherit that refusal.  `beidou live flatten` must not: it needs the venue's
+        # positions and nothing else, and an emergency exit that a broken file can block is a
+        # worse failure than the one the refusal prevents.  So the refusal lives in the store
+        # and the exemption is explicit at the call site, rather than the store guessing which
+        # caller it has.
+        self.state: LiveState = store.load() if state is None else state
         if self.state.cycles > 0:  # M-004: this process is a restart, not a first start
             self.state.restarts = self.state.restarts + 1
             self.state.restarted_at = utc_now_iso()
@@ -2017,6 +2026,13 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "no_trade_rel_band": config.rebalance.no_trade_rel_band,
             "max_participation": config.rebalance.max_participation,
             "max_order_notional": config.rebalance.max_order_notional,
+            # v6 (+ rebalance.exempt_reductions), 2026-09-13.  Declared before it is ever written, on
+            # the same proof as v3/v4/v5: the shipped profile does not name the key and False is off,
+            # so recomputed against it the value is False on both sides and only the shape of what is
+            # hashed moved.  It belongs here rather than only in `RebalanceParams` because turning it
+            # on changes which orders the cap refuses, i.e. the book the loop holds - and a knob the
+            # record cannot see is the other half of D-036.
+            "exempt_reductions": config.rebalance.exempt_reductions,
         },
         "exits": {
             "stop_loss": config.exits.stop_loss,

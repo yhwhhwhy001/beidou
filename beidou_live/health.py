@@ -224,7 +224,7 @@ def margin_mode_problems(
 #      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
 #      may be held at all, so changing it changes the book - found while asking whether the
 #      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
-CONSTRUCTION_PAYLOAD_VERSION = 5
+CONSTRUCTION_PAYLOAD_VERSION = 6
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
@@ -261,6 +261,16 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # test asserts on the two-book path rather than leaving to this comment.  Without the alias the next
     # restart would reset M-010's window for a book that is byte-identical.
     "ab3cb75fb2f8d94813aa44c5b6d869c34bf82bcc78757bf1fcfa0bba4e16e1b3": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v6 (+ rebalance.exempt_reductions), 2026-09-13.  Declared before it is ever written, on the same
+    # proof as v3, v4 and v5: the shipped profile does not name the key and False is off, so recomputed
+    # against it the value is False on both sides of the change and only the shape of what is hashed
+    # moved.  What `False` means is the literal previous expression - the participation cap exempts a
+    # full close and nothing else - which the rebalancer and the backtest replay both assert rather
+    # than leaving to this comment.  Without the alias the next restart would reset M-010's 30-day
+    # window, unbroken since 2026-09-04T15:02Z, for a book that is byte-identical.
+    "b579df626e35f92eb7a189386175a9ded2b11e64df15a0d212ef12a1627bf944": (
         "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
     ),
 }

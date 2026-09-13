@@ -29,7 +29,7 @@ from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, MISSED_REBALANCE_REASON
-from beidou_live.state import StateStore
+from beidou_live.state import LiveState, StateStore, StateUnreadable
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
 # "not a derived threshold", placed between 0.13 measured 2026-09-05 and 1.0 for stage 1 deleted - and
@@ -97,6 +97,30 @@ def _day_end_ms(day: str) -> int:
     return int((start + timedelta(days=1)).timestamp() * 1000)
 
 
+def readable_state(store: StateStore) -> tuple[LiveState, str]:
+    """The persisted state, or an empty one plus the reason it could not be read.
+
+    `StateStore.load` refuses a corrupt state.json rather than returning a fresh `LiveState`, because
+    silently zeroing the income watermark is how the only clean out-of-sample series (M-010) loses a
+    stretch nothing can later detect.  `beidou live run` must inherit that refusal.  The REPORT must
+    not: it is the unattended monitor, it is how a broken file gets noticed at all, and a report that
+    dies on the first line tells the operator less than one that renders the venue's equity, the
+    guards and the drift next to a sentence naming the file.
+
+    D-035's rule, applied to a file instead of to a metric: what cannot be computed says so and gives
+    the reason - it is never read as a zero, and it is never read as "fine".
+    """
+    try:
+        return store.load(), ""
+    except StateUnreadable as exc:
+        return LiveState(), str(exc)
+
+
+def _state_problem(store: StateStore) -> str:
+    """The reason `state.json` cannot be read, or an empty string when it can."""
+    return readable_state(store)[1]
+
+
 def probe_rows(
     store: StateStore, probes: Sequence[ProbeParams], *, equity: float | None, now_ms: int
 ) -> list[dict[str, Any]]:
@@ -105,7 +129,7 @@ def probe_rows(
         return []
     attributions = store.read_jsonl(store.attribution_path)
     cycles = store.read_jsonl(store.cycles_path)  # `book_weights` + `closes`, for the second caliber
-    stopped = store.load().stopped_books
+    stopped = readable_state(store)[0].stopped_books
     rows: list[dict[str, Any]] = []
     for probe in probes:
         status = probe_status(probe, attributions, equity=equity, now_ms=now_ms, cycles=cycles)
@@ -970,7 +994,9 @@ def data_coverage(store: StateStore, root: str | Path = ".beidou/data", interval
     ``load_panel`` excludes a symbol with no stored klines and logs a warning nobody reads; CYSUSDT was
     traded live for sixteen hours while every research run quietly ran without it.
     """
-    state = store.load()
+    state, unreadable = readable_state(store)
+    if unreadable:
+        return {"live_symbols": None, "missing_klines": None, "reason": unreadable}
     symbols = list(dict.fromkeys([*state.universe, *state.leaving]))
     try:
         stored = set(KlineStore(str(root)).symbols(interval))
@@ -1259,7 +1285,7 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
     and cycles written before ``asset_vol`` was recorded carry no sigma at all.
     """
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
-    leverage = dict(store.load().leverage_set)
+    leverage = dict(readable_state(store)[0].leverage_set)
     # Carried on every path, refusals included: it is the number the operator came here to look at,
     # and "the venue is at one leverage for all 15 symbols" is a fact even on a day with no sigma.
     distinct_leverage = len(set(leverage.values()))
@@ -1624,6 +1650,10 @@ def daily_payload(
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
+        # The file itself, before anything derived from it: a corrupt state.json makes several
+        # blocks below quietly thinner (no universe, no leverage, no probe stop records), and
+        # "thinner" and "nothing happened" look identical in a rendered report.
+        "state_file": {"readable": not _state_problem(store), "reason": _state_problem(store)},
         "data_coverage": data_coverage(store, root=data_root),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
         "risk_adaptation": risk_adaptation(store, day),
@@ -1645,6 +1675,12 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     matter of moving one append, not of finding a suppression to undo.
     """
     alerts: list[str] = []
+    state_file = payload.get("state_file") or {}
+    if state_file and not state_file.get("readable", True):
+        # Loud rather than a notice: every block that reads the universe, the leverage or the probe
+        # stop records is now answering from an empty state, and the watermark this file carries is
+        # the one M-010 cannot reconstruct afterwards.
+        alerts.append(f"state.json 读不动，日报的若干读数是从空状态算的：{state_file.get('reason')}")
     for name, key in (("权益", "drift"), ("策略收益", "income_drift")):
         block = payload.get(key) or {}
         if str(block.get("status")) == "ALERT":

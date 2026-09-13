@@ -68,7 +68,7 @@ from beidou_live.reports import (
 )
 from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.scheduler import SystemClock
-from beidou_live.state import StateStore
+from beidou_live.state import LiveState, StateStore, StateUnreadable
 from beidou_live.verify import (
     cycle_clock,
     fetch_lag_seconds,
@@ -664,13 +664,25 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
         payload, f"engaged by `beidou live flatten` {datetime.now(UTC).isoformat()}; release to resume\n"
     )
     click.echo(f"kill switch engaged: {engaged}")
+    store = build_store(payload, dry_run=False)  # flatten is a real action, never a rehearsal
+    # `StateStore.load` refuses a corrupt state.json, and `live run` inherits that refusal on purpose.
+    # This command must not.  Flatten reads the venue's positions and the instrument rules; the state
+    # file contributes nothing it needs.  An emergency exit that a half-written file can block is a
+    # worse failure than the one the refusal exists to prevent - and the file is most likely to be
+    # half-written exactly when the process died mid-cycle, which is when someone reaches for flatten.
+    try:
+        state = store.load()
+    except StateUnreadable as exc:
+        click.echo(f"state.json 读不动，用空状态继续平仓（平仓只需要交易所仓位）：{exc}", err=True)
+        state = LiveState()
     engine = LiveEngine(
         config,
         model=model,
         market=build_market_data(payload),
         venue=venue,
         clock=SystemClock(),
-        store=build_store(payload, dry_run=False),  # flatten is a real action, never a rehearsal
+        store=store,
+        state=state,
     )
 
     async def main() -> None:

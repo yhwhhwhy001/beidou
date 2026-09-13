@@ -86,7 +86,13 @@ EXPECTED_FIELDS = {
         "sleeve_max_gross",
     },
     "guards": {"max_gross", "max_weight", "daily_loss_pause", "stale_bars_max"},
-    "rebalance": {"no_trade_band", "no_trade_rel_band", "max_participation", "max_order_notional"},
+    "rebalance": {
+        "no_trade_band",
+        "no_trade_rel_band",
+        "max_participation",
+        "max_order_notional",
+        "exempt_reductions",
+    },
     "exits": {
         "stop_loss",
         "trailing_stop",
