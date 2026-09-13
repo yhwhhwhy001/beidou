@@ -16,6 +16,7 @@ the reporter is untouched, and this module asserts that by reading through it.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -120,3 +121,17 @@ async def test_two_bars_slept_through_are_two_rows(august_panel: Panel, tmp_path
     assert all(row["reason"] == BACKOFF_REASON for row in rows)
     assert engine.missed_rebalances == 2
     assert clock.now_ms() >= world["bar"] + 3 * HOUR_MS
+
+
+def test_a_skipped_heartbeat_still_says_what_the_process_is_running() -> None:
+    """The restart heartbeat has to carry DL-Q0's digests, because it is the only one written
+    before a cycle completes - and a restart is exactly when the answer just changed.
+
+    Measured 2026-09-13 on the real loop: an intentional restart at 11:03Z wrote a SKIPPED heartbeat
+    with no `registry`, `live status --check` fell back to the previous process's cycle row, and
+    reported a disagreement the restart had just resolved.  It stayed non-zero until the next bar
+    closed at 12:00Z; the hourly check job runs at :10, inside that window every time.
+    """
+    source = Path(inspect.getfile(LiveEngine)).read_text(encoding="utf-8")
+    body = source.split("def _record_missed_rebalance(")[1].split("\n    async def ")[0]
+    assert '"registry"' in body and '"construction"' in body

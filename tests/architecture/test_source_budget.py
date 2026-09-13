@@ -1992,7 +1992,12 @@ CEILING = {
     # +27 more on the merge itself: `dropped_after` moved onto `LiveConfig` so the fingerprint can
     # see it, the `inputs` block that carries it, and `restart_cost` learning that a backoff row is
     # a missed rebalance but not a restart - a six-hour outage was about to read as six restarts.
-    "beidou_live": 8_553,
+    # +15 more, found by performing the restart rather than reasoning about it: the SKIPPED heartbeat
+    # a restart writes carried no `registry`, so `live status --check` answered from the PREVIOUS
+    # process's cycle row and reported a disagreement the restart had just resolved - non-zero from
+    # 11:03Z until the next bar closed at 12:00Z, with the hourly job firing at :10 inside that
+    # window every time.  The instrument could not answer at the one moment its answer had changed.
+    "beidou_live": 8_569,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

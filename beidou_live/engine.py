@@ -573,7 +573,23 @@ class LiveEngine:
                 "dry_run": self.config.dry_run,
             }
         )
-        self.store.heartbeat({"phase": "SKIPPED", "bar_open_ms": bar_open_ms, "late_seconds": age_seconds})
+        self.store.heartbeat(
+            {
+                "phase": "SKIPPED",
+                "bar_open_ms": bar_open_ms,
+                "late_seconds": age_seconds,
+                # DL-Q0's two digests, on the ONE heartbeat that gets written before any cycle completes.
+                # Without them `live status --check` falls back to the newest cycles row carrying a
+                # registry - written by the PREVIOUS process - and reports a disagreement that the
+                # restart just resolved, for as long as it takes the next bar to close.  Measured
+                # 2026-09-13: an intentional restart at 11:03Z left the check non-zero until 12:00Z,
+                # and the hourly job fires at :10, i.e. inside that window every time.  The instrument
+                # exists to say what the process is running; the one moment it could not answer was
+                # the moment right after that answer changed.
+                "registry": registry_digest(self.model),
+                "construction": construction_fingerprint(self.config)["digest"][:12],
+            }
+        )
         if reason == BACKOFF_REASON:
             logger.warning(
                 "failure backoff slept through the close of bar %s (%.1fs ago); counted as a missed rebalance",
