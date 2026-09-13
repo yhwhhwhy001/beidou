@@ -559,7 +559,7 @@ def live_status(
     else:
         click.echo(
             f"周期：最近 {health.window_hours:.0f} 小时共 {health.attempts} 次，完成 "
-            f"{health.success_rate:.1%}（失败 {health.failures} 次）；连续无故障 {health.clean_days} 天；"
+            f"{health.success_rate:.1%}（失败 {health.failures} 次）；连续无故障无重启 {health.clean_days} 天；"
             f"{health.restarts_note()}"
         )
         if health.success_rate < min_success_rate:
