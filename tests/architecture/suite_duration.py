@@ -33,10 +33,28 @@ PLAN_SECONDS = 30
 # seconds, not the 20 that separated 120 from the observed spread.  Drift is the printed line's job,
 # not this one's; that split is the whole design and is unchanged.
 #
-# The alternative considered and NOT taken: parallelising CI (`pytest -n auto`) would cut the wall
-# clock rather than raise the bar, but it adds a dependency and changes what a "run" means, which is
-# a decision for the operator rather than a side effect of a ratchet breach.  Still not taken, and now
-# priced: at 172ms a test it would buy back roughly half the wall clock on a two-core runner.
+# The alternative considered and NOT taken: parallelising CI (`pytest -n auto`).  No longer an estimate
+# - measured 2026-09-13 on this laptop with `pytest-xdist` installed for the measurement and removed
+# again: 1,873 green on every run, 52.4s and 52.7s on two workers against 97.4s serial (1.87x), and
+# 22.1s on sixteen.  So the flaky-under-parallelism risk this note used to assume is not there at the
+# interleavings sixteen workers produce, and on GitHub's two cores CI would read about 180s.
+#
+# Still not taken, and now for a reason rather than a deferral:
+#
+# * it buys 2.6 minutes a push, against a four-day blindness that was caused by the gates being CHAINED
+#   - a red `Types` skipped `Tests` entirely - and not by any of them being slow.  It optimises the
+#   number nobody was hurt by;
+# * the wall clock under `-n` is not the quantity this file's 120 -> 240 -> 400 series is made of, so
+#   adopting it means re-baselining the ratchet, days after the ratchet earned its keep;
+# * a flaky red in a repository whose subject is the difference between "it ran" and "it passed" costs
+#   more than a slow green: it teaches the reader to re-run, which is how a real red gets ignored.
+#   Three clean runs lower that risk.  They do not retire it, and two cores interleave differently from
+#   sixteen, so CI would be the one place the measurement above does not cover.
+#
+# What the measurement does settle is the laptop, where it needs no decision from anyone and no change
+# here: `pip install pytest-xdist && pytest -m "not network" -n auto` reads 22.1s, the first time
+# M-003's 30s has been met on any box since it was written.  Deliberately left out of `requirements.lock`
+# - a tool one person runs by hand is not a dependency this repository has to carry into CI.
 #
 # 2026-09-13: 340.5s on CI, the first reading since 09-08 - the Types gate had been red for 23 pushes
 # and the test step never ran once, so this ratchet went four days without a measurement, the same
@@ -50,19 +68,23 @@ PLAN_SECONDS = 30
 #    it is the one thing measured here that does not shrink when the hardware works faster.
 # 2. The rest is VOLUME, not a slowdown, and the numbers say so in the only way that settles it:
 #
-#      laptop 2026-09-07   46.5s /  847 tests = 54.9ms     CI 2026-09-08 (slowest) 153.2s = 180.9ms
-#      laptop 2026-09-13   97.2s / 1873 tests = 51.9ms     CI 2026-09-13 (green)   321.4s = 171.6ms
+#      laptop 2026-09-07   46.5s /  847 tests = 54.9ms     CI 2026-09-08 (slowest)   153.2s = 180.9ms
+#      laptop 2026-09-13   97.4s / 1873 tests = 52.0ms     CI 2026-09-13 (mean of 2) 330.1s = 176.3ms
 #
-#    All four are measured; the 09-13 pair is the green run this ceiling first ran under.  Per test it
-#    got CHEAPER on both boxes.  The suite grew 2.21x in tests since the 240 was set and its CI wall
-#    clock grew 2.10x; that is the whole of it.  A ceiling that fires on growth measures the
+#    All four measured, the 09-13 row a mean over three laptop runs and the two green CI runs.  Per
+#    test it got cheaper on both boxes - 5.3% on the laptop, 2.5% on CI, which is inside CI's own
+#    run-to-run spread and therefore only a claim that it did not get WORSE.  That is the whole point:
+#    the suite grew 2.21x in tests since the 240 was set and its CI wall clock grew 2.16x, so the wall
+#    clock tracked the test count and nothing else.  A ceiling that fires on growth measures the
 #    repository's size, not its speed, which is not what this instrument is for.
 #
-# 400 was set before that green run, against an estimate 23s low, and deliberately high enough to
-# clear the 340.5s actually observed so a wrong estimate could not become a second red.  Against the
-# 321.4s that came back it leaves 78.6s of headroom - near enough the 86.8s the 240 carried over its
-# own slowest reading that it is left where it is.  One CI reading stands behind this number where
-# six stood behind 240; the next runs will say whether it wants tightening.
+# 400 was set before those green runs, against an estimate 23s low, and deliberately high enough to
+# clear the 340.5s actually observed so a wrong estimate could not become a second red.  Two green CI
+# runs have read it since - 321.4s and 338.9s, a 17.5s spread on identical work - so the headroom is
+# 61.1s to 78.6s rather than the single 78.6s first recorded here, against the 86.8s the 240 carried
+# over its own slowest reading.  Left at 400: tightening towards the faster of two readings would set
+# the bar by the luckier run, and that 17.5s of noise is already a fifth of the headroom it would be
+# trimming.  Two CI readings stand behind this number where six stood behind 240.
 CEILING_SECONDS = 400
 
 # Below this many selected tests the run was filtered (`pytest tests/live`, `-k`, `-m`), and a filtered
