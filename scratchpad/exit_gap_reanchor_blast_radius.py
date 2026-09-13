@@ -11,10 +11,12 @@ state still on such a bar.  That is a deliberate behaviour change, so it has to 
   3. that on a panel with no internal NaN, the pre-fix and post-fix `apply_exits` agree BIT FOR BIT
      over every bar that has a close, weights and events alike.
 
-It also reports the one case the brief did not anticipate: a symbol whose archive simply STOPS.  Held
-through its last stored bar, the overlay now keeps carrying that weight, because at the moment it
-happens a stopped series and a gap are the same observation.  The numbers for that are printed apart
-from the gap numbers, and `run_backtest` prices what it is worth.
+The carry is BOUNDED by `stale_carry_bars`, and the last block sweeps that bound.  It has to be
+bounded: a symbol whose archive simply STOPS looks exactly like a symbol missing one bar at the moment
+it happens, so an unbounded carry holds a delisted symbol to the end of the panel (79,447 symbol-bars
+across 150 ragged tails, measured before the bound went in).  Every extra bar of patience buys back
+stops that longer holes swallowed and pays for it in tail bars; the sweep prices both sides, and
+`run_backtest` prices what the whole change is worth.
 
 The pre-fix code is read out of git rather than re-typed, so (3) compares against the real baseline.
 
@@ -28,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import types
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -35,7 +38,7 @@ import pandas as pd
 import yaml
 
 from beidou_alpha.backtest import run_backtest
-from beidou_alpha.overlays.exits import ExitParams, apply_exits
+from beidou_alpha.overlays.exits import STOP_LOSS, ExitParams, apply_exits
 from beidou_alpha.panel import Panel
 from beidou_data.store import KlineStore
 
@@ -92,6 +95,21 @@ def _internal_gaps(close: pd.DataFrame) -> pd.Series:
     return _spans(close)[1].sum()
 
 
+def _run_lengths(column: pd.Series) -> list[int]:
+    """Lengths of the consecutive NaN runs in one column, in order."""
+    runs: list[int] = []
+    current = 0
+    for missing in column.isna():
+        if missing:
+            current += 1
+        elif current:
+            runs.append(current)
+            current = 0
+    if current:
+        runs.append(current)  # the run that reaches the end of the panel
+    return runs
+
+
 def _weights(close: pd.DataFrame) -> pd.DataFrame:
     """A deterministic stand-in for the model's book: a 24-bar momentum sign, sized like a real one.
 
@@ -118,6 +136,18 @@ def main() -> int:
     print(f"\nsymbols with internal gaps: {len(gapped)}, {int(gapped.sum()):,} symbol-bars")
     for symbol, count in gapped.items():
         print(f"  {symbol:<16} {int(count):>5}")
+
+    # How LONG each internal gap is, because `stale_carry_bars` is a bound on run length, not a total.
+    # A stop swallowed by a 638-bar run can only be rescued by carrying 638 bars.
+    print("\ninternal gap runs (the bound is on run length, not on the total):")
+    leading_mask, _, _ = _spans(close)
+    for symbol in gapped.index:
+        column = close[symbol]
+        inside = column[~leading_mask[symbol]]
+        runs = [n for n in _run_lengths(inside) if n]
+        tail = _run_lengths(column)[-1] if column.isna().iloc[-1] else 0
+        internal = runs[:-1] if tail else runs
+        print(f"  {symbol:<12} runs={sorted(internal, reverse=True)[:6]} max={max(internal, default=0)}")
 
     pinned = list(yaml.safe_load(Path("config/alpha_registry.yaml").read_text(encoding="utf-8"))["universe"])
     overlap = sorted(set(pinned) & set(gapped.index))
@@ -173,6 +203,26 @@ def main() -> int:
     pd.testing.assert_frame_equal(before_clean.events, after_clean.events)
     print(f"  events identical: True ({len(before_clean.events):,} rows)")
     assert exact
+
+    # The trade the bound forces, priced.  Every extra bar of patience rescues stops that longer gaps
+    # swallowed, and pays for it by holding ragged archive tails that much longer.  RESCUED is the
+    # BNXUSDT stop the 2026-09-13 review's reproduction is about - the one a 638-bar hole ate.
+    print(f"\n{'N':>5}{'ragged tail bars':>19}{'in-span moved':>15}{'events':>9}{'BNX 2023-02-22 stop':>22}")
+    target = pd.Timestamp("2023-02-22 14:00", tz="UTC")
+    for n in (0, 1, 2, 3, 6, 12, 24, 48, 72, 120, 240, 516, 517, 518, 638):
+        run = apply_exits(weights, close, replace(SHIPPED, stale_carry_bars=n))
+        moved_n = pd.DataFrame(
+            ~np.isclose(before.weights.to_numpy(), run.weights.to_numpy(), equal_nan=True),
+            index=close.index,
+            columns=close.columns,
+        )
+        rescued = bool(
+            ((run.events["symbol"] == "BNXUSDT") & (run.events["time"] == target) & (run.events["rule"] == STOP_LOSS)).any()
+        )
+        print(
+            f"{n:>5}{int((moved_n & trailing).to_numpy().sum()):>19,}"
+            f"{int((moved_n & internal).to_numpy().sum()):>15,}{len(run.events):>9,}{('YES' if rescued else 'no'):>22}"
+        )
 
     # What the difference is actually worth once the backtest reads it.  `run_backtest` fills a
     # missing asset return with 0, so a weight carried past the end of a symbol's archive earns

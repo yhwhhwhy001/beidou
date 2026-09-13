@@ -13,6 +13,7 @@ and an entry at 100, so one k-unit is 2.0 points.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -70,11 +71,44 @@ def test_a_gap_while_flat_neither_enters_nor_burns_the_cooldown() -> None:
     after, weight, reason = exit_step(state, 0.1, math.nan, 0.02, 0, PARAMS)
     assert after == state and math.isnan(weight) and reason == ""
 
-    # Same for a held position: state untouched, weight is "no decision", no event.
+    # Held, first unjudgable bar: everything but the counter is untouched, weight is "no decision".
     held, _, _ = exit_step(ExitState(), 0.1, 100.0, 0.02, 0, PARAMS)
     for bad in (math.nan, math.inf, -math.inf, 0.0, -5.0):
         same, weight, reason = exit_step(held, 0.1, bad, 0.02, 1, PARAMS)
-        assert same == held and math.isnan(weight) and reason == ""
+        assert same == replace(held, stale_bars=1) and math.isnan(weight) and reason == ""
+
+
+def test_the_carry_is_bounded_and_running_out_gives_up_without_re_entering() -> None:
+    """`stale_carry_bars=2`: two missing bars are waited out, the third gives the position up.
+
+    Bounded because the alternative is not: a bar with no price and a series that has ENDED are the
+    same observation at the moment they happen, so an unbounded carry holds a delisted symbol to the
+    end of the panel.  Same shape as `guards.stale_bars_max: 2` in the live profile - wait a fixed
+    number of bars, then call it gone - and causal for the same reason: it only ever reads the past.
+    """
+    state, _, _ = exit_step(ExitState(), 0.1, 100.0, 0.02, 0, PARAMS)
+    assert PARAMS.stale_carry_bars == 2
+    for bar in (1, 2):
+        state, weight, reason = exit_step(state, 0.0, math.nan, 0.02, bar, PARAMS)
+        assert math.isnan(weight) and reason == "" and state.direction == 1
+        assert state.entry_price == 100.0 and state.stale_bars == bar
+
+    given_up, weight, reason = exit_step(state, 0.0, math.nan, 0.02, 3, PARAMS)
+    assert weight == 0.0 and reason == ""  # a decision, not an abstention - and not an exit RULE
+    assert given_up.direction == 0 and math.isnan(given_up.entry_price) and given_up.stale_bars == 0
+    assert given_up.cooldown_until == state.cooldown_until  # running out of data is not an exit
+
+    # Nothing re-anchors at the missing price: the next priced bar is a fresh entry at ITS price.
+    reopened, weight, _ = exit_step(given_up, 0.1, 80.0, 0.02, 4, PARAMS)
+    assert reopened.entry_price == 80.0 and weight == 0.1
+
+
+def test_a_bar_with_a_price_ends_the_run_so_only_CONSECUTIVE_gaps_count() -> None:
+    params = replace(PARAMS, stale_carry_bars=1)
+    weights, close, vol = _frames([100.0, math.nan, 100.0, math.nan, 100.0, math.nan, 99.0])
+    result = apply_exits(weights, close, params, sigma_1d=vol)
+    assert result.weights["A"].tolist() == [0.1] * 7  # every run is length 1, so nothing is given up
+    assert len(result.events) == 0
 
 
 def test_a_gap_does_not_advance_the_trailing_extreme() -> None:
@@ -89,23 +123,37 @@ def test_a_gap_does_not_advance_the_trailing_extreme() -> None:
     assert reason == "TRAILING_STOP" and weight == 0.0  # 110 -> 105.5 is 2.25 units off the extreme
 
 
+PROPERTY_PARAMS = ExitParams(stop_loss=3.0, trailing_stop=2.0, take_profit=4.0, cooldown_bars=0, stale_carry_bars=3)
+
+
 @st.composite
-def _scenario(draw: st.DrawFn) -> tuple[list[float], list[float], list[int]]:
+def _scenario(draw: st.DrawFn) -> tuple[list[float], list[float], dict[int, int]]:
     size = draw(st.integers(min_value=24, max_value=80))
     steps = draw(st.lists(st.floats(-0.08, 0.08, allow_nan=False), min_size=size, max_size=size))
     signs = draw(st.lists(st.sampled_from((-1.0, 0.0, 1.0)), min_size=size, max_size=size))
-    cuts = draw(st.lists(st.integers(min_value=1, max_value=size - 1), min_size=0, max_size=6))
+    # Runs of at most `stale_carry_bars`, because that is the width of the claim: within the bound the
+    # overlay waits and the anchor survives.  A longer run is the overlay deciding the symbol is gone,
+    # which is a different sequence on purpose and has its own test above.
+    cuts = draw(
+        st.dictionaries(
+            st.integers(min_value=1, max_value=size - 1),
+            st.integers(min_value=1, max_value=PROPERTY_PARAMS.stale_carry_bars),
+            max_size=6,
+        )
+    )
     path = [float(price) for price in 100.0 * np.exp(np.cumsum(steps))]
-    return path, [0.1 * sign for sign in signs], sorted(cuts)
+    return path, [0.1 * sign for sign in signs], cuts
 
 
-def _with_gaps(path: list[float], targets: list[float], cuts: list[int]) -> tuple[list[float], list[float], list[int]]:
-    """Insert a missing bar before each cut index; `marks[i]` is where clean bar `i` ended up."""
+def _with_gaps(
+    path: list[float], targets: list[float], cuts: dict[int, int]
+) -> tuple[list[float], list[float], list[int]]:
+    """Insert `cuts[i]` missing bars before bar `i`; `marks[i]` is where clean bar `i` ended up."""
     prices: list[float] = []
     wanted: list[float] = []
     marks: list[int] = []
     for i, (price, target) in enumerate(zip(path, targets, strict=True)):
-        for _ in range(cuts.count(i)):
+        for _ in range(cuts.get(i, 0)):
             prices.append(math.nan)
             wanted.append(0.0)  # what `build_weights` puts there
         marks.append(len(prices))
@@ -126,16 +174,17 @@ def _run(prices: list[float], targets: list[float], params: ExitParams) -> tuple
 @settings(max_examples=150, deadline=None)
 @given(scenario=_scenario())
 def test_inserting_missing_bars_anywhere_leaves_the_exit_sequence_alone(
-    scenario: tuple[list[float], list[float], list[int]],
+    scenario: tuple[list[float], list[float], dict[int, int]],
 ) -> None:
-    """The review's property: the same price path with arbitrary NaN bars inserted must exit the same.
+    """The review's property, at the width the bounded carry gives it: the same price path with runs of
+    up to `stale_carry_bars` missing bars inserted anywhere must exit the same.
 
     `cooldown_bars=0` on purpose.  A cooldown is counted in BARS, and an inserted bar is a bar, so a
     NaN landing inside a cooldown window lets the re-entry happen one priced bar sooner - a real and
     accepted consequence of the units the cooldown is written in, not the anchor bug this is about.
     """
     path, targets, cuts = scenario
-    params = ExitParams(stop_loss=3.0, trailing_stop=2.0, take_profit=4.0, cooldown_bars=0)
+    params = PROPERTY_PARAMS
     clean_weights, clean_events = _run(path, targets, params)
     prices, wanted, marks = _with_gaps(path, targets, cuts)
     gapped_weights, gapped_events = _run(prices, wanted, params)

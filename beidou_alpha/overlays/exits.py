@@ -52,12 +52,42 @@ class ExitParams:
     )
     regime_tp_scale: float = 0.5  # take_profit multiplier inside the regime (6 -> 3)
     regime_side: str = "low"  # low: tighten when ER < cut (the operator's hypothesis); high: the mirror control arm
+    # How many CONSECUTIVE bars with no usable close a held position is carried through before the
+    # overlay gives it up.  A bounded wait, because the alternative is unbounded: a bar with no price
+    # and a series that has ended are the same observation at the moment they happen, so "hold until
+    # it comes back" holds a delisted symbol to the end of the panel (measured: 79,447 symbol-bars
+    # across 150 ragged archive tails).  Telling the two apart needs `last_valid_index`, which reads
+    # the future and would make a truncated panel disagree with a full one - T-X05 forbids exactly that.
+    #
+    # Why 2.  It is `guards.stale_bars_max` in `config/live.demo.yaml`, which is the loop's own
+    # definition of "this data is too old to act on" (`pool.quarantine_after: 3` is the same shape one
+    # level up).  Research and live disagreeing about when a symbol stops being tradable is KILL-027's
+    # shape, so this reuses the loop's number rather than inventing a second one.  At 1h, two bars is a
+    # data hiccup; three is a halt or a delisting.  Not yet in `construction_fingerprint` - the live
+    # adapter skips a NaN close before `exit_step` sees it, so today this binds in research only.
+    #
+    # What the bound costs, measured on the 1h PIT archive (scratchpad/
+    # exit_gap_reanchor_blast_radius.py sweeps it).  The five gapped members' holes are runs of 518,
+    # 72, 48, 24 and 7 bars, so the stop that the 2026-09-13 review reproduced - BNXUSDT at
+    # 2023-02-22 14:00, swallowed by the 518-bar run - needs N >= 518 exactly (517 does not rescue it):
+    #        N      ragged tail bars      in-span bars moved      that stop
+    #        0                     0                       0      no
+    #        2                   296                      20      no
+    #       72                10,440                     552      no
+    #      517                30,976                     997      no
+    #      518                30,978                     998      YES
+    #   unbounded              79,447                     998      YES
+    # 518 bars at 1h is 21.6 days of holding a position nobody could price.  The operator gets to make
+    # that trade; the default is the number the live guard already uses.
+    stale_carry_bars: int = 2
 
     def __post_init__(self) -> None:
         if min(self.stop_loss, self.trailing_stop, self.take_profit) < 0:
             raise ValueError("exit thresholds must be >= 0")
         if self.cooldown_bars < 0 or self.vol_halflife <= 0 or self.bars_per_day <= 0 or self.min_unit <= 0:
             raise ValueError("invalid exit parameters")
+        if self.stale_carry_bars < 0:
+            raise ValueError("stale_carry_bars must be >= 0")
         if self.unit_mode not in {"entry", "current"}:
             raise ValueError("unit_mode must be 'entry' or 'current'")
         if self.regime_window < 0 or not 0 < self.regime_tp_scale <= 1 or not 0 <= self.regime_er_cut <= 1:
@@ -85,6 +115,7 @@ class ExitState:
     unit: float = math.nan  # sigma_1d (fraction) fixed at entry
     cooldown_until: int = -1  # exclusive
     cooldown_direction: int = 0
+    stale_bars: int = 0  # consecutive unjudgable bars carried so far; reset by any bar with a price
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +125,7 @@ class ExitState:
             "unit": None if math.isnan(self.unit) else self.unit,
             "cooldown_until": self.cooldown_until,
             "cooldown_direction": self.cooldown_direction,
+            "stale_bars": self.stale_bars,
         }
 
     @classmethod
@@ -109,6 +141,7 @@ class ExitState:
             unit=number("unit"),
             cooldown_until=int(payload.get("cooldown_until", -1)),
             cooldown_direction=int(payload.get("cooldown_direction", 0) or 0),
+            stale_bars=int(payload.get("stale_bars", 0) or 0),
         )
 
 
@@ -160,17 +193,18 @@ def exit_step(
     ``tp_scale`` multiplies ``params.take_profit`` for this bar only (EXP-EX2's
     regime scaling); it defaults to 1.0, i.e. no scaling.
 
-    A non-finite or non-positive ``price`` returns the state UNCHANGED and a NaN
-    weight, which means "no decision on this bar - keep holding whatever you
-    held".  Callers must translate that NaN; ``apply_exits`` carries the last
-    weight it emitted and the live loop skips the symbol.
+    A non-finite or non-positive ``price`` is a bar the overlay cannot judge.  For
+    up to ``params.stale_carry_bars`` of them in a row it returns the state
+    UNCHANGED (bar the counter) and a NaN weight, meaning "no decision - keep
+    holding whatever you held"; callers translate that NaN.  Past the bound the
+    position is given up: weight 0.0 and a flat state, never a new entry.
     """
     if not params.enabled:
         return replace(state, direction=_sign(target)), target, ""
     if not math.isfinite(price) or price <= 0:
-        # A bar with no close carries no judgable information, so the overlay changes nothing here:
+        # A bar with no close carries no judgable information, so the overlay decides nothing here:
         # it does not exit, does not re-anchor, does not advance the trailing extreme, and does not
-        # count the bar against a cooldown.
+        # count the bar against a cooldown.  All it does is count how many of these have gone by.
         #
         # What it used to do, and what that cost (found 2026-09-13).  The only price guard was the
         # `price > 0` at the end of the `held != 0` condition just below, so a NaN close failed it,
@@ -185,7 +219,16 @@ def exit_step(
         # So the stop was silently off for the whole segment after any internal gap.  Five PIT
         # members of the 1h archive carry internal gaps (1,005 symbol-bars); none is in the pinned
         # live universe, which is why this never reached the loop.
-        return state, math.nan, ""
+        if state.direction == 0:
+            return state, math.nan, ""  # nothing held, so nothing to carry and nothing to give up
+        if state.stale_bars < params.stale_carry_bars:
+            return replace(state, stale_bars=state.stale_bars + 1), math.nan, ""
+        # The wait ran out: treat the symbol as gone.  Flat, anchors dropped, cooldown left alone -
+        # and deliberately NOT `_enter`, which is the bug this whole branch exists to prevent.  This
+        # is a decision rather than an abstention, so it returns 0.0 instead of NaN.
+        return ExitState(cooldown_until=state.cooldown_until, cooldown_direction=state.cooldown_direction), 0.0, ""
+    if state.stale_bars:
+        state = replace(state, stale_bars=0)  # a bar with a price ends the run, wherever it lands below
     if math.isnan(target):
         target = 0.0
     wanted = _sign(target)
@@ -356,18 +399,9 @@ def _run_stepwise(
     # Carrying rather than passing the model's target through is the whole point: on a gap bar the
     # target is 0 because `build_weights` filled a missing signal with 0, not because the model asked
     # to be flat, and obeying it would sell at the gap and buy back after it - turnover the live loop,
-    # which cannot trade a bar it has no price for, would never have paid.
-    #
-    # The price of that choice, measured on the 1h PIT archive (2026-09-13, scratchpad/
-    # exit_gap_reanchor_blast_radius.py): a symbol whose archive simply STOPS while the overlay holds
-    # it now keeps that weight to the end of the panel - 79,447 symbol-bars across 150 symbols with
-    # ragged tails, against 998 that are the gap bug itself.  It is not a bug that can be fixed here:
-    # at the moment it happens, "the series stopped" and "one bar is missing" are the same
-    # observation, and telling them apart means reading the future (`last_valid_index` would make a
-    # truncated panel disagree with a full one, which is what T-X05's causality test forbids).
-    # `run_backtest` fills a missing asset return with 0, so the carried weight earns nothing; what it
-    # moves is exposure and the round trip that no longer happens - on that panel, average absolute
-    # exposure 2.283 -> 2.315 and turnover 22,335.3 -> 22,332.4 units.
+    # which cannot trade a bar it has no price for, would never have paid.  The carry is BOUNDED by
+    # `params.stale_carry_bars`; the field's comment says why it has to be, and what the unbounded
+    # version cost when it was measured (79,447 symbol-bars held to the end of the panel).
     carry = np.zeros(values.shape[1])
     events: list[_Event] = []
     for t in range(values.shape[0]):
@@ -418,6 +452,7 @@ def _run_vectorised(
     unit = np.full(n, np.nan)
     cooldown_until = np.full(n, -1, dtype=np.int64)
     cooldown_direction = np.zeros(n, dtype=np.int64)
+    stale = np.zeros(n, dtype=np.int64)
     carry = np.zeros(n)
     never = np.zeros(n, dtype=bool)
     out = np.full_like(values, np.nan)
@@ -483,11 +518,17 @@ def _run_vectorised(
             # entry_price / extreme / unit ALONE - unlike `fired` and `closing`, which clear them.
             # That asymmetry is in the scalar code and is preserved here rather than tidied away.
             opened = (alive & ~holding & ~flat) | (idle & ~flat & ~blocked)  # sign flip, or a fresh entry
-            cleared = fired | closing
+            # The bounded wait, as two masks over the bars nothing can be judged on.  `giving_up` joins
+            # the groups that clear the anchors and zero the direction, but NOT the ones that touch the
+            # cooldown - running out of data is not an exit rule firing.
+            stranded = ~judgable & (held != 0)
+            carrying = stranded & (stale < params.stale_carry_bars)
+            giving_up = stranded & ~carrying
+            cleared = fired | closing | giving_up
             zeroed = cleared | blocked | (idle & flat)
 
             weight = np.where(holding | opened, target, 0.0)
-            weight = np.where(~judgable & (held != 0), carry, weight)  # gap bar: hold, do not trade
+            weight = np.where(carrying, carry, weight)  # inside the bound: hold, do not trade
             out[t] = weight
             carry = weight
 
@@ -501,6 +542,7 @@ def _run_vectorised(
 
             cooldown_until = np.where(fired, t + params.cooldown_bars, cooldown_until)
             cooldown_direction = np.where(fired, held, cooldown_direction)
+            stale = np.where(carrying, stale + 1, 0)  # any bar with a price ends the run
             direction = np.where(zeroed, 0, np.where(opened, wanted, held))
             entry_price = np.where(cleared, np.nan, np.where(opened, price, entry_price))
             unit = np.where(cleared, np.nan, np.where(opened, entering[t], unit))

@@ -34,12 +34,15 @@ PARAM_SETS = [
     ExitParams(stop_loss=2.0, take_profit=3.0, regime_window=6, regime_side="low"),
     ExitParams(stop_loss=2.0, take_profit=3.0, regime_window=6, regime_side="high", unit_mode="current"),
     ExitParams(take_profit=1.0, cooldown_bars=50),  # a cooldown longer than most of the panels below
+    # The bounded carry, on both sides of its edge: give up on the first unjudgable bar, carry one,
+    # carry far enough that the runs punched below never reach the bound.
+    ExitParams(stop_loss=2.0, take_profit=3.0, stale_carry_bars=0),
+    ExitParams(stop_loss=2.0, take_profit=3.0, stale_carry_bars=1),
+    ExitParams(stop_loss=2.0, take_profit=3.0, stale_carry_bars=12),
 ]
 
 
-def _frames(
-    prices: np.ndarray, targets: np.ndarray, symbols: int
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _frames(prices: np.ndarray, targets: np.ndarray, symbols: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     columns = [f"S{i}" for i in range(symbols)]
     index = pd.date_range("2024-01-01", periods=len(prices), freq="h", tz="UTC")
     close = pd.DataFrame(prices, index=index, columns=columns)
@@ -57,9 +60,9 @@ def _both(weights: pd.DataFrame, close: pd.DataFrame, vol: pd.DataFrame, params:
     fast = _apply_exits(weights, close, params, vol, _run_vectorised)
     # `assert_frame_equal` with check_exact stops at the first difference; the uint64 view is the
     # claim in full - every weight is the same 64 bits, NaN payloads included.
-    assert np.array_equal(
-        slow.weights.to_numpy().view(np.uint64), fast.weights.to_numpy().view(np.uint64)
-    ), "the vectorised engine emitted a different weight"
+    assert np.array_equal(slow.weights.to_numpy().view(np.uint64), fast.weights.to_numpy().view(np.uint64)), (
+        "the vectorised engine emitted a different weight"
+    )
     pd.testing.assert_frame_equal(slow.events, fast.events, check_exact=True)
 
 
@@ -93,9 +96,7 @@ def test_the_two_engines_agree_on_anything_hypothesis_can_build(
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("params", PARAM_SETS, ids=lambda p: f"sl{p.stop_loss}tr{p.trailing_stop}tp{p.take_profit}")
-def test_the_two_engines_agree_on_a_panel_big_enough_to_cool_down_and_re_enter(
-    seed: int, params: ExitParams
-) -> None:
+def test_the_two_engines_agree_on_a_panel_big_enough_to_cool_down_and_re_enter(seed: int, params: ExitParams) -> None:
     """400 bars x 12 symbols of random walk, 2% of the bars punched out, ~8% of the targets flat."""
     rng = np.random.default_rng(seed)
     bars, symbols = 400, 12
@@ -105,6 +106,28 @@ def test_the_two_engines_agree_on_a_panel_big_enough_to_cool_down_and_re_enter(
     targets[rng.random((bars, symbols)) < 0.08] = 0.0
     targets[: symbols // 2, 0] = np.nan  # a column that starts with nothing to say
     weights, close, vol = _frames(prices, targets, symbols)
+    _both(weights, close, vol, params)
+
+
+@pytest.mark.parametrize("params", PARAM_SETS, ids=lambda p: f"carry{p.stale_carry_bars}sl{p.stop_loss}")
+def test_the_two_engines_agree_across_the_stale_carry_boundary(params: ExitParams) -> None:
+    """Missing bars in RUNS of 1..6, so every panel straddles `stale_carry_bars` in both directions.
+
+    Scattering NaNs independently mostly produces runs of one, which never reaches a bound above 0;
+    the boundary is where the two engines have a counter to disagree about, so it gets its own panel.
+    """
+    rng = np.random.default_rng(97)
+    bars, symbols = 500, 8
+    prices = 100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.02, size=(bars, symbols)), axis=0))
+    for j in range(symbols):
+        start = int(rng.integers(0, 30))
+        while start < bars:
+            prices[start : start + int(rng.integers(1, 7)), j] = np.nan
+            start += int(rng.integers(8, 40))
+    targets = np.round(rng.normal(0.0, 0.1, size=(bars, symbols)), 4)
+    weights, close, vol = _frames(prices, targets, symbols)
+    runs = close.isna().sum().sum()
+    assert runs > bars  # the panel really is full of holes
     _both(weights, close, vol, params)
 
 
