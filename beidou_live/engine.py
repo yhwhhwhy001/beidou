@@ -268,6 +268,9 @@ class LiveEngine:
         #: and it is the engine's to state rather than the reporter's to invent (KILL-R6).
         self.rebalance_window: float | None = None
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
+        # A3: set when `last_income_ms` is missing on a loop that has already run cycles - written onto
+        # the first cycle row of this process so a post-mortem can find the hole from the record.
+        self._income_watermark_lost: dict[str, Any] | None = None
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
 
@@ -423,6 +426,9 @@ class LiveEngine:
         if not self.config.dry_run:
             await self._ensure_leverage(self.managed_symbols(), reassert=True)
         self._roll_day(self.clock.now_ms(), snapshot.equity)
+        # A3, and it has to be asked HERE: the line below is what makes the watermark non-None again,
+        # so by the time `_ingest_income` reads it the evidence of the loss is already gone.
+        await self._note_lost_income_watermark()
         if self.state.last_income_ms is None:
             self.state.last_income_ms = self.clock.now_ms()
         self.state.equity_hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
@@ -1099,6 +1105,45 @@ class LiveEngine:
             logger.warning("venue clock unavailable (%s); using the host clock for the income window", exc)
             return self.clock.now_ms()
 
+    async def _note_lost_income_watermark(self) -> dict[str, Any] | None:
+        """No `last_income_ms` on a loop that has already run cycles: the watermark was LOST (A3).
+
+        The two states are one value apart and mean opposite things.  On a first start `None` is the
+        truth - there is no earlier income to ingest - and the loop rightly starts the window at now.
+        On a loop with `cycles > 0` the same `None` means the only copy of the watermark went away
+        (a state file that would not parse, an edit, a restore from an older copy), and starting the
+        window at now drops every income row earned since the last real cycle, permanently: the rows
+        are never re-queried, so they never reach `attribution.jsonl` and M-010's 30-day series has a
+        hole that reads exactly like a shorter run.  `decay_watch` sees `live_windows` shrink and
+        cannot tell the two apart, which is why this has to be said out loud at the moment it happens
+        rather than inferred later.
+
+        Says it once per process (`alerts.send` dedups on the key), and leaves the fact for the first
+        cycle row to carry so the record - not only the operator's channel - holds it.
+        """
+        if self.state.last_income_ms is not None or self.state.cycles <= 0:
+            return None
+        fact = {
+            "lost": True,
+            "cycles": int(self.state.cycles),
+            "restarts": int(self.state.restarts),
+            "restarted_from": self.state.last_bar_ms,
+            "at": utc_now_iso(),
+        }
+        self._income_watermark_lost = fact
+        logger.error(
+            "income watermark (last_income_ms) is missing after %d cycles; income earned since the last "
+            "cycle will never enter attribution.jsonl",
+            self.state.cycles,
+        )
+        await self.alerts.send(
+            f"北斗：state.json 的收入水位线（last_income_ms）丢了——已跑过 {self.state.cycles} 个周期却没有它。"
+            "停机期间的 income 永远不会进 attribution.jsonl，M-010 的样本外窗口从现在重新起算，"
+            "而读数上只会显示窗口变短。请核对 attribution.jsonl 的 since_ms/until_ms 衔接，并记下这个缺口。",
+            key="income-watermark-lost",
+        )
+        return fact
+
     async def _ingest_income(self, bar_open_ms: int, equity: float) -> dict[str, Any]:
         """Income rows since the last cycle: strategy attribution plus external cash-flow detection.
 
@@ -1121,6 +1166,11 @@ class LiveEngine:
         gap; from then on the watermark is venue-basis and the window is contiguous.
         """
         now = self.venue_now_ms()
+        # Reachable when a cycle runs without `startup` having asked first (`run_cycle` is called
+        # directly by the reproduction path and by tests); the alert key makes the two at most one
+        # message.  `lost` is consumed here rather than re-read, so exactly one cycle row carries it.
+        lost = self._income_watermark_lost or await self._note_lost_income_watermark()
+        self._income_watermark_lost = None
         since = self.state.last_income_ms or now
         if since > now:
             # The watermark is in the future, so [since, now] would be rejected with -1023 and abort the
@@ -1174,6 +1224,8 @@ class LiveEngine:
                 f"北斗外部资金变动 {flows['total']:+.2f} USDT（{flows['rows']} 条流水 {flows['by_type']}）；"
                 f"日初权益与高水位已重置为 {equity:.2f}"
             )
+        if lost is not None:
+            flows["watermark_lost"] = lost
         return flows
 
     async def _risk_ladder(self, bar_open_ms: int) -> dict[str, Any]:

@@ -14,6 +14,24 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+class StateUnreadable(Exception):
+    """``state.json`` is there and cannot be parsed.  Refuse, do not start fresh.
+
+    Until 2026-09-13 this case returned an empty ``LiveState()`` - no raise, no alert, no row - and
+    four cross-cycle facts that exist in exactly one copy went with it: ``last_income_ms`` (the income
+    watermark, whose loss sends `_ingest_income`'s window to ``[now, now]`` and drops every income row
+    earned while the loop was down, permanently, out of ``attribution.jsonl``), ``equity_hwm`` (the
+    drawdown reads 0 and D-015's throttle and R8's ladder both go blind at once), ``exit_states`` (every
+    entry anchor is rebuilt from the venue's VWAP) and ``last_contributions`` (D-005's hold seed zeroes
+    once).  KILL-006 rests M-010's 30-day window on that first one being continuous, and `decay_watch`
+    reading a SHORTER `live_windows` cannot tell "the loop ran less" from "a chunk is missing".
+
+    So the answer to a file that will not parse is to stop and say so.  The operator's way out is in
+    the message: rename the bad file and let the next start rebuild, which is a DECISION with a record
+    rather than a silent reset nobody sees.
+    """
+
+
 @dataclass
 class LiveState:
     last_bar_ms: int | None = None
@@ -68,12 +86,35 @@ class StateStore:
         self.heartbeat_path = self.directory / "heartbeat.json"
 
     def load(self) -> LiveState:
+        """A missing file is a first start; a file that will not parse is a refusal (see `StateUnreadable`).
+
+        The two used to share one answer - a fresh `LiveState()` - and that is the whole defect: the
+        only difference between "this account has never traded" and "the only copy of the income
+        watermark is corrupt" was a file on disk that nobody looked at again.
+        """
         if not self.state_path.exists():
             return LiveState()
         try:
-            return LiveState.from_dict(json.loads(self.state_path.read_text(encoding="utf-8")))
-        except (ValueError, TypeError):
-            return LiveState()
+            payload = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise StateUnreadable(self._unreadable_message(exc)) from exc
+        if not isinstance(payload, dict):
+            raise StateUnreadable(self._unreadable_message(f"top level is {type(payload).__name__}, not an object"))
+        try:
+            return LiveState.from_dict(payload)
+        except TypeError as exc:  # a known key holding a shape the dataclass cannot take
+            raise StateUnreadable(self._unreadable_message(exc)) from exc
+
+    def _unreadable_message(self, detail: object) -> str:
+        """One message, and it has to contain the way out - an operator reads this at 03:00."""
+        return (
+            f"{self.state_path} exists but cannot be read as live state ({detail}). "
+            "Refusing to start on an empty state: it would silently lose the income watermark "
+            "(last_income_ms), the drawdown high-water mark, the exit anchors and D-005's hold seed, "
+            "and M-010's out-of-sample window would restart from now with nothing saying a chunk is "
+            f"missing.  To rebuild deliberately: `mv {self.state_path} {self.state_path}.bad` and start "
+            "again, then check attribution.jsonl's since_ms/until_ms for the gap that leaves."
+        )
 
     def save(self, state: LiveState) -> None:
         state.updated_at = utc_now_iso()
@@ -128,6 +169,34 @@ class StateStore:
 
     @staticmethod
     def _atomic_write(path: Path, text: str) -> None:
+        """tmp -> fsync -> replace -> fsync the directory.  Same standard as `_append` (L1-14).
+
+        This file had two standards in it until 2026-09-13: `_append` above wrote six lines about why
+        a ledger row must be on the disk before the call returns and fsynced, while this one - which
+        writes state.json, the ONLY copy of the income watermark and the drawdown high-water mark -
+        did tmp + `replace` and nothing else.  `replace` is atomic about the RENAME; it promises
+        nothing about the tmp file's CONTENTS having left the page cache, so a power loss between the
+        write and the flush can publish a name pointing at a zero-length or half-written file.  That
+        is exactly the file `load` now refuses to start on, so the cheap fix belongs here rather than
+        in the refusal.
+
+        The directory fsync is what makes the rename itself durable, and it is best effort: some
+        filesystems refuse a directory fsync, and failing to make a heartbeat durable must never be
+        the reason a cycle fails.
+        """
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(text + "\n", encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         tmp.replace(path)
+        try:
+            fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
