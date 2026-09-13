@@ -96,14 +96,13 @@ def compare_targets(
     # between 2026-09-10 and 2026-09-12 and not one left a recoverable diff: `run_check.sh` pages with
     # `tail -n 3` of pretty-printed sorted JSON, whose last three lines are `"tolerance": 1e-09` and
     # the closing brace.  A monitor that cannot say WHAT stopped reproducing has not reported anything.
-    offenders = sorted(
-        (
-            {"strategy": strategy, "symbol": symbol, "diff": value}
-            for strategy, diffs in contributions.items()
-            for symbol, value in diffs.items()
-        ),
-        key=lambda row: -float(row["diff"]),
-    )[:5]
+    # Annotated because the rows mix `str` and `float`, so the key function was sorting on `object`.
+    ranked: list[dict[str, Any]] = [
+        {"strategy": strategy, "symbol": symbol, "diff": value}
+        for strategy, diffs in contributions.items()
+        for symbol, value in diffs.items()
+    ]
+    offenders = sorted(ranked, key=lambda row: -float(row["diff"]))[:5]
     return {
         "as_of_ms": as_of_ms,
         "state_bar_ms": state.last_bar_ms,

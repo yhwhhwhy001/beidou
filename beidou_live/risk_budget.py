@@ -377,7 +377,13 @@ def books_by_symbol(cycle: Mapping[str, Any] | None) -> dict[str, frozenset[str]
     undivided population rather than guessing that the strategy id and the book name are the same
     thing - they are not, and assuming so is how a reading about one book gets taken on two.
     """
-    books = cycle.get("books") if cycle else None
+    # The `if cycle` that used to sit on the first line only guarded THAT line; the walk below went
+    # on to call `cycle.get` on the same possibly-None record.  Unreachable in practice - an empty
+    # record has no `books` either, so the return above fires first - but the guard reads as if it
+    # covered the function and it did not.  One early return, so it does.
+    if not cycle:
+        return {}
+    books = cycle.get("books")
     if not isinstance(books, Mapping) or not books:
         return {}
     out: dict[str, set[str]] = {}

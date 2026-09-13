@@ -110,6 +110,41 @@ class TargetSet(Protocol):
     @property
     def as_of(self) -> pd.Timestamp: ...
 
+    # Observability, not part of the trading decision - but declared here all the same, because the
+    # engine reads both every cycle and writes them into `cycles.jsonl` (`asset_vol` for M-015's
+    # compression, `book_weights` for the per-book mark-to-market the probe stop is calibrated on).
+    # It reads them through `getattr(..., default)` so that a model which cannot supply them still
+    # trades; what that `getattr` also did was keep them out of this file, and a protocol that omits
+    # what the caller actually reads has stopped describing the contract.  That is not theory: it is
+    # why mypy could only see `engine.py:1373` (`self.model.entries`, the one access written without
+    # a `getattr`) and said nothing about the other three.  Mapping rather than dict, and read-only,
+    # so an implementation is free to hand back something narrower.
+    @property
+    def asset_vol(self) -> Mapping[str, float]: ...
+
+    @property
+    def book_weights(self) -> Mapping[str, Mapping[str, float]]: ...
+
+
+class StrategyEntryLike(Protocol):
+    """One enabled strategy, as the live loop reads it (structural; see ``beidou_alpha.registry.StrategyEntry``).
+
+    Two attributes, because two is what ``beidou_live`` actually touches on a typed path: the id and
+    the book it belongs to, which together are the line `engine.py` writes into every cycle record as
+    ``books`` - the fact that let M-015's compression and M-Q08's slippage stop answering a
+    one-book question on the sum of two.  The rest of the entry (``params``, ``weight``, ``probe``)
+    is read only through ``getattr``/``Any`` paths (``registry_digest``, ``_crowding_effect``), which
+    is deliberate there: those walk a model that may hold a ``mined_*`` id this process cannot
+    resolve.  Declaring only what is read keeps this file free of ``beidou_alpha`` - a port that
+    imports the implementation it exists to hide is not a port.
+    """
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def book(self) -> str: ...
+
 
 class SignalModel(Protocol):
     """Turns closed bars plus funding into target weights with per-strategy attribution.
@@ -129,6 +164,14 @@ class SignalModel(Protocol):
 
     @property
     def needs_funding(self) -> bool: ...
+
+    # The enabled strategies behind the weights.  `engine.py:1373` has read this off the concrete
+    # model since 2026-09-12 while the protocol said no such attribute existed; mypy reported it,
+    # CI went red for 23 pushes on 2026-09-09..13, and the pytest step behind it never ran once in
+    # those four days.  So the cost of a protocol that lies is not "a type error" - it is every test
+    # that stops being run while somebody argues about one.
+    @property
+    def entries(self) -> tuple[StrategyEntryLike, ...]: ...
 
     def targets(
         self,
