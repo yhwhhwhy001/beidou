@@ -1952,6 +1952,30 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Tenth raise, 2026-09-14, and the sentence the rule requires: +50 beidou_live, +6 beidou_cli,
+    # bought by the same operator question for the FIFTH time - why is every order at 5x.  D-038 is the
+    # entry that answered it the third time, and its diagnosis was not "explain better" but "a correct
+    # fact no instrument states is indistinguishable from an unproven one".  It built M-015 and wired it
+    # into the daily report, where it renders well.  The question came back anyway, because the command
+    # an operator actually reaches for is `live status`, and that one dumps `state.to_dict()` - in which
+    # the only per-symbol number is `leverage_set`, eighteen identical 5s, with nothing beside it.  The
+    # same hole D-038 measured, one command over, and it went unnoticed because D-038 looked where the
+    # question had been answered rather than where it gets asked.
+    #
+    # The lines are `latest_risk_adaptation` (the day comes from `_day_of`, the ruler `risk_adaptation`
+    # already buckets by, so the command needs no day argument and 00:30Z does not read as "no data")
+    # and `risk_adaptation_headline`, most of which is the docstring recording two decisions a later
+    # reader would otherwise undo: the venue half is carried on refusals, because a missing reading does
+    # not make the operator's question go away; and the share reuses `1 - compression` rather than a
+    # second expression of the same quantity, which is how two rulers end up in one file.
+    #
+    # What was deliberately NOT bought, so that nobody adds it later as an oversight: the OK reading does
+    # not go onto the hourly webhook.  That path is `daily_alerts`' `alerts` list, it fires every hour,
+    # and a healthy-state number repeated hourly is KILL-R7's measured shape - 36 identical lines over 36
+    # hours, unhandled.  A daily carrier for healthy readings may be right; it is not priced, so it is
+    # not here.  Non-alpha growth against the 90% target, and this one's excuse is on the record: four
+    # prior rounds of analysis were more expensive than these 56 lines.
+    #
     # Ninth raise, 2026-09-13, and the sentence the rule requires.  One commit, seven packages, because
     # nine parallel workers all landed against a table with ZERO margin in every row - and that is worth
     # recording as a finding rather than only as an inconvenience: a ratchet with no headroom stops being
@@ -1997,11 +2021,11 @@ CEILING = {
     # process's cycle row and reported a disagreement the restart had just resolved - non-zero from
     # 11:03Z until the next bar closed at 12:00Z, with the hourly job firing at :10 inside that
     # window every time.  The instrument could not answer at the one moment its answer had changed.
-    "beidou_live": 8_569,
+    "beidou_live": 8_619,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
-    "beidou_cli": 5_820,
+    "beidou_cli": 5_826,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
