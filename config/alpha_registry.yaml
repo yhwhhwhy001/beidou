@@ -242,9 +242,33 @@ strategies:
     # 不重启：换证据指针不动 construction_fingerprint 也不动 registry_digest，所以 M-010 那段自
     # 2026-09-04T15:02Z 起未断的窗口不清零。
     # 这条指针的有效期到下一次 universe 日常重排（约每日 01:00Z）——见 RESEARCH_LOG 同日条目。
+    # 2026-09-14 (P32)：指针移到 182325Z。以上每一段都在描述 182204Z，它是在 `vol_target 0.30` 下
+    # 产出的；操作者把 k 裁定为 0.60，那份证据就不再描述被交易的构造，`registry_evidence_problems`
+    # 会说 `portfolio vol_target is 0.6 live but 0.3 in the cited evidence`，armed 启动被拒。上面那句
+    # 「不重启：换证据指针不动 construction_fingerprint」描述的是那一次换指针，**不适用于这一次**：
+    # 这一次同时改了 `vol_target`，是构造改动，M-010 与 M-G06 的窗口都清零。
+    #
+    # 新证据与旧证据逐项对照，把变差的也列出来，因为它们是这次加注的价钱：
+    #   OOS Sharpe      1.8087 -> 1.5919      门 1.5136 @183 -> 1.5493 @242
+    #   余量            +0.2951 -> +0.0426    <-- 薄了将近一个数量级，这是本次最该被记住的数
+    #   CPCV mean/q05   1.86/1.31 -> 1.61/1.19       PBO 0.0856 -> 0.2082
+    #   成本 x2         1.69 -> 1.56          全样本 MDD -21.5% -> -40.3%
+    #   平均毛敞口       0.849 -> 1.345        换手 415 -> 540
+    #   guards          封顶 bar 390 -> 4070、暂停 bar -> 491；liquidation_touches 仍是 0，
+    #                   min_margin_buffer 97.17 —— 限制的不是爆仓，只是回撤，这一条没有变。
+    # VERDICT PASS 成立，但它是**擦边过**：OOS 比门只高 0.0426。下一次任何抬高 N 的动作（申报新格子、
+    # 账本新增行）都可能把它推到门下，所以在 k=0.60 下再做 tsmom 的搜索之前必须先算门，不能先跑。
+    #
+    # 全库口径下这次**不过**：whole-library 门 1.8184 对 OOS 1.5919。按 R0 那是报告项不是门
+    # （`gate_scope: per_strategy_bucket`），而且同一口径今天也会否掉 k=0.30 的在位者（1.8087 对
+    # 1.8184）——这正是 R0 注记里 KILL-AR-01 说的那件事。记在这里，不是拿它当通过的理由。
+    #
+    # DL-R4 的标注同样仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴。
+    # 预登记物证：`--prereg 96d659ae`（commit 时间写进了报告的 preregistration 块）。但那条预登记
+    # 本身是**补记**的，日志同日条目第一句就写了这件事；下游不得援引「预登记的选择规则」。
     evidence:
-      report: reports/research/tsmom-validation-20260908T182204Z.json
-      sha256: da400f4d28ef0da9843417fdcbfe722657dc7902fa204a64ab86e24f60c083e0
+      report: reports/research/tsmom-validation-20260913T182325Z.json
+      sha256: cff07c6777295defce2acf7b045544f633c2f62c5ef766391eab4950236ef951
       verdict: PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
