@@ -9,16 +9,19 @@ same statistical distance on BTC and on a meme coin.  After an exit the same
 direction is suppressed for ``cooldown_bars``; the opposite direction may
 enter immediately.  Same-direction resizes keep the original entry.
 
-``exit_step`` is the single source of truth for one symbol-bar; ``apply_exits``
-runs it over a whole weight frame (vectorised across symbols, looped over
-bars) and is what backtests use; the live loop calls ``exit_step`` per symbol
-with the venue's entry price as the reference.
+``exit_step`` is the single source of truth for one symbol-bar, and the live
+loop calls it per symbol with the venue's entry price as the reference.
+``apply_exits`` runs the same machine over a whole weight frame for backtests,
+through one of two engines: ``_run_stepwise`` calls ``exit_step`` per
+symbol-bar and is the specification, ``_run_vectorised`` re-implements it over
+numpy arrays (serial in bars, element-wise across symbols) and is what ships.
+The second only exists because a test holds the two to bit-for-bit equality.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -273,10 +276,37 @@ class ExitResult:
         return {"exits": len(self.events), "by_rule": {str(k): int(v) for k, v in counts.items()}}
 
 
+# One exit, as the engines hand it back: (bar, column, rule, entry_price, price, units, direction).
+# Both engines emit this and `_apply_exits` builds every event row from it in one place, so the two
+# cannot disagree about a dtype or a cast - which is half of what "bit for bit" has to mean here.
+_Event = tuple[int, int, str, float, float, float, int]
+_Engine = Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray, ExitParams], tuple[np.ndarray, list[_Event]]]
+
+
 def apply_exits(
     weights: pd.DataFrame, close: pd.DataFrame, params: ExitParams, *, sigma_1d: pd.DataFrame | None = None
 ) -> ExitResult:
-    """Run ``exit_step`` over a decision-time weight frame (index = decision bars, columns = symbols)."""
+    """Run the exit state machine over a decision-time weight frame (index = decision bars, columns = symbols)."""
+    return _apply_exits(weights, close, params, sigma_1d, _run_vectorised)
+
+
+def _apply_exits(
+    weights: pd.DataFrame,
+    close: pd.DataFrame,
+    params: ExitParams,
+    sigma_1d: pd.DataFrame | None,
+    run: _Engine,
+) -> ExitResult:
+    """Align the frames, run one engine over them, and dress the result.
+
+    Two engines, one definition of correct.  ``_run_stepwise`` calls ``exit_step`` once per symbol-bar
+    and IS the specification - the live loop calls the same function per symbol, which is D-012's
+    "the backtest loop and the live loop call the same exit_step".  ``_run_vectorised`` is a second
+    implementation of that state machine over numpy arrays, and it is only allowed to exist because
+    ``tests/alpha/test_the_vectorised_exit_engine_is_the_same_machine.py`` holds the two to bit-for-bit
+    equality, events included.  Everything that turns arrays into frames lives here rather than in
+    either engine, so the only thing the test has to compare is the state machine itself.
+    """
     empty_events = pd.DataFrame(columns=["time", "symbol", "rule", "entry_price", "price", "units", "direction"])
     if not params.enabled:
         return ExitResult(weights.copy(), empty_events)
@@ -293,8 +323,29 @@ def apply_exits(
         if scale_frame is not None
         else np.ones_like(values)
     )
+    out, raw = run(values, prices, vols, scales, params)
+    events = [
+        {
+            "time": weights.index[t],
+            "symbol": weights.columns[j],
+            "rule": rule,
+            "entry_price": entry_price,
+            "price": price,
+            "units": units,
+            "direction": direction,
+        }
+        for t, j, rule, entry_price, price, units, direction in raw
+    ]
+    frame = pd.DataFrame(out, index=weights.index, columns=weights.columns)
+    return ExitResult(frame, pd.DataFrame(events) if events else empty_events)
+
+
+def _run_stepwise(
+    values: np.ndarray, prices: np.ndarray, vols: np.ndarray, scales: np.ndarray, params: ExitParams
+) -> tuple[np.ndarray, list[_Event]]:
+    """``exit_step`` once per symbol-bar.  Slow, obvious, and the reference the vectorised engine is held to."""
     out = np.full_like(values, np.nan)
-    states = [ExitState() for _ in weights.columns]
+    states = [ExitState() for _ in range(values.shape[1])]
     # The weight this overlay last emitted per symbol, which is what a gap bar keeps holding.
     # `out[t - 1, j]` would be the obvious source and is wrong in one case: an all-NaN row is skipped
     # below and leaves NaN in `out`, so a gap immediately after one would propagate that NaN into a
@@ -318,7 +369,7 @@ def apply_exits(
     # moves is exposure and the round trip that no longer happens - on that panel, average absolute
     # exposure 2.283 -> 2.315 and turnover 22,335.3 -> 22,332.4 units.
     carry = np.zeros(values.shape[1])
-    events: list[dict[str, Any]] = []
+    events: list[_Event] = []
     for t in range(values.shape[0]):
         row = values[t]
         if np.all(np.isnan(row)):
@@ -335,16 +386,124 @@ def apply_exits(
             carry[j] = weight
             if reason and reason != COOLDOWN:
                 unit_price = _unit_price(before, vols[t, j], params)
-                events.append(
-                    {
-                        "time": weights.index[t],
-                        "symbol": weights.columns[j],
-                        "rule": reason,
-                        "entry_price": before.entry_price,
-                        "price": prices[t, j],
-                        "units": float((prices[t, j] - before.entry_price) * before.direction / unit_price),
-                        "direction": before.direction,
-                    }
-                )
-    frame = pd.DataFrame(out, index=weights.index, columns=weights.columns)
-    return ExitResult(frame, pd.DataFrame(events) if events else empty_events)
+                units = float((prices[t, j] - before.entry_price) * before.direction / unit_price)
+                events.append((t, j, reason, before.entry_price, float(prices[t, j]), units, before.direction))
+    return out, events
+
+
+def _run_vectorised(
+    values: np.ndarray, prices: np.ndarray, vols: np.ndarray, scales: np.ndarray, params: ExitParams
+) -> tuple[np.ndarray, list[_Event]]:
+    """The same machine with the symbol loop replaced by element-wise numpy (P1).
+
+    The state machine is serial in BARS - bar t reads the state bar t-1 left - but the symbols never
+    touch each other: no branch reads another column, and the only cross-symbol object in sight,
+    ``regime_tp_scale``, is computed per symbol-bar before the loop starts.  So the six ExitState
+    fields become six arrays and each bar is one pass of element-wise work instead of one Python call
+    per symbol.  On the 1h PIT panel (49,937 bars x 205 symbols, 10.2M symbol-bars) that is the
+    difference between 15 s and about a second, and ``research overlay`` runs eleven of these.
+
+    Every arithmetic expression below is written in the SAME order as its scalar twin, because "bit
+    for bit" is the acceptance criterion and float addition is not associative.  The NaN conventions
+    were checked rather than assumed: `max(nan, x)` in Python returns nan when nan is the FIRST
+    argument (it keeps the left operand unless the right compares greater), which is what
+    `np.maximum` does unconditionally, and `_unit_price` happens to put the possibly-NaN unit first.
+    Every comparison against a NaN is False on both sides, which is what makes the `>=` thresholds
+    agree without a mask.
+    """
+    n = values.shape[1]
+    direction = np.zeros(n, dtype=np.int64)
+    entry_price = np.full(n, np.nan)
+    extreme = np.full(n, np.nan)
+    unit = np.full(n, np.nan)
+    cooldown_until = np.full(n, -1, dtype=np.int64)
+    cooldown_direction = np.zeros(n, dtype=np.int64)
+    carry = np.zeros(n)
+    never = np.zeros(n, dtype=bool)
+    out = np.full_like(values, np.nan)
+    events: list[_Event] = []
+    # `extreme` exists only to feed `retrace`, so with the trailing stop off nothing can read it and
+    # the four operations that maintain it are dead weight - which matters, because the shipped
+    # configuration IS trailing-off (stop_loss 6 / take_profit 6).  Skipping them leaves `extreme`
+    # all-NaN, and that is unobservable: the engines are compared on weights and events, not on state.
+    trailing = params.trailing_stop > 0
+    moved = extreme
+    # `_enter`'s unit, for every symbol-bar at once.  It reads nothing but this bar's sigma, so it does
+    # not have to be recomputed inside the loop; one pass here costs one more array the size of `vols`
+    # and takes five element-wise operations off every bar.
+    entering = np.maximum(np.where(~np.isnan(vols) & (vols > 0), vols, params.min_unit), params.min_unit)
+    # One errstate for the whole run rather than one per bar.  Entering the context is a pair of
+    # `seterr` calls, which at 50k bars was about a fifth of the loop.  What it silences: the flat
+    # symbols divide a NaN numerator by a NaN `unit_price`, and a +-inf price subtracts to NaN - both
+    # are masked out below, and both would otherwise print a RuntimeWarning per bar.
+    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+        for t in range(values.shape[0]):
+            row = values[t]
+            absent = np.isnan(row)
+            if absent.all():
+                continue
+            price, sigma = prices[t], vols[t]
+            target = np.where(absent, 0.0, row)  # `exit_step`'s `if isnan(target): target = 0.0`
+            wanted = np.sign(target).astype(np.int64)
+            held = direction
+            # `exit_step`'s three gates, as masks: a bar it can judge, a position it is tracking, and
+            # the rest.  `~np.isnan(entry_price)` can only matter for a state read back from disk, but
+            # it is in the scalar condition so it is in this one.
+            judgable = np.isfinite(price) & (price > 0)
+            managed = judgable & (held != 0) & ~np.isnan(entry_price)
+            idle = judgable & ~managed
+
+            current = params.unit_mode == "current"
+            measured = np.where(~np.isnan(sigma) & (sigma > 0), sigma, unit) if current else unit
+            unit_price = np.maximum(measured, params.min_unit) * entry_price
+            adverse = (entry_price - price) * held / unit_price
+            favourable = -adverse
+            # The scalar version is an if/elif/elif chain, so each rule only fires when the ones above
+            # it did not.  The masks below are deliberately written that way even though `fired` is
+            # their union either way, because the rule NAME is picked from them further down.
+            hit_stop = (adverse >= params.stop_loss) if params.stop_loss > 0 else never
+            hit_take = (favourable >= params.take_profit * scales[t]) if params.take_profit > 0 else never
+            if trailing:
+                moved = np.where(held > 0, np.maximum(extreme, price), np.minimum(extreme, price))
+                moved = np.where(np.isnan(moved), price, moved)
+                hit_trail = (moved - price) * held / unit_price >= params.trailing_stop
+            else:
+                hit_trail = never
+            stopped = managed & hit_stop
+            trailed = managed & ~hit_stop & hit_trail
+            fired = stopped | trailed | (managed & ~hit_stop & ~hit_trail & hit_take)
+
+            # What the bar does, as groups that cover every symbol.
+            alive = managed & ~fired
+            flat = wanted == 0
+            holding = alive & (wanted == held)  # resize or stay: only the extreme moves
+            closing = alive & flat  # the model went flat: drop the anchor, keep the cooldown
+            blocked = idle & ~flat & (t < cooldown_until) & (wanted == cooldown_direction)
+            # `idle & flat` and `blocked` both take `replace(state, direction=0)`, which leaves
+            # entry_price / extreme / unit ALONE - unlike `fired` and `closing`, which clear them.
+            # That asymmetry is in the scalar code and is preserved here rather than tidied away.
+            opened = (alive & ~holding & ~flat) | (idle & ~flat & ~blocked)  # sign flip, or a fresh entry
+            cleared = fired | closing
+            zeroed = cleared | blocked | (idle & flat)
+
+            weight = np.where(holding | opened, target, 0.0)
+            weight = np.where(~judgable & (held != 0), carry, weight)  # gap bar: hold, do not trade
+            out[t] = weight
+            carry = weight
+
+            if fired.any():
+                units = (price - entry_price) * held / unit_price
+                for j in np.flatnonzero(fired):  # ascending, which is the scalar loop's column order
+                    rule = STOP_LOSS if stopped[j] else (TRAILING_STOP if trailed[j] else TAKE_PROFIT)
+                    events.append(
+                        (t, int(j), rule, float(entry_price[j]), float(price[j]), float(units[j]), int(held[j]))
+                    )
+
+            cooldown_until = np.where(fired, t + params.cooldown_bars, cooldown_until)
+            cooldown_direction = np.where(fired, held, cooldown_direction)
+            direction = np.where(zeroed, 0, np.where(opened, wanted, held))
+            entry_price = np.where(cleared, np.nan, np.where(opened, price, entry_price))
+            unit = np.where(cleared, np.nan, np.where(opened, entering[t], unit))
+            if trailing:
+                extreme = np.where(cleared, np.nan, np.where(opened, price, np.where(holding, moved, extreme)))
+    return out, events
