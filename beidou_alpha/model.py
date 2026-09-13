@@ -57,6 +57,14 @@ class AlphaModel:
         for entry in self.entries:
             if entry.book != MAIN_BOOK and entry.book not in self.books:
                 raise ValueError(f"strategy {entry.id} refers to undeclared book {entry.book!r}")
+        # Every per-strategy structure in this class is a dict keyed by id, so two entries sharing one
+        # would silently become one and the loop would trade a book it cannot name.  `parse_registry`
+        # already refuses this for a registry read from disk; said here too, because a model can also be
+        # built by `replace`, by a test, or by a miner assembling entries by hand.
+        ids = [entry.id for entry in self.entries]
+        repeated = sorted({name for name in ids if ids.count(name) > 1})
+        if repeated:
+            raise ValueError(f"duplicate strategy id {repeated}: per-strategy results are keyed by id")
 
     @classmethod
     def from_registry(
@@ -190,7 +198,15 @@ class AlphaModel:
             )
         eligible = self.eligible(panel, membership)
         targets: dict[str, pd.DataFrame] = {}
-        for entry, scores in zip(self.entries, self.strategy_scores(panel, eligible).values(), strict=True):
+        # By id, not by position.  `strategy_scores` builds its dict in this same order, so zipping the
+        # values against `self.entries` was right - until two entries share an id, at which point the
+        # dict collapses by one and the loop pairs every later entry with the wrong frame.  `strict=True`
+        # turns that into a length error, which is a true statement about the zip and says nothing about
+        # the duplicate that caused it.  `parse_registry` refuses duplicates at the door and names the
+        # id; this is the second lock, for a model built any other way.
+        scored = self.strategy_scores(panel, eligible)
+        for entry in self.entries:
+            scores = scored[entry.id]
             seed = self._seed(previous, entry)
             held = scores_to_targets(
                 scores.where(eligible), entry.entry_threshold, hold=self.hold_on_no_action, initial=seed
