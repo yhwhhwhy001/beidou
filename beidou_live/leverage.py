@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 
 from beidou_exchange.rules import meets_min_notional, quantize_qty
@@ -84,7 +85,10 @@ def scale_orders_to_margin(
             kept.append(order)
             continue
         rule = rules.get(order.symbol)
-        quantity = quantize_qty(float(order.quantity) * factor, rule) if rule is not None else order.quantity * 0
+        # No rule means no step to quantize to, and an unquantizable order is dropped below rather than
+        # sent at an unknown step.  Spelled `Decimal(0)`: it used to read `order.quantity * 0`, which is
+        # the same zero by Decimal arithmetic but reads like a typo.
+        quantity = quantize_qty(float(order.quantity) * factor, rule) if rule is not None else Decimal(0)
         if quantity <= 0 or (rule is not None and not meets_min_notional(quantity, order.price, rule)):
             dropped.append({"symbol": order.symbol, "reason": "MARGIN_SCALED_BELOW_MIN", "factor": factor})
             continue
