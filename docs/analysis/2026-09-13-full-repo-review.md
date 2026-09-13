@@ -9,12 +9,12 @@
 **受检对象**：北斗 V5，`main @ 1db3e611`（工作树干净）
 **扫描**：`beidou_shared` / `beidou_data` / `beidou_alpha` / `beidou_exchange` / `beidou_governance` /
 `beidou_live` / `beidou_cli` = **31,632 行**（另 `scripts/` 414 行；`tests/` 34,057 行 / 181 个文件 /
-1,714 个测试；已排除 `.claude/`、`.venv/`、`scratchpad/`）
+1,650 个测试；已排除 `.claude/`、`.venv/`、`scratchpad/`）
 **上两份**：`docs/analysis/2026-09-05-backtest-guard-external-audit.md`、
 `docs/analysis/2026-09-08-backtest-guard-external-audit.md`（本报告不重复其已闭环项）
 
 **本轮实测**：环境为 `.venv`（Python 3.12.14、pandas 3.0.5、numpy 2.5.2、mypy 2.3.1）。
-`ruff check` 全过、`ruff format --check` 305 个文件全过、`pytest -m "not network"` **1,714 项全绿，98.9s**、
+`ruff check` 全过、`ruff format --check` 305 个文件全过、`pytest -m "not network"` **1,650 项全绿，98.9s**、
 `mypy` **30 个错误、退出码 1**。量化结论由本会话临时脚本产出，不写账本、不写报告。
 
 **总评**：🔴 致命 0 项 · 🟠 高危 3 项 · 🟡 中 9 项 · 🔵 低 10 项（含逻辑项 3 项）
@@ -516,7 +516,7 @@ chanlun 今天未启用。若启用并与 4h 图表对照，结构会对不上�
 
 ### [🔵 低] 没有覆盖率工具
 
-`pyproject.toml:30-38` 的 dev 依赖里没有 `pytest-cov`。1,714 个测试、101 个源模块**每一个都被某个
+`pyproject.toml:30-38` 的 dev 依赖里没有 `pytest-cov`。1,650 个测试、101 个源模块**每一个都被某个
 测试文件提到过**（本轮核过），但「提到」不是「覆盖」。加一个 `--cov` 门槛（哪怕只是报告不设阈值）
 能让上面那条「exchange 只有 11 个测试」这类失衡自己浮出来，而不是靠人去数文件。
 
