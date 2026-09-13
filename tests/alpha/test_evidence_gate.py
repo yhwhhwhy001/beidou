@@ -16,6 +16,7 @@ from beidou_alpha.registry import StrategyEntry, evidence_params, evidence_probl
 from beidou_alpha.signals import get_signal
 from beidou_live.composition import load_registry
 from beidou_live.config import registry_evidence_problems
+from beidou_shared.config import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WEEKLY: dict[str, Any] = {"horizons": [168, 336, 720], "horizon_weights": [0.2, 0.3, 0.5], "entry_threshold": 0.2}
@@ -99,8 +100,25 @@ def test_evidence_problems_reports_a_param_drift_end_to_end() -> None:
 
 
 def test_the_shipped_registry_runs_what_its_evidence_validated() -> None:
-    """The guard that matters: every enabled strategy on this branch, against the reports it cites."""
-    assert registry_evidence_problems(load_registry(ROOT / "config" / "alpha_registry.yaml")) == []
+    """The guard that matters: every enabled strategy on this branch, against the reports it cites.
+
+    The profile is an argument here, and that is the point of this test rather than a detail of it.  This
+    test carries the shipped pair's name but for a long time called the gate with the REGISTRY ALONE, so
+    it only ever reached the evidence pointers and their digests; the portfolio-level comparison
+    `registry_evidence_problems` grew later was never exercised from the one place named for it.
+
+    2026-09-14 is what that cost.  `vol_target` 0.30 -> 0.60 (96d659ae) left the shipped profile
+    disagreeing with the shipped registry - `tsmom: portfolio vol_target is 0.6 live but 0.3 in the cited
+    evidence` - which `beidou_cli/live_cmd.py:301` turns into a refusal for any armed run.  This test
+    stayed green.  What went red was a transaction drill in `tests/governance/`, whose entire message is
+    `assert 'ROLLBACK' == 'APPLY'`: it names neither the file, nor the field, nor the loop that would
+    refuse to start.  The pair is checked here, where the failure can say so.
+    """
+    problems = registry_evidence_problems(
+        load_registry(ROOT / "config" / "alpha_registry.yaml"),
+        load_yaml(ROOT / "config" / "live.demo.yaml"),
+    )
+    assert problems == [], problems
 
 
 @pytest.mark.parametrize("signal_id", sorted(get_signal(s).id for s in ("tsmom", "xsmom", "carry", "flow")))
