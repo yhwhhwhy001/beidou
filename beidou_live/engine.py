@@ -841,6 +841,10 @@ class LiveEngine:
             bar_open_ms=bar_open_ms,
             params=config.rebalance,
             liquidity=liquidity,
+            # R8's ladder shrinks every weight by one scalar, and `no_trade_rel_band` used to eat the
+            # first rung's whole 25% before it reached the venue.  The ladder's own state is what
+            # lifts the relative band off reductions - the rung is a risk action, not a rebalance.
+            deescalating=bool(ladder.get("acting")),
         )
         if orders:
             orders, margin = scale_orders_to_margin(
