@@ -708,7 +708,12 @@ def probe_correlation(store: StateStore, probes: Sequence[ProbeParams], *, since
     return out
 
 
-def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[str, Any]:
+PLAN_MARGIN_BUDGET = 0.50  # the plan's M-007 number; superseded as the BAR by `margin_cap` (2026-09-14)
+
+
+def margin_and_rejections(
+    store: StateStore, *, since_ms: int | None, margin_cap: float | None = None
+) -> dict[str, Any]:
     """M-007: initial-margin usage and the count of venue rejections, by code.
 
     The plan set two numbers - usage at or below 50% of equity, and zero -2019 (insufficient margin)
@@ -721,7 +726,22 @@ def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[st
     orders asked for, and only exists on cycles that placed one; ``standing`` is the initial margin the
     *held* positions consume, recorded every cycle from positionRisk (D-027: the venue's own
     ``totalInitialMargin`` is the field that overflowed).  The plan's 50% is about the standing book.
+
+    2026-09-14: the BAR is now ``margin_cap`` when the caller can supply it, with the plan's 50% kept
+    beside it as ``plan_budget`` rather than deleted.  Two numbers governed one quantity - the plan's
+    50% doing the judging here, and the profile's ``margin_cap`` 0.40 checked once at startup against
+    the CONFIG (D-016) and never against the reading - so realized standing margin could sit anywhere
+    in 40-50%, above the declared policy, and this metric read OK.  That is the ``max_slippage_bps``
+    shape the profile already records: a bar 1.25x looser than the policy it stands for cannot fail
+    before the policy is already breached.  ``margin_cap`` wins because it is the number the operator
+    configured and the one D-016 derives the venue leverage from; the plan's 50% stays visible because
+    what a corrected ruler was wrong ABOUT is the part a later reader needs.
+
+    A breach means realized ``gross/equity`` exceeded ``max_gross`` between rebalances - the only path
+    there is, since stage 3 clips gross at rebalance and margin is ``gross / L``.  It self-corrects at
+    the next rebalance, which is why ``daily_alerts`` routes it as a notice rather than a page.
     """
+    budget = float(margin_cap) if margin_cap else PLAN_MARGIN_BUDGET
     peak = 0.0
     peak_bar: int | None = None
     standing: list[float] = []
@@ -759,8 +779,9 @@ def margin_and_rejections(store: StateStore, *, since_ms: int | None) -> dict[st
         "peak_standing_usage": peak_standing if standing else None,
         "last_standing_usage": standing[-1] if standing else None,
         "standing_cycles": len(standing),
-        "budget": 0.50,
-        "over_budget": peak_standing > 0.50 if standing else peak > 0.50,
+        "budget": budget,
+        "plan_budget": PLAN_MARGIN_BUDGET,
+        "over_budget": peak_standing > budget if standing else peak > budget,
         "rejections": rejections,
         "insufficient_margin": sum(count for code, count in rejections.items() if "-2019" in code),
     }
@@ -1593,6 +1614,7 @@ def daily_payload(
     dataset: Mapping[str, Any] | None = None,
     *,
     vol_target: float | None = None,
+    margin_cap: float | None = None,
     data_root: str | Path = ".beidou/data",
     closes: Callable[[str], pd.Series] | None = None,
 ) -> dict[str, Any]:
@@ -1712,7 +1734,7 @@ def daily_payload(
         # "thinner" and "nothing happened" look identical in a rendered report.
         "state_file": {"readable": not _state_problem(store), "reason": _state_problem(store)},
         "data_coverage": data_coverage(store, root=data_root),
-        "margin": margin_and_rejections(store, since_ms=window["since_ms"]),
+        "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
         "dataset": _dataset_block(dataset),
@@ -1771,6 +1793,17 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             + "；风险贡献相互拉开——查第一层"
         )
     notices: list[str] = []
+    margin = payload.get("margin") or {}
+    if margin.get("over_budget"):
+        # M-007.  A notice rather than an alert, by the same test the other entries here use: realized
+        # standing margin above the policy means gross/equity drifted past `max_gross` between
+        # rebalances, and stage 3 re-clips it at the next one - there is nothing to do inside the hour.
+        # It is here at all because until 2026-09-14 `over_budget` had no reader: it was computed, it
+        # was rendered into the markdown, and no path carried it to either list.
+        notices.append(
+            f"M-007 保证金占用 {_fmt_pct(margin.get('peak_standing_usage'))} 超过 "
+            f"{_fmt_pct(margin.get('budget'))}（margin_cap）：实际 gross/权益 在两次再平衡之间越过了 max_gross"
+        )
     if str(budget.get("status")) == "BLIND":
         # A criterion with no reading is not a breach and cannot be acted on in the next hour - it
         # clears itself once the bars or fills arrive.  It is here rather than nowhere because the

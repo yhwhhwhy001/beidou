@@ -1952,6 +1952,32 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twelfth raise, 2026-09-14, and the sentence the rule requires: +33 beidou_live, +3 beidou_cli for
+    # M-007's bar.  Two numbers governed one quantity and the looser one was doing the judging: this
+    # metric compared realized standing margin against the PLAN's 50%, while the profile declares
+    # `margin_cap` 0.40 and D-016 checks that only at startup, against the CONFIG, never against the
+    # reading.  So realized margin could sit anywhere in 40-50% - above the declared policy - and M-007
+    # read OK.  That is the `max_slippage_bps` shape the profile already records: a bar 1.25x looser
+    # than the policy it stands for cannot fail before the policy is already breached.
+    #
+    # The second half is why it would not have been read anyway.  `over_budget` was computed, rendered
+    # into the daily markdown, and never routed - `daily_alerts` had no margin branch at all, so the
+    # finding reached neither list.  D-038's shape, a third time this week.  It is a NOTICE and not an
+    # alert, by the test the other entries there use: a breach means gross/equity drifted past
+    # `max_gross` between rebalances, and stage 3 re-clips it at the next one, so there is nothing to
+    # do inside the hour.
+    #
+    # Most of the 33 lines are the docstring and that routing comment.  The plan's 50% is kept as
+    # `plan_budget` rather than deleted, for the reason this file exists: what a corrected ruler was
+    # wrong ABOUT is the part a later reader needs.
+    #
+    # One line of the 33 is a bug this nearly shipped.  The budget started life as a local named `bar`,
+    # and the rejection loop thirty lines below rebinds `bar` to `bar_open_ms` - so with any trade row
+    # present, `over_budget` compared a margin share against a millisecond timestamp and was always
+    # False.  A silent pass, and the first four tests could not see it because their fixtures record no
+    # trades.  mypy caught it, not the suite; the test that now pins it was written to fail first and
+    # did (`budget` read 1788000000000).  Worth the line count: a guard that cannot fail is the exact
+    # thing this whole entry is about, and it almost got re-introduced in the commit fixing it.
     # Tenth raise, 2026-09-14, and the sentence the rule requires: +50 beidou_live, +6 beidou_cli,
     # bought by the same operator question for the FIFTH time - why is every order at 5x.  D-038 is the
     # entry that answered it the third time, and its diagnosis was not "explain better" but "a correct
@@ -2032,11 +2058,11 @@ CEILING = {
     # the rule must not rest on k, since 96d659ae's O-3 put the first rung back at 0.75 while restating
     # the ladder against a wider budget, so the coincidence recurs at the next re-scale.  Two existing
     # lines were replaced, hence 33 added against 31 net.
-    "beidou_live": 8_650,
+    "beidou_live": 8_683,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
-    "beidou_cli": 5_826,
+    "beidou_cli": 5_829,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
