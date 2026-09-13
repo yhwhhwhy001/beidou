@@ -486,6 +486,24 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
     assert "Grid (full-sample Sharpe per configuration)" in markdown
     assert "vol_window=100" in markdown and "vol_window=200" in markdown
     assert "parameter_neighbourhood" in markdown
+    # The three caveats have to travel WITH their numbers (2026-09-14 audit): each one existed in the
+    # tree already and was quoted without itself.  This grid has two configurations, so the PBO note
+    # must be the "not informative" branch - the exact case the audit caught being cited as a cost.
+    assert "selection contamination" in markdown, "CPCV's embargo caveat must print beside fraction_negative"
+    assert "structural bound, not a measurement" in markdown, "the margin buffer's bound must print beside it"
+    assert "NOT informative and NOT enforced at grid_trials=2" in markdown, "PBO below four is a coin flip"
+    # The gate is an OOS number and `cost_stress` is a full-sample one; before this they could only be
+    # compared by subtracting two different sample sizes.  x1 must reproduce the headline gate exactly.
+    assert "Cost stress against that gate" in markdown
+    payload = json.loads(sorted(out.glob("tsmom-validation-*.json"))[-1].read_text())
+    gate = payload["cost_stress_gate"]
+    assert set(gate) == {"x1", "x1.5", "x2"}
+    # x1 is the SHIPPED configuration's OOS series (F3), not the fold-selected mixture the headline
+    # gate reads - they differ whenever the folds disagreed, which this fixture's grid does.
+    assert gate["x1"]["oos_sharpe"] == pytest.approx(payload["best_key_oos_sharpe"])
+    assert gate["x2"]["oos_sharpe"] < gate["x1"]["oos_sharpe"], "paying more cannot help the OOS Sharpe"
+    for level in gate.values():
+        assert level["margin"] == pytest.approx(level["oos_sharpe"] - level["threshold"])
 
 
 def _mine(root: Path, out: Path, *extra: str) -> tuple[int, str, dict]:

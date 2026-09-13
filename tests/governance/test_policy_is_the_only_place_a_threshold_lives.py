@@ -35,7 +35,9 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # refused outright whenever two candidates were queued.  FIFO needs no further judgement; every
 # alternative is a selection rule needing its own pre-registration.  Recorded in policy so that
 # changing it later is a rule version change rather than an edit.
-PINNED_DIGEST = "5200c9c98136"
+# 2026-09-14: R8's two rungs moved (POLICY_VERSION 0.3.2 -> 0.3.3).  The old digest was
+# 5200c9c98136.
+PINNED_DIGEST = "9706af802de6"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:
@@ -60,10 +62,16 @@ def test_the_judgement_calls_are_labelled_as_such() -> None:
 
 @pytest.mark.parametrize(
     ("drawdown", "expected"),
-    [(0.0, None), (-0.34, None), (-0.35, 0.225), (-0.49, 0.225), (-0.50, 0.15), (-0.80, 0.15)],
+    [(0.0, None), (-0.48, None), (-0.49, 0.45), (-0.69, 0.45), (-0.70, 0.30), (-0.90, 0.30)],
 )
 def test_the_ladder_takes_the_deepest_rung_that_applies(drawdown: float, expected: float | None) -> None:
-    """A -60% drawdown must get 0.15, not the 0.225 it also qualifies for."""
+    """A -90% drawdown must get 0.30, not the 0.45 it also qualifies for.
+
+    2026-09-14: the rungs moved from (-0.35, 0.225) / (-0.50, 0.15) to (-0.49, 0.45) / (-0.70, 0.30),
+    re-derived by the shipped rule for the -70% budget declared with `vol_target` 0.60.  The cases
+    below moved with them; what this test is about - deepest rung wins, and nothing above the first -
+    did not.
+    """
     assert Policy().throttle_scalar(drawdown) == expected
 
 

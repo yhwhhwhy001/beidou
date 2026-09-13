@@ -13,6 +13,21 @@ At budget 70%: k=0.60 -> ((-0.49, 0.45), (-0.70, 0.30));  k=0.75 -> ((-0.49, 0.5
 
 Also reports the bootstrapped q95 of the THROTTLED series, because P32's q95 was measured on the
 un-throttled one and the throttle changes the very tail it is supposed to control.
+
+SUPERSEDED for every q95 and P(breach) number below by `p32d_ladder_bootstrap_pathwise.py`
+(2026-09-14, `docs/analysis/2026-09-14-backtest-guard-k060-ladder-audit.md`).  Two defects, and the
+paragraph above names the right problem while `q95_of` only half-solves it:
+
+  1. `q95_of` resamples `thr`, whose throttle scalars were decided on the HISTORICAL ordering, so a
+     draw deep enough to matter carries the protection history happened to earn at those bar
+     positions instead of the protection the ladder would have applied to that draw.  Replaying the
+     ladder inside each draw moves the shipped arm from -70.8% to -52.6% and reverses C-006.
+  2. Both arms are replayed against the book's mark-to-market NAV, and R8 does not read that.  Under
+     the ruler it does read - `base + cumsum(attributed)`, income rows only - the shipped ladder gets
+     q95 -69.3% against the rescaled arm's -69.9%, i.e. almost no ladder at all (p32e, p32d).
+
+This file is left running exactly as it ran, numbers included: E-010 and C-006 cite it, and rewriting
+the evidence underneath a claim is how a record stops being one.
 """
 
 from __future__ import annotations

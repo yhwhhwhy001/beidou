@@ -2058,11 +2058,65 @@ CEILING = {
     # the rule must not rest on k, since 96d659ae's O-3 put the first rung back at 0.75 while restating
     # the ladder against a wider budget, so the coincidence recurs at the next re-scale.  Two existing
     # lines were replaced, hence 33 added against 31 net.
-    "beidou_live": 8_683,
+    # +54 more beidou_live (8_683 -> 8_737), 2026-09-14, and the sentence the rule requires: R8's ruler
+    # now carries the book's UNREALISED P&L, and `_risk_ladder` clamps a scalar that would add size.
+    # The measurement that bought them: over 2021-2026 at k=0.60 the mark-to-market ruler spends 785
+    # bars past the first rung and the income-only ruler spends 0.  Five years and seven months, zero
+    # firings - a control that cannot be distinguished from its own absence.  Taking collateral
+    # repricing out of the numerator is what KILL-AR-05 asked for and is unchanged; taking the book's
+    # own open positions out was never part of it and is what made the ladder inert.
+    #
+    # The clamp is a second defect the first one hid: `throttle_scalar` returns an ABSOLUTE vol target
+    # and the engine divides by the running one, so rungs calibrated for a larger k give a scalar above
+    # 1 at a smaller one - an amplifier that fires when the book is already down.  Latent since R8 was
+    # wired; it could never be observed while the ladder never fired.
+    #
+    # Most of the lines are those two paragraphs in the source, plus `marked_from` / `marked_rows` and
+    # the `ruler` label, which exists because a row written before `unrealized` and a row written after
+    # are not comparable and only a name can say so after the fact.
+    "beidou_live": 8_737,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
-    "beidou_cli": 5_829,
+    # +44 more beidou_cli (5_829 -> 5_873), and the sentence the rule requires: three caveats that
+    # already existed in the tree were being quoted without themselves.  The 2026-09-14 backtest-guard
+    # audit found the registry note and the commit message for `tsmom-validation-20260913T182325Z`
+    # citing CPCV's `fraction_negative`, `liquidation_touches: 0`, and a PBO move as evidence - while
+    # the caveat for each one lived one file over, in `cpcv_splits`' docstring, in `backtest.py`'s
+    # margin-buffer paragraph, and in `verdict.decide`'s own "not enforced below four" branch.  The
+    # lines buy `_MARGIN_BUFFER_NOTE`, `_embargo_note` and `_pbo_note`, which print beside the numbers
+    # they qualify, so the next reader of an artefact does not have to already know.
+    #
+    # Why lines rather than a doc: a document describing the caveat is the thing that was already there
+    # and did not travel.  D-038's shape - "a correct fact no instrument states is indistinguishable
+    # from an unproven one" - applied to a caveat instead of a fact.
+    #
+    # What was deliberately NOT bought: the JSON payload is untouched.  Putting the notes in `report`
+    # would move every future `report_digest` and make the archived sha256 the registry cites
+    # incomparable with a re-run, which is a real cost for a string no rule reads.
+    # +55 more beidou_cli (5_873 -> 5_928), and the sentence the rule requires: `_stressed_oos_gate`,
+    # which re-asks D-028's gate on the stressed cost series instead of leaving a reader to subtract a
+    # full-sample Sharpe from an out-of-sample threshold.  The audit caught that subtraction being made
+    # with the evidence's own numbers - a +0.0426 gate margin weighed against a -0.1175 cost-doubling
+    # effect measured on 49,240 bars rather than the gate's 45,240 - and the report had no way to answer
+    # "does it still clear the gate if costs double", which is the question an operator asks before real
+    # capital.  Same folds, same N, stressed series; x1 reproduces `best_key_oos_sharpe` exactly (NOT the
+    # fold-selected mixture the headline gate reads - the docstring names the difference) and a test
+    # asserts that, so the new number cannot drift away from the one it is supposed to extend.
+    #
+    # Unlike the caveats above this one DOES go into the JSON.  The rule those followed was "markdown
+    # only, because no rule reads a string"; this is a number a rule could read, and a governance number
+    # that lives only in prose is the D-038 failure the caveats commit cites.  Future reports carry the
+    # key, archived ones do not, and `verdict.decide` already handles reports written before a field
+    # existed - that is the established shape here, not a new risk.
+    #
+    # Part of the same +55: most of the last lines record why the stressed series is
+    # reindexed to `common_index` before the folds cut it.  `fold_list` is sized against that index and a
+    # fresh `run_backtest` returns a longer one, so slicing the raw series reads different bars - it
+    # surfaced as an x1 cell of 6.90 against `best_key_oos_sharpe`'s 6.02 on the fixture.  Silent
+    # misalignment between two indices that both look right is the failure this file keeps paying to
+    # document rather than rediscover.
+    "beidou_cli": 5_928,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2086,7 +2140,13 @@ CEILING = {
     # +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
     # an `all(isinstance(...))` generator that mypy 2.x stopped reading - part of the 30 type errors that
     # had kept CI red for 23 consecutive pushes over four days, with the test step never running once.
-    "beidou_governance": 3_657,
+    # +31 more beidou_governance (3_657 -> 3_688), 2026-09-14: R8's rungs re-derived for the -70%
+    # budget the operator declared when `vol_target` went to 0.60, plus POLICY_VERSION 0.3.3 recording
+    # why.  Two numbers changed; the rest is the paragraph saying that the ruler fix and the rescale
+    # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
+    # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
+    # have re-tuned something that never fires.  The options were priced before the operator picked.
+    "beidou_governance": 3_688,
 }
 
 

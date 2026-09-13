@@ -27,10 +27,14 @@ DAY_MS = 86_400_000
 
 @dataclass(frozen=True)
 class RiskBudgetParams:
-    deescalate_at: float = 0.35  # drawdown from the high-water mark -> step vol_target down
-    rollback_at: float = 0.50  # -> all the way back
-    deescalate_to: float = 0.225
-    rollback_to: float = 0.15
+    # 2026-09-14: re-derived for the -70% budget declared when `vol_target` went to 0.60, by the
+    # shipped rule transcribed (see `Policy.drawdown_ladder`, which is what ACTS - these four are the
+    # reporting copy and the two must not disagree).  A mismatch here does not raise; it just makes
+    # `action` describe a rung the ladder does not have.
+    deescalate_at: float = 0.49  # drawdown from the high-water mark -> step vol_target down
+    rollback_at: float = 0.70  # -> all the way back
+    deescalate_to: float = 0.45
+    rollback_to: float = 0.30
     vol_band: tuple[float, float] = (0.26, 0.38)
     vol_window_days: int = 30
     min_vol_bars: int = 240  # ten days of hourly cycles before the vol estimate says anything
@@ -259,6 +263,18 @@ def attributed_drawdown_state(
     baseline_at: str | None = None
     bars = 0
     used = 0
+    # 2026-09-14: the book's OPEN positions belong in this path.  Taking collateral repricing out is
+    # what KILL-AR-05 asked for and is unchanged; taking the book's unrealised P&L out was never part
+    # of that and is what made this ladder inert.  Measured over 2021-2026 at k=0.60: the
+    # mark-to-market ruler spends 785 bars past the first rung and this one spent 0 - five years and
+    # seven months, zero firings, while the book drew down 39.85%.  A momentum book holds its losers,
+    # so an income-only ruler learns about a drawdown when it is over.
+    #
+    # `marked_from` is set at the FIRST row that carries `unrealized`, not at the baseline, so the
+    # quantity is continuous across the deploy: the carried term is 0 on that row by construction.
+    # Rows written before the field exists contribute nothing and the reading says which ruler it is.
+    marked_from: float | None = None
+    marked_rows = 0
     for row in rows:
         value = row.get("equity")
         if not isinstance(value, int | float) or value <= 0:
@@ -268,6 +284,7 @@ def attributed_drawdown_state(
             base = path = peak = equity
             baseline_at = str(row.get("at") or "")
             bars = 0
+            marked_from = None  # a re-baselined path re-anchors the open-position term too
         bars += 1
         try:
             bar_key = int(row.get("bar_open_ms"))  # type: ignore[arg-type]
@@ -276,8 +293,17 @@ def attributed_drawdown_state(
         if bar_key is not None and bar_key in by_bar:
             path += by_bar.pop(bar_key)
             used += 1
-        peak = max(peak, path)
-        current = 0.0 if peak <= 0 else path / peak - 1.0
+        mark = row.get("unrealized")
+        if isinstance(mark, int | float):
+            marked_rows += 1
+            if marked_from is None:
+                marked_from = float(mark)
+            carried = float(mark) - marked_from
+        else:
+            carried = 0.0
+        marked = path + carried
+        peak = max(peak, marked)
+        current = 0.0 if peak <= 0 else marked / peak - 1.0
         drawdown = min(drawdown, current)
     if base is None:
         return {
@@ -316,6 +342,13 @@ def attributed_drawdown_state(
         # negative, so it reads the same way as `Policy.throttle_scalar` takes it
         "value": current,
         "max_drawdown": drawdown,
+        # WHICH ruler produced `value`, carried with the number rather than assumed by the reader.  A
+        # record whose rows predate `unrealized` reads `attributed_pnl` and means exactly what it used
+        # to; one whose rows carry it reads `attributed_pnl+unrealized` and is the book's own
+        # mark-to-market with collateral still excluded.  The two are not comparable across the
+        # boundary, and a name is the only thing that can say so after the fact.
+        "ruler": "attributed_pnl+unrealized" if marked_rows else "attributed_pnl",
+        "marked_rows": marked_rows,
         "path": path,
         "peak": peak,
         "base": base,

@@ -621,6 +621,81 @@ def _embargo_bars(purge: int, embargo: int | None) -> int:
     return purge if embargo is None else embargo
 
 
+# The three notes below travel WITH the numbers they qualify.  Each caveat already existed in the tree -
+# in `cpcv_splits`' docstring, in `backtest.py`'s margin-buffer paragraph, in `verdict.decide`'s PBO
+# branch - and each was quoted without it: the 2026-09-14 audit found the registry note and the commit
+# message for `tsmom-validation-20260913T182325Z` citing CPCV's `fraction_negative`, the zero liquidation
+# touches, and a PBO move, none of them carrying the caveat that lives one file over.  A caveat reachable
+# only by reading the implementation is not a disclosure to the person reading the artefact - it is a
+# disclosure to the person who already knows.  Markdown only: the JSON payload is deliberately untouched
+# so every archived report's sha256 stays comparable with the ones the registry already cites.
+_MARGIN_BUFFER_NOTE = (
+    "structural bound, not a measurement: buffer = (1 + r - c) / (gross * maintenance_margin_rate), and "
+    "gross <= max_gross, so at mmr 0.005 and max_gross 2.0 it cannot fall below about 100.  Reaching the "
+    "liquidation line at 1.0 would take one bar losing ~99%, so `liquidation_touches: 0` is arithmetic "
+    "rather than evidence.  The channel that can actually liquidate this account is collateral repricing "
+    "(52% non-USDT, KILL-AR-05) and this replay models zero collateral."
+)
+
+
+def _embargo_note(embargo: int) -> str:
+    """Why `fraction_negative` is easier to pass than it looks, printed beside `fraction_negative`."""
+    return (
+        f"{embargo} bars, which is shorter than the model's feature lookback (tsmom max(horizons)=720, "
+        "AlphaModel.warmup_bars 1442).  Training bars AFTER a test block are therefore computed from a "
+        "window covering it, and `cpcv_evaluate` picks parameters on exactly those bars.  The returns stay "
+        "causal, so this is selection contamination rather than look-ahead - it makes `fraction_negative`, "
+        "one of D-020's hard gates, easier to pass than it should be.  Open boundary on the record: see "
+        "`cpcv_splits`' docstring and docs/analysis/2026-09-13-full-repo-review.md."
+    )
+
+
+def _pbo_note(grid_trials: object) -> str:
+    """PBO below four configurations is a coin flip; `decide` knows that and readers of the report did not."""
+    try:
+        trials = int(grid_trials)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return "grid_trials not reported"
+    if trials >= 4:
+        return f"enforced: grid_trials={trials} >= 4"
+    return (
+        f"NOT informative and NOT enforced at grid_trials={trials}: CSCV ranks configurations against each "
+        "other, and with fewer than four it only says that two curves traded places across sub-periods.  "
+        "`verdict.decide` skips the gate below four, so a move in this number is not a cost or a gain either."
+    )
+
+
+def _stressed_oos_gate(net: pd.Series, folds: Sequence[Any], bars_per_year: float, n_trials: int) -> dict[str, Any]:
+    """D-028's gate re-derived on a stressed cost assumption, so the two numbers are the same kind.
+
+    The gate is an out-of-sample Sharpe against a threshold; `cost_stress` reports a full-sample
+    Sharpe.  A reader who wants to know whether doubling costs would have cost the strategy its
+    verdict has, until now, had to subtract one from the other - which is comparing a number measured
+    on 49,240 bars with a bar measured on 45,240 of them, and is how a +0.0426 margin got weighed
+    against a -0.1175 effect.  Same folds, same N, stressed series.
+
+    BASIS, because it is not the headline's: these levels are re-priced from `best_weights`, so the
+    series is ONE configuration's - `best_key_oos_sharpe` (F3), not the fold-selected mixture that
+    `oos_selection` and `verdict.decide` read.  The x1 cell therefore reproduces `best_key_oos_sharpe`
+    exactly and NOT `oos_selection.oos_sharpe_annual`, and the two differ whenever the folds did not
+    all choose the same configuration.  That is the right basis for this question - the registry ships
+    a configuration, not a mixture - but it is a different number, so it is named rather than assumed.
+    Re-pricing the whole grid at each stress level would make them the same number and cost three more
+    full grid backtests; not bought.
+    """
+    oos = pd.concat([net.iloc[fold.test_slice] for fold in folds])
+    selection = oos_selection_threshold(oos.to_numpy(dtype=float), n_trials=n_trials, bars_per_year=bars_per_year)
+    achieved, threshold = selection.get("oos_sharpe_annual"), selection.get("threshold_annual")
+    if achieved is None or threshold is None:
+        return {"oos_sharpe": achieved, "threshold": threshold, "margin": None, "clears": None}
+    return {
+        "oos_sharpe": achieved,
+        "threshold": threshold,
+        "margin": achieved - threshold,
+        "clears": achieved >= threshold,
+    }
+
+
 @research.command("validate")
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
@@ -872,20 +947,35 @@ def research_validate(
     # artefact's own label did not describe the number the verdict turned on.  The error ran in the
     # permissive direction (flat is cheaper than flat+impact), which is the direction that matters.
     # The multiplier still scales `turnover_bps` alone: impact is not a fee and does not scale with one.
-    stress = cost_stress(
-        {
-            multiplier: run_backtest(
-                panel,
-                best_weights,
-                CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
-                execution=execution,  # type: ignore[arg-type]
-                guards=book_guards,
-                impact=impact,
-            ).portfolio_net
-            for multiplier in (1.0, 1.5, 2.0)
-        },
-        bpy,
-    )
+    stressed_nets = {
+        multiplier: run_backtest(
+            panel,
+            best_weights,
+            CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
+            execution=execution,  # type: ignore[arg-type]
+            guards=book_guards,
+            impact=impact,
+        ).portfolio_net
+        for multiplier in (1.0, 1.5, 2.0)
+    }
+    stress = cost_stress(stressed_nets, bpy)
+    # The same stressed series re-asked against D-028's gate.  `cost_stress` is a FULL-SAMPLE Sharpe and
+    # the gate compares an OUT-OF-SAMPLE one, so the two are not subtractable - and the 2026-09-14 audit
+    # caught exactly that subtraction, setting the gate's +0.0426 margin against a cost-doubling effect
+    # measured on a different series.  Nothing in the report answered "does it still clear the gate if
+    # costs double"; this does, on the same folds and the same trials count.
+    # `.reindex(common_index)` is load-bearing and not tidiness: `fold_list` was cut against
+    # `len(common_index)`, while a fresh `run_backtest` returns its own longer index, so slicing the raw
+    # series by those folds silently reads different bars.  It showed up as an x1 cell that did not equal
+    # `best_key_oos_sharpe` (6.90 against 6.02 on the fixture).  `cost_stress` above is deliberately left
+    # on the UNreindexed series: its `x2` cell is a gate `verdict.decide` reads and every archived report
+    # carries it, so it keeps the series it has always had.
+    stress_gate = {
+        f"x{multiplier:g}": _stressed_oos_gate(
+            net.reindex(common_index).fillna(0.0), fold_list, bpy, pooled["n_trials"]
+        )
+        for multiplier, net in stressed_nets.items()
+    }
     costs_payload = load_yaml(costs_path)
     fee_bps = float(costs_payload.get("taker_fee_bps", 5.0))
     levels = slippage_levels(
@@ -995,6 +1085,7 @@ def research_validate(
             "parameter_neighborhood": neighbourhood,
         },
         "cost_stress": stress,
+        "cost_stress_gate": stress_gate,
         # The fee is a contract constant and the slippage assumption is the half the loop measures, so
         # this varies only the second one at declared levels (`costs.yaml: slippage_stress_bps`).
         "slippage_stress": slippage,
@@ -1034,7 +1125,7 @@ def research_validate(
             ),
             (
                 "Book guards / exits (the layers the loop applies)",
-                {"guards": report["book_guards"], "exits": report["exits"]},
+                {"guards": report["book_guards"], "exits": report["exits"], "margin_buffer": _MARGIN_BUFFER_NOTE},
             ),
             ("Best params (full sample)", params_by_key[best_key]),
             ("Full sample", report["full_sample"]),
@@ -1045,8 +1136,8 @@ def research_validate(
                     "best_key_oos_sharpe": report["best_key_oos_sharpe"],
                 },
             ),
-            ("CPCV", {k: v for k, v in cpcv.items() if k != "chosen"}),
-            ("Multiple testing", mt),
+            ("CPCV", {**{k: v for k, v in cpcv.items() if k != "chosen"}, "embargo": _embargo_note(embargo_bars)}),
+            ("Multiple testing", {**mt, "pbo_is_informative": _pbo_note(mt.get("grid_trials"))}),
             # Immediately above the gate it moves, because at 19,578 candidates against a four-cell grid
             # the search IS the denominator and a reader who sees only `n_trials` cannot tell where it
             # came from.  The per-configuration facts stay in the JSON; this is the headline.
@@ -1061,6 +1152,14 @@ def research_validate(
                 else []
             ),
             ("Selection-deflated OOS threshold (D-028)", report["oos_selection"]),
+            (
+                "Cost stress against that gate (same folds, same N, best_key basis)",
+                {
+                    level: f"oos={_fmt(v['oos_sharpe'])} threshold={_fmt(v['threshold'])} "
+                    f"margin={_fmt(v['margin'])} clears={_fmt(v['clears'])}"
+                    for level, v in stress_gate.items()
+                },
+            ),
             (
                 "Stability",
                 {
