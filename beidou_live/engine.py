@@ -193,6 +193,7 @@ class LiveEngine:
         metrics_store: Any = None,
         spot_verification: Verification | None = None,
         record_metrics: bool = True,
+        dropped_after: int = 3,
     ) -> None:
         self.config = config
         self.model = model
@@ -268,6 +269,12 @@ class LiveEngine:
         #: and it is the engine's to state rather than the reporter's to invent (KILL-R6).
         self.rebalance_window: float | None = None
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
+        # How many consecutive cycles a symbol's bars may be missing before the loop treats it as a
+        # DELISTING and flattens, rather than as the data wobble it usually is.  Same shape as D-031's
+        # `quarantine_after`, and deliberately a constructor parameter rather than a config key: it
+        # changes no weight and no threshold, so it has no business inside `construction_fingerprint`,
+        # and a knob in YAML that the digest cannot see is the other half of D-036.
+        self.dropped_after = int(dropped_after)
         # A3: set when `last_income_ms` is missing on a loop that has already run cycles - written onto
         # the first cycle row of this process so a post-mortem can find the hole from the record.
         self._income_watermark_lost: dict[str, Any] | None = None
@@ -652,6 +659,7 @@ class LiveEngine:
         raw = {symbol: float(weight) for symbol, weight in targets.weights.items()}
         for symbol in managed:
             raw.setdefault(symbol, 0.0)
+        dropped_inputs = await self._hold_dropped(raw, inputs.dropped)
         # D-014's exit side follows positions, but its ENTRY side follows the universe.  Reading `leaving`
         # here instead of the universe left a hole: `leaving` is filtered to symbols that still hold a
         # position a few lines above, so the cycle after a departing symbol is flattened it is still in
@@ -661,6 +669,10 @@ class LiveEngine:
         for symbol in raw:
             if symbol not in pool:
                 raw[symbol] = 0.0
+        # The pre-throttle weights this cycle actually produced, which is what the NEXT cycle holds
+        # onto for any symbol whose bars go missing.  Written here rather than in `_finish_cycle`
+        # because that is where `raw` exists; persisted by the same `store.save`.
+        self.state.last_raw_targets = dict(raw)
         throttled = {symbol: weight * scalar for symbol, weight in raw.items()}
         # exit overlay (D-012): venue positions are the reference, state persists across restarts
         adjusted, exit_states, exit_events = self.exits.apply(
@@ -707,6 +719,10 @@ class LiveEngine:
             "leaving": list(self.state.leaving),
             "universe_update": universe_update,
             "inputs": inputs.to_dict(),
+            # What the loop DID about `inputs.dropped`, next to the list itself.  The list has been in
+            # this row since the beginning and had no reader anywhere in the tree (D-041 / DL-Q0's
+            # shape: written down, nobody reads it); this is the reader's own record.
+            "dropped_inputs": dropped_inputs,
             "construction": construction_fingerprint(config)["digest"],
             # DL-G9: the same construction, restricted to what a validation report can describe, so a
             # later reader can compare the two as strings.  Cheap enough to write every cycle (16 chars),
@@ -895,6 +911,64 @@ class LiveEngine:
                     "且 registry digest 已随之改变"
                 )
         return hit
+
+    async def _hold_dropped(self, raw: dict[str, float], dropped: Sequence[str]) -> dict[str, Any]:
+        """A symbol with no usable bars this cycle keeps LAST cycle's target; only a streak flattens it.
+
+        This is a deliberate behaviour change (2026-09-13), and it is a change that can only REDUCE
+        trading.  What it replaces: `closed_bars` returns an empty frame or a single bar for a symbol
+        (a delisting, a public-endpoint wobble, the empty body a rate limit hands back), `model_inputs`
+        puts it in `dropped`, the model scores nothing for it, the `setdefault` above fills it with
+        0.0, and `plan_rebalance` reads a target of 0 against an open position as `closing` - a
+        reduce-only market order that flattens the whole line.  Next cycle the data comes back and the
+        signal re-opens it.  The bill for one missing HTTP response is two crossings of the spread, a
+        reset exit anchor (the new entry is a new anchor, so the stop distance is recomputed) and a
+        cooldown.
+
+        Flattening on an actual delisting is RIGHT, so the fix is not "never flatten"; it is being able
+        to tell the two apart, and the only thing that tells them apart is whether the data comes back.
+        So: hold for `dropped_after - 1` cycles, flatten on the `dropped_after`-th.  Exactly D-031's
+        `quarantine_after` shape, one input over - evidence, then act.
+
+        Why it cannot increase trading: the only weights this touches are ones the caller had just set
+        to 0.0, and it replaces them with the previous cycle's own weight for the same symbol.  A held
+        weight equal to the last one plans no order (the no-trade band sees no change); a flatten that
+        is merely postponed is the same flatten, later.  Nothing here can open a line the model did not
+        already have on.
+        """
+        dropped = list(dropped)
+        streak = {symbol: self.state.dropped_streak.get(symbol, 0) + 1 for symbol in dropped}
+        # Only the symbols missing RIGHT NOW carry a streak: one good cycle is what clears it, and a
+        # symbol that left the universe takes its count with it rather than leaving a stale one behind.
+        self.state.dropped_streak = streak
+        if not dropped:
+            self.alerts.clear("inputs-dropped")
+            return {"symbols": [], "held": [], "flattened": [], "after": self.dropped_after}
+        held: list[str] = []
+        flattened: list[str] = []
+        for symbol in dropped:
+            # `dropped_after <= 0` is the old behaviour, kept reachable on purpose: a symbol that is
+            # not in the traded pool is zeroed a few lines below anyway, so holding it there would be
+            # a weight nothing acts on and a `leaving` name that never leaves.
+            if self.dropped_after > 0 and streak[symbol] < self.dropped_after and symbol in set(self.universe):
+                raw[symbol] = float(self.state.last_raw_targets.get(symbol, raw.get(symbol, 0.0)))
+                held.append(symbol)
+            else:
+                flattened.append(symbol)
+        logger.warning(
+            "no usable bars for %s this cycle (streak %s); holding %s, flattening %s",
+            dropped,
+            {symbol: streak[symbol] for symbol in dropped},
+            held or "nothing",
+            flattened or "nothing",
+        )
+        await self.alerts.send(
+            f"北斗：本周期有 {len(dropped)} 个标的拿不到可用 K 线（{', '.join(dropped)}）。"
+            f"连续次数 { ({symbol: streak[symbol] for symbol in dropped}) }；"
+            f"保持上一轮目标：{held or '无'}；按退市平掉（连续 {self.dropped_after} 轮）：{flattened or '无'}",
+            key="inputs-dropped",
+        )
+        return {"symbols": dropped, "held": held, "flattened": flattened, "streak": streak, "after": self.dropped_after}
 
     async def _maybe_refresh_universe(self, bar_open_ms: int) -> dict[str, Any] | None:
         """Once per UTC day: re-rank through the pool; what leaves is flattened, what enters waits for history."""

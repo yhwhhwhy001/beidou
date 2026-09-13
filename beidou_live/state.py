@@ -48,6 +48,15 @@ class LiveState:
     universe_day: str | None = None
     leaving: list[str] = field(default_factory=list)  # symbols that left the universe but still hold a position
     reject_streak: dict[str, int] = field(default_factory=dict)  # consecutive rejected orders per symbol (D-031)
+    # Same shape as `reject_streak`, pointed at the other silent exit: consecutive cycles whose inputs
+    # carried no usable bars for a symbol.  Persisted because the streak has to survive a restart -
+    # a loop that restarts every time the venue's kline endpoint flaps would otherwise never reach the
+    # threshold, and a delisting would never be acted on.
+    dropped_streak: dict[str, int] = field(default_factory=dict)
+    # The PRE-throttle model weights of the last completed cycle, which is what a symbol whose data
+    # went missing holds onto.  `last_targets` is post-throttle/post-guard and would be throttled a
+    # second time when re-used as an input; this is the quantity the model actually produced.
+    last_raw_targets: dict[str, float] = field(default_factory=dict)
     stopped_books: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )  # probe books closed by their stop rule (D-019)
