@@ -61,8 +61,10 @@ from beidou_live.reports import (
     daily_markdown,
     daily_payload,
     expectations_from_evidence,
+    latest_risk_adaptation,
     preregistration_problems,
     preregistration_skipped,
+    risk_adaptation_headline,
     weekly_markdown,
     weekly_payload,
 )
@@ -487,6 +489,10 @@ def live_status(
     heartbeat = store.read_heartbeat()
     state = store.load()
     click.echo(json.dumps({"heartbeat": heartbeat, "state": state.to_dict()}, indent=2, sort_keys=True, default=str))
+    # Beside the dump rather than inside it: the dump is what `live status | jq` reads, and the number
+    # this line explains - `state.leverage_set`, eighteen identical 5s - is in there.  Unconditional,
+    # above the `--check` return, because the reader who needs it is the one running this by hand.
+    click.echo(risk_adaptation_headline(latest_risk_adaptation(store)))
     if not check:
         return
     interval = str((payload.get("market_data", {}) or {}).get("interval", "1h"))

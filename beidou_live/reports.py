@@ -1373,6 +1373,56 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
     }
 
 
+def latest_risk_adaptation(store: StateStore) -> dict[str, Any]:
+    """M-015 for the day the newest recorded cycle belongs to, for readers that have no day in hand.
+
+    `live status` is one: it answers "what is the loop doing right now", and asking it to name a UTC day
+    would make it answer for a day that may have no cycles yet - at 00:30Z, every day.  The day comes
+    from `_day_of`, the same ruler `risk_adaptation` buckets by, rather than from the host clock.
+    """
+    day = next((found for found in map(_day_of, reversed(store.read_jsonl(store.cycles_path))) if found), None)
+    if day is None:
+        leverage = dict(readable_state(store)[0].leverage_set)
+        return {
+            "enforced": False,
+            "rows": [],
+            "reason": "no cycles recorded",
+            "leverage_distinct": len(set(leverage.values())),
+        }
+    return risk_adaptation(store, day)
+
+
+def risk_adaptation_headline(block: Mapping[str, Any]) -> str:
+    """M-015 in one line, for the command that shows `leverage_set` (D-038 again, 2026-09-14).
+
+    D-038 built M-015 because the daily report showed `last_targets` with nothing to read them against,
+    so the only per-symbol number anywhere was the venue's uniform 5x.  It fixed the report, and the
+    question came back a fifth time - because `live status`, the command an operator actually reaches
+    for, dumps `state.to_dict()` and has the same hole in it.
+
+    Two halves, and only the first can refuse.  A reading needs three held names and a cycle written
+    after `asset_vol` was recorded; the sentence about the venue leverage needs neither, and it is the
+    half the operator came here for, so it is carried on every path - the same rule `risk_adaptation`
+    applies to `leverage_distinct`.  The share is `1 - compression`, the ruler `_risk_adaptation_lines`
+    already uses: a second ruler for the same quantity is how the two disagree six months from now.
+    """
+    distinct = block.get("leverage_distinct")
+    venue = f"交易所杠杆 {distinct} 个取值，在这本书里不承担风险（D-037）" if distinct else "交易所杠杆尚未设置"
+    compression = block.get("compression")
+    if not block.get("enforced") or not isinstance(compression, int | float):
+        # The English `reason` is not pasted here.  This line lands in `live status`, whose prose is the
+        # body of the hourly alert, and that channel is Chinese by the 2026-09-08 ruling; the reason is
+        # one command away in a report where English is the house language.
+        return f"杠杆自适应（M-015）：本轮读不出（原因见日报的 M-015 段）；{venue}"
+    limit = float(block.get("limit", RISK_COMPRESSION_LIMIT))
+    reading = "单书" if block.get("judged") == "single_book" else "合并"
+    verdict = "当前告警" if block.get("status") == "ALERT" else "当前正常"
+    return (
+        f"杠杆自适应（M-015）：第一层定价吸收了市场波动离散度的 {1.0 - float(compression):.0%}"
+        f"（压缩度 {float(compression):.2f}，{reading}读法，超 {limit:.2f} 告警；{verdict}）；{venue}"
+    )
+
+
 def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
     """D-041: what the cited evidence's dataset manifest says about the data on disk.
 
