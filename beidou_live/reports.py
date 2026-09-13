@@ -167,6 +167,112 @@ def evidence_window(store: StateStore) -> dict[str, Any]:
     }
 
 
+def attribution_coverage(store: StateStore) -> dict[str, Any]:
+    """O3: does `attribution.jsonl` still meet itself end to end, or has a stretch gone missing?
+
+    M-010 is the only clean out-of-sample evidence KILL-006 recognises, and every number in it comes
+    out of this one append-only file.  The file can lose a block with nothing saying so: `state.py`
+    hands back an empty state when `state.json` fails to parse, `engine.py`'s
+    ``since = self.state.last_income_ms or now`` then becomes *now*, and the income earned while the
+    loop was away is never queried at all.  What `decay_watch` sees afterwards is a SHORTER window -
+    which reads as "less evidence so far", not as "a hole in the middle".  Those are different
+    claims and only one of them is true.
+
+    Every row already carries the venue-clock window it ingested (``since_ms`` / ``until_ms``) and
+    nothing had ever compared one row's end to the next row's start.  This does:
+
+        covered_ms / span_ms   the union of those windows, over the span they lie in
+        gap_count              how many times a row starts after the previous one ended
+
+    **`coverage` is not a health score, and on the live record it reads 0.18.**  A row is written
+    only by a cycle that HAD income, so an hour in which the book realised nothing, paid no
+    commission and settled no funding leaves no row at all while its income window WAS queried.
+    Measured 2026-09-13 over the live file: 42 rows, span 213.0 h, union 37.3 h, 31 gaps, the widest
+    18.0 h - and not one of them lost a cent.
+
+    The number built for the question is ``largest_gap_without_a_cycle_ms``.  A gap the loop ran
+    through was ingested, because the cycle at its right edge queried across the whole of it; a gap
+    with no completed cycle inside it was not.  That reads 1.00 h today, which is one cycle period:
+    a single quiet hour leaves a gap with nothing strictly inside it, and at one period wide that
+    shape cannot be told from an hour of downtime.  A wiped watermark over a real outage is many
+    periods wide, and shows up here as exactly that.
+
+    Reported, never enforced.  It carries no threshold and `report daily --check` must not learn to
+    exit non-zero on it: the first version of this reading would have called 31 gaps a fault.  When
+    it cannot be computed it says so and returns no number (D-035) - above all it never reads 1.0.
+    """
+    windows: list[tuple[int, int]] = []
+    unreadable = 0
+    for row in store.read_jsonl(store.attribution_path):
+        since, until = row.get("since_ms"), row.get("until_ms")
+        if not isinstance(since, int | float) or not isinstance(until, int | float) or until < since:
+            unreadable += 1
+            continue
+        windows.append((int(since), int(until)))
+    block: dict[str, Any] = {
+        "enforced": False,
+        "reason": None,
+        "rows": len(windows),
+        "unreadable_rows": unreadable,
+        "first_since_ms": None,
+        "last_until_ms": None,
+        "span_ms": None,
+        "covered_ms": None,
+        "coverage": None,
+        "gap_count": None,
+        "gap_ms": None,
+        "largest_gap_ms": None,
+        "overlap_count": None,
+        "gaps_without_a_cycle": None,
+        "largest_gap_without_a_cycle_ms": None,
+    }
+    if len(windows) < 2:
+        # One window covers itself, so `covered / span` would read exactly 1.0 - and a file reduced
+        # to one row is what the failure this instrument watches for LOOKS like.  "Cannot tell" is
+        # the honest answer; this is the one place where defaulting to 1.0 is worse than no number.
+        return {**block, "reason": f"{len(windows)} readable attribution row(s); fewer than 2 cannot be met end to end"}
+    windows.sort()
+    gaps: list[tuple[int, int]] = []
+    overlaps = covered = 0
+    start, end = windows[0]
+    for since, until in windows[1:]:
+        if since > end:
+            gaps.append((end, since))
+            covered += end - start
+            start, end = since, until
+            continue
+        # An overlap is not a gap but it is not nothing either: the same income rows were queried
+        # twice, and `attribute` would have counted them twice.  Counted, not merged away.
+        overlaps += 1 if since < end else 0
+        end = max(end, until)
+    covered += end - start
+    span = end - windows[0][0]
+    if span <= 0:
+        return {**block, "reason": "every readable row carries the same instant; there is no span to cover"}
+    # The loop's own wall clock, not `bar_open_ms`: across the 2026-09-04 restarts several cycles
+    # carry the SAME bar minutes apart, so bar time cannot say whether the loop was alive inside a
+    # gap - and with bar time this reading called a benign 21-minute restart gap unexplained.
+    ran_at = sorted(
+        int(moment.timestamp() * 1000) for row in _cycles(store) if (moment := _parsed(row.get("at"))) is not None
+    )
+    unexplained = [(a, b) for a, b in gaps if not any(a < moment < b for moment in ran_at)]
+    return {
+        **block,
+        "enforced": True,
+        "first_since_ms": windows[0][0],
+        "last_until_ms": end,
+        "span_ms": span,
+        "covered_ms": covered,
+        "coverage": covered / span,
+        "gap_count": len(gaps),
+        "gap_ms": span - covered,
+        "largest_gap_ms": max((b - a for a, b in gaps), default=0),
+        "overlap_count": overlaps,
+        "gaps_without_a_cycle": len(unexplained),
+        "largest_gap_without_a_cycle_ms": max((b - a for a, b in unexplained), default=0),
+    }
+
+
 def _series_by_strategy(store: StateStore, since_ms: int | None) -> dict[str, list[tuple[int, float]]]:
     """Attributed P&L per strategy, ON THE CYCLE GRID - one point per completed cycle, zero where
     that cycle attributed nothing to that strategy.
@@ -1039,6 +1145,34 @@ def _long_run_sharpe_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     return lines
 
 
+def _attribution_coverage_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """O3 in the markdown, worded so the 0.18 cannot be misread as four fifths of the evidence lost.
+
+    The share is rendered next to what produces it - rows against the hours they span - and the gap
+    count is rendered next to the only half of it that means anything on its own.
+    """
+    if not block:
+        return {"none": 0}
+    if not block.get("enforced"):
+        return {"not measured": str(block.get("reason") or "no reason recorded")}
+    hours = float(block.get("span_ms") or 0) / 3_600_000
+    covered_hours = float(block.get("covered_ms") or 0) / 3_600_000
+    unexplained = int(block.get("gaps_without_a_cycle") or 0)
+    return {
+        "attribution_rows": f"{block.get('rows')}（无法读出窗口的行：{block.get('unreadable_rows')}）",
+        "span_hours": f"{hours:.1f}",
+        "attributed_hours": f"{covered_hours:.1f}（占 {float(block.get('coverage') or 0.0):.1%}；"
+        "只有产生了收入的周期才写行，所以这个比例天生远小于 1，不是证据缺失）",
+        "gaps": f"{block.get('gap_count')} 处，最宽 {float(block.get('largest_gap_ms') or 0) / 3_600_000:.2f}h",
+        # The one that would mean something: a gap the loop did not run through was never ingested.
+        "gaps_without_a_cycle": (
+            f"{unexplained} 处，最长 {float(block.get('largest_gap_without_a_cycle_ms') or 0) / 3_600_000:.2f}h"
+            + ("（一个周期宽度以内的都可能只是一小时没有收入；报告，不作门）" if unexplained else "")
+        ),
+        "double_ingested_windows": block.get("overlap_count"),
+    }
+
+
 def _probe_correlation_note(payload: Mapping[str, Any], strategy: str) -> str:
     """The M-014 pair involving this probe, rendered onto its review line (empty when unreadable)."""
     pairs = [
@@ -1182,7 +1316,15 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
     # pass.  The combined reading is computed and printed either way (the L3 shape: moving a reading
     # out of the gate is not deleting it).
     judged = alone if alone.get("compression") is not None else combined
-    compression = judged.get("compression")
+    # Narrowed on the way out of the record rather than trusted into the comparison below.  Every
+    # number in `judged` was computed by `spread` from a JSON cycle row, so its static type carries
+    # the `str` the file could hold; an unreadable one used to reach `compression > limit` and raise
+    # TypeError from inside a report whose whole job is to answer.  D-035's rule is the other one:
+    # a reading that cannot be computed says so and is never read as a number.
+    raw_compression = judged.get("compression")
+    if raw_compression is not None and not isinstance(raw_compression, int | float):
+        return {**refused, "reason": f"compression is not a number: {raw_compression!r}", "rows": rows}
+    compression: float | None = None if raw_compression is None else float(raw_compression)
     return {
         "enforced": True,
         "reason": None,
@@ -1278,7 +1420,12 @@ def restart_cost(
     params = params or RiskBudgetParams()
     missed = restarts = unreadable = 0
     windows: list[float] = []
-    wakes: list[float] = []  # how late each SCHEDULED cycle woke, from its own row
+    # How late each SCHEDULED cycle woke, from its own row, paired with the bar that row allowed it.
+    # The annotation is the fix for a contradiction, not decoration: this was `list[float]` while the
+    # append below put a `(woke, window)` pair in it and the line under `widest` unpacked one back
+    # out.  It ran correctly - the tuple went in and came out - which is exactly why nobody reread it
+    # when the pairing was added.  A declared element type is what makes the next such edit fail loudly.
+    wakes: list[tuple[float, float | None]] = []
     restart_late: list[float] = []
     for row in rows:
         reason = row.get("reason")
@@ -1459,6 +1606,11 @@ def daily_payload(
         "collateral_drift": collateral_drift(_cycles(store), store.read_jsonl(store.attribution_path)),
         "drift": drift_check(store, expectations or {}),
         "evidence_window": window,
+        # O3, beside the window rather than inside it: `evidence_window` says how long the current
+        # construction has run, and this says whether the attribution series under it is unbroken.
+        # A window that is merely SHORT and a window with a block missing read the same everywhere
+        # else, and M-010 is the evidence KILL-006 rests on.  A reading, with no threshold.
+        "attribution_coverage": attribution_coverage(store),
         "income_drift": income_drift(
             store, expectations or {}, equity=equities[-1] if equities else None, since_ms=window["since_ms"]
         ),
@@ -1933,6 +2085,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "construction": (payload.get("evidence_window") or {}).get("construction"),
                     "bars_under_it": (payload.get("evidence_window") or {}).get("bars"),
                     "construction_changes_last_7d": (payload.get("evidence_window") or {}).get("changes_7d"),
+                    # O3: the window says how long; these say whether it is whole.
+                    **_attribution_coverage_lines(payload.get("attribution_coverage") or {}),
                 },
             ),
             (
