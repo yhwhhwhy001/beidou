@@ -1027,6 +1027,15 @@ class LiveEngine:
         weight equal to the last one plans no order (the no-trade band sees no change); a flatten that
         is merely postponed is the same flatten, later.  Nothing here can open a line the model did not
         already have on.
+
+        What it COSTS, stated rather than discovered later: for the cycles a symbol is held, the exit
+        overlay cannot evaluate it - `ExitOverlay.apply` skips any symbol with fewer than two bars, so
+        a stop cannot fire while the data is gone.  The old behaviour flattened instead, which is more
+        protective in exactly that case.  The trade is deliberate: flattening pays two spreads, a reset
+        anchor and a cooldown on EVERY wobble, while the exposure it avoids is at most
+        `dropped_after - 1` bars of an already-open position that the venue is still marking and still
+        liquidating against.  If that ever stops being the right side of the trade, `dropped_after` is
+        where to say so.
         """
         dropped = list(dropped)
         streak = {symbol: self.state.dropped_streak.get(symbol, 0) + 1 for symbol in dropped}
