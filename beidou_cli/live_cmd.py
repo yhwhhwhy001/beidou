@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import signal
 import subprocess
 import time
@@ -767,9 +768,25 @@ def live_kill_switch(profile: str, engage: bool) -> None:
     """Engage/release the kill-switch file: while engaged, only risk-reducing orders are sent."""
     payload = load_profile(profile)
     targets = kill_switch_targets(payload)
+    # L1-07 once more.  `account_kill_switches` returns an empty tuple in two different situations - a
+    # paper run with no account to scope to, and an operator whose shell lacks the export - and this
+    # command must not treat the second like the first.  Measured 2026-09-13T20:44Z on the running demo
+    # loop: a `--release` without the credential printed one success line, exited 0, and left the
+    # account-scoped file engaged, so the book stayed stopped while the operator had been told it was
+    # released.  Release therefore refuses before touching anything; engage still writes what it can,
+    # because a kill switch fails toward stopping, and only then says the stop is weaker than it looks.
+    name = str((payload.get("venue", {}) or {}).get("api_key_env", ""))
+    blind = bool(name) and not os.environ.get(name)
+    if blind and not engage:
+        raise click.ClickException(
+            f"{name} 不在环境里：账户级 kill switch 的路径由 API key 派生，这次只会清掉配置路径，"
+            "循环仍然被挡住。先载入凭据再跑 --release。"
+        )
     if engage:
         for written in engage_kill_switches(targets, f"engaged {datetime.now(UTC).isoformat()}\n"):
             click.echo(f"kill switch engaged: {written}")
+        if blind:
+            raise click.ClickException(f"{name} 不在环境里：只写了配置路径，账户级开关没有落下——这个停止比看上去弱。")
     else:
         removed = release_kill_switches(targets)
         for cleared in removed:

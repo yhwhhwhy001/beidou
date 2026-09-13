@@ -2116,7 +2116,15 @@ CEILING = {
     # surfaced as an x1 cell of 6.90 against `best_key_oos_sharpe`'s 6.02 on the fixture.  Silent
     # misalignment between two indices that both look right is the failure this file keeps paying to
     # document rather than rediscover.
-    "beidou_cli": 5_928,
+    # +17 beidou_cli (5_928 -> 5_945), 2026-09-13: `live kill-switch` treated "this profile has no
+    # account to scope to" and "this operator's shell lacks the export" as the same fact.  Measured on
+    # the running demo loop minutes after a flatten had engaged both paths: `--release` without the
+    # credential printed one success line, exited 0, and left the account-scoped switch in place - the
+    # book stayed stopped while the operator had been told it was released.  Seven of the seventeen are
+    # the comment saying why the two directions are deliberately not symmetric: release refuses before
+    # touching anything, because it must not report a success it did not achieve; engage still writes
+    # what it can and only then exits non-zero, because a kill switch fails toward stopping.
+    "beidou_cli": 5_945,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
