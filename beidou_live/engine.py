@@ -752,6 +752,12 @@ class LiveEngine:
             # the ladder and the vol sizing still divide by `equity`, and changing that denominator is a
             # construction decision.  What this buys is telling a BTC-driven drawdown from a real one.
             "collateral": collateral_share(equity=snapshot.equity, usdt_equity=snapshot.account.usdt_equity),
+            # R8's ruler (`attributed_drawdown_state`) needs the book's OPEN P&L, not only what it has
+            # realised: an income-only path learns about a drawdown after the position is closed, which
+            # over 2021-2026 meant the ladder never fired at all.  Managed positions only - a foreign
+            # position is not this book's.  The venue supplies the figure; `Position.unrealized_pnl` is
+            # what the parser already reads off `positionRisk`.
+            "unrealized": sum(position.unrealized_pnl for position in snapshot.positions.values()),
             "gross_before": snapshot.gross_notional(),
             # M-007 is about the standing book, not about what one cycle's orders ask for: record the
             # initial margin the positions already consume so the daily report can read a real series.
@@ -1468,7 +1474,11 @@ class LiveEngine:
             RiskBudgetParams(),
         )
         block: dict[str, Any] = {
-            "ruler": "attributed_pnl",
+            # Read off the reading rather than asserted here: after 2026-09-14 the ruler carries the
+            # book's unrealised P&L whenever the cycles it reads recorded it, and a label this file
+            # hardcodes would keep saying `attributed_pnl` through the change.
+            "ruler": reading.get("ruler", "attributed_pnl"),
+            "marked_rows": reading.get("marked_rows"),
             "enforced": bool(reading.get("enforced")),
             "drawdown": reading.get("value"),
             "attributed": reading.get("attributed"),
@@ -1504,13 +1514,24 @@ class LiveEngine:
                 logger.warning("risk ladder cleared at attributed drawdown %.4f", drawdown)
             return block
         cycles = int(standing.get("cycles", 0)) + 1
-        scalar = float(target) / base if base > 0 else 1.0
+        # A de-escalation ladder must never ADD size.  `throttle_scalar` returns an ABSOLUTE vol target
+        # and this divides by the running one, so rungs calibrated for a larger k return a scalar above
+        # 1 at a smaller one - an amplifier wearing a brake's name, and it would fire exactly when the
+        # book is already down.  Latent since R8 was wired (0.225 against k=0.15 is 1.5x) and surfaced
+        # on 2026-09-14, when re-deriving the rungs for k=0.60 made their dependence on a k explicit.
+        # Clamped rather than raised: a rung that asks for more than the book already runs is a
+        # mis-calibration to report, not a reason to stop the cycle.
+        raw = float(target) / base if base > 0 else 1.0
+        scalar = min(1.0, raw)
         acting = cycles > policy.drawdown_grace_cycles
         self.state.risk_ladder = {
             "cycles": cycles,
             "rung": target,
             "vol_target": target,
             "scalar": scalar,
+            # True means the rung sits ABOVE the running vol_target, so the ladder asked for no cut at
+            # all.  Reported so a mis-calibrated ladder reads as mis-calibrated instead of as quiet.
+            "rung_above_base": raw > 1.0,
             "acting": acting,
             "drawdown": drawdown,
             "since_bar_ms": int(standing.get("since_bar_ms") or bar_open_ms),

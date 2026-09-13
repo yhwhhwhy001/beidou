@@ -16,6 +16,12 @@ a property of that k and not of the rule: 96d659ae rejected restating the rungs 
 wider budget (O-3) precisely because it put the first rung back at 0.75.  The tests below therefore pin
 the RULE at a given scalar rather than any profile's k.
 
+2026-09-14, after this fix landed: O-3 WAS adopted - the rungs are now ((-0.49, 0.45), (-0.70, 0.30))
+against the -70% budget, so the first rung is back at 0.75 exactly as 96d659ae feared.  It is safe
+because of the fix this file is about, which is the order the two changes had to happen in: the
+exemption first, the rescale second.  Had they landed the other way round the ladder would have gone
+back to having one reachable rung, and nothing in the record would have said so.
+
 Both halves of the record read normal on their own.  `risk_ladder.acting` was true - the ladder DID
 de-escalate, it produced a smaller target - and `skipped[]` carried an ordinary `NO_TRADE_BAND`, the
 same row a quiet symbol writes on a quiet bar.  The two only contradict each other when read together,
@@ -54,10 +60,11 @@ EQUITY = 100_000.0
 PRICE = 50_000.0
 BAND = 0.005  # config/live.demo.yaml: no_trade_band
 REL_BAND = 0.40  # config/live.demo.yaml: no_trade_rel_band
-# The two rungs as scalars at vol_target 0.30, the k the defect was found at.  Spelled out rather than
+# The two rungs as scalars.  Unchanged by the 2026-09-14 rescale: both the rungs and k doubled, so
+# 0.225/0.30 and 0.45/0.60 are the same 0.75.  Spelled out rather than
 # read from `Policy()` and the profile on purpose: this file is about what `plan_rebalance` does with a
 # scalar, and the profile's own k moved to 0.60 while this was being written.
-FIRST_RUNG_SCALAR = 0.75  # 0.225 / 0.30
+FIRST_RUNG_SCALAR = 0.75  # 0.225 / 0.30, and 0.45 / 0.60
 SECOND_RUNG_SCALAR = 0.50  # 0.150 / 0.30
 HELD_WEIGHT = 0.10  # 10,000 USDT of a 100,000 USDT book, so the relative band is 4,000 USDT
 
@@ -177,7 +184,10 @@ def _world(panel: Panel, tmp_path: Path, cursor: int = 400) -> tuple[LiveEngine,
         grace_seconds=1.0,
         # `_risk_ladder` divides the rung by this, so it is what makes the first rung a 0.75 scalar
         # here as it is live.  Nothing else in the loop reads it (the model carries its own).
-        portfolio=PortfolioParams(vol_target=0.30),
+        # 0.60 since 2026-09-14: the rungs are absolute vol targets derived for that k, and
+        # `_risk_ladder` now clamps a scalar above 1 rather than letting a ladder add size, so at
+        # 0.30 the first rung (0.45) would read as "no cut" and this test would observe nothing.
+        portfolio=PortfolioParams(vol_target=0.60),
     )
     engine = LiveEngine(
         config,
@@ -203,9 +213,9 @@ async def _second_cycle(engine: LiveEngine, market: FakeMarketData, venue: FakeV
         rows = engine.store.read_jsonl(engine.store.cycles_path)
         bar = int(rows[-1]["bar_open_ms"])
         engine.store.append_attribution(
-            {"bar_open_ms": bar, "until_ms": bar + 3_600_000, "total": -0.40 * float(rows[0]["equity"])}
+            {"bar_open_ms": bar, "until_ms": bar + 3_600_000, "total": -0.55 * float(rows[0]["equity"])}
         )
-        engine.state.risk_ladder = {"cycles": 3, "rung": 0.225, "acting": True, "since_bar_ms": bar}
+        engine.state.risk_ladder = {"cycles": 3, "rung": 0.45, "acting": True, "since_bar_ms": bar}
     market.cursor += 1
     for symbol in SYMBOLS:
         venue.set_price(symbol, float(market.panel.close[symbol].iloc[market.cursor - 1]))

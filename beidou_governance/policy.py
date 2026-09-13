@@ -28,8 +28,17 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.3.2"
-"""0.3.1 (2026-09-10): ONE extra mine round, for the window 2026-09-03..2026-10-03 only.
+POLICY_VERSION = "0.3.3"
+"""0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
+unrealised P&L.  One decision in two halves - see `drawdown_ladder` for why they cannot ship apart.
+The short version: measured over 2021-2026 at k=0.60 the ladder as it stood NEVER FIRED, because the
+ruler counted only realised P&L while a momentum book holds its losers; and the rungs it would have
+fired at were calibrated for a 50% budget the operator replaced with 70% when k doubled.  Fixing
+either alone gives the wrong book - the ruler alone silently buys a 20.5pp/yr brake nobody chose, the
+rungs alone re-tune something inert.  Evidence and the priced alternatives:
+docs/analysis/2026-09-14-backtest-guard-k060-ladder-audit.md.
+
+0.3.1 (2026-09-10): ONE extra mine round, for the window 2026-09-03..2026-10-03 only.
 
 4 -> 5 rounds.  Not a standing increase, and the difference is enforced rather than promised: the
 reversion has a date and a test that fails on it (`test_the_single_window_mine_opening_is_returned`).
@@ -166,11 +175,33 @@ class Policy:
     # The clean-record requirement a promotion must find already satisfied, and which it then resets.
     min_clean_days_before_promotion: int = 30
 
-    # R8: the drawdown ladder, on attributed P&L rather than venue equity - 52% of this account's
+    # R8: the drawdown ladder, on the BOOK's P&L rather than venue equity - 52% of this account's
     # equity is non-USDT collateral, so an equity drawdown can be bitcoin moving and nothing else.
     # The first crossing alerts and waits two cycles before acting, so one bad print cannot halve
     # the risk budget.
-    drawdown_ladder: tuple[tuple[float, float], ...] = ((-0.35, 0.225), (-0.50, 0.15))
+    #
+    # 2026-09-14, and both halves of this change are one decision (operator, options priced):
+    #
+    # (a) the RUNGS are re-derived for the -70% budget the operator declared when k went to 0.60.
+    #     They are the shipped rule transcribed, not a new rule: `deescalate_at` = 70% of budget,
+    #     `rollback_at` = budget, `deescalate_to` = 75% of k, `rollback_to` = 50% of k.  At k=0.60 and
+    #     budget 70% that is ((-0.49, 0.45), (-0.70, 0.30)).  The old numbers were calibrated at
+    #     k=0.30 against a 50% budget and, left alone, would have de-risked at -35% - far inside the
+    #     budget the operator chose in order to buy return, at a measured median cost of 20.5pp of
+    #     CAGR (`p32d`, both universes).  The rescaled ladder costs 0.4pp and lands q95 at -66.5%,
+    #     inside the declared -70%.
+    #
+    # (b) the RULER now includes the book's unrealised P&L (`risk_budget.attributed_drawdown_state`),
+    #     because excluding collateral repricing - which is what KILL-AR-05 asked for and is still
+    #     true - never required excluding the book's own open positions, and excluding them made this
+    #     ladder INERT: measured over 2021-2026 at k=0.60, the mark-to-market ruler spends 785 bars
+    #     past the first rung and the income-only ruler spends 0.  Five years and seven months, zero
+    #     firings.  See docs/analysis/2026-09-14-backtest-guard-k060-ladder-audit.md.
+    #
+    # They move together on purpose.  Fixing the ruler alone would have made the OLD rungs bite for
+    # the first time, i.e. silently adopted the 20.5pp arm the operator did not choose; re-scaling the
+    # rungs alone would have re-tuned a ladder that never fires.
+    drawdown_ladder: tuple[tuple[float, float], ...] = ((-0.49, 0.45), (-0.70, 0.30))
     drawdown_grace_cycles: int = 2
 
     # R9 / R10: the digest is recorded every cycle, and it is what makes an edit here visible.

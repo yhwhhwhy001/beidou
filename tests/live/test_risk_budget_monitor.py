@@ -33,11 +33,12 @@ def test_the_ladder_fires_at_its_two_thresholds_and_names_the_action() -> None:
     params = RiskBudgetParams()
     flat = [_cycle(i, 100.0) for i in range(5)]
     assert drawdown_state(flat, params)["action"] is None
-    assert drawdown_state([*flat, _cycle(5, 70.0)], params)["action"] is None  # -30%, inside
-    stepped = drawdown_state([*flat, _cycle(5, 64.0)], params)  # -36%
-    assert stepped["action"] == "vol_target -> 0.225"
-    rolled = drawdown_state([*flat, _cycle(5, 49.0)], params)  # -51%
-    assert rolled["action"] == "vol_target -> 0.15"
+    # 2026-09-14: the rungs moved to -49% / -70%, re-derived for the -70% budget declared with k=0.60.
+    assert drawdown_state([*flat, _cycle(5, 55.0)], params)["action"] is None  # -45%, inside
+    stepped = drawdown_state([*flat, _cycle(5, 50.0)], params)  # -50%
+    assert stepped["action"] == "vol_target -> 0.45"
+    rolled = drawdown_state([*flat, _cycle(5, 29.0)], params)  # -71%
+    assert rolled["action"] == "vol_target -> 0.3"
 
 
 def test_a_rebaselined_cycle_resets_the_high_water_mark() -> None:

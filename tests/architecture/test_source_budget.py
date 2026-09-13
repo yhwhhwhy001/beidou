@@ -2058,7 +2058,23 @@ CEILING = {
     # the rule must not rest on k, since 96d659ae's O-3 put the first rung back at 0.75 while restating
     # the ladder against a wider budget, so the coincidence recurs at the next re-scale.  Two existing
     # lines were replaced, hence 33 added against 31 net.
-    "beidou_live": 8_683,
+    # +54 more beidou_live (8_683 -> 8_737), 2026-09-14, and the sentence the rule requires: R8's ruler
+    # now carries the book's UNREALISED P&L, and `_risk_ladder` clamps a scalar that would add size.
+    # The measurement that bought them: over 2021-2026 at k=0.60 the mark-to-market ruler spends 785
+    # bars past the first rung and the income-only ruler spends 0.  Five years and seven months, zero
+    # firings - a control that cannot be distinguished from its own absence.  Taking collateral
+    # repricing out of the numerator is what KILL-AR-05 asked for and is unchanged; taking the book's
+    # own open positions out was never part of it and is what made the ladder inert.
+    #
+    # The clamp is a second defect the first one hid: `throttle_scalar` returns an ABSOLUTE vol target
+    # and the engine divides by the running one, so rungs calibrated for a larger k give a scalar above
+    # 1 at a smaller one - an amplifier that fires when the book is already down.  Latent since R8 was
+    # wired; it could never be observed while the ladder never fired.
+    #
+    # Most of the lines are those two paragraphs in the source, plus `marked_from` / `marked_rows` and
+    # the `ruler` label, which exists because a row written before `unrealized` and a row written after
+    # are not comparable and only a name can say so after the fact.
+    "beidou_live": 8_737,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2124,7 +2140,13 @@ CEILING = {
     # +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
     # an `all(isinstance(...))` generator that mypy 2.x stopped reading - part of the 30 type errors that
     # had kept CI red for 23 consecutive pushes over four days, with the test step never running once.
-    "beidou_governance": 3_657,
+    # +31 more beidou_governance (3_657 -> 3_688), 2026-09-14: R8's rungs re-derived for the -70%
+    # budget the operator declared when `vol_target` went to 0.60, plus POLICY_VERSION 0.3.3 recording
+    # why.  Two numbers changed; the rest is the paragraph saying that the ruler fix and the rescale
+    # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
+    # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
+    # have re-tuned something that never fires.  The options were priced before the operator picked.
+    "beidou_governance": 3_688,
 }
 
 
