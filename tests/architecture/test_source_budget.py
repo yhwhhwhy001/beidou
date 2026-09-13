@@ -1952,36 +1952,68 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
-    # +39 alpha / +18 live / +35 cli (P30, 2026-09-12): `sleeve_max_gross`, a per-bar gross cap on a
-    # non-main book applied before its fraction.  P21 rejected `594a12f9` on drawdown alone and named
-    # the cause as exposure rather than parameters - the sleeve averages 1.372 gross against tsmom's
-    # 0.859 - so a third of it was never a third of the risk budget.  The alpha lines are `cap_gross`
-    # (one row-wise cap, now also the one `combine_books` calls, so the two cannot drift) plus the
-    # field; live is the fingerprint entry and its alias, because a knob the record cannot see is the
-    # other half of D-036; cli is the flag, the report's `sleeve_gross` block and the comments that say
-    # why the cap sits before the fraction and outside the standalone verdict.
-    "beidou_alpha": 8_133,
-    "beidou_live": 7_832,
-    # +7 more cli: `governance plan` was recording an admission ruling into M-G05's ledger, and a dry
-    # run is not a ruling - found during the DRILL-G1 production run, four invocations leaving four
-    # rows and divergence going 1 -> 5 pending.  Same defect as `family_gate`'s date key, same morning,
-    # one command away; the lines are the docstring carrying both measurements.
-    # +22 more cli: `governance window`, the reader for §8's Phase 4a list (see the governance note).
-    "beidou_cli": 5_759,
-    "beidou_data": 5_365,
-    "beidou_exchange": 611,
+    # Ninth raise, 2026-09-13, and the sentence the rule requires.  One commit, seven packages, because
+    # nine parallel workers all landed against a table with ZERO margin in every row - and that is worth
+    # recording as a finding rather than only as an inconvenience: a ratchet with no headroom stops being
+    # a ratchet and becomes a tax on the first honest change, paid in deleted comments.  The first worker
+    # to hit it had already golfed its two files from +16/+6 down to +10/+4 before anyone noticed the
+    # table was the binding constraint on all nine.  Nothing was shaved after that.
+    #
+    # +455 beidou_alpha.  The larger half (~251) is `overlays/exits.py`: a bar with no close used to fail
+    # the `price > 0` at the end of the `held != 0` condition, fall PAST the whole exit block and land in
+    # `_enter`, which anchored a new ExitState at the NaN price and erased the entry - so one missing bar
+    # silently disarmed the stop for the rest of that episode (reproduced at 100 -> 89 -> 87 with
+    # stop_loss 6 and sigma_1d 0.02: 6.5 units adverse, no fire).  The lines are that reproduction, the
+    # `stale_carry_bars` bound that decides when "a gap" becomes "the symbol is gone", the sweep table
+    # behind the default of 2, and a second, vectorised engine that is asserted bit-identical to
+    # `exit_step` rather than trusted (10x: 13.8s -> 1.4s on 49,937 x 205, which is what `research
+    # overlay`'s eleven cells were paying eleven times).  The rest: +156 for calendar-anchored re-fit
+    # boundaries in `features`/`portfolio` - the GARCH and HRP options re-fitted on `t % refit_bars`, so
+    # the same calendar bar read differently depending on where the panel was sliced, D-033's lesson in a
+    # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
+    # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
+    # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
+    "beidou_alpha": 8_588,
+    # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
+    # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
+    # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
+    # answered a corrupt file with a fresh `LiveState` - no raise, no alert, no row.  M-010 is the only
+    # clean out-of-sample series this system has (KILL-006), and that path could take a stretch out of it
+    # that nothing afterwards could detect.  ~348 for the refusal, the fsync `_atomic_write` never had
+    # while `_append` six lines away had written six lines of comment about needing one, the bounded
+    # dropped-input rule (one bad REST answer used to flatten a symbol and re-open it next cycle), the
+    # backoff writing the bars it slept through so M-Q03's threshold of zero can see them, and bounded
+    # order concurrency that is bit-identical at its default of 1.  ~202 for `attribution_coverage` and
+    # the three protocol members `engine` had been reading past `ports.SignalModel` to get at.  ~57 for
+    # the flip's margin arithmetic and the snapshot's overlapped reads; ~69 for the merge itself - the
+    # seam that lets `live flatten` run without a readable state file, because an emergency exit a
+    # half-written file can block is a worse failure than the one the refusal prevents, and the file is
+    # most likely half-written exactly when someone reaches for flatten.
+    "beidou_live": 8_526,
+    # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
+    # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
+    # which is a sentence a later reader needs and a schema cannot carry.
+    "beidou_cli": 5_820,
+    # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
+    # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
+    # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
+    # and 81 of those 109 are six symbols whose 1h archive was never backfilled - a sync gap wearing a
+    # universe defect's clothes.  Only LUNAUSDT's 28 refreshes are the phenomenon, and a single merged
+    # share hides that, so the reading is per symbol.
+    "beidou_data": 5_432,
+    # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
+    # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
+    # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
+    # the ones the attribution ledger is made of.  The walk now overlaps and dedupes by id, and says out
+    # loud when it stopped asking rather than when the window ended.  The rest is the two write-only
+    # counters finally being read (a warning, never a sleep - the loop is holding positions) and the
+    # correction to `ARCHITECTURE.md`, which had claimed 限频 this package does not do.
+    "beidou_exchange": 714,
     "beidou_shared": 289,
-    # +65 governance: §3's `queued -> probe` requires "队首" and the state recorded no order at all, so
-    # `queue_head` refused outright whenever two candidates were queued - a gate that can never open
-    # rather than one that is strict, and the half-transition the 2026-09-09 audit counted as missing.
-    # `Candidate.queued_at` stamped where the transition happens, `Book.queue` FIFO over it, and
-    # `Policy.queue_order` so changing the order is a rule version change (0.3.1 -> 0.3.2).
-    # +158 governance: §8's Phase 4a says "块 4 必改项一次改完", which presumes a LIST of construction
-    # changes applied together in one window - and that list never existed.  Each was decided in a log
-    # entry, the log has no reader, so on the day a window opens nothing says what it was supposed to
-    # carry.  Same shape as the thirteen reopen conditions, pointed the other way: not a closed
-    # hypothesis nobody reopens, but an open decision nobody applies.  It applies nothing itself.
-    "beidou_governance": 3_643,
+    # +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
+    # an `all(isinstance(...))` generator that mypy 2.x stopped reading - part of the 30 type errors that
+    # had kept CI red for 23 consecutive pushes over four days, with the test step never running once.
+    "beidou_governance": 3_657,
 }
 
 

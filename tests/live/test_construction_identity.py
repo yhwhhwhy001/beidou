@@ -104,6 +104,7 @@ EXPECTED_FIELDS = {
         "regime_er_cut",
         "regime_tp_scale",
         "regime_side",
+        "stale_carry_bars",
     },
     "throttle": {"enabled", "start", "stop", "floor"},
     "leverage": {"mode", "margin_cap", "max_leverage", "margin_buffer"},

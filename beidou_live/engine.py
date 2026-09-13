@@ -2045,6 +2045,14 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "regime_er_cut": config.exits.regime_er_cut,
             "regime_tp_scale": config.exits.regime_tp_scale,
             "regime_side": config.exits.regime_side,
+            # v6's second field, 2026-09-13.  How many consecutive unjudgable bars the overlay holds
+            # a position through before it gives the symbol up.  Inert on THIS path today - the live
+            # adapter skips a symbol whose close is missing before `exit_step` ever sees it - so the
+            # live construction is unchanged and the alias's proof holds.  It is hashed anyway for the
+            # reason every other `exits` field is: the day someone wires the live adapter to the same
+            # rule, a knob the record cannot see is KILL-Q15's shape, and the record has to have been
+            # carrying it from before that day, not from after it.
+            "stale_carry_bars": config.exits.stale_carry_bars,
         },
         "throttle": {
             "enabled": config.throttle.enabled,
