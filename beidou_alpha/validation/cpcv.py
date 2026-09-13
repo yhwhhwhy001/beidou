@@ -23,6 +23,39 @@ class Split:
 def cpcv_splits(
     n_bars: int, n_groups: int = 6, n_test_groups: int = 2, purge: int = 0, embargo: int = 0
 ) -> list[Split]:
+    """Every `n_test_groups`-of-`n_groups` combination, with `purge` bars dropped before each test
+    block and `embargo` bars dropped after it.
+
+    The two numbers block two different leaks, and unlike walk-forward, CPCV has both.  A CPCV
+    training set is chosen by COMBINATION, so it contains groups that lie after the test block as
+    well as before it:
+
+        purge   - training bars BEFORE the test block, whose labels reach forward into it;
+        embargo - training bars AFTER the test block, whose FEATURE LOOKBACK reaches back into it.
+
+    Only the second one is live in this pipeline, and it is the one that was set wrong.  What gets
+    split here is a realised net-return series, so there is no forward label anywhere - the audit of
+    2026-09-08 said so (`docs/analysis/2026-09-08-backtest-guard-external-audit.md:309`) and
+    concluded the embargo carries nothing.  That conclusion is correct for `walk_forward_folds`,
+    where the training window always ends before the test block, and WRONG here: every bar of this
+    series was produced by a model whose feature window looks BACK, so a training bar sitting `k`
+    bars after the test block was computed from a window covering that block whenever `k < lookback`
+    - and `cpcv_evaluate` picks its parameters on exactly those bars.  The returns stay causal, so
+    this is not a look-ahead; it is selection contamination, and it makes a gate such as D-020's
+    `fraction_negative <= 0.10` easier to pass than it should be.
+
+    So `embargo` should be sized by the model's FEATURE LOOKBACK, never by a label horizon:
+    `AlphaModel.warmup_bars` (1,442 under the registry shipped on 2026-09-13), or at the very least
+    the longest lookback in it - `max(horizons)` = 720 for tsmom.
+
+    What the callers actually pass today is `embargo = purge = 50` (`beidou_cli/research_cmd.py`,
+    `research validate` and `research book`), which leaves roughly 670 of those ~720 contaminated
+    bars inside the training set of every "after" group.  This boundary is therefore OPEN, on the
+    record rather than by argument: see the orange entry in
+    `docs/analysis/2026-09-13-full-repo-review.md`.  `--embargo` exists so the operator can close it;
+    its default is still `--purge` because adopting a real embargo means a pre-registered re-run that
+    charges the trials ledger, which is a decision, not a refactor.
+    """
     if n_groups < 2 or not 0 < n_test_groups < n_groups or n_bars < n_groups * 2:
         raise ValueError("invalid CPCV specification")
     bounds = np.linspace(0, n_bars, n_groups + 1, dtype=int)
