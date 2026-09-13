@@ -144,3 +144,45 @@ def test_a_probe_adopted_on_a_book_report_cannot_be_asked_this_question_at_all()
     assert [r.status for r in readings] == [UNREADABLE]
     assert "oos_selection" in readings[0].why
     assert failures(readings) == (), "UNREADABLE is a failure to ask the question, not a failed gate"
+
+
+def test_a_selection_block_missing_any_one_number_is_unreadable() -> None:
+    """The four-way numeric check, pinned one field at a time.
+
+    It read `all(isinstance(v, int | float) for v in (...))` until 2026-09-13.  That spelling narrows
+    nothing for a type checker - every `float(sharpe)` and `int(n_then)` after it stayed `Any | None`,
+    and mypy 2.x failed the file on 22 arg-type errors ahead of the test step, so the suite did not run
+    for four days.  It was rewritten as an explicit chain, which is only a rewrite if every field still
+    refuses on its own and refuses with the same sentence: the operator tells UNREADABLE from FAIL by
+    that text, and a field that silently stopped being checked would reach `float()` as None instead.
+    """
+    message = "the selection block is missing sharpe/variance/threshold/n"
+    for field in ("oos_sharpe_annual", "variance", "threshold_annual", "n_trials"):
+        absent = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
+        del absent["oos_selection"][field]
+        reading = read_gate("tsmom", absent, _ledger("tsmom", 88))
+        assert (reading.status, reading.why) == (UNREADABLE, message), f"absent {field}"
+
+        not_a_number = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
+        not_a_number["oos_selection"][field] = "1.8087"
+        reading = read_gate("tsmom", not_a_number, _ledger("tsmom", 88))
+        assert (reading.status, reading.why) == (UNREADABLE, message), f"{field} as a string"
+
+
+def test_an_unreadable_reading_still_carries_the_numbers_it_could_read() -> None:
+    """Field order on the partial `GateReading`, which two UNREADABLE returns fill positionally.
+
+    `read_gate` hands the `ledger_trials`-missing and append-only-violation returns three bare
+    positionals - sharpe, N at adoption, threshold at adoption - so a reordered dataclass would relabel
+    an operator's numbers rather than fail, and the today columns must stay empty because nothing was
+    recomputed.
+    """
+    no_ledger = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
+    del no_ledger["ledger"]
+    reading = read_gate("tsmom", no_ledger, _ledger("tsmom", 88))
+    assert reading.status == UNREADABLE
+    assert reading.oos_sharpe == 1.8087
+    assert reading.n_at_adoption == 183
+    assert reading.threshold_at_adoption == pytest.approx(max_sharpe_quantile(183, VARIANCE, 0.05) * SCALE)
+    assert (reading.n_today, reading.threshold_today) == (None, None)
+    assert reading.margin is None, "no threshold today means no margin today"

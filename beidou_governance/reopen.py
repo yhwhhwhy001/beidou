@@ -107,25 +107,29 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
     if entry.check not in MACHINE_CHECKS:
         return Status(entry, UNREADABLE, f"unknown check {entry.check!r}")
 
+    # Each branch names its own locals.  They used to share `want` and `have`, which costs nothing at
+    # runtime - the branches are exclusive and each returns - but reads to a type checker as one variable
+    # that is a float here and a list of columns ten lines down.  Names only, no behaviour.
     if entry.check == "equity_at_least":
-        want = float(entry.args.get("usdt", 0.0))
-        have = facts.get("equity")
-        if not isinstance(have, int | float):
+        want_usdt = float(entry.args.get("usdt", 0.0))
+        have_equity = facts.get("equity")
+        if not isinstance(have_equity, int | float):
             return Status(entry, UNREADABLE, "no equity in the live record")
         return Status(
             entry,
-            MET if float(have) >= want else NOT_MET,
-            f"equity {float(have):,.0f} vs {want:,.0f} USDT",
+            MET if float(have_equity) >= want_usdt else NOT_MET,
+            f"equity {float(have_equity):,.0f} vs {want_usdt:,.0f} USDT",
         )
 
     if entry.check == "data_columns":
-        want = [str(c) for c in entry.args.get("columns", ())]
-        have = {str(c) for c in facts.get("columns", ())}
-        missing = [c for c in want if c not in have]
+        want_columns = [str(c) for c in entry.args.get("columns", ())]
+        have_columns = {str(c) for c in facts.get("columns", ())}
+        missing = [c for c in want_columns if c not in have_columns]
         return Status(
             entry,
             MET if not missing else NOT_MET,
-            f"{len(want) - len(missing)}/{len(want)} present" + (f"; missing {', '.join(missing)}" if missing else ""),
+            f"{len(want_columns) - len(missing)}/{len(want_columns)} present"
+            + (f"; missing {', '.join(missing)}" if missing else ""),
         )
 
     when = str(entry.args.get("date", ""))
