@@ -1989,7 +1989,10 @@ CEILING = {
     # seam that lets `live flatten` run without a readable state file, because an emergency exit a
     # half-written file can block is a worse failure than the one the refusal prevents, and the file is
     # most likely half-written exactly when someone reaches for flatten.
-    "beidou_live": 8_526,
+    # +27 more on the merge itself: `dropped_after` moved onto `LiveConfig` so the fingerprint can
+    # see it, the `inputs` block that carries it, and `restart_cost` learning that a backoff row is
+    # a missed rebalance but not a restart - a six-hour outage was about to read as six restarts.
+    "beidou_live": 8_553,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

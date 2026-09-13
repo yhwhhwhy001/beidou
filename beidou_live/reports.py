@@ -28,7 +28,7 @@ from beidou_data.store import KlineStore, MetricsStore
 from beidou_live.health import canonical_construction
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
-from beidou_live.scheduler import ALREADY_REBALANCED_REASON, MISSED_REBALANCE_REASON
+from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
 from beidou_live.state import LiveState, StateStore, StateUnreadable
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
@@ -1457,7 +1457,14 @@ def restart_cost(
         reason = row.get("reason")
         skipped = row.get("phase") == "SKIPPED" or reason == MISSED_REBALANCE_REASON
         if skipped:
-            restarts += 1
+            # A backoff is not a restart.  These rows arrived on 2026-09-13, when the failure backoff
+            # began writing one SKIPPED row per bar it slept through - without which M-Q03's threshold
+            # of zero could not see them at all (the loop stayed up, so nothing else recorded the gap).
+            # They are genuine MISSES and are charged below; counting them as restarts too would make a
+            # single six-hour outage read as six process restarts and inflate `worst_restart_late`,
+            # which is the number the failure action "查重启原因" sends someone to look at.
+            if reason != BACKOFF_REASON:
+                restarts += 1
             # A bar that was already rebalanced cannot have had its rebalance missed.  The row still
             # carries the window the engine allowed, so `widest_window_seconds` keeps it; only the miss
             # COUNT declines to charge it.
@@ -1465,7 +1472,7 @@ def restart_cost(
                 missed += 1
             if isinstance(window := row.get("window_seconds"), int | float):
                 windows.append(float(window))
-            if isinstance(value := row.get("late_seconds"), int | float):
+            if reason != BACKOFF_REASON and isinstance(value := row.get("late_seconds"), int | float):
                 restart_late.append(float(value))
             continue
         # The bar is per row when the row carries it (every completed cycle does, from 2026-09-10) and

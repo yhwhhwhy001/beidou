@@ -146,6 +146,13 @@ class LiveConfig:
     margin_cap: float = 0.40
     max_leverage: int = 5
     margin_buffer: float = 0.10
+    # D-031's shape, one source over: how many consecutive cycles a symbol may return no closed bars
+    # before the loop stops holding it and flattens it as delisted.  1 reproduces the behaviour this
+    # field was added to make visible - a single empty REST answer zeroed the target, `plan_rebalance`
+    # read that as `closing`, and the position was crossed out and re-opened the next cycle, paying two
+    # spreads and resetting the exit anchor for what was usually a hiccup.  Raising it is a real change
+    # to the book, so it is a priced one.
+    dropped_after: int = 1
     # Which symbols may trade at all.  Carried here so `construction_fingerprint` can see it: it is a
     # portfolio-construction parameter in every sense that matters and was outside the digest until
     # 2026-09-09, which meant lowering it would have changed the tradable universe with nothing on the
@@ -195,7 +202,7 @@ class LiveEngine:
         metrics_store: Any = None,
         spot_verification: Verification | None = None,
         record_metrics: bool = True,
-        dropped_after: int = 3,
+        dropped_after: int | None = None,
         order_concurrency: int = 1,
         state: LiveState | None = None,
     ) -> None:
@@ -286,7 +293,7 @@ class LiveEngine:
         # `quarantine_after`, and deliberately a constructor parameter rather than a config key: it
         # changes no weight and no threshold, so it has no business inside `construction_fingerprint`,
         # and a knob in YAML that the digest cannot see is the other half of D-036.
-        self.dropped_after = int(dropped_after)
+        self.dropped_after = config.dropped_after if dropped_after is None else int(dropped_after)
         # Orders per `asyncio.gather` batch.  1 is today's serial loop, byte for byte; see
         # `_execute_orders` for why >1 changes nothing about WHAT is sent and why it is off by default.
         self.order_concurrency = int(order_concurrency)
@@ -2034,6 +2041,13 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # record cannot see is the other half of D-036.
             "exempt_reductions": config.rebalance.exempt_reductions,
         },
+        # v6's third field.  How many consecutive cycles a symbol may come back with no closed
+        # bars before the loop treats it as delisted and flattens it.  1 is today's behaviour
+        # exactly - one bad REST answer flattens the symbol and the next cycle re-opens it - so
+        # the alias's proof holds.  Anything above 1 holds the position through the gap instead,
+        # which trades two crossings and a reset exit anchor for `dropped_after - 1` bars of an
+        # unpriced position: a real change to the book, and therefore a priced one.
+        "inputs": {"dropped_after": config.dropped_after},
         "exits": {
             "stop_loss": config.exits.stop_loss,
             "trailing_stop": config.exits.trailing_stop,

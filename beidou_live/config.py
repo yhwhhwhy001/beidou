@@ -122,6 +122,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         leverage_mode=leverage_mode,
         margin_cap=float(portfolio.get("margin_cap", 0.40)),
         max_leverage=int(portfolio.get("max_leverage", 5)),
+        dropped_after=int(pool.get("dropped_after", 1)),
         margin_buffer=float(portfolio.get("margin_buffer", 0.10)),
         universe_refresh=str(pool.get("refresh", "never")).lower() != "never",
         liquidity_window=int(pool.get("liquidity_window", 24)),

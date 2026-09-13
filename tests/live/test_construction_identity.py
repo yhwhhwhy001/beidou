@@ -86,6 +86,10 @@ EXPECTED_FIELDS = {
         "sleeve_max_gross",
     },
     "guards": {"max_gross", "max_weight", "daily_loss_pause", "stale_bars_max"},
+    # v6: what the loop does when a symbol's bars do not arrive.  Not a portfolio parameter and not a
+    # guard - it decides whether a position survives an empty REST answer - so it gets its own block
+    # rather than being filed under one of theirs.
+    "inputs": {"dropped_after"},
     "rebalance": {
         "no_trade_band",
         "no_trade_rel_band",

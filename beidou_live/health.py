@@ -263,7 +263,7 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     "ab3cb75fb2f8d94813aa44c5b6d869c34bf82bcc78757bf1fcfa0bba4e16e1b3": (
         "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
     ),
-    # v6 (+ rebalance.exempt_reductions, + exits.stale_carry_bars), 2026-09-13.  Declared before it is ever written, on the same
+    # v6 (+ rebalance.exempt_reductions, + exits.stale_carry_bars, + inputs.dropped_after), 2026-09-13.  Declared before it is ever written, on the same
     # proof as v3, v4 and v5: the shipped profile does not name the key and False is off, so recomputed
     # against it the value is False on both sides of the change and only the shape of what is hashed
     # moved.  What `False` means is the literal previous expression - the participation cap exempts a
@@ -271,9 +271,14 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # than leaving to this comment.  `stale_carry_bars` rides the same version and the same proof by a
     # different route: it is inert on the LIVE path, because `ExitOverlay.apply` skips a symbol whose
     # close is missing before `exit_step` is reached, so the live construction is unchanged whatever
-    # the value reads.  Without the alias the next restart would reset M-010's 30-day window, unbroken
-    # since 2026-09-04T15:02Z, for a book that is byte-identical.
-    "1d63a0476000e22ef7555576d7c034dc8649b124ed7b7b8d1d4324edf6e794ef": (
+    # the value reads.  `dropped_after` is the third, and it is the one that had to be MADE true: the
+    # rule it names - hold a symbol whose bars did not arrive, rather than flattening and re-opening
+    # it next cycle - shipped at 3, which is a different book.  It ships at 1 instead, which is the
+    # behaviour it was written to make visible, so the proof reads the same way as the other two and
+    # raising it stays a priced decision rather than a side effect of deploying a fix.  Without the
+    # alias the next restart would reset M-010's 30-day window, unbroken since 2026-09-04T15:02Z,
+    # for a book that is byte-identical.
+    "18b8b20fb6273b90070cff33a06dff62da98de5e7eebdfef51990ac372c55b85": (
         "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
     ),
 }

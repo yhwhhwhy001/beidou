@@ -99,7 +99,7 @@ async def _open_the_book(world: dict[str, Any]) -> int:
 async def test_one_missing_cycle_holds_the_position_instead_of_flattening_it(
     august_panel: Panel, tmp_path: Path
 ) -> None:
-    world = _world(august_panel, tmp_path)
+    world = _world(august_panel, tmp_path, dropped_after=3)
     engine, market, venue = world["engine"], world["market"], world["venue"]
     bar = await _open_the_book(world)
     held_before = venue.qty[VICTIM]
@@ -134,7 +134,7 @@ async def test_every_dropped_cycle_is_announced(august_panel: Panel, tmp_path: P
 
 async def test_a_streak_is_a_delisting_and_still_flattens(august_panel: Panel, tmp_path: Path) -> None:
     """The rule is not "never flatten".  Three consecutive absences are evidence, and it acts on them."""
-    world = _world(august_panel, tmp_path)
+    world = _world(august_panel, tmp_path, dropped_after=3)
     engine, market, venue = world["engine"], world["market"], world["venue"]
     bar = await _open_the_book(world)
     market.blind = {VICTIM}
@@ -153,7 +153,7 @@ async def test_a_streak_is_a_delisting_and_still_flattens(august_panel: Panel, t
 
 async def test_the_streak_resets_the_moment_the_data_comes_back(august_panel: Panel, tmp_path: Path) -> None:
     """One good cycle clears it, so a feed that flaps every other hour never reaches the threshold."""
-    world = _world(august_panel, tmp_path)
+    world = _world(august_panel, tmp_path, dropped_after=3)
     engine, market, venue = world["engine"], world["market"], world["venue"]
     bar = await _open_the_book(world)
 
@@ -196,3 +196,20 @@ async def test_the_streak_survives_a_restart(august_panel: Panel, tmp_path: Path
     await engine.run_cycle(bar + HOUR_MS)
 
     assert StateStore(tmp_path / "live").load().dropped_streak == {VICTIM: 1}
+
+
+async def test_the_shipped_default_is_the_old_behaviour_so_the_rule_is_adopted_not_deployed(
+    august_panel: Panel, tmp_path: Path
+) -> None:
+    """`dropped_after` ships at 1, which flattens on the first empty answer - what this replaced.
+
+    The rule above is the fix; shipping it ON would have changed the live book as a side effect of
+    deploying a defect report, which is the one thing every other knob added on 2026-09-13 was careful
+    not to do.  `construction_fingerprint` carries the field so raising it is visible in the record,
+    and raising it is a priced decision rather than a consequence of a restart.
+    """
+    from beidou_live.config import LiveConfig
+
+    assert LiveConfig.dropped_after == 1
+    world = _world(august_panel, tmp_path)  # no override: the shipped default
+    assert world["engine"].dropped_after == 1
