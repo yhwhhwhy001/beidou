@@ -51,6 +51,19 @@ def _shipped(tmp_path: Path) -> tuple[Path, Path, dict]:
     registry = tmp_path / "alpha_registry.yaml"
     registry.write_text((ROOT / "config" / "alpha_registry.yaml").read_text(encoding="utf-8"), encoding="utf-8")
     profile = yaml.safe_load((ROOT / "config" / "live.demo.yaml").read_text(encoding="utf-8"))
+
+    # Every drill below starts from a pair the real gate accepts, and says so rather than assuming it.
+    # Drilling the REAL gate is this file's whole design (see the module docstring), and the cost of that
+    # is that the drill goes red whenever the shipped profile and registry disagree for reasons that have
+    # nothing to do with transactions - reporting someone else's breakage in the one vocabulary that
+    # cannot describe it.  2026-09-14: `vol_target` 0.30 -> 0.60 (96d659ae) made the gate refuse, the
+    # accepted-change drill failed as `assert 'ROLLBACK' == 'APPLY'`, and nothing in that message named
+    # the config, the field, or the armed loop that would refuse to start.  The pair is owned by
+    # `tests/alpha/test_evidence_gate.py::test_the_shipped_registry_runs_what_its_evidence_validated`;
+    # this line only keeps the drill from answering for it.
+    problems = registry_evidence_problems(parse_registry(yaml.safe_load(registry.read_text(encoding="utf-8"))), profile)
+    assert problems == [], f"the shipped registry and profile disagree before the drill even starts: {problems}"
+
     return registry, tmp_path / "transactions.jsonl", profile
 
 

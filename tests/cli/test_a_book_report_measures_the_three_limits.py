@@ -14,9 +14,11 @@ the arithmetic - it was in the wiring.
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 from pathlib import Path
 
 import pandas as pd
+import yaml
 from click.testing import CliRunner
 
 from beidou_cli import main
@@ -24,8 +26,27 @@ from beidou_data.store import KlineStore
 from beidou_governance.lifecycle import Book, Candidate, Event, State, evaluate
 from beidou_governance.policy import Policy
 from beidou_governance.replay import _facts_for
+from beidou_shared.config import load_yaml
 
+ROOT = Path(__file__).resolve().parents[2]
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
+
+#: `research book --profile` defaults to `config/live.demo.yaml`, so until this was pinned every
+#: expectation in this file was re-run against a different book each time the operator re-priced risk -
+#: and not one of them is about the live risk budget.  2026-09-14: `vol_target` 0.30 -> 0.60 (96d659ae)
+#: turned the slippage arm below red, and it read as a wiring bug for exactly as long as it took to
+#: bisect the config.  The caps are still read from the shipped profile, because the report's treatment
+#: of `max_weight`/`max_gross` IS under test here; only the knob that is not gets pinned.
+PINNED_VOL_TARGET = 0.30
+
+
+def _profile(tmp_path: Path) -> Path:
+    payload = load_yaml(ROOT / "config" / "live.demo.yaml")
+    payload.setdefault("portfolio", {})["vol_target"] = PINNED_VOL_TARGET
+    path = tmp_path / "profile.yaml"
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return path
+
 
 #: tsmom on the main book, meanrev as a running probe.  Two books rather than one, because the limit
 #: `research correlate` could never answer for a book is the MAXIMUM over what is running - a report
@@ -68,7 +89,7 @@ def _book(tmp_path: Path, august_dir: Path, sleeve: str) -> tuple[dict, str]:
             "research", "book",
             "--main", "tsmom", "--sleeve", sleeve,
             "--root", str(root), "--symbols", ",".join(SYMBOLS),
-            "--registry", str(registry),
+            "--registry", str(registry), "--profile", str(_profile(tmp_path)),
             "--out", str(out), "--no-funding", "--universe", "static",
             "--folds", "3", "--min-train", "300", "--purge", "5", "--cpcv-groups", "4",
             "--min-history", "0", "--sensitivity", "",
@@ -121,8 +142,21 @@ def test_the_slippage_arm_re_prices_the_same_decision_rather_than_a_different_on
 
     The 2.0 bps row must reproduce the report's own marginal block to the digit - that level IS the
     baseline cost model (5.0 fee + 2.0 slippage = the 7.0 every archived report was priced at), so any
-    difference means the stress is re-pricing something other than the decision.  And the marginal must
-    decay monotonically as slippage rises, because cost enters the net stream one way.
+    difference means the stress is re-pricing something other than the decision.  And every Sharpe CURVE
+    the arm reports must decay monotonically as slippage rises, because cost enters each net stream one
+    way.
+
+    Monotonicity is asserted of the curves and NOT of the marginal, and the difference is the whole
+    lesson of 2026-09-14.  The marginal is a DIFFERENCE of two Sharpes, so its slope in cost is
+    `tau_main / sigma_main - tau_booked / sigma_booked`: it falls only while the booked pair is the more
+    cost-sensitive of the two, which is an empirical fact about this fixture and not a property of the
+    wiring.  At `vol_target` 0.60 it inverts.  Four symbols at `max_weight` 0.15 cap gross at 0.60, so
+    both books clip, clipping pins weights and pins turnover, and the main book then loses 0.2204 of
+    Sharpe across this bps range against the booked pair's 0.2014 - the marginal RISES by 0.019 while
+    both curves still fall.  The old assertion read that as `paying more cannot help`, which made a risk
+    re-pricing look like a wiring bug.  (The clipping is not a fixture artefact of no interest: on the
+    live universe `config/live.demo.yaml` records 111/293 cycles clipping at k=0.60, though only
+    BTCUSDT.  It is the four-symbol fixture that turns it from partial into total.)
     """
     report, _ = _book(tmp_path, august_dir, "breakout")
     by_level = report["book_limits"]["slippage_stress"]["marginal_by_level"]
@@ -132,12 +166,21 @@ def test_the_slippage_arm_re_prices_the_same_decision_rather_than_a_different_on
     assert by_level["slip2"]["delta_oos_sharpe"] == baseline["delta_oos_sharpe"]
     assert by_level["slip2"]["fold_deltas"] == baseline["fold_deltas"]
 
-    deltas = [by_level[key]["delta_oos_sharpe"] for key in ("slip2", "slip5.5", "slip9.2")]
-    assert deltas == sorted(deltas, reverse=True), f"paying more cannot help: {deltas}"
     # The sleeve's own Sharpe curve is the same shape validation reports carry, so the two artefacts
     # can be read against each other rather than only within themselves.
+    levels = ("slip2", "slip5.5", "slip9.2")
     sleeve = report["book_limits"]["slippage_stress"]["sleeve_standalone_sharpe"]
-    assert sorted(sleeve) == ["slip2", "slip5.5", "slip9.2"]
+    assert sorted(sleeve) == list(levels)
+
+    curves = {
+        "main book": [by_level[key]["main_oos_sharpe"] for key in levels],
+        "booked pair": [by_level[key]["main_oos_sharpe"] + by_level[key]["delta_oos_sharpe"] for key in levels],
+        "sleeve standalone": [sleeve[key] for key in levels],
+    }
+    # STRICTLY decreasing, not merely non-increasing: a flat curve means the extra basis points reached
+    # no net stream at all, which is the wiring failure this test is named for and would otherwise pass.
+    for name, curve in curves.items():
+        assert all(a > b for a, b in pairwise(curve)), f"paying more must cost the {name} something: {curve}"
 
 
 def test_a_candidate_that_is_already_a_running_book_is_not_correlated_with_itself(

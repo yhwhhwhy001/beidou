@@ -17,23 +17,25 @@ un-throttled one and the throttle changes the very tail it is supposed to contro
 
 from __future__ import annotations
 
-import copy, json, sys
+import copy
+import json
+import sys
 from dataclasses import replace
 from pathlib import Path
+
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from beidou_alpha.backtest import run_backtest
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams
-from beidou_alpha.panel import interval_seconds
 from beidou_cli.research_cmd import _load, _membership, _resolve_symbols
 from beidou_governance.policy import Policy
 from beidou_live.composition import build_model, cost_model, load_registry
 from beidou_shared.config import load_yaml
 
 sys.path.insert(0, "scratchpad")
-from p32b_r8_ladder_replay import drawdown_path, replay_ladder  # noqa: E402
+from p32b_r8_ladder_replay import drawdown_path, replay_ladder
 
 BUDGET = 0.70
 ARMS = {0.45: None, 0.60: None, 0.75: None}
@@ -64,7 +66,6 @@ def main(mode: str) -> None:
     guards = BookGuardParams(max_weight=float(pf["max_weight"]), max_gross=float(pf["max_gross"]),
                              daily_loss_pause=float(profile["guards"]["daily_loss_pause"]))
     years = len(panel.close) / panel.bars_per_year
-    rng = np.random.default_rng(SEED)
     print(f"[{mode}] budget {BUDGET:.0%}; rescaled rungs are a transcription of the shipped rule")
     print(f"{'k':>6}{'arm':>12}{'CAGR':>9}{'IS MDD':>9}{'q95 MDD':>10}{'P<-50%':>9}{'throttled':>11}")
     out = []
