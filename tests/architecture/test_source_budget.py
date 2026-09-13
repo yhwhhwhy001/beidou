@@ -2078,7 +2078,29 @@ CEILING = {
     # What was deliberately NOT bought: the JSON payload is untouched.  Putting the notes in `report`
     # would move every future `report_digest` and make the archived sha256 the registry cites
     # incomparable with a re-run, which is a real cost for a string no rule reads.
-    "beidou_cli": 5_873,
+    # +55 more beidou_cli (5_873 -> 5_928), and the sentence the rule requires: `_stressed_oos_gate`,
+    # which re-asks D-028's gate on the stressed cost series instead of leaving a reader to subtract a
+    # full-sample Sharpe from an out-of-sample threshold.  The audit caught that subtraction being made
+    # with the evidence's own numbers - a +0.0426 gate margin weighed against a -0.1175 cost-doubling
+    # effect measured on 49,240 bars rather than the gate's 45,240 - and the report had no way to answer
+    # "does it still clear the gate if costs double", which is the question an operator asks before real
+    # capital.  Same folds, same N, stressed series; x1 reproduces `best_key_oos_sharpe` exactly (NOT the
+    # fold-selected mixture the headline gate reads - the docstring names the difference) and a test
+    # asserts that, so the new number cannot drift away from the one it is supposed to extend.
+    #
+    # Unlike the caveats above this one DOES go into the JSON.  The rule those followed was "markdown
+    # only, because no rule reads a string"; this is a number a rule could read, and a governance number
+    # that lives only in prose is the D-038 failure the caveats commit cites.  Future reports carry the
+    # key, archived ones do not, and `verdict.decide` already handles reports written before a field
+    # existed - that is the established shape here, not a new risk.
+    #
+    # Part of the same +55: most of the last lines record why the stressed series is
+    # reindexed to `common_index` before the folds cut it.  `fold_list` is sized against that index and a
+    # fresh `run_backtest` returns a longer one, so slicing the raw series reads different bars - it
+    # surfaced as an x1 cell of 6.90 against `best_key_oos_sharpe`'s 6.02 on the fixture.  Silent
+    # misalignment between two indices that both look right is the failure this file keeps paying to
+    # document rather than rediscover.
+    "beidou_cli": 5_928,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
