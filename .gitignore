@@ -21,6 +21,12 @@ reports/daily/
 
 # scratchpad scripts ARE committed (they reproduce adoption decisions); their outputs are not
 scratchpad/*.json
+# ...and that rule only ever matched the TOP LEVEL, so an output written into a subdirectory was
+# untracked-but-not-ignored and sat in every `git status` looking like someone's unfinished work.
+# Three of them did exactly that on 2026-09-14 (`da-report/`, `paper-state/`, `paper-state2/`) while
+# two sessions asked each other whose they were - the cost is not the noise, it is that a real stray
+# file stops being visible among them.  Scripts stay committed: what is ignored is directories.
+scratchpad/*/
 
 # OS
 .DS_Store
