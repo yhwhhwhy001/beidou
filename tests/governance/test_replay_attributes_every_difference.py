@@ -49,6 +49,19 @@ ADOPTIONS = {
     # "history never adopted it" agreed, and the agreement was hiding a stale list.  One bug was
     # masking another, and the masked one is the kind that makes an adoption history quietly wrong.
     "reports/research/tsmom-validation-20260908T182204Z.json": "2026-09-09",  # carries a preregistration block
+    # 2026-09-14 (`72034790`), the pointer the registry cites now: P32 ruled k = 0.60, which made the
+    # 182204Z evidence describe a construction that is no longer traded (`registry_evidence_problems`
+    # read `portfolio vol_target is 0.6 live but 0.3 in the cited evidence` and refused the armed
+    # start), so tsmom was re-validated at 0.60 and the pointer moved.
+    #
+    # Second time this list has gone stale, and the entry above records the first - which is the part
+    # worth naming rather than just fixing.  This dict IS the adoption history, deliberately written
+    # out instead of derived from `git log` (see the module docstring: a shallow clone must replay the
+    # same), so moving an evidence pointer is only half an adoption; the other half is this line.  Miss
+    # it and AC-G0 reports an unattributed difference - which is the check working, not a false alarm:
+    # a report the registry cites and history does not record IS a difference between the rules and
+    # what happened.
+    "reports/research/tsmom-validation-20260913T182325Z.json": "2026-09-14",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
@@ -101,12 +114,21 @@ def test_only_the_reports_that_name_their_gate_are_the_ones_the_rules_admit() ->
     stricter, and it is the first report to carry a `preregistration` block, so DL-K3 can be decided
     on the artefact instead of suspended.  The set is named rather than counted - a count would pass
     while the wrong report joined it.
+
+    Three since 2026-09-14, and the naming is what made the third one checkable rather than assumed:
+    P32's re-validation at k = 0.60 carries `preregistration` (commit `96d659ae`, committed 02:20:42
+    +08:00, three minutes before the report's own 18:23:25Z stamp, so DL-K3's ordering holds on the
+    artefact), reads `verdict: PASS`, and has the same shape as the pointer it replaces apart from the
+    `embargo` field that landed with `--embargo`.  Its OOS margin is thin - 1.5919 against a 1.5493
+    gate at N=242, where the report it replaces cleared by 0.2951 - which is a fact for whoever cites
+    it next, not a reason the rules refuse it.
     """
     result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
     admitted = sorted(line.split("：")[0] for line in result.reproduced if "规则同意采纳（validate" in line)
     assert admitted == [
         "tsmom-validation-20260908T105259Z.json",
         "tsmom-validation-20260908T182204Z.json",
+        "tsmom-validation-20260913T182325Z.json",
     ]
 
 

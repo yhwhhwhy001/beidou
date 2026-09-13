@@ -816,6 +816,9 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         RiskBudgetParams.from_mapping(payload.get("risk_budget", {}) or {}),
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
         vol_target=portfolio_params(payload).vol_target,
+        # The policy, not `PortfolioParams` - `margin_cap` is a live-config field (D-016) and does not
+        # exist on the research dataclass.  Absent from a profile, M-007 falls back to the plan's 50%.
+        margin_cap=float((payload.get("portfolio", {}) or {}).get("margin_cap", 0.0)) or None,
         data_root=data_root,
     )
     markdown = daily_markdown(data)
