@@ -9010,3 +9010,37 @@ registry 的 `evidence` 指针已移到 182325Z（sha256 `cff07c67…`）。**�
 `vol_target`，是构造改动**，M-010 那段自 2026-09-04T15:02Z 起未断的窗口与 M-G06 的 547 天时钟都清零；
 registry 里那句「不重启：换证据指针不动 construction_fingerprint」描述的是上一次，不适用于这一次。
 
+### 补声明：k=0.60 下 `max_weight 0.15` 开始绑定，而且只绑 BTCUSDT
+
+由并行会话 beidou-41 在核对 `margin_cap` 余量时量到并送来（`docs/analysis/2026-09-14-adaptive-leverage-fifth-ask.md`
+第 8 节，E-LV10–E-LV15），本会话独立复核一致。把 `cycles.jsonl` 的实盘权重按 k 线性放大后重加 stage 3
+的两道上限（忠实性依据：stage 2 的 scalar = `vol_target / portfolio_vol(stage1)`，stage1 ∝ k 而
+`portfolio_vol` 对权重一次齐次，所以 scalar 与 k 无关、stage 2 权重对 k 严格线性）：
+
+| | k=0.30 | k=0.60 |
+| --- | ---: | ---: |
+| 至少截断一个名字的周期 | 0 | **111/293（37.9%）**（beidou-41 在 273 个周期上量到 98，35.9%，同一结论） |
+| 被截断的名字 | — | **只有 BTCUSDT** |
+| 不截断时的峰值权重 | — | 0.1651，需削 9.1% |
+
+BTCUSDT 的年化 σ 是 0.304、全书中位 0.736——它是最平静的名字，而逆波动率定价必然把最大权重给最平静的
+名字，所以第一个撞上单币上限的一定是它。**k 翻倍不等于这本书翻倍：它在三分之一的周期里削掉最平静的那一个
+名字。**
+
+**这不是收益数字的错误，是披露的错误。** `build_weights` 的 stage 3 本来就在 gross 上限之前先做
+`clip(-max_weight, max_weight)`，所以 P32 全表的 CAGR/q95 已经把这个截断算进去了；profile 自己的注释也早
+写过「NOT linear, because `max_weight`/`max_gross` bind more often」。错的是本会话在冻结件 E-011 里写的
+「0 个币会被 max_weight 截断，但只差 1.6%」——那句话只对被引用的那**一个**周期成立（2026-09-13T18:00Z，
+BTCUSDT 0.1483），当成一般陈述是错的，就地更正而不是删除。
+
+**一条要盯的后果**：`risk_adaptation` 的 docstring 把「max_weight binding on the calmest names」列为
+M-015 compression 合法升高的原因之一。当前 single_book compression 0.0948、告警线 0.76；重启后它会升高，
+**升高本身不是故障**，但若越过 0.76 要先按这条读，不要当成 stage 1 失效。
+
+同时收下并复核的另外两条（与本轮方向一致）：`margin_cap` 不用管——`implied_margin = max_gross /
+max_leverage` 的表达式里没有 `vol_target`，0.30 与 0.60 都得 0.4000 都 PASS，实际占用在 0.60 下峰值
+25.8% 对 40%；拦住 0.60 的自始至终是 `registry_evidence_problems` 的证据指针比对。以及 M-Q06 最近可达
+强平距离 446.98 个日波动单位、18 个持仓 14 个不可达、阈值 10.0，k 翻倍约减半仍是阈值的约 22 倍——与 P32
+网格上 `liquidation_touches` 全 0 同向。
+
+
