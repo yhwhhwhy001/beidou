@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 RETRYABLE_HTTP = frozenset({418, 429, 500, 502, 503, 504})
 RETRYABLE_CODES = frozenset({-1003, -1015, -1021, -1001, -1007, -1008})
 CLOCK_SKEW_CODE = -1021
+# USDⓈ-M allows 2,400 request weight per minute per IP.  These two thresholds buy VISIBILITY only:
+# nothing here sleeps on them.  A token bucket would change what the live loop does mid-run, and this
+# client has only ever been reactive (429/418 + Retry-After); see docs/ARCHITECTURE.md.
+USED_WEIGHT_WARN = 1_800
+TRANSPORT_FAILURE_WARN = 3
 
 
 class BinanceRestClient:
@@ -58,6 +63,7 @@ class BinanceRestClient:
         self.clock_offset_ms = 0
         self.used_weight = 0
         self.consecutive_transport_failures = 0
+        self._weight_warned = False
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -110,9 +116,9 @@ class BinanceRestClient:
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 # nothing was sent: safe to retry for reads and writes alike
                 last_error = exc
-                self.consecutive_transport_failures += 1
+                self._note_transport_failure(exc)
             except httpx.TransportError as exc:
-                self.consecutive_transport_failures += 1
+                self._note_transport_failure(exc)
                 if mutating:
                     raise OrderOutcomeUnknown(
                         f"{type(exc).__name__} after sending {method} {path}",
@@ -192,6 +198,26 @@ class BinanceRestClient:
             )
         return self._Outcome(data=body)
 
+    def _note_transport_failure(self, exc: Exception) -> None:
+        """Count a transport failure, and say so once per run of them.
+
+        The counter has existed since the first version and nothing has ever read it, so a path to the
+        venue that had gone away showed up only as per-request retry noise with nothing saying the
+        failures were CONSECUTIVE - which is the part that separates "the venue blipped" from "the
+        local proxy on :1082 is 503-ing again".  Fires on the crossing only (`==`, not `>=`), so an
+        outage lasting an hour prints one line rather than one per attempt; the success path already
+        resets the counter, which re-arms it.
+        """
+        self.consecutive_transport_failures += 1
+        if self.consecutive_transport_failures == TRANSPORT_FAILURE_WARN:
+            logger.warning(
+                "%d consecutive transport failures reaching %s (latest: %s); this client retries but does "
+                "not route around it",
+                self.consecutive_transport_failures,
+                self.rest_url,
+                type(exc).__name__,
+            )
+
     def _read_rate_headers(self, headers: httpx.Headers) -> None:
         for key, value in headers.items():
             if key.lower().startswith("x-mbx-used-weight-"):
@@ -199,3 +225,17 @@ class BinanceRestClient:
                     self.used_weight = int(value)
                 except ValueError:
                     continue
+                # Edge-triggered on the way up, re-armed on the way down (the venue's window resets every
+                # minute, so a busy cycle crosses at most once).  Warning only: a client walking into the
+                # weight ceiling used to look exactly like an idle one, because this number was recorded
+                # and never read.  What it does NOT do is sleep - see USED_WEIGHT_WARN.
+                over = self.used_weight >= USED_WEIGHT_WARN
+                if over and not self._weight_warned:
+                    logger.warning(
+                        "request weight %d (%s) is past the %d mark; from here the venue answers 429 with "
+                        "Retry-After and this client only backs off after being told",
+                        self.used_weight,
+                        key,
+                        USED_WEIGHT_WARN,
+                    )
+                self._weight_warned = over

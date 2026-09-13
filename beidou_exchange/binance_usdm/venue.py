@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from collections.abc import Sequence
 from decimal import Decimal
@@ -12,10 +14,17 @@ from beidou_exchange.rules import format_decimal
 from beidou_shared.binance_rules import parse_exchange_info
 from beidou_shared.types import AccountState, InstrumentRules, OrderAck, OrderRequest, Position, Side, VenueError
 
+logger = logging.getLogger(__name__)
+
 RULES_TTL_SECONDS = 3600.0
 ORDER_NOT_FOUND = -2013
 # /fapi/v1/forceOrders caps `limit` here, unlike the 1000 the paged endpoints accept.
 FORCE_ORDERS_LIMIT = 100
+PAGE_LIMIT = 1000
+MAX_PAGES = 50
+# The per-row id each paged endpoint supplies.  Having one is what makes `_paged`'s overlapping cursor
+# safe; an endpoint absent from this map is walked the conservative way instead (see `_paged`).
+PAGE_ID_FIELDS = {"/fapi/v1/income": "tranId", "/fapi/v1/userTrades": "id"}
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -262,17 +271,71 @@ class BinanceUsdmVenue:
         return {"multi_assets": bool(multi.get("multiAssetsMargin", False)), "isolated_symbols": isolated}
 
     async def _paged(self, path: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """Every row of ``[start_ms, end_ms]``, in the order the venue returned them.
+
+        The cursor OVERLAPS: the next page restarts at the last row's own timestamp rather than one
+        millisecond past it, and whatever comes back twice is dropped by id.  Stepping to ``last + 1``
+        (what this did until 2026-09-13) silently dropped every row that shared the final millisecond
+        of a full page, and income shares a millisecond by rule rather than by accident - one funding
+        settlement writes one row per held symbol, all stamped with the same ``fundingTime``.  A full
+        page lying entirely inside one millisecond was worse: ``last <= cursor`` broke the loop and
+        truncated the window there.  Neither case wrote a log line, and these rows are the money -
+        D-021 and D-032 attribute from them.
+
+        None of it has been seen yet because a one-hour window on this account does not reach 1,000
+        rows.  D-030's first catch-up window and the one after a restart are not one hour.
+
+        Paging stops on an empty page, on a short page, or on a full page that is entirely rows
+        already collected, and in any case at ``MAX_PAGES``.  The last two are logged: "the window
+        ended" and "this loop stopped asking" are different answers and must not look alike.
+        """
+        id_field = PAGE_ID_FIELDS.get(path)
         rows: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
         cursor = int(start_ms)
-        for _ in range(50):
+        for _ in range(MAX_PAGES):
             page = await self._client.get(
-                path, {"startTime": cursor, "endTime": int(end_ms), "limit": 1000}, signed=True
+                path, {"startTime": cursor, "endTime": int(end_ms), "limit": PAGE_LIMIT}, signed=True
             )
             if not page:
-                break
-            rows.extend(page)
+                return rows
+            fresh = 0
+            for row in page:
+                if id_field is not None:
+                    # Keyed on the id AND the row behind it.  The id alone is the right key only for as
+                    # long as it really is one-per-row, and `tranId` is not obviously that (a single fill
+                    # writes a COMMISSION row and a REALIZED_PNL row).  Folding the row in costs nothing
+                    # and makes this incapable of dropping anything the venue did not send twice.
+                    key = (str(row.get(id_field, "")), json.dumps(row, sort_keys=True, default=str))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                rows.append(row)
+                fresh += 1
+            if len(page) < PAGE_LIMIT:
+                return rows
             last = int(page[-1].get("time", cursor))
-            if len(page) < 1000 or last <= cursor:
+            if id_field is None:
+                # Nothing to de-duplicate on, so an overlapping cursor would double-count rather than
+                # recover them.  Keep the exclusive step: it can still drop rows sharing the last
+                # millisecond of a full page, but a caller counting money would rather be short than
+                # double, and the warning below says the window was not walked to its end.
+                if last <= cursor:
+                    break
+                cursor = last + 1
+                continue
+            if fresh == 0:
+                # A whole page of rows already held: the venue cannot get past this millisecond and
+                # neither can this loop - /fapi/v1/income has no `fromId` to continue from.  Stop
+                # rather than spin, and say so.
                 break
-            cursor = last + 1
+            cursor = max(last, cursor)
+        logger.warning(
+            "%s: stopped paging [%d, %d] at cursor %d holding %d row(s); the window may be incomplete",
+            path,
+            int(start_ms),
+            int(end_ms),
+            cursor,
+            len(rows),
+        )
         return rows
