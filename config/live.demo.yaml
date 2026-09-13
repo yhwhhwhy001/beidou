@@ -127,6 +127,19 @@ portfolio:
   #      backtest's mark-to-market series in place of `attributed_drawdown_state`, which counts only
   #      REALISED P&L over a frozen total-equity base and therefore fires later and less.  Both biases
   #      run the same way: 16.3pp is an upper bound and the true figure may be near zero.
+  #      2026-09-14 UPDATE - it is worse than "unreliable", the SIGN is wrong.  Replaying the ladder
+  #      INSIDE each bootstrap draw (beidou-7a's independent audit; RESEARCH_LOG same day) gives, for
+  #      the shipped rungs, q95 -52.6% and P(breach -50%) ~12% on BOTH universes, against the rescaled
+  #      arm's -66.5%/-66.7% and ~55%.  So the configuration this file ships is the more conservative
+  #      one in the tail, and "O-3 strictly dominates O-2" is WITHDRAWN.  Rescaling would buy a median
+  #      +21.3pp of CAGR for P(breach -50%) ~12% -> ~55%; both stay inside the declared -70% budget, so
+  #      it remains an available ruling - but only under that description.
+  #      READ THE NEXT SENTENCE WITH IT, or the paragraph above becomes "the tail is actually safe".
+  #      Those shipped-arm numbers assume the ladder REALLY FIRES in a deep drawdown.  R8's ruler is
+  #      `attributed_drawdown_state`: `base + cumsum(REALISED attributed P&L)` where `base` is total
+  #      equity INCLUDING the 52.65% that is BTC collateral.  Unrealised losses never enter it, so a
+  #      momentum book holding losers barely moves it.  The live tail therefore depends on something
+  #      NOT YET MEASURED (income-row attributed drawdown vs mark-to-market, being measured separately).
   #   3. `policy.py`'s own 0.3.0 note gives two conditions for moving a governance constant (provenance
   #      is E5; it is a rate limit rather than the control itself).  R8 satisfies neither.
   # So the loop still de-escalates to vol_target 0.225 at -35% attributed drawdown and to 0.15 at -50%,
