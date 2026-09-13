@@ -179,10 +179,16 @@ def membership_summary(membership: pd.DataFrame, *, available: pd.DataFrame | No
     symbol that has stopped quoting, so it can hold one of ``top_n`` slots with nothing in it for up to
     a month: LUNAUSDT's last 1h bar is 2022-05-13 and it stayed a member until 2022-06-10, 28
     refreshes.  Measured over the whole point-in-time table - 2,042 refreshes, 35,899 member-refresh
-    slots - that is 109 dead slots, 0.30%, on 104 refresh days (5.1%), worst 2 of 18-20 over
-    2026-07-18..22.  0.30% changes no conclusion.  It is reported because "N-choose-K degenerates in
-    some periods" is a family of defect where a measured 0.30% and an unmeasured unknown are not the
-    same answer, and only one of them can be argued with.
+    slots - that is 109 dead slots, 0.30%, on 104 refresh days (5.1%), worst 2 of 18 on 2026-07-18.
+    0.30% changes no conclusion.  It is reported because "N-choose-K degenerates in some periods" is a
+    family of defect where a measured 0.30% and an unmeasured unknown are not the same answer, and only
+    one of them can be argued with.
+
+    Running it also splits the 109 into two unrelated causes, which is the part a single share hides:
+    28 are LUNAUSDT's delisting tail, and the other 81 belong to six 2026 names (SKYAI, SYN, BLESS,
+    ALLO, RE, ENSO) whose 1h archive has simply not been backfilled - the same six
+    ``research --universe pit`` already prints as "member symbols have no 1h klines yet".  Those are a
+    sync gap wearing a universe defect's clothes, and the fix for them is a download.
     """
     if membership.empty:
         return {"refreshes": 0, "union": [], "mean_size": 0.0, "changes_per_refresh": 0.0}
