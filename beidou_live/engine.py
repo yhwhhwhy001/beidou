@@ -9,6 +9,7 @@ cycle:   (new UTC day: universe refresh) -> closed bars (mainnet) -> venue snaps
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -43,12 +44,13 @@ from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
-from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
+from beidou_live.rebalancer import PlannedOrder, RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, is_own_order, startup_reconcile, take_snapshot
 from beidou_live.reports import collateral_share
 from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state
 from beidou_live.scheduler import (
     ALREADY_REBALANCED_REASON,
+    BACKOFF_REASON,
     last_closed_bar_open_ms,
     late_seconds,
     rebalance_window_seconds,
@@ -193,6 +195,8 @@ class LiveEngine:
         metrics_store: Any = None,
         spot_verification: Verification | None = None,
         record_metrics: bool = True,
+        dropped_after: int = 3,
+        order_concurrency: int = 1,
     ) -> None:
         self.config = config
         self.model = model
@@ -268,6 +272,18 @@ class LiveEngine:
         #: and it is the engine's to state rather than the reporter's to invent (KILL-R6).
         self.rebalance_window: float | None = None
         self._own_orders: set[str] | None = None  # D-032, seeded lazily from the trade log
+        # How many consecutive cycles a symbol's bars may be missing before the loop treats it as a
+        # DELISTING and flattens, rather than as the data wobble it usually is.  Same shape as D-031's
+        # `quarantine_after`, and deliberately a constructor parameter rather than a config key: it
+        # changes no weight and no threshold, so it has no business inside `construction_fingerprint`,
+        # and a knob in YAML that the digest cannot see is the other half of D-036.
+        self.dropped_after = int(dropped_after)
+        # Orders per `asyncio.gather` batch.  1 is today's serial loop, byte for byte; see
+        # `_execute_orders` for why >1 changes nothing about WHAT is sent and why it is off by default.
+        self.order_concurrency = int(order_concurrency)
+        # A3: set when `last_income_ms` is missing on a loop that has already run cycles - written onto
+        # the first cycle row of this process so a post-mortem can find the hole from the record.
+        self._income_watermark_lost: dict[str, Any] | None = None
         if self.state.stopped_books:  # a probe stopped in an earlier run stays stopped across restarts
             self.model = _without_books(self.model, list(self.state.stopped_books))
 
@@ -423,6 +439,9 @@ class LiveEngine:
         if not self.config.dry_run:
             await self._ensure_leverage(self.managed_symbols(), reassert=True)
         self._roll_day(self.clock.now_ms(), snapshot.equity)
+        # A3, and it has to be asked HERE: the line below is what makes the watermark non-None again,
+        # so by the time `_ingest_income` reads it the evidence of the loss is already gone.
+        await self._note_lost_income_watermark()
         if self.state.last_income_ms is None:
             self.state.last_income_ms = self.clock.now_ms()
         self.state.equity_hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
@@ -539,11 +558,18 @@ class LiveEngine:
             }
         )
         self.store.heartbeat({"phase": "SKIPPED", "bar_open_ms": bar_open_ms, "late_seconds": age_seconds})
-        logger.warning(
-            "restart was %.1fs after the bar close (window %.1fs); reconciled but did not rebalance",
-            age_seconds,
-            window_seconds,
-        )
+        if reason == BACKOFF_REASON:
+            logger.warning(
+                "failure backoff slept through the close of bar %s (%.1fs ago); counted as a missed rebalance",
+                bar_open_ms,
+                age_seconds,
+            )
+        else:
+            logger.warning(
+                "restart was %.1fs after the bar close (window %.1fs); reconciled but did not rebalance",
+                age_seconds,
+                window_seconds,
+            )
 
     async def guarded_cycle(self, bar_open_ms: int) -> dict[str, Any] | None:
         try:
@@ -593,7 +619,7 @@ class LiveEngine:
             # M-004: back off exponentially, capped at an hour, before the next attempt.  launchd's
             # ThrottleInterval only paces process restarts; a loop that stays up and retries a failing
             # venue every cycle needs its own brake, and the plan capped it at 1h.
-            await self.clock.sleep(self.backoff_seconds())
+            await self._backoff(bar_open_ms)
             return None
         self.consecutive_errors = 0
         self.alerts.clear("cycle-failed")
@@ -646,6 +672,7 @@ class LiveEngine:
         raw = {symbol: float(weight) for symbol, weight in targets.weights.items()}
         for symbol in managed:
             raw.setdefault(symbol, 0.0)
+        dropped_inputs = await self._hold_dropped(raw, inputs.dropped)
         # D-014's exit side follows positions, but its ENTRY side follows the universe.  Reading `leaving`
         # here instead of the universe left a hole: `leaving` is filtered to symbols that still hold a
         # position a few lines above, so the cycle after a departing symbol is flattened it is still in
@@ -655,6 +682,10 @@ class LiveEngine:
         for symbol in raw:
             if symbol not in pool:
                 raw[symbol] = 0.0
+        # The pre-throttle weights this cycle actually produced, which is what the NEXT cycle holds
+        # onto for any symbol whose bars go missing.  Written here rather than in `_finish_cycle`
+        # because that is where `raw` exists; persisted by the same `store.save`.
+        self.state.last_raw_targets = dict(raw)
         throttled = {symbol: weight * scalar for symbol, weight in raw.items()}
         # exit overlay (D-012): venue positions are the reference, state persists across restarts
         adjusted, exit_states, exit_events = self.exits.apply(
@@ -701,6 +732,10 @@ class LiveEngine:
             "leaving": list(self.state.leaving),
             "universe_update": universe_update,
             "inputs": inputs.to_dict(),
+            # What the loop DID about `inputs.dropped`, next to the list itself.  The list has been in
+            # this row since the beginning and had no reader anywhere in the tree (D-041 / DL-Q0's
+            # shape: written down, nobody reads it); this is the reader's own record.
+            "dropped_inputs": dropped_inputs,
             "construction": construction_fingerprint(config)["digest"],
             # DL-G9: the same construction, restricted to what a validation report can describe, so a
             # later reader can compare the two as strings.  Cheap enough to write every cycle (16 chars),
@@ -787,41 +822,120 @@ class LiveEngine:
             record["margin"] = margin
             skipped.extend(margin.get("dropped", []))
         record["skipped"] = skipped
-        reports: list[ExecutionReport] = []
-        for order in orders:
-            if config.dry_run:
-                record["orders"].append({**order.to_dict(), "status": "DRY_RUN"})
-                continue
-            report = await execute_order(
-                self.venue,
-                order,
-                self.clock,
-                poll_attempts=config.poll_attempts,
-                poll_interval_seconds=config.poll_interval_seconds,
-            )
-            reports.append(report)
-            self.store.append_trade(
-                {
-                    "bar_open_ms": bar_open_ms,
-                    # M-Q03 reads this: how late an entry was, per fill, so the metric can be "bar-hours
-                    # held by a late entry" rather than "share of fills that were late" (KILL-R6).
-                    "late_seconds": late_seconds(bar_open_ms, self.config.interval_ms, at_ms=self.clock.now_ms()),
-                    # L1-04 / M-Q08: the price the BACKTEST would have entered at, recorded per fill so
-                    # slippage can be measured against it.  The instrument used to read the venue mark
-                    # from the cycle's snapshot, which is an index price sampled when the loop woke; the
-                    # backtest enters at the execution bar's open, and in a continuous market that is the
-                    # decision bar's close.  Measuring against the mark answered a question M-Q08 does
-                    # not ask, and the 10 bps gate it was compared to was a fee-inclusive budget.
-                    "decision_close": decision_closes.get(order.symbol),
-                    **report.to_dict(),
-                }
-            )
-            self._remember_order(report)
-            record["orders"].append(report.to_dict())
+        reports = await self._execute_orders(orders, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
         record["quarantined"] = await self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
         self._finish_cycle(record, targets.contributions, getattr(targets, "book_weights", None), latest_closes(usable))
         return record
+
+    async def _place(self, order: PlannedOrder) -> ExecutionReport:
+        return await execute_order(
+            self.venue,
+            order,
+            self.clock,
+            poll_attempts=self.config.poll_attempts,
+            poll_interval_seconds=self.config.poll_interval_seconds,
+        )
+
+    def _record_fill(
+        self,
+        report: ExecutionReport,
+        record: dict[str, Any],
+        *,
+        bar_open_ms: int,
+        decision_closes: Mapping[str, float],
+        at_ms: int | None = None,
+    ) -> None:
+        """The three bookkeeping writes one order makes, in the order they have always been made.
+
+        ``at_ms`` is when THIS order finished.  ``None`` reads the clock here, which is where the
+        serial path has always read it; the concurrent path passes the instant its own order came
+        back, because a per-fill lateness stamped when the whole batch finished would be a different
+        measurement wearing the same name.
+        """
+        self.store.append_trade(
+            {
+                "bar_open_ms": bar_open_ms,
+                # M-Q03 reads this: how late an entry was, per fill, so the metric can be "bar-hours
+                # held by a late entry" rather than "share of fills that were late" (KILL-R6).
+                "late_seconds": late_seconds(
+                    bar_open_ms,
+                    self.config.interval_ms,
+                    at_ms=self.clock.now_ms() if at_ms is None else at_ms,
+                ),
+                # L1-04 / M-Q08: the price the BACKTEST would have entered at, recorded per fill so
+                # slippage can be measured against it.  The instrument used to read the venue mark
+                # from the cycle's snapshot, which is an index price sampled when the loop woke; the
+                # backtest enters at the execution bar's open, and in a continuous market that is the
+                # decision bar's close.  Measuring against the mark answered a question M-Q08 does
+                # not ask, and the 10 bps gate it was compared to was a fee-inclusive budget.
+                "decision_close": decision_closes.get(report.order.symbol),
+                **report.to_dict(),
+            }
+        )
+        self._remember_order(report)
+        record["orders"].append(report.to_dict())
+
+    async def _execute_orders(
+        self,
+        orders: Sequence[PlannedOrder],
+        record: dict[str, Any],
+        *,
+        bar_open_ms: int,
+        decision_closes: Mapping[str, float],
+    ) -> list[ExecutionReport]:
+        """Send this bar's orders.  ``order_concurrency`` 1 is the serial loop this has always been.
+
+        Why concurrency is worth having at all: `execute_order` sleeps 1.0s up to `poll_attempts`
+        times whenever an ack is not terminal, so a bar's LAST order can be sent tens of seconds after
+        its first.  The later the fill, the further the price is from `decision_close` - and
+        `decision_close` is the benchmark M-Q08 measures slippage against, recorded on every one of
+        these rows.  Serial sending therefore inflates the very number it is measured by.
+
+        Why it is off by default, and why 1 must stay byte-identical: the fix is a LATENCY change and
+        nothing else.  Concurrency cannot double-send (`client_order_id` is derived from the bar, and
+        `execute_order` queries before it submits), but it does change the order fills arrive in, and
+        two things must not follow that order - `store.append_trade` and `record["orders"]`, which are
+        the append-only trade log and the cycle row that every reader reconstructs a bar from.  Both
+        are written below in PLANNED order (``asyncio.gather`` returns results positionally, whatever
+        the completion order was), so the record is the same sequence at any concurrency.
+
+        Turning it on is a wiring decision, taken outside this file.
+        """
+        if self.config.dry_run:
+            for order in orders:
+                record["orders"].append({**order.to_dict(), "status": "DRY_RUN"})
+            return []
+        if self.order_concurrency <= 1 or len(orders) < 2:
+            reports: list[ExecutionReport] = []
+            for order in orders:
+                report = await self._place(order)
+                reports.append(report)
+                self._record_fill(report, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
+            return reports
+        gate = asyncio.Semaphore(self.order_concurrency)
+
+        async def send(order: PlannedOrder) -> tuple[ExecutionReport, int]:
+            async with gate:
+                report = await self._place(order)
+                return report, self.clock.now_ms()
+
+        # `return_exceptions=True` so a failure in one order cannot leave the others running as
+        # orphans past the cycle that owns them: everything that DID come back is recorded first, in
+        # planned order, and only then does the first failure propagate - which is what the serial
+        # path does too (it records each order before the next one can raise).
+        settled = await asyncio.gather(*(send(order) for order in orders), return_exceptions=True)
+        done: list[ExecutionReport] = []
+        for outcome in settled:
+            if isinstance(outcome, BaseException):
+                continue
+            report, at_ms = outcome
+            done.append(report)
+            self._record_fill(report, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes, at_ms=at_ms)
+        for outcome in settled:
+            if isinstance(outcome, BaseException):
+                raise outcome
+        return done
 
     async def flatten(self) -> list[ExecutionReport]:
         """Close every managed position with reduce-only market orders (``beidou live flatten``)."""
@@ -889,6 +1003,73 @@ class LiveEngine:
                     "且 registry digest 已随之改变"
                 )
         return hit
+
+    async def _hold_dropped(self, raw: dict[str, float], dropped: Sequence[str]) -> dict[str, Any]:
+        """A symbol with no usable bars this cycle keeps LAST cycle's target; only a streak flattens it.
+
+        This is a deliberate behaviour change (2026-09-13), and it is a change that can only REDUCE
+        trading.  What it replaces: `closed_bars` returns an empty frame or a single bar for a symbol
+        (a delisting, a public-endpoint wobble, the empty body a rate limit hands back), `model_inputs`
+        puts it in `dropped`, the model scores nothing for it, the `setdefault` above fills it with
+        0.0, and `plan_rebalance` reads a target of 0 against an open position as `closing` - a
+        reduce-only market order that flattens the whole line.  Next cycle the data comes back and the
+        signal re-opens it.  The bill for one missing HTTP response is two crossings of the spread, a
+        reset exit anchor (the new entry is a new anchor, so the stop distance is recomputed) and a
+        cooldown.
+
+        Flattening on an actual delisting is RIGHT, so the fix is not "never flatten"; it is being able
+        to tell the two apart, and the only thing that tells them apart is whether the data comes back.
+        So: hold for `dropped_after - 1` cycles, flatten on the `dropped_after`-th.  Exactly D-031's
+        `quarantine_after` shape, one input over - evidence, then act.
+
+        Why it cannot increase trading: the only weights this touches are ones the caller had just set
+        to 0.0, and it replaces them with the previous cycle's own weight for the same symbol.  A held
+        weight equal to the last one plans no order (the no-trade band sees no change); a flatten that
+        is merely postponed is the same flatten, later.  Nothing here can open a line the model did not
+        already have on.
+
+        What it COSTS, stated rather than discovered later: for the cycles a symbol is held, the exit
+        overlay cannot evaluate it - `ExitOverlay.apply` skips any symbol with fewer than two bars, so
+        a stop cannot fire while the data is gone.  The old behaviour flattened instead, which is more
+        protective in exactly that case.  The trade is deliberate: flattening pays two spreads, a reset
+        anchor and a cooldown on EVERY wobble, while the exposure it avoids is at most
+        `dropped_after - 1` bars of an already-open position that the venue is still marking and still
+        liquidating against.  If that ever stops being the right side of the trade, `dropped_after` is
+        where to say so.
+        """
+        dropped = list(dropped)
+        streak = {symbol: self.state.dropped_streak.get(symbol, 0) + 1 for symbol in dropped}
+        # Only the symbols missing RIGHT NOW carry a streak: one good cycle is what clears it, and a
+        # symbol that left the universe takes its count with it rather than leaving a stale one behind.
+        self.state.dropped_streak = streak
+        if not dropped:
+            self.alerts.clear("inputs-dropped")
+            return {"symbols": [], "held": [], "flattened": [], "after": self.dropped_after}
+        held: list[str] = []
+        flattened: list[str] = []
+        for symbol in dropped:
+            # `dropped_after <= 0` is the old behaviour, kept reachable on purpose: a symbol that is
+            # not in the traded pool is zeroed a few lines below anyway, so holding it there would be
+            # a weight nothing acts on and a `leaving` name that never leaves.
+            if self.dropped_after > 0 and streak[symbol] < self.dropped_after and symbol in set(self.universe):
+                raw[symbol] = float(self.state.last_raw_targets.get(symbol, raw.get(symbol, 0.0)))
+                held.append(symbol)
+            else:
+                flattened.append(symbol)
+        logger.warning(
+            "no usable bars for %s this cycle (streak %s); holding %s, flattening %s",
+            dropped,
+            {symbol: streak[symbol] for symbol in dropped},
+            held or "nothing",
+            flattened or "nothing",
+        )
+        await self.alerts.send(
+            f"北斗：本周期有 {len(dropped)} 个标的拿不到可用 K 线（{', '.join(dropped)}）。"
+            f"连续次数 { ({symbol: streak[symbol] for symbol in dropped}) }；"
+            f"保持上一轮目标：{held or '无'}；按退市平掉（连续 {self.dropped_after} 轮）：{flattened or '无'}",
+            key="inputs-dropped",
+        )
+        return {"symbols": dropped, "held": held, "flattened": flattened, "streak": streak, "after": self.dropped_after}
 
     async def _maybe_refresh_universe(self, bar_open_ms: int) -> dict[str, Any] | None:
         """Once per UTC day: re-rank through the pool; what leaves is flattened, what enters waits for history."""
@@ -1099,6 +1280,45 @@ class LiveEngine:
             logger.warning("venue clock unavailable (%s); using the host clock for the income window", exc)
             return self.clock.now_ms()
 
+    async def _note_lost_income_watermark(self) -> dict[str, Any] | None:
+        """No `last_income_ms` on a loop that has already run cycles: the watermark was LOST (A3).
+
+        The two states are one value apart and mean opposite things.  On a first start `None` is the
+        truth - there is no earlier income to ingest - and the loop rightly starts the window at now.
+        On a loop with `cycles > 0` the same `None` means the only copy of the watermark went away
+        (a state file that would not parse, an edit, a restore from an older copy), and starting the
+        window at now drops every income row earned since the last real cycle, permanently: the rows
+        are never re-queried, so they never reach `attribution.jsonl` and M-010's 30-day series has a
+        hole that reads exactly like a shorter run.  `decay_watch` sees `live_windows` shrink and
+        cannot tell the two apart, which is why this has to be said out loud at the moment it happens
+        rather than inferred later.
+
+        Says it once per process (`alerts.send` dedups on the key), and leaves the fact for the first
+        cycle row to carry so the record - not only the operator's channel - holds it.
+        """
+        if self.state.last_income_ms is not None or self.state.cycles <= 0:
+            return None
+        fact = {
+            "lost": True,
+            "cycles": int(self.state.cycles),
+            "restarts": int(self.state.restarts),
+            "restarted_from": self.state.last_bar_ms,
+            "at": utc_now_iso(),
+        }
+        self._income_watermark_lost = fact
+        logger.error(
+            "income watermark (last_income_ms) is missing after %d cycles; income earned since the last "
+            "cycle will never enter attribution.jsonl",
+            self.state.cycles,
+        )
+        await self.alerts.send(
+            f"北斗：state.json 的收入水位线（last_income_ms）丢了——已跑过 {self.state.cycles} 个周期却没有它。"
+            "停机期间的 income 永远不会进 attribution.jsonl，M-010 的样本外窗口从现在重新起算，"
+            "而读数上只会显示窗口变短。请核对 attribution.jsonl 的 since_ms/until_ms 衔接，并记下这个缺口。",
+            key="income-watermark-lost",
+        )
+        return fact
+
     async def _ingest_income(self, bar_open_ms: int, equity: float) -> dict[str, Any]:
         """Income rows since the last cycle: strategy attribution plus external cash-flow detection.
 
@@ -1121,6 +1341,11 @@ class LiveEngine:
         gap; from then on the watermark is venue-basis and the window is contiguous.
         """
         now = self.venue_now_ms()
+        # Reachable when a cycle runs without `startup` having asked first (`run_cycle` is called
+        # directly by the reproduction path and by tests); the alert key makes the two at most one
+        # message.  `lost` is consumed here rather than re-read, so exactly one cycle row carries it.
+        lost = self._income_watermark_lost or await self._note_lost_income_watermark()
+        self._income_watermark_lost = None
         since = self.state.last_income_ms or now
         if since > now:
             # The watermark is in the future, so [since, now] would be rejected with -1023 and abort the
@@ -1174,6 +1399,8 @@ class LiveEngine:
                 f"北斗外部资金变动 {flows['total']:+.2f} USDT（{flows['rows']} 条流水 {flows['by_type']}）；"
                 f"日初权益与高水位已重置为 {equity:.2f}"
             )
+        if lost is not None:
+            flows["watermark_lost"] = lost
         return flows
 
     async def _risk_ladder(self, bar_open_ms: int) -> dict[str, Any]:
@@ -1323,6 +1550,39 @@ class LiveEngine:
     def backoff_seconds(self) -> float:
         """Delay after a failed cycle: 60s doubling per consecutive error, capped at 1 hour (M-004)."""
         return float(min(3600.0, 60.0 * 2 ** max(0, self.consecutive_errors - 1)))
+
+    async def _backoff(self, bar_open_ms: int) -> None:
+        """Sleep the failure backoff, then charge M-Q03 for every bar that closed while we slept.
+
+        The backoff itself is right (M-004) and unchanged.  What was wrong until 2026-09-13 is that
+        the bars it eats left NO trace anywhere a threshold could see: the ERROR row belongs to the
+        bar that failed, `wait_for_bar_close` returns the next bar to close and never mentions the
+        ones already gone, and `_record_missed_rebalance` - the only thing that moves
+        `missed_rebalances` - was reachable from the restart path alone.  From the seventh consecutive
+        failure each sleep is a whole 1h bar (60 -> 120 -> ... -> 3600, capped), and the running total
+        by then is about 7,380s, so a venue outage could silently cost two bars and more against a
+        `max_missed_rebalances: 0` that would report zero.
+
+        One row per bar, at the same reason-bearing shape the restart misses use, so `restart_cost`
+        counts them with no change on its side.  The scan is bounded by the sleep we actually measured
+        rather than by the clock alone: a clock that jumped forward is a different fault and must not
+        be able to write an unbounded number of rows out of this one.
+        """
+        started = self.clock.now_ms()
+        await self.clock.sleep(self.backoff_seconds())
+        resumed = self.clock.now_ms()
+        interval = self.config.interval_ms
+        # Always set by `run()` before the first cycle; 0.0 only when a cycle is driven directly.
+        window = self.rebalance_window if self.rebalance_window is not None else 0.0
+        last_closed = last_closed_bar_open_ms(resumed, interval)
+        limit = int(max(0, resumed - started) // interval) + 1
+        bar = bar_open_ms + interval
+        while bar <= last_closed and limit > 0:
+            self._record_missed_rebalance(
+                bar, late_seconds(bar, interval, at_ms=resumed), window, reason=BACKOFF_REASON
+            )
+            bar += interval
+            limit -= 1
 
     async def _announce_guards(self, decision: GuardDecision, bar_open_ms: int) -> None:
         """Alert on every change of the guard state, in both directions (M-001).

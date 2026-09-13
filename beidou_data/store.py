@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,39 @@ import pandas as pd
 from beidou_data.binance_public import KLINE_COLUMNS
 
 FUNDING_COLUMNS: tuple[str, ...] = ("funding_time", "funding_rate", "mark_price")
+
+
+def _fsync(path: Path) -> None:
+    """Best effort: a file (or directory) whose bytes are on the disk, not in the page cache."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def write_parquet_atomically(frame: pd.DataFrame, path: Path) -> None:
+    """tmp -> fsync -> replace -> fsync the directory.  One standard, in one place.
+
+    All three stores here were tmp + `replace` and nothing else until 2026-09-13, which is the same
+    gap `beidou_live.state._atomic_write` had: `replace` makes the RENAME atomic and says nothing
+    about the tmp file's contents having left the page cache, so a crash can publish a name pointing
+    at a truncated parquet.  This archive is 4.1 GB and every backtest and every validate report is
+    produced from it - a half-written month here is not one lost sync, it is a number in a published
+    report that nothing can reproduce.  `append` is read-modify-write over the WHOLE file, so the
+    window this closes is the whole file, not the new rows.
+    """
+    tmp = path.with_suffix(".parquet.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(tmp, index=False)
+    _fsync(tmp)
+    tmp.replace(path)
+    _fsync(path.parent)
 
 
 def interval_ms(interval: str) -> int:
@@ -60,10 +94,7 @@ class KlineStore:
         else:
             merged = incoming
         merged = merged.drop_duplicates("open_time", keep="last").sort_values("open_time").reset_index(drop=True)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".parquet.tmp")
-        merged.to_parquet(tmp, index=False)
-        tmp.replace(path)
+        write_parquet_atomically(merged, path)
         return len(merged)
 
     def gaps(self, symbol: str, interval: str) -> list[tuple[int, int]]:
@@ -139,10 +170,7 @@ class FundingStore:
         incoming = frame[list(FUNDING_COLUMNS)] if not frame.empty else pd.DataFrame(columns=list(FUNDING_COLUMNS))
         merged = pd.concat([pd.read_parquet(path), incoming], ignore_index=True) if path.exists() else incoming
         merged = merged.drop_duplicates("funding_time", keep="last").sort_values("funding_time").reset_index(drop=True)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".parquet.tmp")
-        merged.to_parquet(tmp, index=False)
-        tmp.replace(path)
+        write_parquet_atomically(merged, path)
         return len(merged)
 
     def load(self, symbol: str) -> pd.DataFrame:
@@ -192,10 +220,7 @@ class MetricsStore:
         incoming = frame if not frame.empty else pd.DataFrame(columns=["open_time", "symbol"])
         merged = pd.concat([pd.read_parquet(path), incoming], ignore_index=True) if path.exists() else incoming
         merged = merged.drop_duplicates("open_time", keep="last").sort_values("open_time").reset_index(drop=True)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".parquet.tmp")
-        merged.to_parquet(tmp, index=False)
-        tmp.replace(path)
+        write_parquet_atomically(merged, path)
         return len(merged)
 
     def load(self, symbol: str) -> pd.DataFrame:
