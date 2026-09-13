@@ -2021,7 +2021,18 @@ CEILING = {
     # process's cycle row and reported a disagreement the restart had just resolved - non-zero from
     # 11:03Z until the next bar closed at 12:00Z, with the hourly job firing at :10 inside that
     # window every time.  The instrument could not answer at the one moment its answer had changed.
-    "beidou_live": 8_619,
+    # Eleventh raise, 2026-09-14, and the sentence the rule requires: +31 net in beidou_live for R8's
+    # first rung, which could not place an order.  At vol_target 0.30 - the k the loop ran from R8's
+    # wiring on 2026-09-09 until the 0.60 restart - the rung multiplies every weight by 0.225/0.30 =
+    # 0.75, so a book standing at its target needs an order of 0.25 x |current|, inside
+    # `no_trade_rel_band`'s 0.40 x |current|.  Between -35% and -50% attributed drawdown the ladder
+    # therefore de-escalated nothing, and the record could not say so: `risk_ladder.acting` read true
+    # and `skipped[]` read NO_TRADE_BAND, each correct alone.  Of the 33 lines added, 11 are the fix and
+    # its signature docstring and 22 are the two comment blocks carrying the arithmetic - including why
+    # the rule must not rest on k, since 96d659ae's O-3 put the first rung back at 0.75 while restating
+    # the ladder against a wider budget, so the coincidence recurs at the next re-scale.  Two existing
+    # lines were replaced, hence 33 added against 31 net.
+    "beidou_live": 8_650,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

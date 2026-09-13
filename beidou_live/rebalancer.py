@@ -84,8 +84,15 @@ def plan_rebalance(
     bar_open_ms: int,
     params: RebalanceParams,
     liquidity: Mapping[str, float] | None = None,
+    deescalating: bool = False,
 ) -> tuple[list[PlannedOrder], list[dict[str, Any]]]:
-    """``liquidity``: average hourly quote volume per symbol, used with ``params.max_participation`` (T-S03)."""
+    """``liquidity``: average hourly quote volume per symbol, used with ``params.max_participation`` (T-S03).
+
+    ``deescalating``: R8's ladder is acting this cycle, so a same-direction REDUCTION is a risk action
+    rather than a rebalance and skips the relative band.  Not a ``RebalanceParams`` field on purpose -
+    it is the state of a governance rule, already recorded per cycle under ``risk_ladder``, not a
+    construction choice, and it must stay out of ``construction_fingerprint`` for the same reason.
+    """
     orders: list[PlannedOrder] = []
     skipped: list[dict[str, Any]] = []
     if equity <= 0:
@@ -109,7 +116,27 @@ def plan_rebalance(
             current_qty != 0.0 and target_notional != 0.0 and (target_notional > 0) == (current_qty > 0)
         )
         threshold = params.no_trade_band * equity
-        if same_direction_resize:
+        # R8's first rung could not place an order, and both halves of the record read normal.  At
+        # vol_target 0.30 - what the loop ran from R8's wiring on 2026-09-09 until the 0.60 restart -
+        # the rung takes 0.30 -> 0.225, i.e. it multiplies every weight by 0.75, so a book standing at
+        # its unthrottled target needs an order of 0.25 x |current|, inside a relative band of 0.40 x
+        # |current|.  The de-escalation was swallowed at every drawdown between the two rungs; only the
+        # second (0.15/0.30 = 0.50) cleared the band, so a two-rung ladder had one rung.
+        # `risk_ladder.acting` said true and `skipped[]` said NO_TRADE_BAND, and neither row is wrong.
+        #
+        # The relative band's job is suppressing small same-direction RESIZES on the ordinary weight
+        # path; the ladder is not on that path, it is a step imposed on top of it, and it only ever
+        # shrinks.  So the exception is exactly that: reductions, while the ladder acts.  An increase
+        # keeps the band even then - a raw target that grew through the scalar is ordinary rebalancing.
+        # The absolute band is deliberately still applied, so this cannot manufacture dust.
+        #
+        # Whether a rung clears the band at all is an accident of k.  The loop now runs 0.60 (72034790
+        # moved the evidence pointer, construction 46b8d731530a), where the rungs are 0.375 and 0.25
+        # and both clear - so this repairs nothing that is broken TODAY, and that is the point: the
+        # same commit rejected O-3, restating the rungs proportionally to a wider budget, precisely
+        # because it put the first one back at 0.75.  The coincidence recurs at the next re-scale.
+        shedding = deescalating and abs(target_notional) < abs(current_notional)
+        if same_direction_resize and not shedding:
             threshold = max(threshold, params.no_trade_rel_band * abs(current_notional))
         if abs(delta) < threshold:
             # The most common outcome of a cycle used to be the only one that left no trace: a bare
