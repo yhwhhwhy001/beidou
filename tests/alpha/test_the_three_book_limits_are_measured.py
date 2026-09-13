@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from beidou_alpha.validation.book_limits import (
     DECISION_SLIPPAGE_BPS,
@@ -97,9 +98,12 @@ def test_the_maximum_is_over_every_running_book_not_only_the_main_one() -> None:
         "probe_a": sleeve * 2.0,  # a re-parameterisation of the candidate: corr 1.0
     }
     correlations = correlations_with_running(sleeve, running)
-    assert correlations["probe_a"] == 1.0
+    # approx, not ==: a perfect correlation comes back 1 ulp short on some BLAS builds.  The
+    # claim here is "perfectly correlated", and 1e-6 keeps every wrong answer this test can
+    # produce (a main-only reading, or one dragged down by non-overlapping bars) far outside.
+    assert correlations["probe_a"] == pytest.approx(1.0)
     assert abs(correlations["main"]) < 0.5
-    assert max_correlation(correlations) == 1.0
+    assert max_correlation(correlations) == pytest.approx(1.0)
 
 
 def test_a_diversifier_is_not_a_violation() -> None:
@@ -107,8 +111,8 @@ def test_a_diversifier_is_not_a_violation() -> None:
     index = pd.date_range("2026-01-01", periods=100, freq="h", tz="UTC")
     sleeve = pd.Series([0.01 * (i % 5) for i in range(100)], index=index)
     correlations = correlations_with_running(sleeve, {"main": -sleeve})
-    assert correlations["main"] == -1.0
-    assert max_correlation(correlations) == -1.0, "abs() here would refuse the best possible sleeve"
+    assert correlations["main"] == pytest.approx(-1.0)
+    assert max_correlation(correlations) == pytest.approx(-1.0), "abs() here would refuse the best possible sleeve"
 
 
 def test_nothing_measured_is_none_and_not_zero() -> None:
@@ -125,7 +129,7 @@ def test_nothing_measured_is_none_and_not_zero() -> None:
 def test_only_the_overlapping_bars_are_correlated() -> None:
     index = pd.date_range("2026-01-01", periods=100, freq="h", tz="UTC")
     sleeve = pd.Series([0.01 * (i % 5) for i in range(100)], index=index)
-    assert correlations_with_running(sleeve, {"late": sleeve.iloc[60:]})["late"] == 1.0
+    assert correlations_with_running(sleeve, {"late": sleeve.iloc[60:]})["late"] == pytest.approx(1.0)
     assert correlations_with_running(sleeve, {"disjoint": sleeve.shift(freq="1000h")})["disjoint"] is None
 
 

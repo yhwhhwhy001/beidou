@@ -67,7 +67,9 @@ class _Recorder(httpx.BaseTransport):
 
 
 def _client(transport: httpx.BaseTransport) -> MetricsArchiveClient:
-    return MetricsArchiveClient(transport=transport)
+    # backoff=0.0 so the 5xx tests below do not really sleep 1+2+4 seconds each.  The production
+    # schedule is not lost with it: `test_the_retry_schedule_is_the_one_the_cdn_needs` pins it.
+    return MetricsArchiveClient(transport=transport, backoff=0.0)
 
 
 def test_a_symbols_days_are_appended_once_not_once_per_day(tmp_path: Path, monkeypatch) -> None:
@@ -111,6 +113,22 @@ def test_a_5xx_is_retried_and_a_404_is_not(tmp_path: Path) -> None:
     with _client(absent) as client:
         sync_metrics(client, store, ["AAAUSDT"], start="2024-01-01", end="2024-01-02")
     assert absent.attempts == 1, "a 404 must not be retried"
+
+
+def test_the_retry_schedule_is_the_one_the_cdn_needs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """What `backoff=0.0` costs the suite in coverage, bought back without the 7 seconds.
+
+    The seam exists so the tests above run instantly; this one is the reason it is a seam and not a
+    lowered default.  Against a CDN that throttles by concurrency, retrying three times in a row with
+    no pause is not a retry - it is the same burst again - so the waits themselves are the behaviour.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr("beidou_data.metrics_archive.time.sleep", slept.append)
+    store = MetricsStore(tmp_path)
+    transport = _Recorder(fail="AAAUSDT", status=503)
+    with MetricsArchiveClient(transport=transport, backoff=1.0) as client:  # the shipped default
+        sync_metrics(client, store, ["AAAUSDT"], start="2024-01-01", end="2024-01-02")
+    assert slept == [1.0, 2.0, 4.0], f"four attempts, doubling between them, got {slept}"
 
 
 def test_the_watermark_is_the_store_so_a_resume_asks_for_nothing_it_holds(tmp_path: Path) -> None:

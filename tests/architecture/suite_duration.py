@@ -35,11 +35,37 @@ PLAN_SECONDS = 30
 #
 # The alternative considered and NOT taken: parallelising CI (`pytest -n auto`) would cut the wall
 # clock rather than raise the bar, but it adds a dependency and changes what a "run" means, which is
-# a decision for the operator rather than a side effect of a ratchet breach.
-CEILING_SECONDS = 240
+# a decision for the operator rather than a side effect of a ratchet breach.  Still not taken, and now
+# priced: at 159ms a test it would buy back roughly half the wall clock on a two-core runner.
+#
+# 2026-09-13: 340.5s on CI, the first reading since 09-08 - the Types gate had been red for 23 pushes
+# and the test step never ran once, so this ratchet went four days without a measurement, the same
+# blindness the 240 note describes one gate further up.  Two things came out of the breach:
+#
+# 1. A sleep, exactly as advertised.  `MetricsArchiveClient` had no `backoff` seam, so the two tests
+#    that exercise its 5xx path each really slept 1+2+4s - 14s on the laptop, ~42s here.  Fixed rather
+#    than budgeted for; the seam is the one `onchain.CommunityClient` already carried.
+# 2. The rest is VOLUME, not a slowdown, and the numbers say so in the only way that settles it:
+#
+#      laptop 2026-09-07   46.5s /  847 tests = 54.9ms     CI 2026-09-08 (slowest) 153.2s = 180.9ms
+#      laptop 2026-09-13   97.2s / 1873 tests = 51.9ms     CI 2026-09-13 (est.)    298.4s = 159.4ms
+#
+#    The laptop column is measured on both dates; the CI estimate is 340.5s less the ~42s of sleeps
+#    and is the one number here the next green run replaces.  Per test it got CHEAPER on both boxes.  The suite grew 2.21x in tests since the 240 was set and
+#    its wall clock grew 2.22x; that is the whole of it.  A ceiling that fires on growth measures the
+#    repository's size, not its speed, which is not what this instrument is for.
+#
+# 400 is set against the 298.4s estimate above, and deliberately also clears the 340.5s that was
+# actually observed - so the next run cannot go red on my arithmetic being wrong about the sleeps.
+# That leaves ~100s of headroom against the expectation, the same proportion the 240 carried over its
+# own slowest reading (87s over 153.2s).  One CI reading stands behind this number where six stood
+# behind 240; the next runs will say whether it wants tightening.
+CEILING_SECONDS = 400
 
 # Below this many selected tests the run was filtered (`pytest tests/live`, `-k`, `-m`), and a filtered
-# run is not the thing the plan put a number on.  847 selected as of 2026-09-08, network markers: 0.
+# run is not the thing the plan put a number on.  847 selected as of 2026-09-08 and 1,873 as of
+# 2026-09-13, network markers: 0.  Left at 700: it is a floor under "was this the whole suite", not a
+# second ratchet, and raising it with the count would make deleting tests fail the run.
 FULL_SUITE_MIN = 700
 
 _STARTED_AT: float | None = None

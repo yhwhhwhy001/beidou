@@ -55,8 +55,14 @@ class MetricsArchiveClient:
         *,
         timeout: float = 60.0,
         transport: httpx.BaseTransport | None = None,
+        backoff: float = 1.0,
     ) -> None:
         self._client = httpx.Client(base_url=base_url, timeout=timeout, transport=transport, follow_redirects=True)
+        # A seam, not a knob - the one `onchain.CommunityClient` already carries, for the same reason.
+        # Two tests here exercise the 5xx path and paid its 1+2+4 seconds of real sleeping each; that is
+        # 14s on the laptop and ~42s on CI, against a suite whose ceiling names "a sleep" as the step
+        # change it exists to catch.  Tests pass 0; nothing else should.
+        self._backoff = backoff
 
     def close(self) -> None:
         self._client.close()
@@ -79,12 +85,13 @@ class MetricsArchiveClient:
         A 404 is NOT retried: the archive genuinely has no file for a day it has not published, and
         that is the normal case every morning (a day appears at about T+1 06:45-07:00 UTC).
         """
-        delay = 1.0
+        delay = self._backoff
         for attempt in range(_RETRIES):
             response = self._client.get(path)
             if response.status_code < 500 or attempt == _RETRIES - 1:
                 return response
-            time.sleep(delay)
+            if delay:
+                time.sleep(delay)
             delay *= 2
         raise AssertionError("unreachable")  # pragma: no cover
 

@@ -2008,7 +2008,11 @@ CEILING = {
     # and 81 of those 109 are six symbols whose 1h archive was never backfilled - a sync gap wearing a
     # universe defect's clothes.  Only LUNAUSDT's 28 refreshes are the phenomenon, and a single merged
     # share hides that, so the reading is per symbol.
-    "beidou_data": 5_432,
+    # +7 more beidou_data (5_432 -> 5_439): the `backoff` seam `MetricsArchiveClient` was missing while
+    # `onchain.CommunityClient` had carried it all along, with the comment saying why.  Its two 5xx
+    # tests each really slept 1+2+4 seconds, which is 14s on the laptop and ~42s on CI - and `Types`
+    # had been red for 23 pushes, so the test step never ran and `suite_duration.py` never saw them.
+    "beidou_data": 5_439,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
