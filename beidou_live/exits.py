@@ -42,6 +42,15 @@ class ExitOverlay:
             if frame is None or len(frame) < 2:
                 continue
             close = float(frame["close"].iloc[-1])
+            if not math.isfinite(close) or close <= 0:
+                # Same rule as `exit_step`'s own guard, applied one step earlier because `_reconcile`
+                # runs BEFORE it and writes the entry anchor: a NaN close reached `_reconcile`, which
+                # adopted it (or the venue VWAP with a NaN unit), and then `exit_step` re-anchored on
+                # top of that.  A bar with no close is not information; leaving the symbol out of
+                # `new_states` is what preserves the anchor, because the engine merges rather than
+                # replaces (`{**self.state.exit_states, **exit_states}`).  The model's own target
+                # stands for this cycle, exactly as it does for a missing or too-short frame above.
+                continue
             sigma = self._sigma(frame)
             tp_scale = 1.0
             if self.params.regime_window > 0:

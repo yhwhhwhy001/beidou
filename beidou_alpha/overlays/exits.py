@@ -156,14 +156,38 @@ def exit_step(
     increment of ``bar`` per bar (1 for indices, interval_ms for timestamps).
     ``tp_scale`` multiplies ``params.take_profit`` for this bar only (EXP-EX2's
     regime scaling); it defaults to 1.0, i.e. no scaling.
+
+    A non-finite or non-positive ``price`` returns the state UNCHANGED and a NaN
+    weight, which means "no decision on this bar - keep holding whatever you
+    held".  Callers must translate that NaN; ``apply_exits`` carries the last
+    weight it emitted and the live loop skips the symbol.
     """
     if not params.enabled:
         return replace(state, direction=_sign(target)), target, ""
+    if not math.isfinite(price) or price <= 0:
+        # A bar with no close carries no judgable information, so the overlay changes nothing here:
+        # it does not exit, does not re-anchor, does not advance the trailing extreme, and does not
+        # count the bar against a cooldown.
+        #
+        # What it used to do, and what that cost (found 2026-09-13).  The only price guard was the
+        # `price > 0` at the end of the `held != 0` condition just below, so a NaN close failed it,
+        # fell PAST the whole exit block, and landed in `_enter` - which anchored a brand-new
+        # ExitState at the NaN price, erasing the entry.  The next priced bar then found
+        # `isnan(entry_price)`, missed the block for the same reason, and ran `_enter` a SECOND time,
+        # putting the anchor on the far side of the gap.  Measured with stop_loss = take_profit = 6
+        # and sigma_1d = 0.02, so one k-unit is 2.0 points off a 100.0 entry:
+        #     no gap:      100, 100, 89, 87 -> 87 is 6.5 units adverse >= 6 -> STOP_LOSS, weight 0
+        #     one NaN bar: 100, 100, nan, 89, 87 -> the nan bar re-anchors to nan, the 89 bar
+        #                  re-anchors to 89, and 87 is only 1.0 unit adverse -> no stop, weight 0.1
+        # So the stop was silently off for the whole segment after any internal gap.  Five PIT
+        # members of the 1h archive carry internal gaps (1,005 symbol-bars); none is in the pinned
+        # live universe, which is why this never reached the loop.
+        return state, math.nan, ""
     if math.isnan(target):
         target = 0.0
     wanted = _sign(target)
     held = state.direction
-    if held != 0 and not math.isnan(state.entry_price) and price > 0:
+    if held != 0 and not math.isnan(state.entry_price):
         extreme = max(state.extreme, price) if held > 0 else min(state.extreme, price)
         if math.isnan(extreme):
             extreme = price
@@ -271,6 +295,29 @@ def apply_exits(
     )
     out = np.full_like(values, np.nan)
     states = [ExitState() for _ in weights.columns]
+    # The weight this overlay last emitted per symbol, which is what a gap bar keeps holding.
+    # `out[t - 1, j]` would be the obvious source and is wrong in one case: an all-NaN row is skipped
+    # below and leaves NaN in `out`, so a gap immediately after one would propagate that NaN into a
+    # row where the other symbols carry real weights.  Carrying the last EMITTED weight instead is
+    # the same value everywhere else and never invents a NaN.  It is always 0.0 while flat and
+    # non-zero while held, so `direction != 0` below only makes that invariant explicit.
+    #
+    # Carrying rather than passing the model's target through is the whole point: on a gap bar the
+    # target is 0 because `build_weights` filled a missing signal with 0, not because the model asked
+    # to be flat, and obeying it would sell at the gap and buy back after it - turnover the live loop,
+    # which cannot trade a bar it has no price for, would never have paid.
+    #
+    # The price of that choice, measured on the 1h PIT archive (2026-09-13, scratchpad/
+    # exit_gap_reanchor_blast_radius.py): a symbol whose archive simply STOPS while the overlay holds
+    # it now keeps that weight to the end of the panel - 79,447 symbol-bars across 150 symbols with
+    # ragged tails, against 998 that are the gap bug itself.  It is not a bug that can be fixed here:
+    # at the moment it happens, "the series stopped" and "one bar is missing" are the same
+    # observation, and telling them apart means reading the future (`last_valid_index` would make a
+    # truncated panel disagree with a full one, which is what T-X05's causality test forbids).
+    # `run_backtest` fills a missing asset return with 0, so the carried weight earns nothing; what it
+    # moves is exposure and the round trip that no longer happens - on that panel, average absolute
+    # exposure 2.283 -> 2.315 and turnover 22,335.3 -> 22,332.4 units.
+    carry = np.zeros(values.shape[1])
     events: list[dict[str, Any]] = []
     for t in range(values.shape[0]):
         row = values[t]
@@ -282,7 +329,10 @@ def apply_exits(
                 state, row[j], prices[t, j], vols[t, j], t, params, tp_scale=float(scales[t, j])
             )
             states[j] = new_state
+            if math.isnan(weight):  # gap bar: `exit_step` had nothing to judge, so hold, do not trade
+                weight = carry[j] if new_state.direction != 0 else 0.0
             out[t, j] = weight
+            carry[j] = weight
             if reason and reason != COOLDOWN:
                 unit_price = _unit_price(before, vols[t, j], params)
                 events.append(
