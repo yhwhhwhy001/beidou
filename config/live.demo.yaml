@@ -86,7 +86,85 @@ portfolio:
   # And every report produced at 0.15 is no longer horizontally comparable - only verdicts carry over.
   # Reverting is this one line.  Live de-escalation is pre-registered: -35% drawdown -> back to 0.225,
   # -50% -> back to 0.15, automatic, not a discussion.
-  vol_target: 0.30            # annualised portfolio volatility target
+  # 2026-09-14 (operator decision, P32): 0.30 -> 0.60, against a declared drawdown budget of -70%.
+  # Like P13 below, this is a risk-budget decision and not a research finding, and the criterion behind
+  # it CHANGED: P13 sized k against a 50% budget; the operator has now ruled the criterion is absolute
+  # RETURN and that the budget is re-negotiable.  Under that criterion the ladder was measured on the
+  # registry book (main + flow_short + exits + book guards), both universes, k grid reused verbatim from
+  # `scratchpad/vol_target_drawdown_bootstrap.py` (scripts: `scratchpad/p32_k_ladder_under_return_criterion.py`,
+  # `-p32b_r8_ladder_replay.py`, `-p32c_rescaled_ladder.py`):
+  #       k      CAGR pit/static     q95 MDD pit/static    P(breach -50%)     avg gross     liq touches
+  #     0.30       77.3% / 56.7%       -44.1% / -50.3%       1.2% / 5.3%          0.89               0
+  #     0.45      108.3% / 87.2%       -59.0% / -63.1%      20.1% / 30.3%         1.17               0
+  #     0.60      126.5% / 119.1%      -68.8% / -69.7%      53.4% / 58.6%         1.38               0
+  #     0.75      141.1% / 134.8%      -78.1% / -76.1%      81.7% / 79.2%         1.53               0
+  # CAGR rises monotonically in k on BOTH universes, so the return criterion has a cross-universe answer
+  # where Sharpe does not: Sharpe's argmax is 0.15 on pit and 0.60 on static, a complete sign flip, which
+  # is also why P26's published "argmax k = 0.15 at every capital" is WITHDRAWN as stated - that run hard-codes
+  # `pit` at `p26_vol_target_under_impact.py:52` and was never checked on static.  Withdrawn, not replaced:
+  # the static curve spans 0.106 with no error bars, so the honest reading is that Sharpe does not determine k.
+  #
+  # WHAT THE OPERATOR IS ACCEPTING, in the corrected wording rather than the one first put to them.  q95
+  # -69.9% was originally offered with "0.13pp of headroom under the budget"; that headroom is NOT
+  # measurable.  The same net series bootstrapped twice, same block/draws/seed, differs by up to 1.03pp
+  # (pit k=0.60: -68.85% vs -69.87%) purely from RNG stream position, so the margin is ~8x smaller than
+  # the estimator's own reproducibility.  And the bootstrap's bias SIGN is not known: weekly blocks destroy
+  # multi-month regime structure (optimistic) but also concatenate bad blocks history never ran together
+  # (pessimistic) - on pit the q95 is 1.7x the in-sample MDD.  The accepted statement is therefore:
+  # P(a >50% drawdown) is somewhere around a coin flip, and -70% is a declared appetite, not a bound.
+  # Re-confirmed by the operator on this wording 2026-09-14 after the first wording was retracted.
+  #
+  # WHAT IS DELIBERATELY NOT CHANGED, and it is the whole reason this is one line.  A proposal to rescale
+  # R8's ladder (`beidou_governance/policy.py:173`) proportionally to the new budget was WITHDRAWN under
+  # adversarial review.  Three findings killed it, all reproduced independently:
+  #   1. R8 applies its rung as a scalar on the weights, and the resulting REDUCTION still has to clear
+  #      `no_trade_rel_band` - `rebalancer.py:104`'s `same_direction_resize` does not exempt reductions.
+  #      A rung only trades when scalar <= 0.60.  The rescaled first rung was 0.45/0.60 = 0.75: dead.
+  #      The rungs kept here are 0.225/0.60 = 0.375 and 0.15/0.60 = 0.25, so BOTH still place orders.
+  #      That is the reason this configuration was chosen over the rescaled one.
+  #   2. The "16.3pp cost of not rescaling" rested on bootstrapping an already-throttled series, which
+  #      decouples the throttle pattern from the resampled path's own drawdowns; and on using the
+  #      backtest's mark-to-market series in place of `attributed_drawdown_state`, which counts only
+  #      REALISED P&L over a frozen total-equity base and therefore fires later and less.  Both biases
+  #      run the same way: 16.3pp is an upper bound and the true figure may be near zero.
+  #   3. `policy.py`'s own 0.3.0 note gives two conditions for moving a governance constant (provenance
+  #      is E5; it is a rate limit rather than the control itself).  R8 satisfies neither.
+  # So the loop still de-escalates to vol_target 0.225 at -35% attributed drawdown and to 0.15 at -50%,
+  # i.e. WELL INSIDE the -70% budget just declared.  That mismatch is intentional and is what the operator
+  # confirmed: the circuit-breaker stays tighter than the appetite, and the book will be cut to 0.15 - a
+  # 75% cut - long before -70% is reached.  `risk_budget` below is left untouched for the same reason;
+  # it is the reporting copy of the same ladder and the two must not disagree.
+  #
+  # KNOWN, UNFIXED, AND NOT CREATED BY THIS CHANGE: R8's first rung is ALREADY dead at vol_target 0.30
+  # (0.225/0.30 = 0.75, swallowed by the same band), so the shipped ladder has been running one rung
+  # instead of two.  At 0.60 both rungs work, so this change incidentally repairs that - but the defect
+  # is real at any k where a rung lands above 0.60 and is being fixed separately.
+  #
+  # PROVENANCE OF THE EVIDENCE, stated because it is weaker than this repository's norm: P32 was NOT
+  # pre-registered.  The grid and the reading were written before the run but only in a session
+  # transcript, not committed, and there is no RESEARCH_LOG entry - unlike P30/P31.  The -70% budget was
+  # also declared AFTER the q95 column was visible, so "the largest k whose q95 is inside the budget" is
+  # NOT a pre-registered selection rule here and must not be cited as one.  Trials debt: 44 new cells
+  # (P32 7 k x 2 universes x 2 capitals = 28, on P26's precedent of counting the capital axis; P32b's
+  # ladder replay 5 k x 2 universes = 10; P32c's rescaled arms 3 k x 2 universes = 6).  An earlier draft
+  # of this block said 38 and forgot P32c's six.
+  #
+  # THE GATE SEES THIS, and the sentence twenty lines up in this file saying it cannot is STALE.  That
+  # note ("the startup gate compares registry params only, so it cannot see this - a known gap") was
+  # written about `no_trade_rel_band`; since then `registry_evidence_problems` grew a portfolio-level
+  # comparison, and on the first paper run after this edit it said exactly what it should:
+  #     evidence: tsmom: portfolio vol_target is 0.6 live but 0.3 in the cited evidence
+  # `beidou_cli/live_cmd.py:301` turns that into a refusal for any run that is neither --dry-run nor
+  # --paper, so an ARMED loop will not start on this file until the registry cites evidence produced at
+  # 0.60.  That is the gate working, not an obstacle: the cited tsmom report was produced at 0.30 and
+  # genuinely no longer describes this construction.  `--allow-unvalidated` would silence it and must
+  # not be used for this - it is the whole KILL-015 mechanism.  What is owed is a `research validate`
+  # run at vol_target 0.60 whose verdict passes, and a registry `evidence` pointer (plus sha256) moved
+  # to it.  Until that exists this line is written but NOT in force; the loop keeps running whatever it
+  # loaded at startup (0.30), because the engine only builds the model once.
+  #
+  # Reverting is this one line (and `vol_band` below).
+  vol_target: 0.60            # annualised portfolio volatility target
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
@@ -268,7 +346,10 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   rollback_at: 0.50           # -> vol_target 0.15, the declared budget
   deescalate_to: 0.225
   rollback_to: 0.15
-  vol_band: [0.26, 0.38]      # 30-day realised annualised vol; 0.30 target +/- 20%
+  # 2026-09-14: scaled x2 with `vol_target` 0.30 -> 0.60.  This is a transcription, not a new choice -
+  # the band keeps exactly its old relative width.  It has to move with the target or M-002 alerts every
+  # cycle by construction; it measures and never trades.
+  vol_band: [0.52, 0.76]      # 30-day realised annualised vol; 0.60 target, same relative width as before
   vol_window_days: 30
   min_vol_bars: 240           # ten days of hourly cycles before this estimate is allowed to say anything
   # L1-04, fixed 2026-09-07.  The bar is M-Q08's "slippage <= 2x model", so it is written that way
