@@ -138,11 +138,18 @@ class ParticipationModel:
 
     ``capital`` exists because the cap is the first thing here that is not scale-free: weights, costs
     and funding are all fractions of equity, while the cap is an absolute notional.
+
+    ``exempt_reductions`` must be flipped together with ``beidou_live.rebalancer.RebalanceParams``.
+    This replay is only an instrument for the live cap while both halves encode the same rule; flipping
+    one alone makes the measurement describe a loop that does not exist - KILL-027's shape.
     """
 
     capital: float
     max_participation: float
     window: int = 24  # bars averaged, matching `LiveEngine.liquidity_window`
+    # False = today's scope (only a full close escapes the cap), matching `plan_rebalance`'s `closing`.
+    # True = every reduce-only row escapes it, matching `plan_rebalance`'s `reduce_only`.
+    exempt_reductions: bool = False
 
     def __post_init__(self) -> None:
         if self.capital <= 0:
@@ -348,6 +355,14 @@ def _replay_book_guards(
             # live exempts a full close (`closing`: target 0 while holding) and never caps a symbol
             # whose liquidity is unknown, because `plan_rebalance` requires `cap is not None and cap > 0`
             exempt = ((row == 0.0) & (held != 0.0)) | ~np.isfinite(cap) | (cap <= 0.0)
+            if participation.exempt_reductions:
+                # The other half of `RebalanceParams.exempt_reductions`, written to the same rule:
+                # live's `reduce_only` is `closing` (above) OR `pure_reduction`, and `pure_reduction`
+                # is same-side and strictly smaller.  The sign test is `(target > 0) == (current > 0)`
+                # there, so it is `(row > 0) == (held > 0)` here - quirk included, since a short being
+                # taken to zero satisfies both and is already `closing`.
+                same_side = (held != 0.0) & ((row > 0.0) == (held > 0.0))
+                exempt = exempt | (same_side & (np.abs(row) < np.abs(held)))
             desired_notional[t] = float(wanted.sum())
             refused_notional[t] = float(np.where(exempt, 0.0, np.maximum(0.0, wanted - cap)).sum())
         maintenance = float(np.abs(row).sum()) * maintenance_margin_rate

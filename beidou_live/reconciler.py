@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -83,8 +84,18 @@ class Snapshot:
 
 
 async def take_snapshot(venue: Venue, managed_symbols: Sequence[str]) -> Snapshot:
-    account = await venue.account()
-    positions = await venue.positions()
+    # `account` and `positions` do not depend on each other, so they overlap; `mark_prices` needs the
+    # symbol set `positions` returns and stays behind both.  One saved round trip per cycle, on a path
+    # that goes through a system proxy that intermittently 503s.
+    #
+    # `return_exceptions=False` on purpose: a failed call must still raise out of here rather than
+    # arrive as a value nobody inspects.  The one thing this does NOT preserve is *which* failure
+    # surfaces when both calls fail - `gather` propagates the one that fails first in time, while the
+    # sequential version always surfaced `account()`'s because `positions()` never ran.  `gather`
+    # starts its children in argument order, so `account` still wins whenever both fail before
+    # awaiting I/O; a late `account` failure against an immediate `positions` failure is the case that
+    # can now report the other one.  Return values are unchanged either way.
+    account, positions = await asyncio.gather(venue.account(), venue.positions(), return_exceptions=False)
     prices = await venue.mark_prices(list({*managed_symbols, *positions}))
     managed = set(managed_symbols)
     inside = {symbol: position for symbol, position in positions.items() if symbol in managed}

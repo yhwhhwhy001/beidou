@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 
 from beidou_exchange.rules import meets_min_notional, quantize_qty
@@ -33,6 +34,24 @@ def derive_leverage(max_gross: float, margin_cap: float, max_leverage: int, brac
     return max(1, chosen)
 
 
+def _margin_exposure(order: PlannedOrder) -> float:
+    """The part of ``order.notional`` that actually *consumes* margin.
+
+    A flip - long into short, or the reverse - is not ``reduce_only``, because it ends on the other
+    side.  Its quantity is ``|current| + |target|``, and the ``|current|`` half CLOSES the standing
+    position, so it releases margin rather than consuming it.  Counting the whole notional overstated
+    ``needed`` and could shrink a book that fits (2026-09-13 review).  Only the ``|target|`` half is new
+    exposure, expressed as ``notional - |current|`` rather than as a flat ``|target|`` so that a flip
+    whose quantity was already truncated upstream (``max_order_notional``, the participation cap) is
+    charged for what it actually opens - such an order may not even reach zero, and then it opens
+    nothing.  For every other order this is ``order.notional`` unchanged.
+    """
+    flips = order.current_notional * order.target_notional < 0.0
+    if not flips:
+        return order.notional
+    return max(0.0, order.notional - abs(order.current_notional))
+
+
 def scale_orders_to_margin(
     orders: Sequence[PlannedOrder],
     available_balance: float,
@@ -46,9 +65,15 @@ def scale_orders_to_margin(
 
     Reduce-only orders are never scaled (they release margin).  Orders that
     fall below the venue minimum after scaling are dropped and reported.
+
+    This is a PRE-CHECK, which is why ``_margin_exposure`` may correct it downwards without a window:
+    it exists so the venue does not reject orders one by one (-2019), it can only ever shrink what
+    ``plan_rebalance`` already decided, and the venue's own margin check remains the backstop.
     """
     adds = [order for order in orders if not order.reduce_only]
-    needed = sum(order.notional / max(1, leverage_by_symbol.get(order.symbol, default_leverage)) for order in adds)
+    needed = sum(
+        _margin_exposure(order) / max(1, leverage_by_symbol.get(order.symbol, default_leverage)) for order in adds
+    )
     budget = max(0.0, float(available_balance)) * (1.0 - buffer)
     if not adds or needed <= budget:
         return list(orders), {"scaled": False, "needed_margin": needed, "budget": budget}
@@ -60,7 +85,10 @@ def scale_orders_to_margin(
             kept.append(order)
             continue
         rule = rules.get(order.symbol)
-        quantity = quantize_qty(float(order.quantity) * factor, rule) if rule is not None else order.quantity * 0
+        # No rule means no step to quantize to, and an unquantizable order is dropped below rather than
+        # sent at an unknown step.  Spelled `Decimal(0)`: it used to read `order.quantity * 0`, which is
+        # the same zero by Decimal arithmetic but reads like a typo.
+        quantity = quantize_qty(float(order.quantity) * factor, rule) if rule is not None else Decimal(0)
         if quantity <= 0 or (rule is not None and not meets_min_notional(quantity, order.price, rule)):
             dropped.append({"symbol": order.symbol, "reason": "MARGIN_SCALED_BELOW_MIN", "factor": factor})
             continue
