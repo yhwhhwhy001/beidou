@@ -510,7 +510,12 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     lines = ledger.read_text(encoding="utf-8").splitlines() if ledger.exists() else []
 
     def read_report(path: str) -> dict[str, Any]:
-        return json.loads((checkout / path).read_text(encoding="utf-8"))
+        # The local is here for its annotation: `json.loads` hands back `Any` and `warn_return_any` will
+        # not let that out of a `-> dict[str, Any]`.  No isinstance guard on purpose - unlike
+        # `config.read_report` this one must not turn an unreadable report into `{}`; `recheck` renders
+        # OSError/ValueError as UNREADABLE with the error text, and anything else should stay loud.
+        payload: dict[str, Any] = json.loads((checkout / path).read_text(encoding="utf-8"))
+        return payload
 
     readings = recheck_gate(registry, read_report, lines)
     for reading in readings:

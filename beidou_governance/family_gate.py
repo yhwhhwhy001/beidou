@@ -94,7 +94,17 @@ def read_gate(strategy: str, report: Mapping[str, Any], ledger_lines: Sequence[s
     threshold = block.get("threshold_annual")
     n_then = block.get("n_trials")
     alpha = float(block.get("alpha", 0.05))
-    if not all(isinstance(value, int | float) for value in (sharpe, variance, threshold, n_then)):
+    # Spelled out per name rather than `all(isinstance(v, int | float) for v in (...))`, which is what
+    # stood here.  A narrowing made inside a generator does not reach the caller, so every `float(sharpe)`
+    # and `int(n_then)` below stayed `Any | None` and mypy 2.x failed this file on 22 arg-type errors -
+    # the type step is ahead of the test step in CI, so that one line kept the tests from running for four
+    # days.  Same four checks, same message, same verdict; only the spelling moved.  Do not fold it back.
+    if (
+        not isinstance(sharpe, int | float)
+        or not isinstance(variance, int | float)
+        or not isinstance(threshold, int | float)
+        or not isinstance(n_then, int | float)
+    ):
         return GateReading(strategy, UNREADABLE, "the selection block is missing sharpe/variance/threshold/n")
 
     quantile_then = max_sharpe_quantile(int(n_then), float(variance), alpha)
