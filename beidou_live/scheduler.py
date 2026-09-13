@@ -73,6 +73,16 @@ def late_seconds(bar_open_ms: int, interval_ms: int, *, at_ms: int) -> float:
 MISSED_REBALANCE_REASON = "restart outside the rebalance window"
 ALREADY_REBALANCED_REASON = "restart outside the rebalance window; this bar was already rebalanced"
 
+#: The third way a bar goes untraded, and the one that was invisible until 2026-09-13.  A failed cycle
+#: backs off 60s doubling to a 3600s cap (`LiveEngine.backoff_seconds`), so from the seventh
+#: consecutive failure each sleep is a whole 1h bar and the running total by then is about 7,380s -
+#: two bars.  Those bars get no ERROR row (the error belongs to the bar before), no SKIPPED row, and
+#: did not reach `missed_rebalances`, while `config/live.demo.yaml` sets `max_missed_rebalances: 0`
+#: (M-Q03).  A threshold of zero that one whole path cannot move is not a threshold.
+#: It sits beside the two above because `restart_cost` charges every SKIPPED row that is not
+#: ALREADY_REBALANCED_REASON, so naming it here is all the wiring a miss needs.
+BACKOFF_REASON = "failure backoff slept through this bar's close"
+
 
 def restart_reason(*, bar_open_ms: int, last_traded_bar_ms: int | None) -> str:
     """Which of the two a late restart is, decided by the record rather than by the clock.

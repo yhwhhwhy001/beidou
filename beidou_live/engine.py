@@ -49,6 +49,7 @@ from beidou_live.reports import collateral_share
 from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state
 from beidou_live.scheduler import (
     ALREADY_REBALANCED_REASON,
+    BACKOFF_REASON,
     last_closed_bar_open_ms,
     late_seconds,
     rebalance_window_seconds,
@@ -552,11 +553,18 @@ class LiveEngine:
             }
         )
         self.store.heartbeat({"phase": "SKIPPED", "bar_open_ms": bar_open_ms, "late_seconds": age_seconds})
-        logger.warning(
-            "restart was %.1fs after the bar close (window %.1fs); reconciled but did not rebalance",
-            age_seconds,
-            window_seconds,
-        )
+        if reason == BACKOFF_REASON:
+            logger.warning(
+                "failure backoff slept through the close of bar %s (%.1fs ago); counted as a missed rebalance",
+                bar_open_ms,
+                age_seconds,
+            )
+        else:
+            logger.warning(
+                "restart was %.1fs after the bar close (window %.1fs); reconciled but did not rebalance",
+                age_seconds,
+                window_seconds,
+            )
 
     async def guarded_cycle(self, bar_open_ms: int) -> dict[str, Any] | None:
         try:
@@ -606,7 +614,7 @@ class LiveEngine:
             # M-004: back off exponentially, capped at an hour, before the next attempt.  launchd's
             # ThrottleInterval only paces process restarts; a loop that stays up and retries a failing
             # venue every cycle needs its own brake, and the plan capped it at 1h.
-            await self.clock.sleep(self.backoff_seconds())
+            await self._backoff(bar_open_ms)
             return None
         self.consecutive_errors = 0
         self.alerts.clear("cycle-failed")
@@ -1449,6 +1457,39 @@ class LiveEngine:
     def backoff_seconds(self) -> float:
         """Delay after a failed cycle: 60s doubling per consecutive error, capped at 1 hour (M-004)."""
         return float(min(3600.0, 60.0 * 2 ** max(0, self.consecutive_errors - 1)))
+
+    async def _backoff(self, bar_open_ms: int) -> None:
+        """Sleep the failure backoff, then charge M-Q03 for every bar that closed while we slept.
+
+        The backoff itself is right (M-004) and unchanged.  What was wrong until 2026-09-13 is that
+        the bars it eats left NO trace anywhere a threshold could see: the ERROR row belongs to the
+        bar that failed, `wait_for_bar_close` returns the next bar to close and never mentions the
+        ones already gone, and `_record_missed_rebalance` - the only thing that moves
+        `missed_rebalances` - was reachable from the restart path alone.  From the seventh consecutive
+        failure each sleep is a whole 1h bar (60 -> 120 -> ... -> 3600, capped), and the running total
+        by then is about 7,380s, so a venue outage could silently cost two bars and more against a
+        `max_missed_rebalances: 0` that would report zero.
+
+        One row per bar, at the same reason-bearing shape the restart misses use, so `restart_cost`
+        counts them with no change on its side.  The scan is bounded by the sleep we actually measured
+        rather than by the clock alone: a clock that jumped forward is a different fault and must not
+        be able to write an unbounded number of rows out of this one.
+        """
+        started = self.clock.now_ms()
+        await self.clock.sleep(self.backoff_seconds())
+        resumed = self.clock.now_ms()
+        interval = self.config.interval_ms
+        # Always set by `run()` before the first cycle; 0.0 only when a cycle is driven directly.
+        window = self.rebalance_window if self.rebalance_window is not None else 0.0
+        last_closed = last_closed_bar_open_ms(resumed, interval)
+        limit = int(max(0, resumed - started) // interval) + 1
+        bar = bar_open_ms + interval
+        while bar <= last_closed and limit > 0:
+            self._record_missed_rebalance(
+                bar, late_seconds(bar, interval, at_ms=resumed), window, reason=BACKOFF_REASON
+            )
+            bar += interval
+            limit -= 1
 
     async def _announce_guards(self, decision: GuardDecision, bar_open_ms: int) -> None:
         """Alert on every change of the guard state, in both directions (M-001).
