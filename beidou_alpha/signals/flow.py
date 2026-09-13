@@ -36,6 +36,17 @@ class FlowParams:
     window: int = 24
     scale: float = 0.05
     volume_window: int = 48
+    # What the volume-expansion multiplier reads before it has `volume_window` bars.  1.0 is what the
+    # code has always done and stays the default so nothing moves; `None` means "do not fill", which
+    # leaves the score NaN until expansion is warm and is the value `warmup_bars` already declares.
+    # The two are not equivalent and 1.0 is not the neutral one - see `flow_scores`.  Adopting `None`
+    # is an operator decision with its own evidence, so it is a config edit and not a code change.
+    #
+    # Declaring it DOES move two digests, because both are taken over canonicalised signal params:
+    # `registry_fingerprint` 7a969e02 -> 0e1da8bb and `registry_digest` abe21f7a8edf -> e204447bef68.
+    # Nothing the loop computes changes, but until the running process is restarted
+    # `beidou live status --check` will correctly report that the file is not what the loop holds.
+    volume_warmup_fill: float | None = 1.0
     cross_sectional: bool = True
     entry_threshold: float = 0.20
     short_gate: float = 0.0  # 0 disables; shorts are dropped while momentum >= short_gate
@@ -52,6 +63,8 @@ class FlowParams:
             raise ValueError("entry_threshold must be in (0, 1]")
         if not 0 <= self.short_gate <= 1:
             raise ValueError("short_gate must be in [0, 1]")
+        if self.volume_warmup_fill is not None and not 0 < self.volume_warmup_fill <= 1:
+            raise ValueError("volume_warmup_fill must be in (0, 1] - expansion's own range - or None")
         if self.short_gate > 0:
             self.gate_params()  # validates the momentum parameters eagerly
 
@@ -80,6 +93,33 @@ class FlowParams:
 
 
 def flow_scores(panel: Panel, params: FlowParams | None = None) -> pd.DataFrame:
+    """Scores; ``volume_warmup_fill`` decides what the expansion multiplier is before it is warm.
+
+    ``expansion`` lives in (0, 1] and multiplies the imbalance, so ``fillna(1.0)`` is its UPPER bound,
+    not a neutral value: on a bar where the ratio is unknown the score is computed as though volume had
+    expanded as much as it ever can.  That is a lean toward taking the position, in a signal whose
+    shipped use is the short-only ``flow_short`` probe.
+
+    WHERE it is reachable was measured before this knob was written, because the answer is not the one
+    the shape suggests.  The review's reading was the warm-up head: ``imbalance`` needs ``window`` bars
+    and the score is masked where it is NaN, so the fill shows only on ``volume_window < t <= window``,
+    which is bars 25-48 under this class's defaults and EMPTY under the shipped registry (``window``
+    168 against ``volume_window`` 48).  On the point-in-time panel (205 symbols, 49,937 bars,
+    2021-01-01..2026-09-12) the count of bars the fill actually reaches under the registry's own
+    parameters is 4,284 - and every single one of them comes from the OTHER NaN in ``volume_ratio``:
+    ``baseline.where(baseline > 0)``, a symbol whose trailing 48-bar mean volume is exactly zero.
+    36 symbols, 238 of the 4,284 inside the eligible/point-in-time mask.
+
+    Which makes the fill's meaning worse than "aggressive during warm-up": a symbol that has stopped
+    quoting for two days is scored as though its volume were expanding as hard as it can.  It is the
+    same population O4's ``dead_slot_share`` counts - a 30-day trailing volume keeps ranking a name
+    that no longer prints - reached through a different door.
+
+    The default still does not move.  `flow_short` is ENABLED, ``None`` changes 238 in-universe cells
+    from a value to a hold/NaN, and `scores_to_targets` carries values forward, so this is a live
+    change and therefore the operator's to price - not a correction to slip in beside four that are
+    bit-identical.
+    """
     p = params or FlowParams()
     if panel.taker_buy_quote is None or panel.quote_volume is None:
         return pd.DataFrame(np.nan, index=panel.close.index, columns=panel.close.columns)
@@ -90,7 +130,9 @@ def flow_scores(panel: Panel, params: FlowParams | None = None) -> pd.DataFrame:
         # probe demeans against ~123 research names and against the 15-18 the loop manages.
         centre = within_reference(imbalance, panel.reference).mean(axis=1)
         imbalance = imbalance.sub(centre, axis=0)
-    expansion = volume_ratio(panel.volume, p.volume_window).clip(upper=1.0).fillna(1.0)
+    expansion = volume_ratio(panel.volume, p.volume_window).clip(upper=1.0)
+    if p.volume_warmup_fill is not None:
+        expansion = expansion.fillna(p.volume_warmup_fill)
     score = apply_numpy(imbalance / p.scale, np.tanh) * expansion
     score = apply_short_gate(score.clip(-1.0, 1.0).where(imbalance.notna()), panel.close, p)
     if not p.long_side:

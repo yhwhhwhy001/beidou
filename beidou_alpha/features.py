@@ -54,6 +54,51 @@ def annualize_vol(vol: pd.DataFrame, bars_per_year: float) -> pd.DataFrame:
     return vol * math.sqrt(bars_per_year)
 
 
+# The anchor every re-fit cadence is measured from.  Absolute on purpose: see `refit_boundaries`.
+REFIT_EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
+
+
+def refit_boundaries(index: pd.DatetimeIndex, refit_bars: int, min_bars: int = 0) -> list[int]:
+    """Positions at which a periodic re-fit fires, anchored on the UNIX epoch and NOT on the panel.
+
+    `range(start, n, refit_bars)` reads the cadence off the panel's first row, so the same calendar
+    bar falls on a re-fit boundary in one window and inside a block in another.  That is D-033's shape
+    exactly - "the live recursion is rebuilt on a request window that slides one bar per cycle, so the
+    latch point is an artefact of where the window starts" - and it is worse live than in research:
+    the loop asks for a rolling 1,442-bar window every hour, so a positional cadence re-fits on a
+    different calendar hour every cycle, forever.
+
+    Anchoring on 1970-01-01 UTC instead makes the boundary set a property of the CALENDAR, so
+    `f(panel)` and `f(panel.slice(start=...))` agree bar for bar wherever both have the inputs (the
+    slice-invariance test in `tests/alpha/test_refit_boundaries_are_a_calendar_not_an_offset.py`).
+    Any absolute anchor would do; the epoch is the one nobody has to look up.
+
+    `min_bars` is the panel-side floor - how many rows must exist before the first fit - and it is a
+    FLOOR on the boundary, never a new origin for the cadence.  Per-symbol sufficiency ("has this
+    symbol observed enough bars?") is a different question and stays where it was, with the caller.
+
+    The bar width is measured as the MODAL gap rather than taken from the first pair: a panel index is
+    the union of every symbol's bar times, so one venue outage widens a gap and one stray sub-interval
+    archive row narrows one, and neither should be allowed to redefine the grid.  An index that cannot
+    name a width - fewer than two rows, or no positive gap at all - falls back to the positional
+    cadence, because a calendar anchor with no calendar is not more correct, only less predictable.
+    """
+    n_bars = len(index)
+    start, every = max(int(min_bars), 0), max(int(refit_bars), 1)
+    if start >= n_bars:
+        return []
+    stamps = pd.DatetimeIndex(index)
+    if stamps.tz is None:
+        stamps = stamps.tz_localize("UTC")
+    gaps = pd.Series(stamps).diff().dropna()
+    gaps = gaps[gaps > pd.Timedelta(0)]
+    if gaps.empty:
+        return list(range(start, n_bars, every))
+    period = pd.Timedelta(gaps.mode().iloc[0]) * every
+    aligned = np.asarray((stamps - REFIT_EPOCH) % period == pd.Timedelta(0))
+    return [int(position) for position in np.flatnonzero(aligned) if position >= start]
+
+
 # GARCH(1,1) is fitted on a two-parameter grid rather than by a general optimiser, because the third
 # parameter is pinned by VARIANCE TARGETING: omega = sigma_bar^2 * (1 - alpha - beta), where sigma_bar^2
 # is the trailing-window mean of r^2.  That is the standard identification for a long-horizon fit and it
@@ -66,12 +111,18 @@ GARCH_PERSISTENCE = (0.90, 0.95, 0.98, 0.995)
 GARCH_NEWS_SHARE = (0.02, 0.05, 0.10, 0.20)
 
 
-def _garch_loglik(r2: np.ndarray, omega: np.ndarray, alpha: np.ndarray, beta: np.ndarray) -> np.ndarray:
-    """Gaussian QMLE log-likelihood of each parameter row, summed over the bars a symbol actually has.
+def _garch_loglik(
+    r2: np.ndarray, omega: np.ndarray, alpha: np.ndarray, beta: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Gaussian QMLE log-likelihood of each parameter row, and the conditional variance it ends on.
 
     Accumulated inside the loop rather than returned as a path: the fitting grid is
     (n_grid, n_symbols) and materialising a variance path for it over five years of hourly bars is
     1.3 GB, which is the whole reason this is a hand-rolled filter instead of a library call.
+
+    The final ``h`` costs nothing here and is what makes the caller's state window-determined: it is
+    the forecast for the boundary bar under the very parameters the likelihood just scored, filtered
+    from the unconditional level across the whole fitting window.
     """
     h = np.broadcast_to(omega / np.maximum(1.0 - alpha - beta, 1e-9), omega.shape).astype(float).copy()
     total = np.zeros(h.shape)
@@ -80,7 +131,7 @@ def _garch_loglik(r2: np.ndarray, omega: np.ndarray, alpha: np.ndarray, beta: np
         shock = np.where(seen, row, 0.0)
         total += np.where(seen, -0.5 * (np.log(h) + shock / h), 0.0)
         h = np.where(seen, omega + alpha * shock + beta * h, h)
-    return total
+    return total, h
 
 
 def garch_forecast_vol(
@@ -104,10 +155,29 @@ def garch_forecast_vol(
     than filtered with block 0's parameters - using them there would be a fit reading its own sample,
     and it would be invisible because those bars are all inside every walk-forward training window.
 
+    SLICE INVARIANCE, which is the other half of "causal" and used to be missing.  Two things used to
+    make a bar's forecast depend on where the panel happened to START rather than on the calendar:
+    the boundaries were ``range(max(refit_bars, min_obs), n, refit_bars)`` counted off row 0, and the
+    filter state ``h`` was carried across a re-fit, so it was a function of every bar since the symbol
+    first qualified.  Both are now window-determined - `refit_boundaries` anchors the cadence on the
+    epoch, and ``h`` at a boundary is the state `_garch_loglik` ended the FITTING WINDOW on, under the
+    parameters that window just chose.  ``f(panel)`` and ``f(panel.slice(...))`` therefore agree
+    exactly on every bar whose block's fitting window both frames carry.  Nothing shipped moves:
+    ``vol_model`` defaults to ``ewma`` and #35 is REFUTED.  What this buys is that re-opening it will
+    not hand the live loop - which re-requests a window that slides one bar per cycle - a different
+    re-fit hour every hour (D-033).
+
+    Carrying ``h`` across a re-fit was also propagating a state through a parameter CHANGE: the level
+    handed to the new block had been produced by the old block's alpha/beta.  Re-deriving it from the
+    fitting window is both the slice-invariant answer and the internally consistent one.
+
     A symbol with fewer than ``min_obs`` observed returns in the trailing window gets NaN for that
     block, and its filter restarts at the unconditional variance when it next qualifies.  ``min_obs``
     defaults to 720 to match ``AlphaModel.min_history_bars``: a symbol this refuses to size is a symbol
     the model already refuses to trade, so the option does not silently change the traded universe.
+    It is also the floor on the first boundary - a fit needs that many rows to exist at all - where the
+    positional cadence used ``max(refit_bars, min_obs)``, a number the cadence's origin made necessary
+    and the calendar anchor does not.
     """
     simple = close.pct_change()
     r2 = simple.pow(2).to_numpy(dtype=float)
@@ -115,14 +185,11 @@ def garch_forecast_vol(
     persistence = np.array([p for p in GARCH_PERSISTENCE for _ in GARCH_NEWS_SHARE], dtype=float)[:, None]
     share = np.array([s for _ in GARCH_PERSISTENCE for s in GARCH_NEWS_SHARE], dtype=float)[:, None]
     alpha_grid, beta_grid = persistence * share, persistence * (1.0 - share)
-    boundaries = list(range(max(refit_bars, min_obs), n_bars, max(refit_bars, 1)))
+    boundaries = refit_boundaries(pd.DatetimeIndex(close.index), refit_bars, min_obs)
     out = np.full((n_bars, n_symbols), np.nan)
     if not boundaries:
         return pd.DataFrame(out, index=close.index, columns=close.columns)
-    h = np.full(n_symbols, np.nan)
-    omega = np.full(n_symbols, np.nan)
-    alpha = np.zeros(n_symbols)
-    beta = np.zeros(n_symbols)
+    columns = np.arange(n_symbols)
     for position, boundary in enumerate(boundaries):
         window = r2[max(0, boundary - fit_bars) : boundary]
         present = ~np.isnan(window)
@@ -136,11 +203,14 @@ def garch_forecast_vol(
         # given a finite placeholder rather than left to poison a warning-free run.  Real on this panel:
         # a handful of symbol-windows print no price change at all.
         safe = np.where(qualified, target, 1.0)
-        best = np.argmax(_garch_loglik(window, safe * (1.0 - alpha_grid - beta_grid), alpha_grid, beta_grid), axis=0)
+        loglik, state = _garch_loglik(window, safe * (1.0 - alpha_grid - beta_grid), alpha_grid, beta_grid)
+        best = np.argmax(loglik, axis=0)
         alpha, beta = alpha_grid[best, 0], beta_grid[best, 0]
         omega = np.where(qualified, target * (1.0 - alpha - beta), np.nan)
-        # Restart a symbol that has just qualified at its unconditional variance; drop one that stopped.
-        h = np.where(qualified, np.where(np.isnan(h), target, h), np.nan)
+        # The state the winning row ended the FITTING WINDOW on, not the one carried out of the previous
+        # block: that carry was what made a bar's forecast depend on where the panel started, and it also
+        # fed a level built under the previous block's alpha/beta into this block's recursion.
+        h = np.where(qualified, state[best, columns], np.nan)
         end = boundaries[position + 1] if position + 1 < len(boundaries) else n_bars
         for t in range(boundary, end):
             row = r2[t]

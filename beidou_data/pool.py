@@ -166,12 +166,35 @@ def tenure_mask(membership: pd.DataFrame, min_refreshes: int) -> pd.DataFrame:
     return members & (tenure >= min_refreshes)
 
 
-def membership_summary(membership: pd.DataFrame) -> dict[str, Any]:
+def membership_summary(membership: pd.DataFrame, *, available: pd.DataFrame | None = None) -> dict[str, Any]:
+    """Shape of a membership table, plus - when the caller can say - how many slots held no data.
+
+    ``available`` is a boolean frame of the same shape: did this symbol have market data at this
+    refresh?  Given one, the summary gains ``dead_slots`` (member-refresh slots with no data),
+    ``dead_slot_share`` and ``worst_refresh``.  Omitted, those keys are ABSENT rather than 0.0
+    (D-035): a metric that could not be computed must never read as one that passed.  The caller owns
+    the I/O - this module is handed frames, it does not open the archive.
+
+    Why it is worth three keys for a number this small.  A 30-day trailing volume keeps ranking a
+    symbol that has stopped quoting, so it can hold one of ``top_n`` slots with nothing in it for up to
+    a month: LUNAUSDT's last 1h bar is 2022-05-13 and it stayed a member until 2022-06-10, 28
+    refreshes.  Measured over the whole point-in-time table - 2,042 refreshes, 35,899 member-refresh
+    slots - that is 109 dead slots, 0.30%, on 104 refresh days (5.1%), worst 2 of 18 on 2026-07-18.
+    0.30% changes no conclusion.  It is reported because "N-choose-K degenerates in some periods" is a
+    family of defect where a measured 0.30% and an unmeasured unknown are not the same answer, and only
+    one of them can be argued with.
+
+    Running it also splits the 109 into two unrelated causes, which is the part a single share hides:
+    28 are LUNAUSDT's delisting tail, and the other 81 belong to six 2026 names (SKYAI, SYN, BLESS,
+    ALLO, RE, ENSO) whose 1h archive has simply not been backfilled - the same six
+    ``research --universe pit`` already prints as "member symbols have no 1h klines yet".  Those are a
+    sync gap wearing a universe defect's clothes, and the fix for them is a download.
+    """
     if membership.empty:
         return {"refreshes": 0, "union": [], "mean_size": 0.0, "changes_per_refresh": 0.0}
     sizes = membership.sum(axis=1)
     diffs = membership.astype(int).diff().abs().sum(axis=1).iloc[1:]
-    return {
+    summary: dict[str, Any] = {
         "refreshes": len(membership),
         "union": sorted(membership.columns[membership.any(axis=0)]),
         "mean_size": float(sizes.mean()),
@@ -179,6 +202,25 @@ def membership_summary(membership: pd.DataFrame) -> dict[str, Any]:
         "first": str(membership.index[0]),
         "last": str(membership.index[-1]),
     }
+    if available is None:
+        return summary
+    members = membership.astype(bool)
+    # `fillna(False)` on the REINDEX, so a symbol or refresh the caller could say nothing about counts
+    # as dead rather than as fine.  A slot the archive cannot speak for is exactly the slot in question.
+    live = available.reindex(index=membership.index, columns=membership.columns).fillna(False).astype(bool)
+    slots = int(members.sum().sum())
+    if not slots:  # no member-refresh slots at all: the share is 0/0, and 0.0 would read as a pass
+        return summary
+    per_refresh = (members & ~live).sum(axis=1)
+    worst = per_refresh.idxmax()
+    summary["dead_slots"] = int(per_refresh.sum())
+    summary["dead_slot_share"] = float(per_refresh.sum() / slots)
+    summary["worst_refresh"] = {
+        "at": str(worst),
+        "dead": int(per_refresh.loc[worst]),
+        "members": int(sizes.loc[worst]),
+    }
+    return summary
 
 
 # --- live: daily refresh --------------------------------------------------------------------------

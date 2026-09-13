@@ -20,7 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.features import ewm_vol, garch_forecast_vol
+from beidou_alpha.features import ewm_vol, garch_forecast_vol, refit_boundaries
 
 VOL_MODELS = ("ewma", "garch")
 BUDGET_MODES = ("inverse_vol", "inverse_variance", "hrp")
@@ -194,6 +194,19 @@ def _hrp_tilt(sigma: pd.DataFrame, returns: pd.DataFrame, params: PortfolioParam
     Re-clustered every ``hrp_refit_bars``; between re-clusters the tilt is held while the
     inverse-variance part it multiplies keeps updating every bar, so a symbol that lists mid-block is
     sized (tilt 1) rather than dropped.
+
+    WHICH bars those re-clusters land on is a calendar fact, not an offset from row 0 (`refit_boundaries`).
+    ``t % hrp_refit_bars == 0`` made the whole tilt path a function of where the panel started: the same
+    calendar hour re-clustered in one window and held a stale tilt in another, and measured on the
+    point-in-time panel one symbol's weight moved 9.69e-4 between a 1,442-bar and a 1,443-bar request
+    window for no reason but that.  Off by default (``budget_mode`` is ``inverse_vol``, #48 REFUTED), so
+    this moves nothing shipped; it matters the day it is re-opened, because the live loop re-requests a
+    window that slides one bar per cycle and would re-cluster on a different hour every hour (D-033).
+
+    What is NOT fixed, and cannot be without changing the estimator: the EWMA covariance itself starts
+    from zero on the frame's first row, so two frames agree only up to the weight that start still
+    carries - ``2^(-k/halflife)`` after k bars.  That is a warm-up, it decays, and it is bounded; the
+    boundary placement was neither.
     """
     r = returns.fillna(0.0).to_numpy(dtype=float)
     scale = sigma.to_numpy(dtype=float)
@@ -202,10 +215,11 @@ def _hrp_tilt(sigma: pd.DataFrame, returns: pd.DataFrame, params: PortfolioParam
     cov = np.zeros((n_symbols, n_symbols))
     tilt = np.ones((n_bars, n_symbols))
     current = np.ones(n_symbols)
+    recluster = set(refit_boundaries(pd.DatetimeIndex(returns.index), params.hrp_refit_bars))
     for t in range(n_bars):
         row = r[t]
         cov = lam * cov + (1.0 - lam) * np.outer(row, row)
-        if t >= max(params.covariance_halflife, 2) and t % params.hrp_refit_bars == 0:
+        if t >= max(params.covariance_halflife, 2) and t in recluster:
             active = np.flatnonzero(np.isfinite(scale[t]) & (scale[t] > 0) & (np.diag(cov) > 0))
             if len(active) >= 2:
                 block = cov[np.ix_(active, active)]

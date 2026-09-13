@@ -363,6 +363,20 @@ def chanlun_scores(panel: Panel, params: ChanlunParams | None = None) -> pd.Data
     p = params or ChanlunParams()
     high, low, close = panel.high, panel.low, panel.close
     if p.level != "1h":
+        # `closed="right"` is deliberate, and the grid it produces is NOT the venue's.  The panel is
+        # indexed by bar OPEN time, so this groups the opens in (00:00, 04:00] - the 01/02/03/04 bars,
+        # real time 01:00-05:00 - and stamps them at 04:00.  Causally that is the correct stamp: the
+        # group's last input is the 04:00 bar, which closes at 05:00, and 05:00 is exactly where the
+        # information set of the DECISION bar 04:00 ends, so the `ffill` below can never land a value on
+        # a bar that predates its own inputs.  `closed="left"` would group 00/01/02/03 and stamp 00:00,
+        # which is Binance's own 4h candle and a one-bar look-ahead unless it is also shifted.
+        #
+        # The price: these are the 01-05, 05-09, ... buckets, so a `level: "4h"` structure will not line
+        # up with a 4h chart, and the disagreement is the grid rather than the algorithm.  Changing it is
+        # a STRATEGY change (different pens, different segments, different scores), not a tidy-up -
+        # `tests/alpha/test_the_four_hour_grid_is_pinned.py` pins the grouping so that "surely this
+        # should be label='left'" fails a test instead of quietly re-deciding a signal.  chanlun is not
+        # enabled today, which is why this is written down rather than acted on.
         rule = LEVELS[p.level]
         high = panel.high.resample(rule, label="right", closed="right").max()
         low = panel.low.resample(rule, label="right", closed="right").min()
