@@ -621,6 +621,50 @@ def _embargo_bars(purge: int, embargo: int | None) -> int:
     return purge if embargo is None else embargo
 
 
+# The three notes below travel WITH the numbers they qualify.  Each caveat already existed in the tree -
+# in `cpcv_splits`' docstring, in `backtest.py`'s margin-buffer paragraph, in `verdict.decide`'s PBO
+# branch - and each was quoted without it: the 2026-09-14 audit found the registry note and the commit
+# message for `tsmom-validation-20260913T182325Z` citing CPCV's `fraction_negative`, the zero liquidation
+# touches, and a PBO move, none of them carrying the caveat that lives one file over.  A caveat reachable
+# only by reading the implementation is not a disclosure to the person reading the artefact - it is a
+# disclosure to the person who already knows.  Markdown only: the JSON payload is deliberately untouched
+# so every archived report's sha256 stays comparable with the ones the registry already cites.
+_MARGIN_BUFFER_NOTE = (
+    "structural bound, not a measurement: buffer = (1 + r - c) / (gross * maintenance_margin_rate), and "
+    "gross <= max_gross, so at mmr 0.005 and max_gross 2.0 it cannot fall below about 100.  Reaching the "
+    "liquidation line at 1.0 would take one bar losing ~99%, so `liquidation_touches: 0` is arithmetic "
+    "rather than evidence.  The channel that can actually liquidate this account is collateral repricing "
+    "(52% non-USDT, KILL-AR-05) and this replay models zero collateral."
+)
+
+
+def _embargo_note(embargo: int) -> str:
+    """Why `fraction_negative` is easier to pass than it looks, printed beside `fraction_negative`."""
+    return (
+        f"{embargo} bars, which is shorter than the model's feature lookback (tsmom max(horizons)=720, "
+        "AlphaModel.warmup_bars 1442).  Training bars AFTER a test block are therefore computed from a "
+        "window covering it, and `cpcv_evaluate` picks parameters on exactly those bars.  The returns stay "
+        "causal, so this is selection contamination rather than look-ahead - it makes `fraction_negative`, "
+        "one of D-020's hard gates, easier to pass than it should be.  Open boundary on the record: see "
+        "`cpcv_splits`' docstring and docs/analysis/2026-09-13-full-repo-review.md."
+    )
+
+
+def _pbo_note(grid_trials: object) -> str:
+    """PBO below four configurations is a coin flip; `decide` knows that and readers of the report did not."""
+    try:
+        trials = int(grid_trials)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return "grid_trials not reported"
+    if trials >= 4:
+        return f"enforced: grid_trials={trials} >= 4"
+    return (
+        f"NOT informative and NOT enforced at grid_trials={trials}: CSCV ranks configurations against each "
+        "other, and with fewer than four it only says that two curves traded places across sub-periods.  "
+        "`verdict.decide` skips the gate below four, so a move in this number is not a cost or a gain either."
+    )
+
+
 @research.command("validate")
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
@@ -1034,7 +1078,7 @@ def research_validate(
             ),
             (
                 "Book guards / exits (the layers the loop applies)",
-                {"guards": report["book_guards"], "exits": report["exits"]},
+                {"guards": report["book_guards"], "exits": report["exits"], "margin_buffer": _MARGIN_BUFFER_NOTE},
             ),
             ("Best params (full sample)", params_by_key[best_key]),
             ("Full sample", report["full_sample"]),
@@ -1045,8 +1089,8 @@ def research_validate(
                     "best_key_oos_sharpe": report["best_key_oos_sharpe"],
                 },
             ),
-            ("CPCV", {k: v for k, v in cpcv.items() if k != "chosen"}),
-            ("Multiple testing", mt),
+            ("CPCV", {**{k: v for k, v in cpcv.items() if k != "chosen"}, "embargo": _embargo_note(embargo_bars)}),
+            ("Multiple testing", {**mt, "pbo_is_informative": _pbo_note(mt.get("grid_trials"))}),
             # Immediately above the gate it moves, because at 19,578 candidates against a four-cell grid
             # the search IS the denominator and a reader who sees only `n_trials` cannot tell where it
             # came from.  The per-configuration facts stay in the JSON; this is the headline.

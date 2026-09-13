@@ -486,6 +486,12 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
     assert "Grid (full-sample Sharpe per configuration)" in markdown
     assert "vol_window=100" in markdown and "vol_window=200" in markdown
     assert "parameter_neighbourhood" in markdown
+    # The three caveats have to travel WITH their numbers (2026-09-14 audit): each one existed in the
+    # tree already and was quoted without itself.  This grid has two configurations, so the PBO note
+    # must be the "not informative" branch - the exact case the audit caught being cited as a cost.
+    assert "selection contamination" in markdown, "CPCV's embargo caveat must print beside fraction_negative"
+    assert "structural bound, not a measurement" in markdown, "the margin buffer's bound must print beside it"
+    assert "NOT informative and NOT enforced at grid_trials=2" in markdown, "PBO below four is a coin flip"
 
 
 def _mine(root: Path, out: Path, *extra: str) -> tuple[int, str, dict]:

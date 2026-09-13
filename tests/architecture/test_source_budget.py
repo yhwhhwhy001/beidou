@@ -2062,7 +2062,23 @@ CEILING = {
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
-    "beidou_cli": 5_829,
+    # +44 more beidou_cli (5_829 -> 5_873), and the sentence the rule requires: three caveats that
+    # already existed in the tree were being quoted without themselves.  The 2026-09-14 backtest-guard
+    # audit found the registry note and the commit message for `tsmom-validation-20260913T182325Z`
+    # citing CPCV's `fraction_negative`, `liquidation_touches: 0`, and a PBO move as evidence - while
+    # the caveat for each one lived one file over, in `cpcv_splits`' docstring, in `backtest.py`'s
+    # margin-buffer paragraph, and in `verdict.decide`'s own "not enforced below four" branch.  The
+    # lines buy `_MARGIN_BUFFER_NOTE`, `_embargo_note` and `_pbo_note`, which print beside the numbers
+    # they qualify, so the next reader of an artefact does not have to already know.
+    #
+    # Why lines rather than a doc: a document describing the caveat is the thing that was already there
+    # and did not travel.  D-038's shape - "a correct fact no instrument states is indistinguishable
+    # from an unproven one" - applied to a caveat instead of a fact.
+    #
+    # What was deliberately NOT bought: the JSON payload is untouched.  Putting the notes in `report`
+    # would move every future `report_digest` and make the archived sha256 the registry cites
+    # incomparable with a re-run, which is a real cost for a string no rule reads.
+    "beidou_cli": 5_873,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
