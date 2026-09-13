@@ -9,6 +9,7 @@ cycle:   (new UTC day: universe refresh) -> closed bars (mainnet) -> venue snaps
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -43,7 +44,7 @@ from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
-from beidou_live.rebalancer import RebalanceParams, flatten_orders, plan_rebalance
+from beidou_live.rebalancer import PlannedOrder, RebalanceParams, flatten_orders, plan_rebalance
 from beidou_live.reconciler import Snapshot, is_own_order, startup_reconcile, take_snapshot
 from beidou_live.reports import collateral_share
 from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state
@@ -195,6 +196,7 @@ class LiveEngine:
         spot_verification: Verification | None = None,
         record_metrics: bool = True,
         dropped_after: int = 3,
+        order_concurrency: int = 1,
     ) -> None:
         self.config = config
         self.model = model
@@ -276,6 +278,9 @@ class LiveEngine:
         # changes no weight and no threshold, so it has no business inside `construction_fingerprint`,
         # and a knob in YAML that the digest cannot see is the other half of D-036.
         self.dropped_after = int(dropped_after)
+        # Orders per `asyncio.gather` batch.  1 is today's serial loop, byte for byte; see
+        # `_execute_orders` for why >1 changes nothing about WHAT is sent and why it is off by default.
+        self.order_concurrency = int(order_concurrency)
         # A3: set when `last_income_ms` is missing on a loop that has already run cycles - written onto
         # the first cycle row of this process so a post-mortem can find the hole from the record.
         self._income_watermark_lost: dict[str, Any] | None = None
@@ -817,41 +822,120 @@ class LiveEngine:
             record["margin"] = margin
             skipped.extend(margin.get("dropped", []))
         record["skipped"] = skipped
-        reports: list[ExecutionReport] = []
-        for order in orders:
-            if config.dry_run:
-                record["orders"].append({**order.to_dict(), "status": "DRY_RUN"})
-                continue
-            report = await execute_order(
-                self.venue,
-                order,
-                self.clock,
-                poll_attempts=config.poll_attempts,
-                poll_interval_seconds=config.poll_interval_seconds,
-            )
-            reports.append(report)
-            self.store.append_trade(
-                {
-                    "bar_open_ms": bar_open_ms,
-                    # M-Q03 reads this: how late an entry was, per fill, so the metric can be "bar-hours
-                    # held by a late entry" rather than "share of fills that were late" (KILL-R6).
-                    "late_seconds": late_seconds(bar_open_ms, self.config.interval_ms, at_ms=self.clock.now_ms()),
-                    # L1-04 / M-Q08: the price the BACKTEST would have entered at, recorded per fill so
-                    # slippage can be measured against it.  The instrument used to read the venue mark
-                    # from the cycle's snapshot, which is an index price sampled when the loop woke; the
-                    # backtest enters at the execution bar's open, and in a continuous market that is the
-                    # decision bar's close.  Measuring against the mark answered a question M-Q08 does
-                    # not ask, and the 10 bps gate it was compared to was a fee-inclusive budget.
-                    "decision_close": decision_closes.get(order.symbol),
-                    **report.to_dict(),
-                }
-            )
-            self._remember_order(report)
-            record["orders"].append(report.to_dict())
+        reports = await self._execute_orders(orders, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
         record["quarantined"] = await self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
         self._finish_cycle(record, targets.contributions, getattr(targets, "book_weights", None), latest_closes(usable))
         return record
+
+    async def _place(self, order: PlannedOrder) -> ExecutionReport:
+        return await execute_order(
+            self.venue,
+            order,
+            self.clock,
+            poll_attempts=self.config.poll_attempts,
+            poll_interval_seconds=self.config.poll_interval_seconds,
+        )
+
+    def _record_fill(
+        self,
+        report: ExecutionReport,
+        record: dict[str, Any],
+        *,
+        bar_open_ms: int,
+        decision_closes: Mapping[str, float],
+        at_ms: int | None = None,
+    ) -> None:
+        """The three bookkeeping writes one order makes, in the order they have always been made.
+
+        ``at_ms`` is when THIS order finished.  ``None`` reads the clock here, which is where the
+        serial path has always read it; the concurrent path passes the instant its own order came
+        back, because a per-fill lateness stamped when the whole batch finished would be a different
+        measurement wearing the same name.
+        """
+        self.store.append_trade(
+            {
+                "bar_open_ms": bar_open_ms,
+                # M-Q03 reads this: how late an entry was, per fill, so the metric can be "bar-hours
+                # held by a late entry" rather than "share of fills that were late" (KILL-R6).
+                "late_seconds": late_seconds(
+                    bar_open_ms,
+                    self.config.interval_ms,
+                    at_ms=self.clock.now_ms() if at_ms is None else at_ms,
+                ),
+                # L1-04 / M-Q08: the price the BACKTEST would have entered at, recorded per fill so
+                # slippage can be measured against it.  The instrument used to read the venue mark
+                # from the cycle's snapshot, which is an index price sampled when the loop woke; the
+                # backtest enters at the execution bar's open, and in a continuous market that is the
+                # decision bar's close.  Measuring against the mark answered a question M-Q08 does
+                # not ask, and the 10 bps gate it was compared to was a fee-inclusive budget.
+                "decision_close": decision_closes.get(report.order.symbol),
+                **report.to_dict(),
+            }
+        )
+        self._remember_order(report)
+        record["orders"].append(report.to_dict())
+
+    async def _execute_orders(
+        self,
+        orders: Sequence[PlannedOrder],
+        record: dict[str, Any],
+        *,
+        bar_open_ms: int,
+        decision_closes: Mapping[str, float],
+    ) -> list[ExecutionReport]:
+        """Send this bar's orders.  ``order_concurrency`` 1 is the serial loop this has always been.
+
+        Why concurrency is worth having at all: `execute_order` sleeps 1.0s up to `poll_attempts`
+        times whenever an ack is not terminal, so a bar's LAST order can be sent tens of seconds after
+        its first.  The later the fill, the further the price is from `decision_close` - and
+        `decision_close` is the benchmark M-Q08 measures slippage against, recorded on every one of
+        these rows.  Serial sending therefore inflates the very number it is measured by.
+
+        Why it is off by default, and why 1 must stay byte-identical: the fix is a LATENCY change and
+        nothing else.  Concurrency cannot double-send (`client_order_id` is derived from the bar, and
+        `execute_order` queries before it submits), but it does change the order fills arrive in, and
+        two things must not follow that order - `store.append_trade` and `record["orders"]`, which are
+        the append-only trade log and the cycle row that every reader reconstructs a bar from.  Both
+        are written below in PLANNED order (``asyncio.gather`` returns results positionally, whatever
+        the completion order was), so the record is the same sequence at any concurrency.
+
+        Turning it on is a wiring decision, taken outside this file.
+        """
+        if self.config.dry_run:
+            for order in orders:
+                record["orders"].append({**order.to_dict(), "status": "DRY_RUN"})
+            return []
+        if self.order_concurrency <= 1 or len(orders) < 2:
+            reports: list[ExecutionReport] = []
+            for order in orders:
+                report = await self._place(order)
+                reports.append(report)
+                self._record_fill(report, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
+            return reports
+        gate = asyncio.Semaphore(self.order_concurrency)
+
+        async def send(order: PlannedOrder) -> tuple[ExecutionReport, int]:
+            async with gate:
+                report = await self._place(order)
+                return report, self.clock.now_ms()
+
+        # `return_exceptions=True` so a failure in one order cannot leave the others running as
+        # orphans past the cycle that owns them: everything that DID come back is recorded first, in
+        # planned order, and only then does the first failure propagate - which is what the serial
+        # path does too (it records each order before the next one can raise).
+        settled = await asyncio.gather(*(send(order) for order in orders), return_exceptions=True)
+        done: list[ExecutionReport] = []
+        for outcome in settled:
+            if isinstance(outcome, BaseException):
+                continue
+            report, at_ms = outcome
+            done.append(report)
+            self._record_fill(report, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes, at_ms=at_ms)
+        for outcome in settled:
+            if isinstance(outcome, BaseException):
+                raise outcome
+        return done
 
     async def flatten(self) -> list[ExecutionReport]:
         """Close every managed position with reduce-only market orders (``beidou live flatten``)."""
