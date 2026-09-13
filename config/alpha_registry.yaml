@@ -14,6 +14,17 @@ version: 1
 # 这份名单读自 .beidou/live/state.json——armed 循环此刻真正持有的那套。第一版读的是
 # .beidou/data/universe.json，而 09-08 18:00Z 一次裸 --paper 重排把那个文件里的 CYSUSDT
 # 换成了 PUMPUSDT；照那份钉，钉的是循环从来没持有过的币。文件是观察，而且不止一个进程在写它。
+# 2026-09-13T21:13Z（操作者指示）：TRUMPUSDT 移出。它的模型目标已缩到权益的 0.044%
+# （4.75 USDT），而 `no_trade_band: 0.005` 要求一笔调仓至少 0.5% 权益（当时 53.94 USDT），
+# 于是它从 2026-09-13T19:00Z 起每根周期都被记成 BAND_BLOCKS_ENTRY：占着一个名额、永远
+# 建不了仓。18:00Z 那根它自己把空头平掉之后就再没有过敞口，所以移除不平任何仓位。
+# 先测后改，三项都是量出来的而不是推的：
+#   构造指纹 46b8d731530a 删前删后一致 —— M-010 的 30 天窗口**不清零**（universe 名单
+#     不在 construction_fingerprint 里；在里面的是 min_history_bars）；
+#   启动证据门 registry_evidence_problems / registry_dataset_problems 删前删后都是 0；
+#   registry_digest e204447bef68 -> 9e1bf73c3691，重启后心跳应读到后者。
+# 池子每日仍照常重排、照常记进 cycles.jsonl 的 universe_update，但 universe_pinned 下它
+# 不决定任何事，所以 TRUMPUSDT 不会自己回来。
 universe:
   - BTCUSDT
   - ETHUSDT
@@ -23,7 +34,6 @@ universe:
   - HYPEUSDT
   - DOGEUSDT
   - BNBUSDT
-  - TRUMPUSDT
   - ENAUSDT
   - TUTUSDT
   - 1000PEPEUSDT
