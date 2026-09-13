@@ -596,12 +596,38 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     return combos
 
 
+# CPCV's embargo is not walk-forward's purge read backwards; `cpcv_splits`' docstring has the argument
+# and `docs/analysis/2026-09-13-full-repo-review.md` has the finding.  The knob is split out here so the
+# boundary CAN be closed; the default stays `--purge` so that this commit changes no published number.
+_embargo_option = click.option(
+    "--embargo",
+    default=None,
+    type=int,
+    help=(
+        "bars blocked AFTER each CPCV test block (default: --purge, i.e. today's behaviour).  "
+        "Closing the boundary wants the model's feature lookback, not a label horizon - warmup_bars "
+        "is 1,442 under the shipped registry - and that is a pre-registered re-run, not a flag flip."
+    ),
+)
+
+
+def _embargo_bars(purge: int, embargo: int | None) -> int:
+    """The embargo a run actually uses.  `None` means "whatever `--purge` is", bit for bit.
+
+    Every archived report was produced with `embargo == purge`, so the fallback is what keeps this
+    change invisible to them.  Adopting a real embargo moves `cpcv.fraction_negative`, which is one of
+    D-020's four hard gates, and moving a gate is the operator's decision plus a ledger row.
+    """
+    return purge if embargo is None else embargo
+
+
 @research.command("validate")
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
 @click.option("--folds", default=5, show_default=True)
 @click.option("--min-train", default=4000, show_default=True, help="bars before the first test fold")
 @click.option("--purge", default=50, show_default=True)
+@_embargo_option
 @click.option("--cpcv-groups", default=6, show_default=True)
 @click.option(
     "--prior-trials",
@@ -667,6 +693,7 @@ def research_validate(
     folds: int,
     min_train: int,
     purge: int,
+    embargo: int | None,
     cpcv_groups: int,
     prior_trials: int,
     holdout_months: int,
@@ -750,8 +777,9 @@ def research_validate(
     fold_list = walk_forward_folds(n_bars, folds, min_train=min(min_train, max(n_bars // 2, 2)), purge=purge)
     wf = walk_forward_evaluate(nets, params_by_key, fold_list, bpy)
     wf_summary = wf.summary(bpy)
+    embargo_bars = _embargo_bars(purge, embargo)
     cpcv = cpcv_evaluate(
-        nets, cpcv_splits(n_bars, n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=purge), bpy
+        nets, cpcv_splits(n_bars, n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=embargo_bars), bpy
     )
     full_sharpes_raw: dict[str, float | None] = {key: sharpe(series, bpy) for key, series in nets.items()}
     full_sharpes: dict[str, float] = {
@@ -915,6 +943,12 @@ def research_validate(
         "folds": folds,
         "min_train": min_train,
         "purge": purge,
+        # D-024 asks that the fold vector be reproducible from the report alone, and until now the
+        # report said `purge` and let a reader assume the CPCV embargo equalled it.  It did - that is
+        # exactly the 2026-09-13 finding - but "it happened to" and "the artefact says so" are
+        # different facts.  Reports written before this key exists simply do not carry it; every
+        # reader has to treat its absence as "embargo == purge", which is what they were.
+        "embargo": embargo_bars,
         "cpcv_groups": cpcv_groups,
         "prior_trials_declared": prior_trials,
         "trial_sharpes": {key: full_sharpes_raw[key] for key in nets},
@@ -1721,6 +1755,7 @@ def _standalone_block(
     fold_list: Sequence[Fold],
     *,
     purge: int,
+    embargo: int,
     cpcv_groups: int,
     prior_trials: int,
     ledger_path: Path,
@@ -1732,7 +1767,7 @@ def _standalone_block(
     nets = {key: net}
     wf = walk_forward_evaluate(nets, {key: dict(params)}, list(fold_list), bpy).summary(bpy)
     cpcv = cpcv_evaluate(
-        nets, cpcv_splits(len(net), n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=purge), bpy
+        nets, cpcv_splits(len(net), n_groups=cpcv_groups, n_test_groups=2, purge=purge, embargo=embargo), bpy
     )
     full = sharpe(net, bpy)
     record = TrialRecord(
@@ -1807,6 +1842,7 @@ def _evaluate_book(
     folds: int,
     min_train: int,
     purge: int,
+    embargo: int,
     cpcv_groups: int,
     prior_trials: int,
     ledger_path: Path,
@@ -1866,6 +1902,7 @@ def _evaluate_book(
         cost,
         fold_list,
         purge=purge,
+        embargo=embargo,
         cpcv_groups=cpcv_groups,
         prior_trials=prior_trials,
         ledger_path=ledger_path,
@@ -2199,6 +2236,7 @@ def _record_trial(ledger_path: Path, record: TrialRecord) -> bool:
 @click.option("--folds", default=5, show_default=True)
 @click.option("--min-train", default=4000, show_default=True)
 @click.option("--purge", default=50, show_default=True)
+@_embargo_option
 @click.option("--cpcv-groups", default=6, show_default=True)
 @click.option(
     "--sleeve-max-gross",
@@ -2237,6 +2275,7 @@ def research_book(
     folds: int,
     min_train: int,
     purge: int,
+    embargo: int | None,
     cpcv_groups: int,
     sleeve_max_gross: float | None,
     prior_trials: int,
@@ -2301,6 +2340,7 @@ def research_book(
         click.echo(f"running book: {name}")
     evaluated: dict[str, dict[str, Any]] = {}
     records: list[TrialRecord] = []
+    embargo_bars = _embargo_bars(purge, embargo)
     for position, (mode, mode_panel, membership) in enumerate(universes):
         click.echo(
             f"[{mode}] {main_id} + {fraction:.3f} x {sleeve_id} on {len(mode_panel.symbols)} symbols x "
@@ -2320,6 +2360,7 @@ def research_book(
             folds=folds,
             min_train=min_train,
             purge=purge,
+            embargo=embargo_bars,
             cpcv_groups=cpcv_groups,
             prior_trials=prior_trials,
             ledger_path=ledger_path,
@@ -2379,6 +2420,9 @@ def research_book(
         "folds": folds,
         "min_train": min_train,
         "purge": purge,
+        # Same key, same reason, as the validation report: the sleeve's standalone block is scored by
+        # the same CPCV, so the number that shaped `cpcv_negative` belongs in the artefact.
+        "embargo": embargo_bars,
         "prior_trials": prior_trials,
         "universes": evaluated,
         "rule": BOOK_RULE,
