@@ -353,3 +353,67 @@ tsmom 最新报告 `tsmom-validation-20260913T182325Z.json`：
 （附带更正一处 beidou-2b 的读数：它测到「2741 行 / 683 个 param_key」，并推断账本又长了。不是——
 2741 = `mined` 桶 2731 + 7 个 `mined_<hash>` 自己键下的 10 行去重后，683 = 676 + 7。那正是
 `ledger_scope("mined_X")` 的并集口径，是范围差，不是账本增长。本文其余各处用的是 `mined` 桶本身。）
+
+### 12.2 第二次更正：N 的口径我用错了，而裁定 5 的前提不存在
+
+执行阶段动手接线时撞出两条，都推翻本文前面的内容。**原文保留。**
+
+#### (a) 裁定 5 的前提不成立——那道检查早就有，还接着状态机
+
+E-023 写「`registry.py` 不校验签发时的 N 与今天的桶」。这句话作为对 `registry.py` 的陈述是对的，
+作为对系统的陈述是错的：`beidou_governance/family_gate.py` 正是「R0 recomputed against today's
+ledger」，由 `governance gate` 调用、把 PASS/FAIL 写进 verdict 账本、经 `Facts.family_gate_still_passes`
+喂给状态机（`FAMILY_GATE_FAILED` → retired）。它的 docstring 里就有我当成新发现写的那句话：
+**"searching more retires your own incumbents"**，还附了 tsmom 自己的数（N=148 门 1.4884 → N=183
+门 1.5136）。
+
+**这与 K-14 是同一个形状，同一轮里第二次**：从单个文件的 grep 得出一个缺口，而那道检查住在隔壁。
+**裁定 5 撤回**——它不是一项待决事项。
+
+（我按"推荐"动手时先写了一个 `evidence_staleness`，五个测试全绿，然后才发现它是 `read_gate` 的
+重新实现。已删。）
+
+#### (b) N 不是桶的行数——本文全部门的读数都用错了口径
+
+`read_gate` 的注释直接点名了我犯的错：「N is NOT the bucket count.  `dsr_inputs` builds it as
+ledger + this run's grid + the declared pre-ledger trials」。`594a12f9` 的
+**575 = ledger_trials 0 + grid 1 + declared prior 574**，所以它今天的 N 是 **575 加上桶的增量**，
+不是桶本身。按 `read_gate` 的口径重算（年化倍数仍从报告自己的 threshold/quantile 对反解）：
+
+| 桶 today | → N today | 门 | 对 1.7862 | |
+| ---: | ---: | ---: | ---: | --- |
+| 2731（今天） | 3306 | **1.8288** | −0.0426 | FAIL |
+| 2073（剔 09:50 那一轮） | 2648 | **1.8065** | **−0.0203** | **FAIL** |
+| 1415（剔两轮） | 1990 | 1.7774 | +0.0089 | PASS |
+| 676（不同假设数） | 1251 | 1.7291 | +0.0572 | PASS |
+
+**§12 写的「剔掉 09:50 那一轮 → 1.7815，以 +0.0047 通过」是错的。** 正确口径下是 **−0.0203，仍然
+不过**。也就是说：**裁定 2 单独做，救不了这个候选。** 而剩下两种能救它的口径（②④）都与项目自己
+写下的保守计费原则相抵触——§12 已经因为别的理由收回过对它们的语气，这里是第二个理由。
+
+这实质性地削弱了整份分析的头条。头条剩下的部分仍然成立：桶数的是行数不是假设、09:50 那一轮
+逐位重现了前一轮、1h 上 0/676 越过在跑的书。**不再成立的是「有一条窄口子能让它过」。**
+
+#### (c) 一条新发现：那七份报告，生产装置根本不肯重算
+
+`read_gate` 对全部 7 份 mined validation 返回 **UNREADABLE**，理由相同：
+`the report's gate is None, not max_sharpe_quantile`。它们写于 2026-09-06，早于 KILL-Q3 给
+`oos_selection` 补上 `gate` 字段——而 KILL-Q3 讲的正是「a stored threshold outliving the rule that
+made it」。tsmom 的报告有这个键，flow 的没有。
+
+**我这份分析全程做的，正是这个装置拒绝做的事**：从一份没说明自己用了哪条规则的报告里重算阈值。
+经验上我的重算站得住（N=575 处复算与报告自记的 `threshold_annual` 逐位相同，规则确实就是
+`max_sharpe_quantile`），但治理装置按一条有案可查的规则拒绝接受它。
+
+所以裁定 1/2 多了一个前置条件，它比两条裁定本身更靠前：**现有装置无法在这七份证据上执行任何口径
+裁定**，除非先重发它们（带 `gate` 字段重跑 `validate`，本身又是新的账本行），或者先裁定「阈值恒等式
+在 15 位上复现」是否足以认定那条规则。这是第三个裁定，我没有做。
+
+#### (d) 已落地的 R2b，以及它今天为什么不说话
+
+`fix/…`→`feat/stop-when-the-gate-passes-the-space` 给调度器加了 R2b：门若已越过这个空间史上最好的
+候选，`next_action` 返回 WAIT 而不是 MINE。它**只拒绝花钱**，不动任何判决。实现委托
+`family_gate.read_gate`，所以 (b) 的错误不会在它身上重演。
+
+代价是：由于 (c)，它在今天的账本上读到的是「无意见」，对那七份不追溯，从下一次 `research validate`
+起才会说话。这是正确行为而不是接线失败——它与生产装置对同一批报告的判断一致。

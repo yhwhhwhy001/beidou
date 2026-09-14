@@ -28,6 +28,9 @@ from typing import Any
 
 from beidou_alpha.mining import enumerate_candidates
 from beidou_governance.budget import LedgerBudget
+from beidou_governance.family_gate import FAIL as GATE_FAIL
+from beidou_governance.family_gate import PASS as GATE_PASS
+from beidou_governance.family_gate import read_gate
 from beidou_governance.lifecycle import Book, State
 from beidou_governance.policy import Policy
 from beidou_governance.scheduler import WAIT, Action, Context, next_action, parity_satisfied
@@ -35,6 +38,11 @@ from beidou_governance.scheduler import WAIT, Action, Context, next_action, pari
 #: How far along §3's pipeline each state already is.  Used only to subtract: a candidate the state
 #: already carries at `booked` is not work the scheduler should schedule again, and `retired` ranks
 #: highest because R7 makes it absorbing.
+#: The `ledger_source` a caller that did not pass one leaves behind, so `known` can tell "the bucket is
+#: empty" (a reading) from "nobody told me" (not one).  A sentinel rather than `None` because the field
+#: is a SENTENCE that gets printed either way.
+NOT_SUPPLIED = "not supplied"
+
 RANK: dict[State, int] = {
     State.CANDIDATE: 0,
     State.VALIDATED: 1,
@@ -185,6 +193,8 @@ def assemble(
     parity: Mapping[str, Any] | None,
     parity_source: str,
     wanted_trials: int,
+    ledger_lines: Sequence[str] = (),
+    ledger_source: str = NOT_SUPPLIED,
 ) -> Assembly:
     """Build the context out of `reports/research/` and `governance_state.json`, saying what came from where."""
     at_least = {name: RANK[candidate.state] for name, candidate in book.candidates.items()}
@@ -202,6 +212,28 @@ def assemble(
             bool(last),
         ),
     ]
+
+    # R2b.  Both halves come from artefacts: every mined validation on disk, and the bucket's N today.
+    # `known` is false when either half is missing, so `load_bearing` gets to ask whether the missing
+    # half could have changed the answer instead of this module deciding that it could not.
+    mined_validations = {
+        name: payload
+        for name, payload in newest(reports, "validation", "strategy").items()
+        if name.startswith("mined_")
+    }
+    passed, why = gate_has_passed_the_space(mined_validations, ledger_lines)
+    fields.append(
+        Field(
+            "mined_gate_passed_best",
+            1 if passed else 0,
+            f"{why} [{ledger_source}]",
+            # Known iff a caller actually supplied the ledger.  NOT "the ledger has mined rows": an
+            # empty bucket is a real reading (nothing searched yet, so nothing to be exhausted), while a
+            # caller that forgot the argument would read as one - the invisible-default shape, failing
+            # PERMISSIVE, letting a round be spent on the strength of an argument nobody passed.
+            ledger_source != NOT_SUPPLIED,
+        )
+    )
 
     validated = {
         name: str(payload.get("verdict", "")) for name, payload in newest(reports, "validation", "strategy").items()
@@ -262,6 +294,37 @@ def assemble(
 
     values = {field.name: field.value for field in fields}
     return Assembly(Context(**values), tuple(fields))
+
+
+def gate_has_passed_the_space(
+    validations: Mapping[str, Mapping[str, Any]], ledger_lines: Sequence[str]
+) -> tuple[bool, str]:
+    """Would the best candidate this space ever produced still clear its own gate today?
+
+    R2b's whole content, and it is a MEASUREMENT rather than a threshold: the D-028 gate rises
+    monotonically in N, so once it has passed the best out-of-sample Sharpe the space has ever
+    produced, a further round cannot produce an admissible candidate - it can only raise the bar.  On
+    2026-09-09 that crossing happened and two more rounds ran after it.
+
+    The recomputation is `family_gate.read_gate`, not a second implementation of it.  The first version
+    of this function was one, and it was wrong in the way that module's own comment predicts: it read N
+    as the bucket count, while `dsr_inputs` builds N as `ledger_trials + grid + declared prior`.  For
+    `mined_594a12f9307a15d9` that is 575 = 0 + 1 + 574, so its N today is 575 + the bucket's growth,
+    not the bucket - understating the gate by 0.02 and stopping later than it should.  Reusing the
+    module that already isolates this variable is also what keeps the annualisation single-sourced.
+
+    "Best" is by out-of-sample Sharpe across every mined validation on disk, not the newest: a later,
+    worse candidate must not make the space look exhausted.  UNREADABLE readings hold no opinion and
+    are skipped rather than guessed at, the same rule the rest of this module applies to what it cannot
+    read.
+    """
+    readings = [read_gate(name, payload, ledger_lines) for name, payload in validations.items()]
+    scored = [r for r in readings if r.status in (GATE_PASS, GATE_FAIL) and r.oos_sharpe is not None]
+    if not scored:
+        return False, "no mined validation report carries a readable selection block to compare against"
+    best = max(scored, key=lambda r: r.oos_sharpe or 0.0)
+    verb = "has passed" if best.status == GATE_FAIL else "is still below"
+    return best.status == GATE_FAIL, f"the gate {verb} this space's best, {best.strategy}: {best.why}"
 
 
 def load_bearing(context: Context, policy: Policy, unknown: Sequence[str]) -> tuple[str, ...]:

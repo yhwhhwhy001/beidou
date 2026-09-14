@@ -1952,6 +1952,33 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Fifteenth raise OF THIS TABLE, 2026-09-14: +100 beidou_governance, +10 beidou_cli for R2b, the
+    # first reason the research loop has ever had to stop mining.
+    #
+    # `next_action` returned MINE whenever R2 held (the space digest moved) and R1 still had a round.
+    # Nothing in it asked whether another round COULD produce an admissible candidate.  It could not,
+    # and had not been able to since 2026-09-09: the `mined` bucket's D-028 threshold rises
+    # monotonically in N, and that day it rose past the out-of-sample Sharpe of the best candidate the
+    # space has ever produced (1.7862, `mined_594a12f9307a15d9`).  Two more rounds ran after it, each
+    # charging its rows and raising the bar further.
+    #
+    # Why it may live in `scheduler`, which holds no thresholds of its own: it IS no threshold.  Both
+    # sides are measurements already on disk - the best mined validation's own `oos_selection` block
+    # (its OOS Sharpe, its variance, and the `threshold_annual`/`n_trials` pair that pins the
+    # annualisation exactly, so nothing assumes a bars-per-year) against the bucket's N today.  Filed
+    # under R2's provenance for the same reason: it answers R2's question from a second measurement,
+    # not a new question.
+    #
+    # It refuses SPENDING and nothing else.  No verdict moves, `n_trials` is untouched, and nothing
+    # about what may reach the book changes; an append-only ledger is what makes not-spending the
+    # reversible direction.  Mining resumes by itself when either number moves.
+    #
+    # ~35 of the 100 are `gate_has_passed_the_space` and its docstring; the rest is the assembler half,
+    # which is where the expensive part is.  A `Context` field nothing fills is inert - the shape that
+    # silently forked 96 cycles in 2026-09 - so the field arrives with its provenance sentence and a
+    # `known` flag that is false when the CALLER did not supply the bucket, not when the bucket is
+    # empty.  An empty bucket is a reading; a forgotten argument is not, and conflating them would
+    # fail permissive: a round spent on the strength of an argument nobody passed.
     # Thirteenth raise OF THIS TABLE, 2026-09-14 - the number collides with the 2026-09-04 entry at the
     # top of the file, which is a different series and already records that this happens.  With the
     # sentence the rule requires: +18 beidou_live for one number nobody could see, `equity_over_peak`
@@ -2184,7 +2211,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_004,
+    "beidou_cli": 6_014,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2214,7 +2241,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_688,
+    "beidou_governance": 3_788,
 }
 
 
