@@ -502,6 +502,94 @@ def replay_adoptions(
     return ReplayResult(tuple(reproduced), tuple(differences))
 
 
+#: What has to be identical before two reports count as two arms of ONE measurement.  A pair that
+#: differs anywhere here was not run to compare anything; it is two runs that happen to differ by a
+#: construction key, and a coincidence must not buy an exemption.
+ARM_SETTINGS: tuple[str, ...] = (
+    "strategy",
+    "range",
+    "symbols",
+    "interval",
+    "universe_mode",
+    "min_tenure",
+    "execution",
+    "folds",
+    "min_train",
+    "purge",
+    "embargo",
+    "grid",
+)
+
+
+def _construction_agrees(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    """Equal on every key the two SHARE - `construction_problems`' rule, and for its reason.
+
+    A report predates the keys added after it: the pointer adopted on 2026-09-13 carries no
+    `flat_inside_band` because the key did not exist.  Comparing key SETS would mean every new
+    construction key silently disqualifies the incumbent from anchoring a pair, which is the
+    opposite of what the anchor is for.
+    """
+    return all(left[key] == right[key] for key in set(left) & set(right))
+
+
+def paired_construction_arm(
+    name: str,
+    report: Mapping[str, Any],
+    reports: Mapping[str, Mapping[str, Any]],
+    adopted_names: set[str],
+) -> str:
+    """The fifth attribution route (operator's ruling, 2026-09-14): one arm of a paired measurement.
+
+    Returns the attribution sentence, or ``""`` when this report is not such an arm.
+
+    A PASS nobody adopted is normally a question - "the rules would have let this in, why is it not
+    in?".  For an arm of a matched pair the question does not arise: **no decision was asked for**.
+    The pair measures what one construction knob costs; adopting the knob is a separate act that moves
+    the registry pointer.
+
+    Three conditions, and the third is the one that matters.  This route excuses the artefacts of
+    whoever proposes it, so it is written to be useless as a blank cheque:
+
+    1. another validation report for the same strategy with **identical run settings** (`ARM_SETTINGS`)
+       - a pair is a design, not a coincidence;
+    2. their constructions differ in **exactly one** key - one knob, or it is not a measurement of a
+       knob but a different book;
+    3. **one of the two arms is today's book** - it agrees with the adopted pointer's construction on
+       every shared key.  Without this, two novel constructions could be paired with each other and
+       both walk; with it, the pair is anchored to what is actually being traded.
+
+    Condition 3 also refuses to run when nothing is adopted yet: an anchor must be a pointer somebody
+    else accepted, never one of the two reports asking to be excused.
+    """
+    strategy = report.get("strategy")
+    mine = report.get("portfolio") or {}
+    anchors = [
+        other.get("portfolio") or {}
+        for path, other in reports.items()
+        if path.rsplit("/", 1)[-1] in adopted_names and other.get("strategy") == strategy
+    ]
+    if not (mine and anchors):
+        return ""
+    for path, other in sorted(reports.items()):
+        partner = path.rsplit("/", 1)[-1]
+        theirs = other.get("portfolio") or {}
+        if partner == name or partner in adopted_names or other.get("kind") != "validation" or not theirs:
+            continue
+        if any(other.get(key) != report.get(key) for key in ARM_SETTINGS):
+            continue
+        moved = sorted(key for key in set(mine) | set(theirs) if mine.get(key) != theirs.get(key))
+        if len(moved) != 1:
+            continue
+        if not any(_construction_agrees(arm, anchor) for arm in (mine, theirs) for anchor in anchors):
+            continue
+        return (
+            f"成对的构造对照臂：与 `{partner}` 逐项同跑法、构造只差 `{moved[0]}` 一个键，"
+            "且其中一臂就是在位指针的构造——这对报告测的是那个旋钮的代价，"
+            "没有人在这里请求过晋级裁定"
+        )
+    return ""
+
+
 def _why_not_adopted(
     name: str,
     report: Mapping[str, Any],
@@ -572,6 +660,11 @@ def _why_not_adopted(
             "`universe_mode: static`：这是配对跑的稳健性臂，不是晋级候选——"
             "被采纳的同策略指针都是 `pit`（或早于 universe_mode 字段）",
         )
+
+    # Fifth and last, deliberately after the four that read off ONE artefact: this one needs a second
+    # report to exist, so it must not pre-empt an explanation that stands on its own.
+    if arm := paired_construction_arm(name, report, reports, adopted_names):
+        return Difference(name, "从未写进 registry", rules_say, RULE_VERSION, arm)
 
     return Difference(name, "从未写进 registry", rules_say, UNATTRIBUTED, "")
 
