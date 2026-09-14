@@ -10,14 +10,15 @@ The condition here is DERIVED, not chosen - which is the only reason it may live
 otherwise holds no thresholds of its own (`test_policy_is_the_only_place_a_threshold_lives`).  Both
 sides of it are measurements already on disk:
 
-* the best mined candidate's `oos_selection.oos_sharpe_annual`, the `variance` of that same estimate,
-  and the `threshold_annual`/`n_trials` pair its own report recorded - which together pin the
-  annualisation exactly, so nothing here has to assume a bars-per-year;
-* the bucket's N today.
+* the best mined candidate's own `oos_selection` block, from its validation report;
+* the ledger today.
 
-Recomputing that candidate's own gate at today's N answers "would the best thing this space has ever
-produced still be admissible?".  When the answer is no, another round cannot help - it can only raise
-the bar further - so WAIT, with that sentence as the reason.
+The recomputation itself is `family_gate.read_gate` and deliberately not a second implementation of
+it.  The first version of this file asserted against one, and it was wrong exactly where that module's
+comment says a second implementation goes wrong: it read N as the bucket count, while `dsr_inputs`
+builds N as `ledger_trials + grid + declared prior`.  `mined_594a12f9307a15d9` was signed at
+575 = 0 + 1 + 574, so its N today is 575 plus the bucket's growth - understating the gate by 0.02 and
+stopping later than it should.
 
 It refuses SPENDING, never promotion.  Nothing here touches a verdict, `n_trials`, or what may reach
 the book; an append-only ledger makes not-spending the reversible direction, and mining resumes by
@@ -26,6 +27,9 @@ itself the moment a wider space or a better candidate moves either number.
 
 from __future__ import annotations
 
+import json
+
+from beidou_alpha.validation.multiple_testing import SELECTION_GATE
 from beidou_governance.assemble import gate_has_passed_the_space
 from beidou_governance.policy import Policy
 from beidou_governance.scheduler import MINE, WAIT, Context, next_action
@@ -62,48 +66,74 @@ def test_the_stop_does_not_block_the_work_already_in_hand() -> None:
     assert next_action(stranded).kind == "book"
 
 
+def _report(oos: float) -> dict[str, object]:
+    """The shape `read_gate` requires: the selection block plus the ledger term it separates out."""
+    return {
+        "oos_selection": {
+            "gate": SELECTION_GATE,
+            "oos_sharpe_annual": oos,
+            "variance": 2.200184145624143e-05,
+            "threshold_annual": 1.645341936067292,
+            "n_trials": 575,
+            "alpha": 0.05,
+        },
+        "ledger": {"ledger_trials": 0},
+    }
+
+
+def _ledger(mined_rows: int) -> list[str]:
+    return [
+        json.dumps(
+            {
+                "strategy": "mined",
+                "param_key": f"e{i}",
+                "sharpe_annual": 1.0,
+                "bars_per_year": 8760.0,
+                "recorded_at": "2026-09-09T08:29:15+00:00",
+                "range_start": "2021-01-01",
+                "range_end": "2026-09-08",
+                "symbols": 205,
+                "run_id": "r",
+            }
+        )
+        for i in range(mined_rows)
+    ]
+
+
 def test_a_space_with_no_validated_candidate_yet_is_not_stopped() -> None:
     """Nothing to compare against is not the same fact as "the bar has passed it"."""
-    passed, why = gate_has_passed_the_space([], n_trials=2731)
+    passed, why = gate_has_passed_the_space({}, _ledger(2731))
 
     assert passed is False
     assert "no" in why.lower()
 
 
-def test_the_best_candidate_of_2026_09_06_would_not_clear_todays_bucket() -> None:
-    """The real numbers: `mined_594a12f9307a15d9` passed at N=575 and the bucket is now 2,731."""
-    report = {
-        "verdict": "PASS",
-        "oos_selection": {
-            "oos_sharpe_annual": 1.786223252863809,
-            "variance": 2.200184145624143e-05,
-            "threshold_annual": 1.645341936067292,
-            "n_trials": 575,
-        },
-    }
+def test_the_best_candidate_of_2026_09_06_would_not_clear_todays_ledger() -> None:
+    """`mined_594a12f9307a15d9` was signed at N=575 with an empty bucket; the bucket is now 2,731."""
+    reports = {"mined_594a12f9307a15d9": _report(1.786223252863809)}
 
-    passed_then, _ = gate_has_passed_the_space([report], n_trials=575)
-    passed_now, why = gate_has_passed_the_space([report], n_trials=2731)
+    passed_then, _ = gate_has_passed_the_space(reports, _ledger(0))
+    passed_now, why = gate_has_passed_the_space(reports, _ledger(2731))
 
     assert passed_then is False, "it cleared its own gate on the day it was validated"
-    assert passed_now is True, "and would not clear the same gate at today's N"
-    assert "1.78" in why and "2731" in why, f"the reason has to carry both numbers: {why}"
+    assert passed_now is True, "and would not clear the same gate against today's ledger"
+    assert "1.7862" in why, f"the reason has to carry the Sharpe it is about: {why}"
+    assert "3306" in why, f"N today is 575 + the bucket's growth, not the bucket: {why}"
 
 
 def test_the_comparison_uses_the_best_candidate_not_the_newest() -> None:
     """A later, worse candidate must not make the space look exhausted."""
-    pinned = {"variance": 2.200184145624143e-05, "threshold_annual": 1.645341936067292, "n_trials": 575}
-    good = {"oos_selection": {"oos_sharpe_annual": 2.5, **pinned}}
-    poor = {"oos_selection": {"oos_sharpe_annual": 0.4, **pinned}}
+    reports = {"mined_poor": _report(0.4), "mined_good": _report(2.5)}
 
-    passed, _ = gate_has_passed_the_space([poor, good], n_trials=2731)
+    passed, why = gate_has_passed_the_space(reports, _ledger(2731))
 
-    assert passed is False, "2.5 still clears the bar at N=2731; the space is not exhausted"
+    assert passed is False, f"2.5 still clears the bar; the space is not exhausted: {why}"
+    assert "mined_good" in why
 
 
 def test_a_report_without_the_block_is_skipped_not_guessed() -> None:
     """Reports written before `oos_selection` existed carry no opinion about this."""
-    passed, why = gate_has_passed_the_space([{"verdict": "PASS"}], n_trials=2731)
+    passed, why = gate_has_passed_the_space({"mined_old": {"verdict": "PASS"}}, _ledger(2731))
 
     assert passed is False
     assert "no" in why.lower()

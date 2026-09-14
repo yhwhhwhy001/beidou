@@ -20,12 +20,7 @@ import click
 import yaml
 
 from beidou_alpha.registry import parse_registry
-from beidou_alpha.validation.ledger import (
-    MINED_SEARCH_STRATEGY,
-    parse_ledger,
-    resolve_ledger_path,
-    unique_trials,
-)
+from beidou_alpha.validation.ledger import resolve_ledger_path
 from beidou_cli import main
 from beidou_governance.admission import WINDOW_ANCHOR, Admission, admit, rolled, window_start
 from beidou_governance.assemble import assemble, conclude
@@ -771,10 +766,11 @@ def next_cmd(root: str, reports_dir: str, daily_dir: str, anchor: str, wanted: i
         parity=parity if isinstance(parity, dict) else None,
         parity_source=parity_source,
         wanted_trials=wanted,
-        # R2b needs the WHOLE bucket, not the window's share of it: the D-028 denominator is the
-        # family's lifetime count, and `budget.mined_rows` is deliberately window-scoped.
-        mined_bucket=len(unique_trials(parse_ledger(ledger_lines, MINED_SEARCH_STRATEGY))) if ledger_lines else 0,
-        mined_bucket_source=f"{ledger.name} whole file",
+        # R2b reads the WHOLE file, not the window's share of it: the D-028 denominator is the family's
+        # lifetime count, and `budget.mined_rows` is deliberately window-scoped.  Handed as lines rather
+        # than a count because `family_gate.read_gate` derives N per strategy through `ledger_scope`.
+        ledger_lines=ledger_lines,
+        ledger_source=f"{ledger.name} whole file",
     )
     said, action = conclude(assembly, policy)
 
