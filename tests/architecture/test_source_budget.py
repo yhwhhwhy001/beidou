@@ -1952,6 +1952,27 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Nineteenth raise OF THIS TABLE, 2026-09-14: beidou_cli for the operator's Q4 ruling - `research
+    # mine --measure`, a run that scores the space to COUNT it rather than to search it.
+    #
+    # `effective_trials` (Li & Ji) has been reported-never-substituted since it was written, and the
+    # debt is documented as owed rather than guessed for a concrete reason: the ledger stores Sharpes,
+    # not return series, so a ledger-wide N_eff cannot be computed from anything the gate is given.
+    # Computing it needs the space re-scored with the streams kept - and under R1/R2 that is a mine
+    # round, which charges 676 rows and raises the very bar the number is about.  The measurement could
+    # not be bought with the thing it measures.
+    #
+    # Three properties, and the middle one is what keeps this from being the loophole it resembles:
+    # it charges nothing (no row reaches the ledger, asserted rather than described - 2026-09-08's
+    # command claimed not to charge while charging 514, and nobody found out until someone counted);
+    # it RANKS nothing (the artefact carries distribution-level readings and no candidate rows, because
+    # "free to look at 676 and then declare one" is a multiple-testing hole with a flag on it, while
+    # "free to count" is not); and it is not an enumeration for R2, so measuring does not spend the
+    # space a later real round needs.
+    #
+    # It does not adopt anything.  R0 still reads the raw ledger count, the test that pins
+    # `effective_trials` out of the gate is untouched, and substituting it is a separate ruling this
+    # only prices.
     # Eighteenth raise OF THIS TABLE, 2026-09-14: +8 beidou_cli, and all eight are a docstring saying
     # what its own function does.  `governance gate`'s first line was "Read-only, and it stays read-only
     # ...", and thirty lines below it the same function appends a `family_gate` row to
@@ -2260,7 +2281,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_031,
+    "beidou_cli": 6_073,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
