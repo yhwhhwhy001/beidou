@@ -103,3 +103,29 @@ def test_an_ordinary_round_still_charges(tmp_path: Path, august_dir: Path, isola
     CliRunner().invoke(main, _mine_args(root, tmp_path / "r"))
 
     assert len(_rows(isolated_trials_ledger)) > before
+
+
+def test_the_artefact_reproduces_its_own_headline_number(
+    tmp_path: Path, august_dir: Path, isolated_trials_ledger: Path
+) -> None:
+    """Q4b: the persisted matrix must give back the reported count, or the two can drift apart.
+
+    The first `--measure` run wrote `effective_trials: 193.0` and nothing else, so checking it meant
+    re-running 45 minutes of scoring.  A number that cannot be recomputed from the artefact reporting
+    it is a number nobody can argue with - KILL-Q3's shape, one floor down.
+    """
+    import numpy as np
+
+    from beidou_alpha.validation.multiple_testing import effective_trials_from_correlation
+
+    root = tmp_path / "data"
+    _store_from_fixtures(august_dir, root)
+
+    CliRunner().invoke(main, _mine_args(root, tmp_path / "m", "--measure"))
+    payload = _measured(tmp_path / "m")
+    block = payload["measurement"]["correlation"]
+
+    matrix = np.load(block["path"]).astype(float)
+    assert list(matrix.shape) == block["shape"]
+    recomputed = effective_trials_from_correlation(matrix, dead=block["dead_columns"])
+    assert recomputed == payload["effective_trials"], "the artefact does not reproduce its own number"

@@ -1952,6 +1952,28 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twentieth raise OF THIS TABLE, 2026-09-14: +15 beidou_alpha, +33 beidou_cli so a measurement can
+    # reproduce its own headline number.
+    #
+    # The first `--measure` run cost 45 minutes and wrote one scalar, `effective_trials: 193.0`.
+    # Everything that could be used to disagree with it - the correlation structure it came from - died
+    # with the process, so validating Li & Ji against this ledger meant spending the 45 minutes again.
+    # That is a defect in the ARTEFACT, not a limit of the estimator, and it is this round's own lesson
+    # arriving one floor down: a number nobody can argue with.
+    #
+    # Two changes, and the second is what makes the first mean anything.  `effective_trials` splits
+    # into a returns-shaped front door over `effective_trials_from_correlation`, so the estimator has
+    # one implementation and a persisted matrix feeds the same code the run used.  And `--measure`
+    # writes the real 676x676 correlation beside the report, with its sha256 and shape - then computes
+    # the reported count FROM that file, so the two cannot drift.  A same-spectrum surrogate would not
+    # do: Li & Ji reads only eigenvalues, but the distribution of the MAXIMUM reads the eigenvectors
+    # too, so validating against a surrogate validates a different family.
+    #
+    # One line of it is a claim that was made out loud before it was checked.  "193.0 is not a rounding
+    # artefact, the count must be an integer" is true of the estimator (trace == n, floors are
+    # integers) and false of the artefact: `eigvalsh` is not exact, 40 independent columns return
+    # 39.99999999999999, and the run reported 193.00000000000009.  The test now asserts integrality to
+    # 1e-9 and says why - the looser claim would have passed a test written to match it.
     # Twentieth raise OF THIS TABLE, 2026-09-14: +21 beidou_cli, all docstring, and the second half of
     # a fix two sessions made at the same time.
     #
@@ -2204,7 +2226,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_700,
+    "beidou_alpha": 8_715,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2347,7 +2369,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_094,
+    "beidou_cli": 6_127,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

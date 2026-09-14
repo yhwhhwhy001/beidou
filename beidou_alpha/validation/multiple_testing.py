@@ -225,13 +225,31 @@ def effective_trials(returns_matrix: np.ndarray) -> float:
     if not live.any():
         return float(n_trials)  # nothing varies: no shared structure to collapse
     correlation = np.corrcoef(values[:, live], rowvar=False)
-    correlation = np.atleast_2d(correlation)
-    if not np.all(np.isfinite(correlation)):
-        return float(n_trials)
-    eigenvalues = np.abs(np.linalg.eigvalsh(correlation))
+    return effective_trials_from_correlation(correlation, dead=n_trials - int(live.sum()))
+
+
+def effective_trials_from_correlation(correlation: np.ndarray, *, dead: int = 0) -> float:
+    """Li & Ji's count taken from the correlation matrix itself - the estimator's one implementation.
+
+    Split out 2026-09-14 (Q4b) so an artefact can persist the matrix and get the same number back.  The
+    45-minute `--measure` run before it wrote one scalar and discarded the structure behind it, which
+    made validating the estimator cost the 45 minutes again - a defect in the artefact, not a limit of
+    the estimator, and the same failure `all_trials` names one floor down: a number nobody can see is a
+    number nobody can argue with.  A number that cannot be recomputed from the artefact reporting it is
+    that, one step on.
+
+    ``dead`` is the count of columns with no variance.  They contribute nothing to a correlation and
+    are counted as themselves, which is why they are passed in rather than inferred - a matrix cannot
+    tell how many columns were dropped before it was built.
+    """
+    matrix = np.atleast_2d(np.asarray(correlation, dtype=float))
+    n_live = matrix.shape[0]
+    if n_live == 0:
+        return 0.0 if dead == 0 else float(dead)
+    if not np.all(np.isfinite(matrix)):
+        return float(n_live + dead)
+    eigenvalues = np.abs(np.linalg.eigvalsh(matrix))
     counted = float(np.sum((eigenvalues >= 1.0).astype(float) + (eigenvalues - np.floor(eigenvalues))))
-    n_live = int(live.sum())
-    dead = n_trials - n_live
     return min(max(counted, 1.0), float(n_live)) + float(dead)
 
 
