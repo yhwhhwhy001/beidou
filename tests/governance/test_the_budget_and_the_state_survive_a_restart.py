@@ -21,6 +21,8 @@ from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 from beidou_governance.state import VERSION, dump, load, read, write
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 WINDOW_START = datetime(2026, 9, 1, tzinfo=UTC)
 
 
@@ -101,7 +103,9 @@ def test_the_dsr_denominator_is_not_what_changed() -> None:
     from beidou_alpha.validation.ledger import ledger_scope, parse_ledger, unique_trials
 
     lines = [_mine_row(WINDOW_START, f"c{i}", "one-round") for i in range(514)]
-    assert len(unique_trials(parse_ledger(lines, ledger_scope("mined_abc")))) == 514
+    assert (
+        len(unique_trials(parse_ledger(lines, ledger_scope("mined_abc")), range_end_granularity_days=FOLD_DAYS)) == 514
+    )
 
 
 def test_only_this_windows_rows_are_charged_to_this_window() -> None:

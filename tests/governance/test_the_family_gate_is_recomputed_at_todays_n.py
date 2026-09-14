@@ -24,6 +24,8 @@ from beidou_alpha.registry import parse_registry
 from beidou_alpha.validation.multiple_testing import SELECTION_GATE, max_sharpe_quantile
 from beidou_governance.family_gate import FAIL, PASS, UNREADABLE, failures, read_gate, recheck
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 VARIANCE = 2.1972757178172574e-05
 SCALE = math.sqrt(24 * 365)
 
@@ -64,7 +66,7 @@ def _ledger(strategy: str, rows: int) -> list[str]:
 def test_a_gate_recomputed_on_an_unchanged_ledger_reproduces_the_adoption_threshold() -> None:
     """The identity that makes every other reading attributable to N alone."""
     report = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
-    reading = read_gate("tsmom", report, _ledger("tsmom", 86))
+    reading = read_gate("tsmom", report, _ledger("tsmom", 86), range_end_granularity_days=FOLD_DAYS)
     assert reading.status == PASS
     assert reading.n_today == 183
     assert reading.threshold_today == pytest.approx(reading.threshold_at_adoption, rel=1e-12)
@@ -73,7 +75,7 @@ def test_a_gate_recomputed_on_an_unchanged_ledger_reproduces_the_adoption_thresh
 def test_more_search_in_the_family_raises_the_bar_the_incumbent_faces() -> None:
     """Nothing about the strategy changed.  Ninety-seven more trials in its bucket did."""
     report = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
-    later = read_gate("tsmom", report, _ledger("tsmom", 183))
+    later = read_gate("tsmom", report, _ledger("tsmom", 183), range_end_granularity_days=FOLD_DAYS)
     assert later.n_today == 280
     assert later.threshold_today > later.threshold_at_adoption
     assert later.status == PASS, "the incumbent has margin; sqrt(2 ln N) saturates"
@@ -82,8 +84,8 @@ def test_more_search_in_the_family_raises_the_bar_the_incumbent_faces() -> None:
 def test_a_thin_margin_does_not_survive_the_growth_that_a_wide_one_does() -> None:
     """The rule has to be able to say FAIL, or it is a formality rather than a gate."""
     thin = _report(sharpe=1.5140, n_trials=183, ledger_trials=86)
-    assert read_gate("tsmom", thin, _ledger("tsmom", 86)).status == PASS
-    grown = read_gate("tsmom", thin, _ledger("tsmom", 400))
+    assert read_gate("tsmom", thin, _ledger("tsmom", 86), range_end_granularity_days=FOLD_DAYS).status == PASS
+    grown = read_gate("tsmom", thin, _ledger("tsmom", 400), range_end_granularity_days=FOLD_DAYS)
     assert grown.status == FAIL
     assert grown.margin is not None and grown.margin < 0
     assert failures([grown]) == (grown,)
@@ -91,15 +93,26 @@ def test_a_thin_margin_does_not_survive_the_growth_that_a_wide_one_does() -> Non
 
 def test_evidence_that_cannot_be_read_is_unreadable_rather_than_passed() -> None:
     """Four ways the question cannot be asked, and none of them answers it yes."""
-    assert read_gate("x", {}, []).status == UNREADABLE
+    assert read_gate("x", {}, [], range_end_granularity_days=FOLD_DAYS).status == UNREADABLE
     assert (
-        read_gate("x", _report(sharpe=1.0, n_trials=10, ledger_trials=5, gate="expected_max"), []).status == UNREADABLE
+        read_gate(
+            "x",
+            _report(sharpe=1.0, n_trials=10, ledger_trials=5, gate="expected_max"),
+            [],
+            range_end_granularity_days=FOLD_DAYS,
+        ).status
+        == UNREADABLE
     )
     no_ledger = _report(sharpe=1.0, n_trials=10, ledger_trials=5)
     del no_ledger["ledger"]
-    assert read_gate("x", no_ledger, []).status == UNREADABLE
+    assert read_gate("x", no_ledger, [], range_end_granularity_days=FOLD_DAYS).status == UNREADABLE
     # a bucket smaller than the report's is impossible on an append-only ledger: refuse, do not decide
-    shrunk = read_gate("tsmom", _report(sharpe=1.8, n_trials=183, ledger_trials=86), _ledger("tsmom", 3))
+    shrunk = read_gate(
+        "tsmom",
+        _report(sharpe=1.8, n_trials=183, ledger_trials=86),
+        _ledger("tsmom", 3),
+        range_end_granularity_days=FOLD_DAYS,
+    )
     assert shrunk.status == UNREADABLE and "append-only" in shrunk.why
 
 
@@ -110,7 +123,7 @@ def test_the_bucket_count_is_not_n(tmp_path: Any) -> None:
     183 is 86 ledger + 2 grid + 95 declared.  Only the first term can move after the fact.
     """
     report = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
-    reading = read_gate("tsmom", report, _ledger("tsmom", 88))
+    reading = read_gate("tsmom", report, _ledger("tsmom", 88), range_end_granularity_days=FOLD_DAYS)
     assert reading.n_today == 185, "183 + (88 - 86), not 88"
 
 
@@ -140,7 +153,9 @@ def test_a_probe_adopted_on_a_book_report_cannot_be_asked_this_question_at_all()
             ],
         }
     )
-    readings = recheck(registry, lambda _path: {"verdict": "REJECT", "sleeve": {}}, [])
+    readings = recheck(
+        registry, lambda _path: {"verdict": "REJECT", "sleeve": {}}, [], range_end_granularity_days=FOLD_DAYS
+    )
     assert [r.status for r in readings] == [UNREADABLE]
     assert "oos_selection" in readings[0].why
     assert failures(readings) == (), "UNREADABLE is a failure to ask the question, not a failed gate"
@@ -160,12 +175,12 @@ def test_a_selection_block_missing_any_one_number_is_unreadable() -> None:
     for field in ("oos_sharpe_annual", "variance", "threshold_annual", "n_trials"):
         absent = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
         del absent["oos_selection"][field]
-        reading = read_gate("tsmom", absent, _ledger("tsmom", 88))
+        reading = read_gate("tsmom", absent, _ledger("tsmom", 88), range_end_granularity_days=FOLD_DAYS)
         assert (reading.status, reading.why) == (UNREADABLE, message), f"absent {field}"
 
         not_a_number = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
         not_a_number["oos_selection"][field] = "1.8087"
-        reading = read_gate("tsmom", not_a_number, _ledger("tsmom", 88))
+        reading = read_gate("tsmom", not_a_number, _ledger("tsmom", 88), range_end_granularity_days=FOLD_DAYS)
         assert (reading.status, reading.why) == (UNREADABLE, message), f"{field} as a string"
 
 
@@ -179,7 +194,7 @@ def test_an_unreadable_reading_still_carries_the_numbers_it_could_read() -> None
     """
     no_ledger = _report(sharpe=1.8087, n_trials=183, ledger_trials=86)
     del no_ledger["ledger"]
-    reading = read_gate("tsmom", no_ledger, _ledger("tsmom", 88))
+    reading = read_gate("tsmom", no_ledger, _ledger("tsmom", 88), range_end_granularity_days=FOLD_DAYS)
     assert reading.status == UNREADABLE
     assert reading.oos_sharpe == 1.8087
     assert reading.n_at_adoption == 183
