@@ -1952,6 +1952,30 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twentieth raise OF THIS TABLE, 2026-09-14: +21 beidou_cli, all docstring, and the second half of
+    # a fix two sessions made at the same time.
+    #
+    # The eighteenth raise below corrected `gate_cmd`'s "Read-only" after a session ran it as a read-only
+    # check and it appended a verdict row.  Two things it did not reach.  The MODULE header still opened
+    # with "Phase 0 is read-only: replay the rules, write nothing" - the same claim one level up, met
+    # first, and false for four commands (`gate`/`recheck` append verdicts, `enable` writes a flag,
+    # `replay --out` writes an artefact).  And neither docstring said where the write's duplicate problem
+    # went.
+    #
+    # The second one is why this is worth 21 lines rather than 3.  A reader who now learns the command
+    # writes will reach for the obvious repair - delete the write, make the word true - and that repair
+    # was already rejected on 2026-09-12 in favour of keying idempotence on the ruling
+    # `(gate, subject, call, reasons)` instead of on the date.  The pointer to
+    # `tests/governance/test_a_reread_of_a_ruling_is_not_a_second_verdict.py` is what stops the next
+    # correct-looking change from undoing a decided one; that file also calls `gate` "a read-only
+    # command" while fixing exactly this, which is where the phrase both sessions just corrected came
+    # from.  Documenting the drift's SOURCE costs more lines than documenting the drift.
+    #
+    # Duplicated work recorded rather than hidden: this session wrote its own `gate_cmd` correction,
+    # found the eighteenth raise on merging, and discarded its branch rather than resolving a conflict
+    # into redundant prose.  Two sessions reached the same defect within the hour from opposite ends -
+    # one ran the command, one read the docstring.
+    #
     # Nineteenth raise OF THIS TABLE, 2026-09-14: beidou_cli for the operator's Q4 ruling - `research
     # mine --measure`, a run that scores the space to COUNT it rather than to search it.
     #
@@ -2281,7 +2305,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_073,
+    "beidou_cli": 6_094,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
