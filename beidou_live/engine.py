@@ -1479,6 +1479,11 @@ class LiveEngine:
             # hardcodes would keep saying `attributed_pnl` through the change.
             "ruler": reading.get("ruler", "attributed_pnl"),
             "marked_rows": reading.get("marked_rows"),
+            # The drift between this reading's pinned denominator and the equity the positions are
+            # sized off (see `attributed_drawdown_state`).  Carried per cycle rather than recomputed
+            # later, for the same reason `asset_vol` is: recomputing it from the archive answers a
+            # question about a different bar.
+            "equity_over_peak": reading.get("equity_over_peak"),
             "enforced": bool(reading.get("enforced")),
             "drawdown": reading.get("value"),
             "attributed": reading.get("attributed"),
