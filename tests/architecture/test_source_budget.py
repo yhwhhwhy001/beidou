@@ -1952,6 +1952,35 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-seventh raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
+    # the five "this symbol cannot be priced" rules written down, and NOT merged.
+    #
+    # They live in three packages, carry three numbers, and two bind on only one side: research carries
+    # a position for `stale_carry_bars=2` bars with the stop live, live zeroes the target and re-opens
+    # next cycle with the trailing anchor gone.  Two books.
+    #
+    # The values are unchanged, and that is the decision rather than the shortfall.  `exits.py` already
+    # said reusing the loop's number was the point ("research and live disagreeing ... is KILL-027's
+    # shape") and then admitted it binds in research only; the live half is `dropped_after`, and
+    # `construction.py`'s v6 note records the operator's ruling in as many words - raising it "stays a
+    # priced decision rather than a side effect of deploying a fix".  Making it bind here, from the
+    # other direction, would be exactly that side effect.
+    #
+    # So what was bought is that the disagreement is data with a test behind it instead of prose.  That
+    # is not a preference: the same comment still claimed `stale_carry_bars` was "not yet in
+    # `construction_fingerprint`" two days after v6 put it there.  Prose about five settings in three
+    # packages goes stale; a table joined to `__dataclass_fields__` fails instead.
+    #
+    # Priced, so the flip is a decision and not an argument: over the 322 live cycles on record
+    # `inputs.dropped` is non-empty in ZERO of them.  The five PIT members with internal gaps are none
+    # of them in the pinned universe, which is why research binds and live never has.  The divergence
+    # is latent.
+    #
+    # The +13 in `beidou_cli` is the entry point the reachability guard demanded - correctly: a module
+    # nothing can run is not a control.  `live status` now prints which rules bind, in Chinese, because
+    # that command's output IS the hourly alert body and `test_alerts_are_chinese` allows three English
+    # tokens in it.  Both guards caught this commit and both were right.
+    #
     # Twenty-sixth raise OF THIS TABLE, 2026-09-15: +155 beidou_live - the cycle record given a
     # declaration, and its ledger reader stopped re-parsing from byte zero.
     #
@@ -2371,7 +2400,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_893,
+    "beidou_alpha": 8_902,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2491,7 +2520,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 9_076,
+    "beidou_live": 9_205,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2541,7 +2570,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_136,
+    "beidou_cli": 6_149,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

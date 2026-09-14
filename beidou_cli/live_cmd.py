@@ -71,6 +71,7 @@ from beidou_live.reports import (
 )
 from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.scheduler import SystemClock
+from beidou_live.staleness import RULES, rules_binding
 from beidou_live.state import LiveState, StateStore, StateUnreadable
 from beidou_live.verify import (
     cycle_clock,
@@ -583,6 +584,18 @@ def live_status(
                 f"周期成功率 {health.success_rate:.1%} < {min_success_rate:.0%}"
                 f"（{health.attempts} 次中失败 {health.failures} 次，最近一次在 {health.last_failure}）"
             )
+    # "Why did that symbol flatten?" is asked at this prompt, and the answer was spread over five
+    # settings in three packages with two of them binding on only one side of the system.  Printed as
+    # the live half plus the count of what research does differently, so the divergence is visible to
+    # the operator who would have to price closing it (see `beidou_live/staleness.py`).
+    live_rules = rules_binding("live")
+    research_only = [rule for rule in RULES if rule.binds == "research"]
+    click.echo(
+        f"不可交易判定：实盘 {len(live_rules)} 条（"
+        + "、".join(rule.label for rule in live_rules)
+        + "）"
+        + (f"；研究侧另有 {len(research_only)} 条实盘不绑（{research_only[0].label}）" if research_only else "")
+    )
     if problems:
         raise click.ClickException("; ".join(problems))
 
