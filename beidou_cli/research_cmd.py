@@ -67,7 +67,11 @@ from beidou_alpha.validation.metrics import (
     time_series_ic,
     yearly_breakdown,
 )
-from beidou_alpha.validation.multiple_testing import effective_trials, multiple_testing_report, oos_selection_threshold
+from beidou_alpha.validation.multiple_testing import (
+    effective_trials_from_correlation,
+    multiple_testing_report,
+    oos_selection_threshold,
+)
 from beidou_alpha.validation.stability import (
     cost_stress,
     parameter_neighborhood,
@@ -3191,17 +3195,46 @@ def research_mine(
         # so the artefact carries distribution-level readings and no candidate rows at all.
         payload.pop("candidates", None)
         frame = pd.DataFrame(streams).dropna(how="all").fillna(0.0)
-        payload["effective_trials"] = float(effective_trials(frame.to_numpy(dtype=float)))
+        values = frame.to_numpy(dtype=float)
+        # Q4b: the matrix is persisted and the headline number is computed FROM the persisted matrix,
+        # so the two cannot drift.  The first `--measure` run cost 45 minutes and wrote one scalar; the
+        # structure behind it died with the process, which made validating the estimator cost the 45
+        # minutes again.  That is a defect in the artefact, not a limit of the estimator - the same
+        # failure `all_trials` names: a number nobody can argue with.  Li & Ji reads only the
+        # correlation, so the correlation is the whole of what a later reader needs.
+        live = values.std(axis=0, ddof=1) > 0
+        corr_matrix = np.corrcoef(values[:, live], rowvar=False) if live.any() else np.zeros((0, 0))
+        corr_matrix = np.atleast_2d(corr_matrix).astype(np.float32)
+        dead = int(values.shape[1] - live.sum())
+        stamp = _stamp()
+        matrix_path = Path(out) / f"mine-measurement-{stamp}-corr_matrix.npy"
+        matrix_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(matrix_path, corr_matrix)
+        payload["effective_trials"] = float(effective_trials_from_correlation(corr_matrix.astype(float), dead=dead))
         payload["measurement"] = {
             "note": (
                 "Q4: no ledger row was written and nothing was ranked.  `effective_trials` is Li & Ji's "
                 "count of INDEPENDENT trials among the streams scored here; it is reported and is not "
-                "substituted into any gate (R0 still reads the raw ledger count)."
+                "substituted into any gate (R0 still reads the raw ledger count).  It is an integer in "
+                "exact arithmetic and is NOT one here - `eigvalsh` is not exact, so a value off an "
+                "integer by ~1e-13 is numerical noise, not structure."
             ),
             "streams": int(frame.shape[1]),
             "bars": int(frame.shape[0]),
+            "correlation": {
+                "path": str(matrix_path),
+                "shape": list(corr_matrix.shape),
+                "dtype": "float32",
+                "dead_columns": dead,
+                "sha256": hashlib.sha256(matrix_path.read_bytes()).hexdigest(),
+                "note": (
+                    "`effective_trials` above was computed from THIS file, so the artefact reproduces "
+                    "its own headline number: "
+                    "`effective_trials_from_correlation(np.load(path).astype(float), dead=dead_columns)`."
+                ),
+            },
         }
-        path, digest = _write(out, f"mine-measurement-{_stamp()}", payload, markdown)
+        path, digest = _write(out, f"mine-measurement-{stamp}", payload, markdown)
         click.echo(
             f"measurement: {payload['effective_trials']:.1f} independent of {search.evaluated} scored "
             f"({frame.shape[1]} streams x {frame.shape[0]} bars).  No ledger row written, nothing ranked; "
