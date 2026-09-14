@@ -125,6 +125,17 @@ async def test_a_clean_startup_says_nothing(tmp_path: Path) -> None:
     assert not any("foreign" in message.lower() for message in sent)
 
 
+def test_the_check_script_keeps_the_readings_from_the_runs_that_PASSED() -> None:
+    """`verify`'s tolerance cannot be set from `verify-failures.jsonl`: that file records only runs
+    that exceeded the tolerance, so it is a sample censored at the number under test.  The passing
+    runs are the other half of the distribution, and the reading has to be attached to the line that
+    is written when a check passes - mentioning it in a comment would keep none of them."""
+    script = Path("deploy/run_check.sh").read_text(encoding="utf-8")
+
+    assert 'ok   $check$(reading "$check" "$output")' in script
+    assert "max_contribution_diff" in script
+
+
 def test_the_check_script_uses_the_shared_dedup_state() -> None:
     """`run_check.sh` must pass a state path, or its dedup is the in-memory one that cannot work."""
     script = Path("deploy/run_check.sh").read_text(encoding="utf-8")

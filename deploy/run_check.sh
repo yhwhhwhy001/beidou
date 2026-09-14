@@ -41,10 +41,22 @@ sys.exit(0 if asyncio.run(alerts.send(sys.argv[2], key=sys.argv[3])) else 1)
       || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }
+# `verify`'s tolerance is 1e-9, and the reproduction's own float-level disagreement measures about
+# 2e-8 - twenty times larger - so M-011 can fail on nothing at all.  Setting the tolerance from that
+# needs the distribution, and `verify-failures.jsonl` cannot supply it: it records only runs that
+# EXCEEDED the tolerance, which is a sample censored at the very number in question.  The successful
+# runs are the other half, and this is the cheapest place to keep them - one field on a line that is
+# already written, into a log that is already append-only.  Raising a tolerance to quiet an alarm is
+# the move that most deserves suspicion, so the number has to exist before anyone picks one.
+reading() {
+  [ "$1" = verify ] || return 0
+  printf ' (max_contribution_diff %s)' "$(printf '%s' "$2" | "$REPO/.venv/bin/python" -c \
+    'import json,sys; print(json.load(sys.stdin)["max_contribution_diff"])' 2>/dev/null || echo '?')"
+}
 failed=0
 for check in status verify; do
   if output="$("$REPO/.venv/bin/beidou" live "$check" --check 2>&1)"; then
-    echo "[$(stamp)] ok   $check"
+    echo "[$(stamp)] ok   $check$(reading "$check" "$output")"
   else
     failed=1
     notify "$check" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
