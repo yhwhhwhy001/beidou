@@ -43,7 +43,16 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # round can only raise it.  That crossing happened on 2026-09-09 and two more rounds ran after it.
 # It carries no threshold of its own (both sides are read off artefacts, `gate_has_passed_the_space`)
 # and it refuses SPENDING only - no verdict, no promotion, nothing that reaches the book.
-PINNED_DIGEST = "75764f646ca6"
+# 0.3.5 (2026-09-14): caliber ④, `trial_range_end_granularity_days = 7`.  Operator ruling on Q4c.  Two
+# ledger rows that differ only by a `range_end` a few days apart are one trial: a signal reads only
+# data up to bar t, so the same expression over the same start, symbols and construction gives an
+# IDENTICAL stream on the shared index, and the added independence is exactly zero - arithmetic, not an
+# estimate.  Not a reason to drop the field, because the same holds for two years later and that IS a
+# second look, so the fold needs a granularity.  7 folds least among the ones that fold the observed
+# case, and the choice is not load-bearing here: 7 / 14 / 30 all give `mined` 1,559, `tsmom` 101,
+# `flow` 43.  The measured half of Q4c went the other way - the second universe is worth 1.90x, so
+# cross-universe re-charges stay charged.  The old digest was 75764f646ca6.
+PINNED_DIGEST = "d62ac59fa95c"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:

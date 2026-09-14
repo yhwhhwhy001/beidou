@@ -20,6 +20,8 @@ from beidou_alpha.validation.multiple_testing import (
 )
 from beidou_alpha.validation.walk_forward import walk_forward_evaluate, walk_forward_folds
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 
 def test_walk_forward_folds_purge_and_cover() -> None:
     folds = walk_forward_folds(1000, 5, min_train=500, purge=10)
@@ -154,7 +156,13 @@ def test_ledger_pools_trials_and_verdict_ignores_pbo_for_tiny_grids() -> None:
     ]
     prior = parse_ledger(lines, "s")
     assert len(prior) == 4
-    pooled = dsr_inputs(prior, {"new1": 1.5 / 8760**0.5, "new2": None}, 8760.0, manual_prior_trials=10)
+    pooled = dsr_inputs(
+        prior,
+        {"new1": 1.5 / 8760**0.5, "new2": None},
+        8760.0,
+        manual_prior_trials=10,
+        range_end_granularity_days=FOLD_DAYS,
+    )
     assert pooled["n_trials"] == 16 and pooled["pooled_sharpes"] == 5 and pooled["sharpe_variance"] > 0
     base = {
         "walk_forward": {"oos_sharpe": 1.6, "oos_t_stat": 3.1, "fold_consistency": 1.0},
@@ -202,12 +210,18 @@ def test_dsr_inputs_count_exact_replays_once() -> None:
         TrialRecord("s", "k1", 1.7, 8760.0, "t3", "2021-01-31", "2026-09-03", 15, "run3"),  # other universe
         TrialRecord("s", "k2", 0.4, 8760.0, "t4", "2021-03-02", "2026-09-03", 146, "run4"),
     ]
-    assert [r.run_id for r in unique_trials(rows)] == ["run1", "run3", "run4"]
-    pooled = dsr_inputs(rows, {"k2": 0.4 / 8760**0.5}, 8760.0, current_range=("2021-03-02", "2026-09-03", 146))
+    assert [r.run_id for r in unique_trials(rows, range_end_granularity_days=FOLD_DAYS)] == ["run1", "run3", "run4"]
+    pooled = dsr_inputs(
+        rows,
+        {"k2": 0.4 / 8760**0.5},
+        8760.0,
+        current_range=("2021-03-02", "2026-09-03", 146),
+        range_end_granularity_days=FOLD_DAYS,
+    )
     assert pooled["ledger_trials"] == 2 and pooled["ledger_rows"] == 4
     assert pooled["duplicate_rows"] == 1 and pooled["replayed_rows"] == 1
     assert pooled["n_trials"] == 3 and pooled["pooled_sharpes"] == 3
-    naive = dsr_inputs(rows, {"k2": 0.4 / 8760**0.5}, 8760.0)
+    naive = dsr_inputs(rows, {"k2": 0.4 / 8760**0.5}, 8760.0, range_end_granularity_days=FOLD_DAYS)
     assert naive["ledger_trials"] == 3 and naive["n_trials"] == 4
 
 

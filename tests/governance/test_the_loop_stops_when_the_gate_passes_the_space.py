@@ -34,6 +34,8 @@ from beidou_governance.assemble import gate_has_passed_the_space
 from beidou_governance.policy import Policy
 from beidou_governance.scheduler import MINE, WAIT, Context, next_action
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 
 def _mineable(**overrides: object) -> Context:
     """A context whose only available action is MINE, so a WAIT can only come from the new condition."""
@@ -102,7 +104,7 @@ def _ledger(mined_rows: int) -> list[str]:
 
 def test_a_space_with_no_validated_candidate_yet_is_not_stopped() -> None:
     """Nothing to compare against is not the same fact as "the bar has passed it"."""
-    passed, why = gate_has_passed_the_space({}, _ledger(2731))
+    passed, why = gate_has_passed_the_space({}, _ledger(2731), range_end_granularity_days=FOLD_DAYS)
 
     assert passed is False
     assert "no" in why.lower()
@@ -112,8 +114,8 @@ def test_the_best_candidate_of_2026_09_06_would_not_clear_todays_ledger() -> Non
     """`mined_594a12f9307a15d9` was signed at N=575 with an empty bucket; the bucket is now 2,731."""
     reports = {"mined_594a12f9307a15d9": _report(1.786223252863809)}
 
-    passed_then, _ = gate_has_passed_the_space(reports, _ledger(0))
-    passed_now, why = gate_has_passed_the_space(reports, _ledger(2731))
+    passed_then, _ = gate_has_passed_the_space(reports, _ledger(0), range_end_granularity_days=FOLD_DAYS)
+    passed_now, why = gate_has_passed_the_space(reports, _ledger(2731), range_end_granularity_days=FOLD_DAYS)
 
     assert passed_then is False, "it cleared its own gate on the day it was validated"
     assert passed_now is True, "and would not clear the same gate against today's ledger"
@@ -125,7 +127,7 @@ def test_the_comparison_uses_the_best_candidate_not_the_newest() -> None:
     """A later, worse candidate must not make the space look exhausted."""
     reports = {"mined_poor": _report(0.4), "mined_good": _report(2.5)}
 
-    passed, why = gate_has_passed_the_space(reports, _ledger(2731))
+    passed, why = gate_has_passed_the_space(reports, _ledger(2731), range_end_granularity_days=FOLD_DAYS)
 
     assert passed is False, f"2.5 still clears the bar; the space is not exhausted: {why}"
     assert "mined_good" in why
@@ -133,7 +135,9 @@ def test_the_comparison_uses_the_best_candidate_not_the_newest() -> None:
 
 def test_a_report_without_the_block_is_skipped_not_guessed() -> None:
     """Reports written before `oos_selection` existed carry no opinion about this."""
-    passed, why = gate_has_passed_the_space({"mined_old": {"verdict": "PASS"}}, _ledger(2731))
+    passed, why = gate_has_passed_the_space(
+        {"mined_old": {"verdict": "PASS"}}, _ledger(2731), range_end_granularity_days=FOLD_DAYS
+    )
 
     assert passed is False
     assert "no" in why.lower()

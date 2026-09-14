@@ -1952,6 +1952,36 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-first raise OF THIS TABLE, 2026-09-14: caliber ④, the operator's ruling on Q4c -
+    # `range_end` folds to a policy-set granularity before two ledger rows are compared.
+    #
+    # Q4c measured the half that needed measuring.  The same 676 expressions scored on both universes
+    # gave a joint `N_exact` of 641 against a single-universe 337 - ratio 1.90, so **the second
+    # universe is very nearly a full second look and cross-universe re-charges stay charged**.  Only
+    # `range_end` collapses, and that half is arithmetic: a signal reads only data up to bar t, so the
+    # same expression over the same start, symbols and construction produces an IDENTICAL stream on the
+    # shared index when the range ends a few days later.  Zero added independence, not an estimate.
+    #
+    # The argument does not say "drop the field" - it holds for two years later too, and that IS a
+    # second look.  So the fold needs a granularity, a granularity is a threshold, and R10 puts those in
+    # `Policy` (0.3.4 -> 0.3.5).  `beidou_alpha` is the lower layer and cannot import it, so the value
+    # is threaded through as a REQUIRED keyword.  That is most of the line count and most of the churn:
+    # 49 call sites, none of which may default.  A default here would let a caller quietly get the
+    # pre-ruling rule while believing it had the new one - the invisible-default shape this repo was
+    # bitten by twice on 2026-09-14 alone.
+    #
+    # The trap this could have shipped is in `dsr_inputs`: its `exclude` set was assembled by hand in
+    # the shape of a signature.  Quantise the fold and leave the exclusion literal, and every replay
+    # stops matching and is charged a second time - silently, in the direction that looks rigorous.
+    # Both now go through `fold_key`, and a test fails if they ever disagree.
+    #
+    # What it costs the incumbents, measured on the real ledger AFTER the change rather than estimated
+    # before it: `tsmom` 111 -> 105 and `flow` 45 -> 43 folded trials, which LOWERS the bar they face.
+    # `mined` goes 2,073 -> 1,559.  An earlier note in this session put tsmom at "137 -> 101"; that
+    # compared RAW ROWS against folded trials and overstated the incumbent's exposure by six times.
+    # `unique_trials` already dropped exact copies before caliber ④ existed, so the honest before is the
+    # folded before.  The granularity itself is not load-bearing here - 7, 14 and 30 days all give the
+    # same counts - so 7 is taken as the one that folds least among those that fold the case at all.
     # Twentieth raise OF THIS TABLE, 2026-09-14: +15 beidou_alpha, +33 beidou_cli so a measurement can
     # reproduce its own headline number.
     #
@@ -2226,7 +2256,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_715,
+    "beidou_alpha": 8_798,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2396,7 +2426,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_127,
+    "beidou_cli": 6_156,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2426,7 +2456,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_828,
+    "beidou_governance": 3_847,
 }
 
 

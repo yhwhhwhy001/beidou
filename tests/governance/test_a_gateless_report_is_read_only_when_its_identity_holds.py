@@ -33,6 +33,8 @@ from pathlib import Path
 from beidou_alpha.validation.multiple_testing import SELECTION_GATE, max_sharpe_quantile
 from beidou_governance.family_gate import PASS, UNREADABLE, read_gate
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 REPORTS = Path("reports/research")
 
 
@@ -54,13 +56,13 @@ def test_a_labelled_report_is_still_read_without_consulting_the_identity() -> No
     """The label wins where it exists; this ruling only covers its absence."""
     report = _block(scale=math.sqrt(8760), gate=SELECTION_GATE)
 
-    assert read_gate("mined_x", report, []).status == PASS
+    assert read_gate("mined_x", report, [], range_end_granularity_days=FOLD_DAYS).status == PASS
 
 
 def test_a_gateless_report_whose_identity_holds_is_now_read() -> None:
     report = _block(scale=math.sqrt(8760), gate=None)
 
-    reading = read_gate("mined_x", report, [])
+    reading = read_gate("mined_x", report, [], range_end_granularity_days=FOLD_DAYS)
 
     assert reading.status == PASS, reading.why
 
@@ -69,7 +71,7 @@ def test_a_gateless_report_whose_identity_fails_is_still_refused() -> None:
     """0.8052 x sqrt(8760): the `expected_max` fingerprint the six pre-KILL-Q3 reports carry."""
     report = _block(scale=0.8052 * math.sqrt(8760), gate=None)
 
-    reading = read_gate("mined_x", report, [])
+    reading = read_gate("mined_x", report, [], range_end_granularity_days=FOLD_DAYS)
 
     assert reading.status == UNREADABLE
     assert "75.3" in reading.why or "annualisation" in reading.why, reading.why
@@ -80,14 +82,14 @@ def test_a_gateless_report_with_no_interval_is_refused() -> None:
     report = _block(scale=math.sqrt(8760), gate=None)
     del report["interval"]
 
-    assert read_gate("mined_x", report, []).status == UNREADABLE
+    assert read_gate("mined_x", report, [], range_end_granularity_days=FOLD_DAYS).status == UNREADABLE
 
 
 def test_a_report_labelled_with_some_other_gate_is_refused_identity_or_not() -> None:
     """An explicit wrong label is a statement; the identity does not get to overrule it."""
     report = _block(scale=math.sqrt(8760), gate="expected_max_sharpe")
 
-    assert read_gate("mined_x", report, []).status == UNREADABLE
+    assert read_gate("mined_x", report, [], range_end_granularity_days=FOLD_DAYS).status == UNREADABLE
 
 
 def test_the_ruling_admits_exactly_one_of_the_seven_real_reports() -> None:
@@ -96,7 +98,7 @@ def test_the_ruling_admits_exactly_one_of_the_seven_real_reports() -> None:
     for path in sorted(REPORTS.glob("mined_*-validation-*.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
         name = path.name.split("-validation")[0]
-        readable[name] = read_gate(name, payload, []).status
+        readable[name] = read_gate(name, payload, [], range_end_granularity_days=FOLD_DAYS).status
 
     admitted = [name for name, status in readable.items() if status != UNREADABLE]
     assert admitted == ["mined_594a12f9307a15d9"], (

@@ -546,7 +546,9 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
         payload: dict[str, Any] = json.loads((checkout / path).read_text(encoding="utf-8"))
         return payload
 
-    readings = recheck_gate(registry, read_report, lines)
+    readings = recheck_gate(
+        registry, read_report, lines, range_end_granularity_days=Policy().trial_range_end_granularity_days
+    )
     for reading in readings:
         click.echo(f"{reading.status:10s} {reading.strategy:22s} {reading.why}")
     for reading in readings:
@@ -918,6 +920,7 @@ def advance_cmd(
             parse_registry(load_yaml(registry_path)),
             lambda path: json.loads((checkout / path).read_text(encoding="utf-8")),
             lines,
+            range_end_granularity_days=Policy().trial_range_end_granularity_days,
         )
     }
     for reading in readings.values():

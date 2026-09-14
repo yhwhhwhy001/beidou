@@ -221,7 +221,9 @@ def assemble(
         for name, payload in newest(reports, "validation", "strategy").items()
         if name.startswith("mined_")
     }
-    passed, why = gate_has_passed_the_space(mined_validations, ledger_lines)
+    passed, why = gate_has_passed_the_space(
+        mined_validations, ledger_lines, range_end_granularity_days=Policy().trial_range_end_granularity_days
+    )
     fields.append(
         Field(
             "mined_gate_passed_best",
@@ -297,7 +299,10 @@ def assemble(
 
 
 def gate_has_passed_the_space(
-    validations: Mapping[str, Mapping[str, Any]], ledger_lines: Sequence[str]
+    validations: Mapping[str, Mapping[str, Any]],
+    ledger_lines: Sequence[str],
+    *,
+    range_end_granularity_days: int,
 ) -> tuple[bool, str]:
     """Would the best candidate this space ever produced still clear its own gate today?
 
@@ -318,7 +323,10 @@ def gate_has_passed_the_space(
     are skipped rather than guessed at, the same rule the rest of this module applies to what it cannot
     read.
     """
-    readings = [read_gate(name, payload, ledger_lines) for name, payload in validations.items()]
+    readings = [
+        read_gate(name, payload, ledger_lines, range_end_granularity_days=range_end_granularity_days)
+        for name, payload in validations.items()
+    ]
     scored = [r for r in readings if r.status in (GATE_PASS, GATE_FAIL) and r.oos_sharpe is not None]
     if not scored:
         return False, "no mined validation report carries a readable selection block to compare against"
