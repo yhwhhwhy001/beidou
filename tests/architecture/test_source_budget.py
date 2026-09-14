@@ -1952,6 +1952,26 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Sixteenth raise OF THIS TABLE, 2026-09-14: +40 beidou_governance for the operator's Q1 ruling -
+    # a report that predates `gate` may be recomputed, but only if it proves its own rule.
+    #
+    # KILL-Q3 added `gate` so a stored threshold could not outlive the rule that made it, and
+    # `read_gate` refused any block without it.  Correct, and total: all seven mined validations
+    # predate the field, so the production recheck had no opinion about any of them - including the
+    # only candidate this pipeline has ever passed, whose admissibility is an open ruling.
+    #
+    # The identity may stand in for the label because it is FALSIFIABLE.  `threshold_annual` is the raw
+    # quantile times `sqrt(bars_per_year)`, so `threshold / max_sharpe_quantile(n, variance, alpha)`
+    # recovers the annualisation, and a threshold produced by any other rule leaves a different number
+    # there.  Measured on the seven before the rule was written: 594a12f9 implies 93.594872 = sqrt(8760)
+    # to 0.000e+00; the other six imply 0.805x that, which is `E[max] / quantile(0.95)` - the
+    # expectation KILL-Q3 replaced because it "admitted pure noise at 43.5%".
+    #
+    # So this admits ONE report and refuses SIX.  That is the point and it is why the lines are worth
+    # it: the check is not a way past the refusal, it is the refusal's own criterion recovered from the
+    # numbers, and it dates six reports the field would have dated for us.  An explicit wrong label
+    # still refuses - a statement beats an inference - and a report with no readable `interval` refuses
+    # too, because without one there is no `sqrt(bars_per_year)` to hold the identity against.
     # Fifteenth raise OF THIS TABLE, 2026-09-14: +100 beidou_governance, +10 beidou_cli for R2b, the
     # first reason the research loop has ever had to stop mining.
     #
@@ -2241,7 +2261,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_788,
+    "beidou_governance": 3_828,
 }
 
 

@@ -31,10 +31,12 @@ which is a different operator action from FAIL and is reported as such.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from beidou_alpha.panel import bars_per_year
 from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import ledger_scope, parse_ledger, unique_trials
 from beidou_alpha.validation.multiple_testing import SELECTION_GATE, max_sharpe_quantile
@@ -84,10 +86,12 @@ def read_gate(strategy: str, report: Mapping[str, Any], ledger_lines: Sequence[s
     block = _selection(report)
     if block is None:
         return GateReading(strategy, UNREADABLE, "the report carries no `oos_selection` block")
-    if str(block.get("gate")) != SELECTION_GATE:
+    labelled = block.get("gate")
+    if labelled is not None and str(labelled) != SELECTION_GATE:
         # KILL-Q3's leftover: a stored threshold outliving the rule that made it.  Refuse rather than
         # recompute under today's rule, which would compare two numbers that mean different things.
-        return GateReading(strategy, UNREADABLE, f"the report's gate is {block.get('gate')!r}, not {SELECTION_GATE}")
+        # An explicit wrong label is a STATEMENT, and the identity below does not get to overrule one.
+        return GateReading(strategy, UNREADABLE, f"the report's gate is {labelled!r}, not {SELECTION_GATE}")
 
     sharpe = block.get("oos_sharpe_annual")
     variance = block.get("variance")
@@ -111,6 +115,42 @@ def read_gate(strategy: str, report: Mapping[str, Any], ledger_lines: Sequence[s
     if quantile_then <= 0.0:
         return GateReading(strategy, UNREADABLE, "the report's quantile is not positive; scale is unrecoverable")
     scale = float(threshold) / quantile_then
+
+    if labelled is None:
+        # Operator ruling 2026-09-14 (Q1).  Every report written before KILL-Q3 added `gate` carries no
+        # label, which made the recheck total: all seven mined validations were UNREADABLE, including
+        # the only candidate this pipeline has ever passed.  The ruling is that the IDENTITY may stand
+        # in for the label, and it may because it is falsifiable - `threshold_annual` is the raw
+        # quantile times `sqrt(bars_per_year)`, so a threshold produced by any other rule leaves a
+        # different scale behind.  Measured on the seven before this was written: 594a12f9 implies
+        # 93.594872 = sqrt(8760) exactly; the other six imply 0.805x that, which is
+        # `E[max] / quantile(0.95)` - the expectation KILL-Q3 replaced because it "admitted pure noise
+        # at 43.5%".  So this admits one report and refuses six, which is the discrimination `gate` was
+        # added to make, recovered from the numbers.
+        interval = report.get("interval")
+        try:
+            expected = math.sqrt(bars_per_year(str(interval)))
+        except (KeyError, ValueError, TypeError):
+            return GateReading(
+                strategy,
+                UNREADABLE,
+                f"the report carries no `gate` and no usable `interval` ({interval!r}), so its "
+                "annualisation cannot be checked against the rule it claims",
+                float(sharpe),
+                int(n_then),
+                float(threshold),
+            )
+        if abs(scale - expected) > 1e-6 * expected:
+            return GateReading(
+                strategy,
+                UNREADABLE,
+                f"the report carries no `gate` and its annualisation is {scale:.6f}, not the "
+                f"{expected:.6f} that {SELECTION_GATE} at {interval} implies: it was produced by a "
+                "different rule",
+                float(sharpe),
+                int(n_then),
+                float(threshold),
+            )
 
     # N is NOT the bucket count.  `dsr_inputs` builds it as ledger + this run's grid + the declared
     # pre-ledger trials, so tsmom's 183 is 86 + 2 + 95 and the bucket alone reads 88.  Only the ledger
