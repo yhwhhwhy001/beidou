@@ -134,7 +134,24 @@ class LiveConfig:
     strategy_weights: dict[str, float] = field(default_factory=dict)
     poll_attempts: int = 5
     poll_interval_seconds: float = 1.0
-    grace_seconds: float = 5.0
+    # How long after a bar closes the loop wakes up and fetches it.  It was 5.0, and `SETTLE_SECONDS`
+    # in `verify.py` is 15.0 - measured, not assumed - so the loop read every bar while the venue was
+    # still aggregating it.  `flow` is the only book that reads `taker_buy_quote` / `quote_volume`, the
+    # two kline fields the exchange finalises last, and it is the only book the six KILL-027
+    # reproduction failures of 2026-09-10..12 ever landed in.
+    #
+    # What this does NOT buy: the book was never wrong in a way it could act on.  The largest target
+    # difference those failures produced was 1.13e-05 of equity - 0.12 USDT against a `no_trade_band`
+    # of 0.5% (54 USDT at this size), 441x below it - so an unsettled read has never changed an order
+    # and could not have.  What it buys is M-011: the monitor went red on a known-benign cause often
+    # enough that a real divergence would have been read as that one, and the honest way to quiet a
+    # monitor is to remove its noise SOURCE rather than to widen the tolerance it fires on.
+    #
+    # Priced against what it costs: the book acts 15s later on a 3600s bar (0.42%), and the DL-L4
+    # rebalance window, which is DERIVED from this, widens by the same 15s (70.7s -> 85.7s).  Not made
+    # configurable, for the reason the dedup window stopped being configurable an hour earlier: this
+    # number is a property of the venue's aggregation, not a choice this deployment gets to make.
+    grace_seconds: float = 20.0
     max_consecutive_errors: int = 12
     # DL-L4: launchd's ThrottleInterval, mirrored here because the rebalance window is derived from
     # it (deploy/com.beidou.live.plist).  A relaunch can sit in that queue before this process starts.

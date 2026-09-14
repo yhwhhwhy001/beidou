@@ -20,6 +20,44 @@ So the two halves are separated, which is what the fix should always have been.
 from __future__ import annotations
 
 from beidou_live.scheduler import rebalance_window_seconds, within_rebalance_window
+from beidou_live.verify import SETTLE_SECONDS
+
+
+def test_the_loop_waits_for_the_venue_to_finish_aggregating_the_bar() -> None:
+    """Two numbers that have to be read together, in files that never mentioned each other.
+
+    `SETTLE_SECONDS` was measured on 2026-09-12: the venue is still finalising `taker_buy_quote` and
+    `quote_volume` for about fifteen seconds after a bar closes, and `flow` is the only book that reads
+    them.  `grace_seconds` was 5.0 the whole time, so the loop fetched EVERY bar inside that window -
+    not 56% of them, which is what measuring the cycle's row-WRITE time says; the fetch is the first
+    thing the cycle does after waking at close + grace.
+
+    The book was never wrong in a way it could act on (the worst target difference those unsettled
+    reads produced was 441x below the no-trade band).  What it cost was M-011, which went red on a
+    known-benign cause often enough to hide a real one.
+
+    Asserted as an inequality against the measurement rather than as `== 20.0`, so that re-measuring
+    the settle window moves this with it instead of leaving a stale constant behind.
+    """
+    from tests.live.helpers_construction import live_config_for_profile
+
+    assert live_config_for_profile().grace_seconds > SETTLE_SECONDS
+
+
+def test_waiting_longer_widens_the_rebalance_window_by_exactly_the_same_amount() -> None:
+    """The DL-L4 window is DERIVED from the grace, so the grace cannot move quietly.
+
+    This one passes trivially whenever the grace has not moved - it is not a defect detector and is
+    not claimed as one.  Its job is to fail if the window ever stops being a straight sum of its
+    parts, which is the property KILL-R6 bought when 120s stopped being a picked number.
+    """
+    from tests.live.helpers_construction import live_config_for_profile
+
+    grace = live_config_for_profile().grace_seconds
+    before = rebalance_window_seconds(grace_seconds=5.0, throttle_interval=60.0, startup_seconds=5.687)
+    after = rebalance_window_seconds(grace_seconds=grace, throttle_interval=60.0, startup_seconds=5.687)
+
+    assert after - before == grace - 5.0
 
 
 def test_the_window_is_derived_from_the_parts_not_chosen() -> None:

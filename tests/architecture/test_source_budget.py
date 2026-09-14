@@ -2327,7 +2327,26 @@ CEILING = {
     # file, under a comment that says "One dedup window across every process that can alert".  Each
     # conclusion survived (a standing fact must leave the paging path, and that is true at any window);
     # the stated fact did not, so the two in `reports.py` now argue from what is invariant instead.
-    "beidou_live": 8_833,
+    #
+    # Twenty-fourth raise OF THIS TABLE, 2026-09-14 - and the series has a duplicate in it: a parallel
+    # session numbered its `+15 beidou_alpha, +33 beidou_cli` entry "Twentieth" within the hour,
+    # which is the second entry to carry that number.  Recorded rather than renumbered, per the
+    # thirteenth entry's own precedent - it is already pushed, and a count nobody can reconstruct is
+    # worse than a count with its collisions written down.  This one keeps counting from the entries
+    # that were in the file when it was written.  +17 beidou_live, all of it the paragraph beside
+    # `grace_seconds`, which went 5.0 -> 20.0.  `SETTLE_SECONDS` is 15.0 and was MEASURED (the venue
+    # finalises `taker_buy_quote` / `quote_volume` last, and `flow` is the only book that reads them),
+    # so a loop waking 5s after the close read every bar mid-aggregation - every one, not the 56% that
+    # measuring the cycle's row-WRITE time suggests; the fetch is the first thing the cycle does.
+    #
+    # The paragraph is worth more than the number because the number looks like tuning and is not.
+    # It records what the change does NOT buy: the largest target difference an unsettled read ever
+    # produced was 441x below the no-trade band, so it has never changed an order and could not have.
+    # What it buys is M-011's signal-to-noise, and it buys it by removing the noise SOURCE rather than
+    # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
+    # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
+    # DL-L4's rebalance window widens by the same 15s because it is derived from this.
+    "beidou_live": 8_850,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
