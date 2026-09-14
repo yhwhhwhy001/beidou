@@ -46,7 +46,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from beidou_alpha.validation.multiple_testing import (  # noqa: E402
+from beidou_alpha.validation.multiple_testing import (
     effective_trials_from_correlation,
     normal_ppf,
 )

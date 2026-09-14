@@ -30,8 +30,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
+from q4b_liji_fwer import ALPHA, _fwer, _n_for_rate, _sample_max
+
 from beidou_alpha.validation.multiple_testing import effective_trials_from_correlation
-from q4b_liji_fwer import ALPHA, _fwer, _n_for_rate, _sample_max  # noqa: E402
 
 DRAWS = 20_000
 SEED = 20260914
