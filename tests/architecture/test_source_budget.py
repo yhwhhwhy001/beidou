@@ -1952,6 +1952,30 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Thirteenth raise OF THIS TABLE, 2026-09-14 - the number collides with the 2026-09-04 entry at the
+    # top of the file, which is a different series and already records that this happens.  With the
+    # sentence the rule requires: +18 beidou_live for one number nobody could see, `equity_over_peak`
+    # on R8's reading.
+    #
+    # R8 divides by `peak`, the running max of the book's own P&L path, which moves only when the book
+    # makes a new high.  The loss in that numerator comes from positions sized `weight x CURRENT
+    # equity`, and 52.65% of this account is BTC collateral.  So a move of x% of the book reads as
+    # `x% * equity / peak`, and while the book sits under its own high-water mark the factor has no
+    # path back to 1: `peak` is pinned and equity keeps floating.  Measured over 287 live cycles the
+    # same day - 1.000 at the baseline, 1.0154 eleven days later, above 1 on 261 of them.
+    #
+    # Why it is worth 18 lines TODAY, when the factor is 1.5%: until 2026-09-13T22:00Z the ladder read
+    # an income-only ruler that never reached its first rung in five years and seven months, so a
+    # distortion of where that rung sits cost nothing.  The ruler changed at 22:00Z and the rungs became
+    # reachable; from that cycle on this factor moves WHEN the book gets throttled.  Extrapolated to a
+    # factor of 2.0 the -35% rung fires at a -17.5% book move - which is, by a completely different
+    # route, the -17% rescaling that the same day's analysis had just REFUTED as a deliberate proposal.
+    # The difference is that a rescaling is one line of YAML someone argues about, and this one answers
+    # to nobody's decision and appears in no reading.  That asymmetry is the whole case for the lines.
+    #
+    # Reported, never applied: dividing by current equity would change when the ladder fires, which is
+    # a risk decision.  Most of the 18 lines are the two docstrings saying so, because the obvious
+    # "simplification" for a later reader is to use the number instead of printing it.
     # Twelfth raise, 2026-09-14, and the sentence the rule requires: +33 beidou_live, +3 beidou_cli for
     # M-007's bar.  Two numbers governed one quantity and the looser one was doing the judging: this
     # metric compared realized standing margin against the PLAN's 50%, while the profile declares
@@ -2074,7 +2098,7 @@ CEILING = {
     # Most of the lines are those two paragraphs in the source, plus `marked_from` / `marked_rows` and
     # the `ruler` label, which exists because a row written before `unrealized` and a row written after
     # are not comparable and only a name can say so after the fact.
-    "beidou_live": 8_737,
+    "beidou_live": 8_755,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

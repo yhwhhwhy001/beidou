@@ -351,6 +351,19 @@ def attributed_drawdown_state(
         "marked_rows": marked_rows,
         "path": path,
         "peak": peak,
+        # How far this reading's denominator has drifted from the equity the POSITIONS are sized off.
+        # `value` is `marked / peak - 1`, and `peak` moves only when the book makes a new high; the
+        # loss that lands in its numerator is `weight x CURRENT equity`, and 52.65% of this account is
+        # BTC collateral.  So a move of x% of the book reads as `x% * equity / peak`: above 1 the rung
+        # fires EARLIER than the book's own move, below 1 later.  While the book sits under its own
+        # high-water mark the factor has no path back to 1 - `peak` is pinned and equity keeps floating.
+        # Measured 2026-09-14 over 287 live cycles: 1.000 at the baseline, 1.0154 eleven days later,
+        # above 1 on 261 of them (`scratchpad/r8_denominator_drift.py`).
+        #
+        # Reported, never applied.  Dividing by current equity instead would change WHEN the ladder
+        # fires, which is a risk decision and not a reporting one; this exists so that decision is
+        # taken with the number in hand rather than after the drift has already moved the rung.
+        "equity_over_peak": (equity / peak) if peak > 0 else None,
         "base": base,
         "attributed": path - base,
         "baseline_at": baseline_at,
