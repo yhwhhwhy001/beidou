@@ -1976,12 +1976,12 @@ CEILING = {
     # Reported, never applied: dividing by current equity would change when the ladder fires, which is
     # a risk decision.  Most of the 18 lines are the two docstrings saying so, because the obvious
     # "simplification" for a later reader is to use the number instead of printing it.
-    # Fourteenth raise, 2026-09-14 - the second of the day, and the entry above is the first: two
-    # sessions raised this table for unrelated work within the hour, which is why the numbering
-    # collides here rather than in the file's other series.  With the sentence the rule requires:
-    # +63 beidou_alpha, +59 beidou_cli, bought by a misreading that no artefact could have
-    # contradicted.  The `mined` bucket
-    # held 2,731 rows and 676 distinct `param_key`s - 4.04 rows per hypothesis, deliberately, because
+    # Fourteenth raise OF THIS TABLE, 2026-09-14 - the second of the day.  The entry above is the
+    # thirteenth, raised by a parallel session within the hour for unrelated work; the two are
+    # sequential in this table's own series, which is the series the entry above is numbering.  With
+    # the sentence the rule requires: +63 beidou_alpha, +59 beidou_cli, bought by a misreading that no
+    # artefact could have contradicted.  The `mined` bucket held 2,731 rows and 676 distinct
+    # `param_key`s - 4.04 rows per hypothesis, deliberately, because
     # `signature` folds on the data range and the construction too (KILL-Q5, conservative by design).
     # Every number the reports carried counted ROWS: `charged`, `candidates`, `declared_remainder`,
     # `family_prior.before/after`, `ledger_rows`, `ledger_trials`, `duplicate_rows`, `replayed_rows`.
