@@ -2255,7 +2255,30 @@ CEILING = {
     # Most of the lines are those two paragraphs in the source, plus `marked_from` / `marked_rows` and
     # the `ruler` label, which exists because a row written before `unrealized` and a row written after
     # are not comparable and only a name can say so after the fact.
-    "beidou_live": 8_755,
+    #
+    # Twenty-first raise OF THIS TABLE, 2026-09-14: +48 beidou_live, the alert dedup cache's clock.
+    # `WebhookAlerts` deduplicates on `time.monotonic()` and PERSISTS those numbers so the hourly check
+    # job - a fresh process every hour - can suppress a standing problem down to one line per hour
+    # (KILL-R7's fix).  Monotonic counts from the machine's last boot, and the file outlives boots.
+    # Measured on the live machine: after the 2026-09-10 reboot `check-verify` held 630465.2 against an
+    # uptime of 374798.0, so `clock() - last` was -255667 - below any window, with no path back inside
+    # the boot.  24 of that key's 28 FAIL lines were never delivered and it had 71 hours left to run.
+    #
+    # The lines are two readings per row instead of one, and the paragraphs saying why the obvious
+    # repairs are wrong.  Comparing wall clocks INSTEAD would put every in-process decision at the mercy
+    # of an NTP step; dropping only rows that are in the future leaves the mirror-image hole, where a
+    # previous boot SHORTER than this one writes a number that reads as a recent delivery.  A row is
+    # kept only when both clocks agree it is recent, and everything else is dropped - the module's own
+    # invariant, three lines above the defect: "it may never be the reason a message does not go out,
+    # and costs at most one duplicate."  A well-formed file broke what a malformed one was tested for.
+    #
+    # Two lines of it are a second, older defect the first one was hiding: the window was measured from
+    # the moment the PROVIDER answered, while a caller's cadence runs from when it asked.  An 8-second
+    # delivery at 11:10Z put the 12:10Z run 3592s later, inside a 3600s window - and that dropped FAIL
+    # was the stale-governance-digest line, the one alert that day that needed the operator.  The window
+    # default also drops to 3540s: equal to the caller's period it is a coin flip, and the loop's cycles
+    # start a few seconds apart each hour, which is the losing side of it.
+    "beidou_live": 8_803,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

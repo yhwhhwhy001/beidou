@@ -5,7 +5,10 @@ Two properties an unattended loop needs from its only output channel, added 2026
 *Deduplication.*  A repeated alert is how the one that matters gets missed - measured in this repo's
 own logs as 36 identical FAIL lines over 36 hours, unhandled (KILL-R7).  The same alert is sent once
 per ``dedup_window_seconds``; a standing problem still re-announces itself hourly rather than never,
-and ``clear`` re-arms a key when the condition it describes goes away.
+and ``clear`` re-arms a key when the condition it describes goes away.  The window is measured from
+when the CALLER asked, against a window strictly shorter than any caller's period, and each persisted
+row carries a wall reading beside its monotonic one - three corrections to the same mistake, that an
+interval between two numbers is only a duration if both were read off the same clock.
 
 *A second channel.*  One URL is a single point of silence.  Both are tried, and delivery to either
 counts - which matters because the breaker (DL-L2) now stops the loop cleanly, and it is only
@@ -25,6 +28,15 @@ from urllib.parse import urlparse
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+# The window has to be strictly SHORTER than the cadence of whoever is calling, or a standing problem
+# is announced on a coin flip.  Every caller here runs hourly at the fastest - the check job on the
+# hour, the loop once a bar - and neither lands on an exact 3600s grid: the loop's cycles start a few
+# seconds apart, and a delivery takes as long as the provider takes.  Measured 2026-09-14 against a
+# 3600s window: the same hourly FAIL was delivered at 10:10Z and 11:10Z and dropped at 12:10Z, which
+# was the one that day the operator needed.  A minute of margin still re-announces every hour.
+HOURLY_CALLER_WINDOW_SECONDS = 3540.0
 
 
 # Lark/Feishu custom bots take `{"msg_type": "text", "content": {"text": ...}}`; Slack and most
@@ -75,8 +87,9 @@ class WebhookAlerts:
         timeout: float = 10.0,
         *,
         secondary_url: str = "",
-        dedup_window_seconds: float = 3600.0,
+        dedup_window_seconds: float = HOURLY_CALLER_WINDOW_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
         transport: httpx.AsyncBaseTransport | None = None,
         state_path: Path | None = None,
     ) -> None:
@@ -85,6 +98,11 @@ class WebhookAlerts:
         self._timeout = timeout
         self._window = float(dedup_window_seconds)
         self._clock = clock
+        # `clock` is monotonic so that nothing inside one process's life depends on the wall clock.
+        # But monotonic counts from the machine's last BOOT, and the state file below outlives boots,
+        # so a stored number means nothing on its own - it is kept beside the wall time it was written
+        # at, and a row is only evidence if both readings agree it is recent.  See `_load_state`.
+        self._wall_clock = wall_clock
         self._transport = transport
         # DL-L3's other half.  KILL-R7's evidence was 36 identical FAIL lines over 36 hours, and those
         # came from the HOURLY CHECK JOB - a fresh process every hour, whose in-memory dedup dict is
@@ -97,6 +115,19 @@ class WebhookAlerts:
         self._last_sent: dict[str, float] = self._load_state()
 
     def _load_state(self) -> dict[str, float]:
+        """The rows this process may use as evidence that a delivery already happened.
+
+        A row is kept only if BOTH clocks put it inside the window.  The monotonic reading is the one
+        `_suppressed` subtracts; the wall reading is what says the monotonic one belongs to this boot
+        at all.  Measured 2026-09-14, with only the first: after the 2026-09-10 reboot `check-verify`
+        held 630465.2 against an uptime of 374798.0, so `clock() - last` was -255667 - below any
+        window, with no path back.  24 of that key's 28 FAIL lines were never delivered and it had 71
+        hours left to run.  The same error points the other way too: a previous boot SHORTER than this
+        one leaves a number that reads as a recent delivery and suppresses a real alert.
+
+        Everything else is dropped - a pre-2026-09-14 bare number, a half-written row, a clock that
+        moved.  Dropping costs one duplicate; keeping costs the silence this docstring is about.
+        """
         if self._state_path is None or not self._state_path.exists():
             return {}
         try:
@@ -105,14 +136,26 @@ class WebhookAlerts:
             return {}
         if not isinstance(payload, dict):
             return {}
-        return {str(k): float(v) for k, v in payload.items() if isinstance(v, (int, float))}
+        now, wall_now = self._clock(), self._wall_clock()
+        kept: dict[str, float] = {}
+        for key, row in payload.items():
+            if not isinstance(row, dict):
+                continue
+            at, wall = row.get("at"), row.get("wall")
+            if not (isinstance(at, (int, float)) and isinstance(wall, (int, float))):
+                continue
+            if 0.0 <= now - at <= self._window and 0.0 <= wall_now - wall <= self._window:
+                kept[str(key)] = float(at)
+        return kept
 
     def _save_state(self) -> None:
         if self._state_path is None:
             return
+        now, wall_now = self._clock(), self._wall_clock()
+        payload = {key: {"at": at, "wall": wall_now - (now - at)} for key, at in self._last_sent.items()}
         try:
             self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(json.dumps(self._last_sent, sort_keys=True), encoding="utf-8")
+            self._state_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
         except OSError as exc:
             logger.warning("could not persist the alert dedup state (%s): a duplicate may follow", exc)
 
@@ -145,6 +188,11 @@ class WebhookAlerts:
         if not force and self._suppressed(fingerprint):
             logger.debug("alert suppressed as a duplicate: %s", fingerprint)
             return False
+        # The window measures the CALLER's cadence, so it runs from the moment the caller asked, not
+        # from whenever the provider got back to us.  Remembering the later instant shortens the next
+        # gap by however long delivery took, which is enough to push an hourly caller's next attempt
+        # inside the window: measured 2026-09-14, an 8-second delivery at 11:10Z dropped 12:10Z's.
+        asked = self._clock()
         delivered = False
         async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
             for url in self.urls:
@@ -158,6 +206,6 @@ class WebhookAlerts:
                 else:
                     logger.warning("alert rejected by %s: HTTP %s %s", url, response.status_code, response.text[:200])
         if delivered:
-            self._last_sent[fingerprint] = self._clock()
+            self._last_sent[fingerprint] = asked
             self._save_state()
         return delivered

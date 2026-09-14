@@ -13,6 +13,7 @@ foreign positions are money on the venue the loop has decided not to manage.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -155,3 +156,125 @@ async def test_our_own_resting_order_is_not_announced_as_foreign() -> None:
     sent = await startup_with_foreign_order("bd-BTCUSDT-123")
 
     assert not any("foreign" in m.lower() and "order" in m.lower() for m in sent), sent
+
+
+# --- The persisted window's clock, and the window's own length -----------------------------------
+#
+# `test_a_corrupt_state_file_costs_a_duplicate_not_an_alert` above states the invariant: this is a
+# cache, and it may never be the reason a message does not go out.  It was tested against a MALFORMED
+# file and broken by a well-formed one.  Three ways, all measured on the live machine 2026-09-14:
+#
+#   * `time.monotonic()` counts from the machine's last boot, and the file outlives boots.  After the
+#     2026-09-10 reboot `check-verify` held 630465.2 against an uptime of 374798.0, so `clock() - last`
+#     was -255667 - below any window, forever.  24 of 28 `verify` FAIL lines were never delivered and
+#     the key had 71 hours left to run.
+#   * the same error in the other direction: a previous boot SHORTER than this one writes a number
+#     that reads as a recent delivery, and suppresses a real alert for up to a full window.
+#   * the window is measured from the moment the provider ANSWERED, while an hourly caller's cadence
+#     is measured from when it started.  An 8-second delivery at 11:10Z put the 12:10Z run 3592s
+#     later - inside a 3600s window - and dropped the one FAIL that day that needed the operator.
+#
+# The fourth is the window itself: 3600s against callers that run hourly is a coin flip, and the live
+# loop's cycles start a few seconds apart each hour, which lands on the losing side of it.
+
+
+def _slow_provider(counter: list[int], clock: list[float], *, seconds: float) -> httpx.MockTransport:
+    """A provider that takes `seconds` to answer, the way the real one takes about eight."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter.append(1)
+        clock[0] += seconds
+        return httpx.Response(200, json={"code": 0})
+
+    return httpx.MockTransport(handler)
+
+
+async def test_a_timestamp_from_a_longer_previous_boot_does_not_silence_the_alert(tmp_path: Path) -> None:
+    """The live numbers, as they sat in the file: a stored value larger than the current uptime."""
+    from beidou_live.alerts import WebhookAlerts
+
+    state = tmp_path / "alert-state.json"
+    state.write_text(json.dumps({"check-verify": 630465.2}), encoding="utf-8")
+    posts: list[int] = []
+
+    alerts = WebhookAlerts(
+        "https://open.feishu.cn/x",
+        transport=_counting(posts),
+        state_path=state,
+        clock=lambda: 374798.0,
+    )
+
+    assert await alerts.send("verify FAIL", key="check-verify") is True
+    assert len(posts) == 1
+
+
+async def test_a_timestamp_from_a_shorter_previous_boot_does_not_silence_it_either(tmp_path: Path) -> None:
+    """The same frame error pointing the other way, where the stale number looks perfectly recent."""
+    from beidou_live.alerts import WebhookAlerts
+
+    state = tmp_path / "alert-state.json"
+    posts: list[int] = []
+    wall = [1_000_000.0]
+
+    # A previous boot, 100 seconds up, delivers and remembers.
+    before = WebhookAlerts(
+        "https://open.feishu.cn/x",
+        transport=_counting(posts),
+        state_path=state,
+        clock=lambda: 100.0,
+        wall_clock=lambda: wall[0],
+    )
+    assert await before.send("standing", key="k") is True
+
+    # The machine reboots a day later and has been up 200 seconds.  `200 - 100` is inside any window,
+    # and the two numbers are from different frames, so the subtraction means nothing.
+    wall[0] += 86_400.0
+    after = WebhookAlerts(
+        "https://open.feishu.cn/x",
+        transport=_counting(posts),
+        state_path=state,
+        clock=lambda: 200.0,
+        wall_clock=lambda: wall[0],
+    )
+
+    assert await after.send("standing", key="k") is True
+    assert len(posts) == 2
+
+
+async def test_the_window_runs_from_when_the_caller_asked_not_from_when_the_provider_answered() -> None:
+    """An hourly caller asks 3600s apart.  What the provider does in between is not its cadence."""
+    from beidou_live.alerts import WebhookAlerts
+
+    posts: list[int] = []
+    clock = [0.0]
+    alerts = WebhookAlerts(
+        "https://open.feishu.cn/x",
+        transport=_slow_provider(posts, clock, seconds=8.0),
+        clock=lambda: clock[0],
+        dedup_window_seconds=3600.0,
+    )
+
+    await alerts.send("standing", key="k")
+    clock[0] = 3600.0  # the caller's next hourly run, exactly one window later
+    await alerts.send("standing", key="k")
+
+    assert len(posts) == 2
+
+
+async def test_an_hourly_caller_that_drifts_a_few_seconds_is_not_deduplicated_against_itself() -> None:
+    """The live loop's cycles start a few seconds apart each hour; the default window must clear that."""
+    from beidou_live.alerts import WebhookAlerts
+
+    posts: list[int] = []
+    clock = [0.0]
+    alerts = WebhookAlerts(  # the DEFAULT window: this is the number under test
+        "https://open.feishu.cn/x",
+        transport=_counting(posts),
+        clock=lambda: clock[0],
+    )
+
+    for start in (0.0, 3597.0, 7194.0, 10791.0):
+        clock[0] = start
+        await alerts.send("standing", key="k")
+
+    assert len(posts) == 4
