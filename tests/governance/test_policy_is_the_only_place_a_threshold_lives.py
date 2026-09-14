@@ -37,7 +37,13 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # changing it later is a rule version change rather than an edit.
 # 2026-09-14: R8's two rungs moved (POLICY_VERSION 0.3.2 -> 0.3.3).  The old digest was
 # 5200c9c98136.
-PINNED_DIGEST = "9706af802de6"
+# 0.3.4 (2026-09-14): R2b, `mine_requires_gate_below_best`.  `research mine` now also stops when
+# another round could not produce an admissible candidate - the D-028 gate rises monotonically in the
+# bucket's N, so once it has passed the best out-of-sample Sharpe the space ever produced, a further
+# round can only raise it.  That crossing happened on 2026-09-09 and two more rounds ran after it.
+# It carries no threshold of its own (both sides are read off artefacts, `gate_has_passed_the_space`)
+# and it refuses SPENDING only - no verdict, no promotion, nothing that reaches the book.
+PINNED_DIGEST = "75764f646ca6"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:

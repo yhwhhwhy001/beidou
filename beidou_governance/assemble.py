@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from beidou_alpha.mining import enumerate_candidates
+from beidou_alpha.validation.multiple_testing import max_sharpe_quantile
 from beidou_governance.budget import LedgerBudget
 from beidou_governance.lifecycle import Book, State
 from beidou_governance.policy import Policy
@@ -35,6 +36,11 @@ from beidou_governance.scheduler import WAIT, Action, Context, next_action, pari
 #: How far along §3's pipeline each state already is.  Used only to subtract: a candidate the state
 #: already carries at `booked` is not work the scheduler should schedule again, and `retired` ranks
 #: highest because R7 makes it absorbing.
+#: The `mined_bucket_source` a caller that did not pass one leaves behind, so `known` can tell "the
+#: bucket is empty" (a reading) from "nobody told me" (not one).  A sentinel rather than `None`
+#: because the field is a SENTENCE that gets printed either way.
+NOT_SUPPLIED = "not supplied"
+
 RANK: dict[State, int] = {
     State.CANDIDATE: 0,
     State.VALIDATED: 1,
@@ -185,6 +191,8 @@ def assemble(
     parity: Mapping[str, Any] | None,
     parity_source: str,
     wanted_trials: int,
+    mined_bucket: int = 0,
+    mined_bucket_source: str = NOT_SUPPLIED,
 ) -> Assembly:
     """Build the context out of `reports/research/` and `governance_state.json`, saying what came from where."""
     at_least = {name: RANK[candidate.state] for name, candidate in book.candidates.items()}
@@ -202,6 +210,26 @@ def assemble(
             bool(last),
         ),
     ]
+
+    # R2b.  Both halves come from artefacts: every mined validation on disk, and the bucket's N today.
+    # `known` is false when either half is missing, so `load_bearing` gets to ask whether the missing
+    # half could have changed the answer instead of this module deciding that it could not.
+    mined_validations = [
+        payload for name, payload in newest(reports, "validation", "strategy").items() if name.startswith("mined_")
+    ]
+    passed, why = gate_has_passed_the_space(mined_validations, n_trials=mined_bucket)
+    fields.append(
+        Field(
+            "mined_gate_passed_best",
+            1 if passed else 0,
+            f"{why} [{mined_bucket_source}]",
+            # Known iff a caller actually supplied the bucket.  NOT `mined_bucket > 0`: an empty bucket
+            # is a real reading (nothing searched yet, so nothing to be exhausted), while a caller that
+            # forgot the argument would read as one - the invisible-default shape, and it would fail
+            # PERMISSIVE, letting a round be spent on the strength of an argument nobody passed.
+            mined_bucket_source != NOT_SUPPLIED,
+        )
+    )
 
     validated = {
         name: str(payload.get("verdict", "")) for name, payload in newest(reports, "validation", "strategy").items()
@@ -262,6 +290,50 @@ def assemble(
 
     values = {field.name: field.value for field in fields}
     return Assembly(Context(**values), tuple(fields))
+
+
+def gate_has_passed_the_space(
+    validations: Sequence[Mapping[str, Any]], *, n_trials: int, alpha: float = 0.05
+) -> tuple[bool, str]:
+    """Would the best candidate this space ever produced still clear its own gate at today's N?
+
+    R2b's whole content, and it is a MEASUREMENT rather than a threshold: the D-028 gate rises
+    monotonically with the bucket's N, so once it passes the best out-of-sample Sharpe the space has
+    ever produced, a further round cannot produce an admissible candidate - it can only raise the bar.
+    On 2026-09-09 that crossing happened and two more rounds ran after it.
+
+    The annualisation is taken from the report rather than assumed.  Each `oos_selection` block records
+    the `threshold_annual` it computed AND the `n_trials` and `variance` it computed it from, so the
+    scale factor is exactly `threshold_annual / max_sharpe_quantile(n_trials, variance, alpha)` - no
+    bars-per-year is needed, and a report at another interval carries its own.
+
+    "Best" is by out-of-sample Sharpe across every mined validation on disk, not the newest: a later,
+    worse candidate must not make the space look exhausted.  A report with no `oos_selection` block, or
+    with a degenerate variance, holds no opinion and is skipped rather than guessed at - the same rule
+    the rest of this module applies to a field it cannot read.
+    """
+    best: tuple[float, float, float] | None = None  # (oos, variance, scale)
+    for report in validations:
+        block = report.get("oos_selection") if isinstance(report, Mapping) else None
+        if not isinstance(block, Mapping):
+            continue
+        oos, variance = block.get("oos_sharpe_annual"), block.get("variance")
+        recorded, at_n = block.get("threshold_annual"), block.get("n_trials")
+        if not all(isinstance(v, int | float) for v in (oos, variance, recorded, at_n)):
+            continue
+        unit = max_sharpe_quantile(max(1, int(at_n)), float(variance), alpha)  # type: ignore[arg-type]
+        if variance <= 0 or unit <= 0:  # type: ignore[operator]
+            continue
+        if best is None or float(oos) > best[0]:  # type: ignore[arg-type]
+            best = (float(oos), float(variance), float(recorded) / unit)  # type: ignore[arg-type]
+    if best is None:
+        return False, "no mined validation report carries an `oos_selection` block to compare against"
+    oos, variance, scale = best
+    gate = max_sharpe_quantile(max(1, int(n_trials)), variance, alpha) * scale
+    verb = "has passed" if gate >= oos else "is still below"
+    return gate >= oos, (
+        f"the gate at N={int(n_trials)} is {gate:.4f} and {verb} this space's best out-of-sample Sharpe {oos:.4f}"
+    )
 
 
 def load_bearing(context: Context, policy: Policy, unknown: Sequence[str]) -> tuple[str, ...]:

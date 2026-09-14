@@ -43,6 +43,10 @@ class Context:
     parity_met_unqueued: int = 0
     budget: LedgerBudget | None = None
     wanted_trials: int = 0
+    # 0/1 rather than a float, so it folds into `load_bearing`'s "the other reading" exactly as every
+    # other unreadable field here does.  Computed by `assemble.gate_has_passed_the_space` from two
+    # measurements; this module is handed the answer, never the arithmetic.
+    mined_gate_passed_best: int = 0
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,17 @@ def next_action(context: Context, policy: Policy | None = None) -> Action:
             return Action(WAIT, stop)
         return Action(VALIDATE, (f"{context.shortlist_candidates} shortlisted candidates are unvalidated",))
 
+    # R2b, before R2 and before the budget: a round the bar has already outrun costs the same and can
+    # only raise the bar further.  On 2026-09-09 the `mined` gate passed the out-of-sample Sharpe of
+    # the best candidate the space had ever produced, and two more rounds ran after it.  Refuses
+    # SPENDING only - nothing here touches a verdict or what may reach the book - and an append-only
+    # ledger is what makes not-spending the reversible direction.
+    if policy.mine_requires_gate_below_best and context.mined_gate_passed_best > 0:
+        blocked.append(
+            "R2b: the mined gate has passed the best out-of-sample Sharpe this space has produced, so "
+            "another round can only raise it further"
+        )
+        return Action(WAIT, tuple(blocked))
     if not policy.mine_requires_new_search_space or context.search_space_digest != context.last_mined_space_digest:
         # The mine BUDGET, not the row budget (policy 0.2.0).  Asking `refusals` here is what made a
         # 514-row search impossible inside a 170-row window, in every window, forever.

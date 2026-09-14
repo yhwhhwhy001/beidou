@@ -28,7 +28,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.3.3"
+POLICY_VERSION = "0.3.4"
 """0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
 unrealised P&L.  One decision in two halves - see `drawdown_ladder` for why they cannot ship apart.
 The short version: measured over 2021-2026 at k=0.60 the ladder as it stood NEVER FIRED, because the
@@ -139,6 +139,11 @@ class Policy:
     # R2: `research mine` runs only when the search space changed.  Re-running the same space and
     # keeping the rows charges the family twice for one hypothesis (the 2026-09-08 incident).
     mine_requires_new_search_space: bool = True
+    # R2b: `research mine` also stops when another round could not produce an admissible candidate.
+    # Not a threshold - both sides are measurements (`gate_has_passed_the_space`), which is why the
+    # rule may sit in `scheduler` at all.  Switchable here because a rule with no off switch is one
+    # nobody can price; turning it off resumes exactly the 2026-09-09 behaviour, which is the point.
+    mine_requires_gate_below_best: bool = True
 
     # R3: how much of the book unproven sleeves may move.  D-018/D-019's shape, unchanged.
     max_concurrent_probes: int = 2
@@ -234,7 +239,13 @@ class Policy:
 PROVENANCE: dict[str, str] = {
     "R0": "推导 - whole-library N fails the incumbent on an honest grid; N_eff only lowers the bar",
     "R1": "E5 - anchored on one mine round costing 514 rows, no evidence that 170 is the right ceiling",
-    "R2": "先例 - K-EX07's shape: whether a replay's rows stay is a ruling, not the command's choice",
+    "R2": (
+        "先例 - K-EX07's shape: whether a replay's rows stay is a ruling, not the command's choice.  "
+        "R2b (`mine_requires_gate_below_best`) is filed here rather than as an eleventh rule because it "
+        "is the same question - may this round be enumerated - answered from a second measurement: 推导, "
+        "the D-028 gate rises monotonically in N, so once it passes the space's best OOS Sharpe another "
+        "round can only raise it further.  No threshold of its own; both sides are read off artefacts"
+    ),
     "R3": "先例 - D-018/D-019, and flow already holds one of the two slots",
     "R4": "E5 - one promotion a window is a pace, not a measurement",
     "R5": "E5 - k=2/n=6; the false-stop rate is what EXP-G6' is for",
