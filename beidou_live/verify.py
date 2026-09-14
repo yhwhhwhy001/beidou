@@ -49,9 +49,36 @@ def fetch_lag_seconds(cycle: Mapping[str, Any] | None) -> float | None:
     return stamp.timestamp() - (float(bar) + 3_600_000.0) / 1000.0
 
 
-def _diff(reference: Mapping[str, float], candidate: Mapping[str, float]) -> dict[str, float]:
+def _diff(
+    reference: Mapping[str, float], candidate: Mapping[str, float], population: set[str] | None = None
+) -> dict[str, float]:
     keys = set(reference) | set(candidate)
-    return {key: abs(float(reference.get(key, 0.0)) - float(candidate.get(key, 0.0))) for key in sorted(keys)}
+    return {
+        key: abs(float(reference.get(key, 0.0)) - float(candidate.get(key, 0.0)))
+        for key in sorted(keys if population is None else keys & population)
+    }
+
+
+def _scored_population(state: LiveState) -> set[str] | None:
+    """The names the last cycle declared it would score, or None when it declared none.
+
+    `state.last_contributions` is a MEMORY, not a record of that cycle's output: the engine merges
+    each cycle into the previous ones on purpose, because D-005's hold seed needs a departed symbol's
+    last contribution the way the backtest's forward-fill does.  The reproduction scores only the
+    names the cycle declared, so diffing the two over the union of their keys reports every departure
+    as an unreproducible contribution - once an hour, with no way back.  Measured: TRUMPUSDT left the
+    pinned universe at 2026-09-13T21:13Z and `live verify --check` was red for the next 16 runs with
+    `max_target_diff` 0.0 throughout.
+
+    `leaving` is a member here and not in the ranking population (P1-01): the engine passes
+    universe+leaving to the model and withholds the exits only from the cross-section, so an exiting
+    symbol IS scored - and those are the cycles where a silent divergence would matter most.
+
+    None rather than an empty set when the state declares nothing, so the caller compares everything:
+    an undeclared population is not a licence to check less.
+    """
+    population = {*state.universe, *state.leaving}
+    return population or None
 
 
 def compare_targets(
@@ -79,13 +106,14 @@ def compare_targets(
     )
     contributions: dict[str, dict[str, float]] = {}
     worst_contribution = 0.0
+    population = _scored_population(state)
     for strategy, recorded in state.last_contributions.items():
         computed = targets.contributions.get(strategy)
         if computed is None:
             contributions[strategy] = {"<missing>": float("inf")}
             worst_contribution = float("inf")
             continue
-        diffs = _diff(recorded, computed)
+        diffs = _diff(recorded, computed, population)
         contributions[strategy] = {symbol: value for symbol, value in diffs.items() if value > tolerance}
         worst_contribution = max(worst_contribution, max(diffs.values(), default=0.0))
     missing = sorted(set(targets.contributions) - set(state.last_contributions))

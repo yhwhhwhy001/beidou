@@ -2278,7 +2278,26 @@ CEILING = {
     # was the stale-governance-digest line, the one alert that day that needed the operator.  The window
     # default also drops to 3540s: equal to the caller's period it is a coin flip, and the loop's cycles
     # start a few seconds apart each hour, which is the losing side of it.
-    "beidou_live": 8_803,
+    #
+    # Twenty-second raise OF THIS TABLE, 2026-09-14: +28 beidou_live, and it is the bill for the raise
+    # above.  `compare_targets` diffed the reproduction against `state.last_contributions` over the
+    # UNION of their keys, and that field is a MEMORY, not a record of what the cycle scored - the
+    # engine merges each cycle into the previous ones on purpose, because D-005's hold seed needs a
+    # departed symbol's last contribution the way the backtest's forward-fill does.  So every symbol
+    # that leaves the universe reads as an unreproducible contribution, hourly, with no way back:
+    # TRUMPUSDT left at 2026-09-13T21:13Z and `live verify --check` was red for the next 16 runs with
+    # `max_target_diff` 0.0 throughout.  Nothing real was missed - the one non-TRUMP diff buried in
+    # those 16 was float noise at 2.4e-08 - but M-011 could no longer distinguish a real failure from
+    # its own, and the raise above had just made it audible once an hour.
+    #
+    # The lines are the population helper and the paragraph naming which set it is.  `leaving` is a
+    # member here and not in the ranking population (P1-01, one field over in the same file, whose
+    # docstring already warned that disagreeing about the population "would make this monitor's own
+    # output the noisiest thing about it"): the engine passes universe+leaving to the model and
+    # withholds the exits only from the cross-section, so an exiting symbol IS scored.  A state that
+    # declares no universe is compared on everything rather than on nothing - an undeclared population
+    # is not a licence to check less, the same direction the alert cache now fails in.
+    "beidou_live": 8_831,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

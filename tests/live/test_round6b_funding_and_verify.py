@@ -230,6 +230,73 @@ def test_verify_flags_a_drifted_contribution_and_a_stale_bar() -> None:
     assert exited["target_diffs"] == {"BTCUSDT": pytest.approx(0.031)}
 
 
+def test_a_symbol_that_left_the_universe_is_not_a_reproduction_failure() -> None:
+    """`last_contributions` is a MEMORY, not a record of what the last cycle scored.
+
+    `engine.py` merges each cycle's contributions into the previous ones on purpose - D-005's hold
+    seed keeps a departed symbol's last value, the way the backtest's forward-fill does.  So the
+    memory outlives the universe, while the reproduction scores only the names the cycle declared,
+    and diffing the two over the UNION of their keys reports the departure as an unreproducible
+    contribution - every hour, forever.
+
+    Measured: TRUMPUSDT left the pinned universe at 2026-09-13T21:13Z and `live verify --check` went
+    red on the next cycle and stayed red for 16 consecutive runs, with `max_target_diff` 0.0 the whole
+    time.  The monitor's own output became the noisiest thing about it - which is the failure its own
+    `reference_symbols` docstring, one field over, was written to prevent.
+    """
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    state = _state(
+        int(bar.timestamp() * 1000),
+        {"tsmom": {"BTCUSDT": 0.34, "TRUMPUSDT": 1.0}},  # the memory still carries the departed name
+        {"BTCUSDT": 0.031},
+    )
+    state.universe = ["BTCUSDT"]  # what the cycle declared it was managing
+
+    result = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031}), state)
+
+    assert result["ok"], result["note"]
+    assert result["contribution_diffs"] == {"tsmom": {}}
+    assert result["max_contribution_diff"] == 0.0
+
+
+def test_a_symbol_still_in_the_universe_that_stops_reproducing_is_still_caught() -> None:
+    """The other side of the same line: this is what the monitor exists to see."""
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    state = _state(int(bar.timestamp() * 1000), {"tsmom": {"BTCUSDT": 0.34, "ETHUSDT": -0.2}}, {"BTCUSDT": 0.031})
+    state.universe = ["BTCUSDT", "ETHUSDT"]
+
+    result = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031}), state)
+
+    assert not result["ok"]
+    assert result["contribution_diffs"]["tsmom"]["ETHUSDT"] == pytest.approx(0.2)
+
+
+def test_a_symbol_held_only_to_be_reduced_out_is_still_compared() -> None:
+    """`leaving` names are scored: the engine passes universe+leaving to the model and excludes the
+    exits only from the cross-sectional RANKING (`engine.py`: "the model still scores it").  So they
+    are part of the population this diff runs over, and dropping them would blind the monitor for
+    exactly the cycles in which a symbol is being unwound."""
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    state = _state(int(bar.timestamp() * 1000), {"tsmom": {"BTCUSDT": 0.34, "DOGEUSDT": 0.5}}, {"BTCUSDT": 0.031})
+    state.universe, state.leaving = ["BTCUSDT"], ["DOGEUSDT"]
+
+    result = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031}), state)
+
+    assert not result["ok"]
+    assert result["contribution_diffs"]["tsmom"]["DOGEUSDT"] == pytest.approx(0.5)
+
+
+def test_a_state_that_declares_no_universe_is_compared_on_everything() -> None:
+    """No declared population is not a licence to check less - it fails toward more comparison."""
+    bar = pd.Timestamp("2026-09-03T13:00:00Z")
+    state = _state(int(bar.timestamp() * 1000), {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031})
+    assert state.universe == []
+
+    result = compare_targets(_targets(bar, {"tsmom": {"BTCUSDT": 0.17}}, {"BTCUSDT": 0.031}), state)
+
+    assert not result["ok"] and result["contribution_diffs"]["tsmom"]["BTCUSDT"] == pytest.approx(0.17)
+
+
 def test_verify_flags_a_strategy_the_state_never_saw() -> None:
     bar = pd.Timestamp("2026-09-03T13:00:00Z")
     state = _state(int(bar.timestamp() * 1000), {"tsmom": {"BTCUSDT": 0.34}}, {"BTCUSDT": 0.031})
