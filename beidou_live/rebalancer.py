@@ -146,6 +146,17 @@ def plan_rebalance(
             # cases are separated from the ordinary suppressed resize because they are structural, not
             # transient: no price path clears the band while the target stays this small.  Flat and
             # wanting flat is neither, and stays silent so `leaving` symbols cannot flood the log.
+            #
+            # `BAND_BLOCKS_EXIT` asks about the POSITION, not about this bar's target.  It used to fire
+            # only on a target of exactly zero, and a decaying model target essentially never lands
+            # there: ENAUSDT sat at -79 contracts (-11.19 USDT against a 54.32 USDT band) from
+            # 2026-09-14T11:00Z with a target of -0.05% of equity, every cycle logged as an ordinary
+            # `NO_TRADE_BAND`, and `report daily` printed `blocked_exit: []` while the operator found
+            # the position by eye in the venue UI.  Unclosable is a property of `|current| < threshold`
+            # - the largest gap a zero target can ever ask for is `|current|` itself - so that is what
+            # the label tests.  `reports.plan_gaps` already documented it this way; only the predicate
+            # was narrower than its own docstring.  No order changes: all three outcomes are still
+            # "no order", and only which one is called what moves.
             if current_qty != 0.0 or target_notional != 0.0:
                 skipped.append(
                     {
@@ -154,10 +165,12 @@ def plan_rebalance(
                             "BAND_BLOCKS_ENTRY"
                             if current_qty == 0.0
                             else "BAND_BLOCKS_EXIT"
-                            if abs(target_notional) < 1e-9
+                            if abs(current_notional) < threshold
                             else "NO_TRADE_BAND"
                         ),
                         "delta_notional": delta,
+                        # The reader has to be able to re-derive the verdict rather than trust the label.
+                        "current_notional": current_notional,
                         "threshold": threshold,
                     }
                 )

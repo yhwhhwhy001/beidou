@@ -1952,6 +1952,23 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-first raise OF THIS TABLE, 2026-09-14: +13 beidou_live so the band names the positions it
+    # cannot close.  Twelve of the thirteen are the comment; the code is one predicate and one field.
+    #
+    # `reports.plan_gaps` has always documented `blocked_exit` as "a position smaller than the band can
+    # never be closed to zero", which is a statement about the POSITION.  The rebalancer tested the
+    # TARGET instead - `abs(target_notional) < 1e-9` - and a decaying model target essentially never
+    # lands on exactly zero, so in 320 armed cycles the label fired zero times while the condition it
+    # names held for 44.  ENAUSDT sat at -79 contracts (-11.19 USDT against a 54.32 USDT band) for
+    # 45 cycles and `report daily` printed `blocked_exit: []`; the operator found it by eye in the
+    # venue UI.  The predicate now reads `abs(current_notional) < threshold`, which is the same
+    # sentence the docstring was already making, and the row carries `current_notional` so the reader
+    # can re-derive the verdict instead of trusting the label.
+    #
+    # No order changes - all three band outcomes were already "no order" and still are.  The lines
+    # buy the difference between a stuck position and a symbol that did not need trading, which is
+    # exactly what no instrument in the system could tell apart on 2026-09-14.
+    #
     # Twentieth raise OF THIS TABLE, 2026-09-14: +15 beidou_alpha, +33 beidou_cli so a measurement can
     # reproduce its own headline number.
     #
@@ -2346,7 +2363,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_850,
+    "beidou_live": 8_863,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
