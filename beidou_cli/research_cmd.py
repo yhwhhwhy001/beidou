@@ -67,7 +67,7 @@ from beidou_alpha.validation.metrics import (
     time_series_ic,
     yearly_breakdown,
 )
-from beidou_alpha.validation.multiple_testing import multiple_testing_report, oos_selection_threshold
+from beidou_alpha.validation.multiple_testing import effective_trials, multiple_testing_report, oos_selection_threshold
 from beidou_alpha.validation.stability import (
     cost_stress,
     parameter_neighborhood,
@@ -2809,6 +2809,17 @@ def research_decompose(
     show_default=True,
     help="search the carry family (needs the funding panel)",
 )
+@click.option(
+    "--measure",
+    is_flag=True,
+    default=False,
+    help=(
+        "Q4: score the space to COUNT it, not to search it.  Writes no ledger row, ranks nothing, and "
+        "is not an enumeration for R2's purposes - it exists because `effective_trials` cannot be "
+        "computed from the ledger (it stores Sharpes, not streams) and buying the measurement with a "
+        "mine round would raise the very bar the number is about."
+    ),
+)
 @click.option("--baseline", default="", help="strategy id to compare each candidate against (registry params)")
 @click.option("--baseline-params", default="", help="JSON overriding the baseline's registry params")
 def research_mine(
@@ -2833,6 +2844,7 @@ def research_mine(
     max_complexity: int,
     max_lookback: int,
     include_funding: bool,
+    measure: bool,
     baseline: str,
     baseline_params: str,
     grids: str,
@@ -2983,7 +2995,7 @@ def research_mine(
     )
     reports_dir = Path(out).parent if out else Path("reports/research")
     prior_run = _prior_search(search, reports_dir)
-    if prior_run is not None and not reauthorize:
+    if prior_run is not None and not reauthorize and not measure:
         raise click.ClickException(
             f"R2: this search space was already enumerated by {prior_run}.  Re-running it charges the "
             "family a second time for one hypothesis - which is what happened on 2026-09-08, when a "
@@ -3001,6 +3013,10 @@ def research_mine(
     entries = [StrategyEntry(id=spec.id, params=dict(spec.default_params)) for spec in specs]
     _require_funding(entries, panel)
     rows: list[dict[str, Any]] = []
+    # Q4: kept only under `--measure`, and only to be COUNTED.  `effective_trials` needs the streams
+    # side by side; the ledger cannot supply them, which is the documented reason the N_eff debt has
+    # stayed open ("the ledger stores Sharpes, not return series").
+    streams: dict[str, pd.Series] = {}
     for candidate, entry in zip(search.candidates, entries, strict=True):
         model = AlphaModel(entries=(entry,), portfolio=portfolio, interval=interval, min_history_bars=history)
         try:
@@ -3012,6 +3028,8 @@ def research_mine(
             rows.append({**candidate.to_dict(), "error": f"{type(exc).__name__}: {exc}"})
             continue
         net = result.portfolio_net
+        if measure:
+            streams[candidate.hash] = net
         row = {
             **candidate.to_dict(),
             "sharpe": sharpe(net, panel.bars_per_year),
@@ -3057,7 +3075,7 @@ def research_mine(
             f"the run does not account for itself: {accounted} bucketed against {search.evaluated} evaluated"
         )
     payload: dict[str, Any] = {
-        "kind": "mine-shortlist",
+        "kind": "mine-measurement" if measure else "mine-shortlist",
         # R2: WHICH space this was, so the next run can refuse to enumerate it again.  The set of
         # canonical expression hashes, not the parameters - two parameterisations of the same space are
         # the same hypothesis space.  `evaluated` beside it is a count and cannot tell two apart.
@@ -3167,6 +3185,30 @@ def research_mine(
     # the width on would charge 267 + 514 for a family of 514, inflating N in the direction that looks
     # rigorous and is simply wrong.  On a mined id's VALIDATION row it is set, because validating the
     # same expression after the space widened really is a second, more expensive selection.
+    if measure:
+        # Free to COUNT, never free to LOOK.  A ranked shortlist here would be a selection over 676
+        # candidates that nothing charged - the exact hole the shared `mined` bucket exists to close -
+        # so the artefact carries distribution-level readings and no candidate rows at all.
+        payload.pop("candidates", None)
+        frame = pd.DataFrame(streams).dropna(how="all").fillna(0.0)
+        payload["effective_trials"] = float(effective_trials(frame.to_numpy(dtype=float)))
+        payload["measurement"] = {
+            "note": (
+                "Q4: no ledger row was written and nothing was ranked.  `effective_trials` is Li & Ji's "
+                "count of INDEPENDENT trials among the streams scored here; it is reported and is not "
+                "substituted into any gate (R0 still reads the raw ledger count)."
+            ),
+            "streams": int(frame.shape[1]),
+            "bars": int(frame.shape[0]),
+        }
+        path, digest = _write(out, f"mine-measurement-{_stamp()}", payload, markdown)
+        click.echo(
+            f"measurement: {payload['effective_trials']:.1f} independent of {search.evaluated} scored "
+            f"({frame.shape[1]} streams x {frame.shape[0]} bars).  No ledger row written, nothing ranked; "
+            f"R0 still reads the raw count.  {path} sha256={digest[:12]}"
+        )
+        return
+
     ledger_path = resolve_ledger_path(out=out)
     stamp = datetime.now(UTC).isoformat()
     run_id = f"mine-shortlist-{_stamp()}"
