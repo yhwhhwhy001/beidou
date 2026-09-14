@@ -1952,6 +1952,14 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Eighteenth raise OF THIS TABLE, 2026-09-14: +8 beidou_cli, and all eight are a docstring saying
+    # what its own function does.  `governance gate`'s first line was "Read-only, and it stays read-only
+    # ...", and thirty lines below it the same function appends a `family_gate` row to
+    # `governance/verdicts.jsonl` for every PASS/FAIL.  A session read the first line, ran the command
+    # as a check, and appended a row it had not intended to write.  Exactly 2026-09-08's shape ("a
+    # command that claims not to charge is charging"), and that entry's ruling applies here too: the
+    # contradiction is the defect, not the writing.  The writing is correct - a gate that decided and
+    # left no record is a gate nobody can audit - so the line moved, not the behaviour.
     # Seventeenth raise OF THIS TABLE, 2026-09-14: +49 beidou_alpha, +9 beidou_cli for the operator's
     # Q3 ruling - D-018's drawdown clause now compares two books at the same risk.
     #
@@ -2252,7 +2260,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_023,
+    "beidou_cli": 6_031,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

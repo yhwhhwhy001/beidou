@@ -496,7 +496,15 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     therefore attributable to the denominator and to nothing else - which is the honest form of
     "searching more retires your own incumbents".
 
-    Read-only, and it stays read-only after the merge that gave `lifecycle.apply` a production caller.
+    It changes no BOOK - it retires nothing, promotes nothing, and touches neither the registry nor the
+    state machine - but it is not read-only, and the word used to say it was.  Every PASS/FAIL reading
+    appends a `family_gate` row to `governance/verdicts.jsonl`, which is the point: a gate that decided
+    and left no record is a gate nobody can audit.  Corrected 2026-09-14 after a session ran this as a
+    "read-only check" on the strength of the old first line and appended a row it had not intended.
+    Same shape as 2026-09-08's "a command that claims not to charge is charging" - a docstring that
+    contradicts its own code is a defect whoever reads it next inherits.
+
+    What it does not do stays true after the merge that gave `lifecycle.apply` a production caller.
     A FAIL is an event for the state machine (`FAMILY_GATE_FAILED` -> retired), and `governance advance`
     is what folds events into `governance_state.json` - this command hands it the reading through
     `Facts.family_gate_still_passes` and retires nothing itself.  The sentence here used to say
