@@ -1952,6 +1952,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-first raise OF THIS TABLE, 2026-09-14: +4 beidou_live, for one assignment and the three
+    # lines that say why it is there.
+    #
+    # `startup` filters the universe to what the venue will actually trade and did not write the result
+    # back to `state.universe`.  The other three mutation sites all pair the two lists; this one was
+    # the exception, and `store.save` at the end of `startup` then persisted the PRE-filter list.
+    #
+    # Four lines rather than one because the failure is invisible where it is caused.  `live verify`
+    # (M-011) reads only `state.universe`, so the reproduction ranked and demeaned over a population
+    # strictly larger than the one the cycle scored - which moves EVERY cross-sectional contribution,
+    # not the dropped symbol's.  A reader who finds this assignment and deletes it as redundant gets a
+    # globally red monitor with nothing in the record able to name the cause, which is KILL-027's shape
+    # one floor down from where KILL-027 was closed.  The comment names D-042 so the contract it
+    # implements is one grep away.
+    #
+    # It does not self-heal under the shipped profile: `alpha_registry.yaml` pins 17 symbols, and a
+    # pinned universe makes `_maybe_refresh_universe` return before it touches state.  Only a restart
+    # with every pinned symbol tradable clears it.
+    #
     # Twentieth raise OF THIS TABLE, 2026-09-14: +15 beidou_alpha, +33 beidou_cli so a measurement can
     # reproduce its own headline number.
     #
@@ -2346,7 +2365,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_850,
+    "beidou_live": 8_854,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

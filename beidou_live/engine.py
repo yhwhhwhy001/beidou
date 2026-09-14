@@ -423,6 +423,10 @@ class LiveEngine:
         if not tradable:
             raise RuntimeError("no tradable symbols in the universe")
         self.universe = tradable
+        # Pair the lists, as the other three mutation sites do.  `live verify` reads only
+        # `state.universe`, so persisting the pre-filter list made the reproduction rank over a larger
+        # population than the cycle scored - D-042's contract, KILL-027's shape.
+        self.state.universe = list(self.universe)
         hedge_probe = getattr(self.venue, "hedge_mode", None)
         if callable(hedge_probe) and await hedge_probe():
             raise RuntimeError("account is in hedge (dual-side) position mode; switch to one-way mode first")
