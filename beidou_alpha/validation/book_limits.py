@@ -36,30 +36,73 @@ import pandas as pd
 DECISION_SLIPPAGE_BPS = 5.5
 
 
-def marginal_metrics(total: Mapping[str, Any], main: Mapping[str, Any]) -> dict[str, Any]:
+def _drawdown(net: pd.Series) -> float:
+    equity = (1.0 + net).cumprod()
+    return float((equity / equity.cummax() - 1.0).min())
+
+
+def _equal_risk_worsening(total_oos: pd.Series, main_oos: pd.Series) -> float | None:
+    """The total book's drawdown cost after it is scaled back to the main book's volatility.
+
+    Operator ruling 2026-09-14 (Q3).  D-018 subtracts the main book's out-of-sample drawdown from the
+    total book's, and those two books do not carry the same risk: adding a stream correlated 0.236 took
+    the 2026-09-07 book from 32.24% vol to 35.66%, +10.6%.  Any sleeve that can add Sharpe adds vol and
+    therefore adds drawdown, so the 1pp allowance was being charged against a bigger book than the one
+    it was written for - the part of the cost that is SCALE rather than the sleeve.
+
+    Scaling the returns and recomputing, rather than scaling the drawdown itself: a drawdown is a path
+    statistic and multiplying it by a vol ratio is an approximation.  The two agree to a few basis
+    points on the 2026-09-07 numbers, and this one needs no caveat.
+    """
+    main_vol, total_vol = float(main_oos.std()), float(total_oos.std())
+    if not (main_vol > 0.0 and total_vol > 0.0):
+        return None
+    scaled = total_oos * (main_vol / total_vol)
+    return _drawdown(main_oos) - _drawdown(scaled)
+
+
+def marginal_metrics(
+    total: Mapping[str, Any],
+    main: Mapping[str, Any],
+    *,
+    total_oos: pd.Series | None = None,
+    main_oos: pd.Series | None = None,
+) -> dict[str, Any]:
     """D-018's marginal block: what the sleeve adds to the main book, fold by fold.
 
-    Both arguments are `_fold_metrics`-shaped (full/oos Sharpe, oos MDD, oos return, fold Sharpes) and
+    Both mappings are `_fold_metrics`-shaped (full/oos Sharpe, oos MDD, oos return, fold Sharpes) and
     must come from the same fold list, or the per-fold deltas are between different periods.
+
+    The two streams are optional, and when they are given the block also carries
+    `oos_mdd_worsening_equal_risk` (Q3).  Optional on purpose: it is what makes the ruling apply to
+    later candidates only, structurally rather than by a date.  An archived report has no such field,
+    `marginal_checks` therefore judges it on the raw difference exactly as before, and no verdict in the
+    archive moves.  The raw difference is kept beside the new number rather than replaced - a ruling
+    that deletes its own evidence cannot be argued with afterwards.
     """
     deltas = [
         None if t is None or m is None else t - m
         for t, m in zip(total["fold_sharpes"], main["fold_sharpes"], strict=True)
     ]
     wins = [d for d in deltas if d is not None]
-    main_oos, total_oos = main["oos_sharpe"], total["oos_sharpe"]
-    return {
+    main_sharpe, total_sharpe = main["oos_sharpe"], total["oos_sharpe"]
+    block: dict[str, Any] = {
         "delta_full_sharpe": (
             None
             if total["full_sharpe"] is None or main["full_sharpe"] is None
             else total["full_sharpe"] - main["full_sharpe"]
         ),
-        "delta_oos_sharpe": None if total_oos is None or main_oos is None else total_oos - main_oos,
+        "delta_oos_sharpe": (None if total_sharpe is None or main_sharpe is None else total_sharpe - main_sharpe),
         "oos_mdd_worsening": main["oos_mdd"] - total["oos_mdd"],
         "delta_oos_return": total["oos_return"] - main["oos_return"],
         "fold_deltas": deltas,
         "fold_win_rate": float(sum(d > 0 for d in wins) / len(wins)) if wins else None,
     }
+    if total_oos is not None and main_oos is not None:
+        equal_risk = _equal_risk_worsening(total_oos, main_oos)
+        if equal_risk is not None:
+            block["oos_mdd_worsening_equal_risk"] = equal_risk
+    return block
 
 
 def marginal_checks(marginal: Mapping[str, Any], rule: Mapping[str, float]) -> dict[str, bool]:
@@ -72,7 +115,12 @@ def marginal_checks(marginal: Mapping[str, Any], rule: Mapping[str, float]) -> d
     win = marginal.get("fold_win_rate")
     return {
         "delta_oos_sharpe": delta is not None and delta >= rule["min_delta_oos_sharpe"],
-        "oos_mdd_worsening": marginal["oos_mdd_worsening"] <= rule["max_oos_mdd_worsening"],
+        # Q3: the equal-risk number when the report carries one, the raw difference when it does not.
+        # That fallback IS "later candidates only" - an archived report has no such field and is judged
+        # exactly as it was, with no date to remember and no migration to run.
+        "oos_mdd_worsening": (
+            marginal.get("oos_mdd_worsening_equal_risk", marginal["oos_mdd_worsening"]) <= rule["max_oos_mdd_worsening"]
+        ),
         "fold_win_rate": win is not None and win >= rule["min_fold_win_rate"],
     }
 

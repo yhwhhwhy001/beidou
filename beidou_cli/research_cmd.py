@@ -2036,7 +2036,15 @@ def _evaluate_book(
             "fraction": fraction,
             "total": {**total_metrics, "summary": total_result.summary()},
             "cap_binding": binding,
-            "marginal": marginal_metrics(total_metrics, main_metrics),
+            # Q3: the OOS streams, so the block also carries the equal-risk drawdown cost.  Sliced at
+            # `oos_start` rather than handed whole - the clause is about out-of-sample drawdown, and a
+            # vol ratio taken over the training period would rescale by a number the verdict never sees.
+            "marginal": marginal_metrics(
+                total_metrics,
+                main_metrics,
+                total_oos=total_net.iloc[oos_start:],
+                main_oos=main_net.iloc[oos_start:],
+            ),
         }
     sleeve_scaled = run_backtest(panel, banded(w_sleeve_in_book * fractions[0]), cost)
     raw_gross = w_sleeve.abs().sum(axis=1)
@@ -2135,7 +2143,12 @@ def _book_limits(
         main_at_level = _fold_metrics(main_stressed, fold_list, bpy)
         levels[f"slip{level:g}"] = sharpe(sleeve_stressed, bpy)
         by_level[level] = {
-            **marginal_metrics(_fold_metrics(total_stressed, fold_list, bpy), main_at_level),
+            **marginal_metrics(
+                _fold_metrics(total_stressed, fold_list, bpy),
+                main_at_level,
+                total_oos=total_stressed.iloc[fold_list[0].test_start :],
+                main_oos=main_stressed.iloc[fold_list[0].test_start :],
+            ),
             "total_cost_bps": total_bps,
             "main_oos_sharpe": main_at_level["oos_sharpe"],
         }

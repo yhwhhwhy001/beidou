@@ -1952,6 +1952,47 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Seventeenth raise OF THIS TABLE, 2026-09-14: +49 beidou_alpha, +9 beidou_cli for the operator's
+    # Q3 ruling - D-018's drawdown clause now compares two books at the same risk.
+    #
+    # The clause subtracts the main book's out-of-sample drawdown from the total book's, and those two
+    # do not carry the same risk.  Measured 2026-09-07 on the `594a12f9` sleeve at fraction 1/3: a
+    # stream correlated 0.236 took the book from 32.24% vol to 35.66%, +10.6%.  Any sleeve that can add
+    # Sharpe adds vol and therefore adds drawdown, so the 1pp allowance was charged against a bigger
+    # book than the one it was written for - against SCALE rather than against the sleeve.  Scaling the
+    # total back to the main book's vol keeps the Sharpe gain to the digit (+0.288) and moves the cost
+    # from +4.27pp to +1.87pp.
+    #
+    # Later candidates only, enforced structurally rather than by a date: the equal-risk number exists
+    # only in reports that carry it, `marginal_checks` reads it when present and the raw difference when
+    # not, so no archived verdict moves and there is no cut-off for anyone to remember.  The raw number
+    # stays beside the new one - a ruling that deletes its own evidence cannot be argued with later.
+    #
+    # It does not rescue the candidate it came from: +1.87pp against a 1pp allowance still fails, which
+    # is exactly why the ruling could be made on its own terms rather than as that candidate's appeal.
+    # The scaling is applied to the RETURNS and the drawdown recomputed, not to the drawdown itself - a
+    # drawdown is a path statistic and the vol-ratio shortcut is an approximation that would need a
+    # caveat this way does not.
+    # Sixteenth raise OF THIS TABLE, 2026-09-14: +40 beidou_governance for the operator's Q1 ruling -
+    # a report that predates `gate` may be recomputed, but only if it proves its own rule.
+    #
+    # KILL-Q3 added `gate` so a stored threshold could not outlive the rule that made it, and
+    # `read_gate` refused any block without it.  Correct, and total: all seven mined validations
+    # predate the field, so the production recheck had no opinion about any of them - including the
+    # only candidate this pipeline has ever passed, whose admissibility is an open ruling.
+    #
+    # The identity may stand in for the label because it is FALSIFIABLE.  `threshold_annual` is the raw
+    # quantile times `sqrt(bars_per_year)`, so `threshold / max_sharpe_quantile(n, variance, alpha)`
+    # recovers the annualisation, and a threshold produced by any other rule leaves a different number
+    # there.  Measured on the seven before the rule was written: 594a12f9 implies 93.594872 = sqrt(8760)
+    # to 0.000e+00; the other six imply 0.805x that, which is `E[max] / quantile(0.95)` - the
+    # expectation KILL-Q3 replaced because it "admitted pure noise at 43.5%".
+    #
+    # So this admits ONE report and refuses SIX.  That is the point and it is why the lines are worth
+    # it: the check is not a way past the refusal, it is the refusal's own criterion recovered from the
+    # numbers, and it dates six reports the field would have dated for us.  An explicit wrong label
+    # still refuses - a statement beats an inference - and a report with no readable `interval` refuses
+    # too, because without one there is no `sqrt(bars_per_year)` to hold the identity against.
     # Fifteenth raise OF THIS TABLE, 2026-09-14: +100 beidou_governance, +10 beidou_cli for R2b, the
     # first reason the research loop has ever had to stop mining.
     #
@@ -2110,7 +2151,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_651,
+    "beidou_alpha": 8_700,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2211,7 +2252,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_014,
+    "beidou_cli": 6_023,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2241,7 +2282,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_788,
+    "beidou_governance": 3_828,
 }
 
 
