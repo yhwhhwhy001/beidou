@@ -202,6 +202,13 @@ CONSTRUCTION_KEYS: tuple[str, ...] = (
     # under the new code; older reports simply do not carry it and are skipped, which is the same rule
     # that let the `portfolio` block be introduced at all.
     "sleeve_max_gross",
+    # D2, 2026-09-14, on the same rule as `sleeve_max_gross`: reports record
+    # `model.portfolio.__dict__`, so this key appears from the first report run under the new code and
+    # older reports simply do not carry it.  `construction_problems` skips a key the report lacks, so
+    # today's pinned evidence is unaffected and the check becomes real for every report produced from
+    # here on.  Its live twin `exempt_crossings` is deliberately NOT here: it has no backtest
+    # counterpart, because the backtest has always behaved the way its True means.
+    "flat_inside_band",
 )
 
 

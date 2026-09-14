@@ -1952,6 +1952,51 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-second raise OF THIS TABLE, 2026-09-14: +66 beidou_live, +26 beidou_alpha for two knobs,
+    # both shipped OFF, that name the two ways the band manufactures a position it cannot close.
+    # Roughly three quarters of both is comment, and the comments are the deliverable here: each knob
+    # is one branch, and what has to survive is WHY False is the current book and what turning it on
+    # would cost.
+    #
+    # `exempt_crossings` is not a new idea, it is a divergence.  `beidou_alpha.portfolio`'s
+    # `apply_no_trade_band` docstring reads "Exits to exactly zero, entries from zero and sign flips
+    # are always executed; only same-direction resizing is suppressed"; `plan_rebalance` applies the
+    # absolute band to all of them.  `model.py`'s D-033 moved the band from the model layer to the
+    # rebalancer on the stated ground that the rebalancer "applies the identical rule".  It does not,
+    # and nothing in the tree said so - the claim sat in a docstring on one side and was contradicted
+    # by a branch on the other.  The consequence is not academic: the exit overlay fires by setting the
+    # weight to 0 (`exits.py:72`) and then goes through the band, so a stop-loss on a sub-band position
+    # plans no order at all.  ENAUSDT spent 45 cycles in that state.
+    #
+    # `flat_inside_band` is the other half: the stub does not appear, it is manufactured.  A reduction
+    # is sized to the model's target and no rule forbids that target landing inside the band; 7 of 170
+    # armed fills (4%) landed there.  The invariant is "never hold a position smaller than the absolute
+    # band", which covers reductions, sign flips and sub-band entries in one sentence - and it has to,
+    # because the first live stub (2026-09-10, +212.56 -> -51.10) was made by a flip, which a
+    # reduction-only rule would not have caught.
+    #
+    # Both are declared in `construction_fingerprint` rather than left as bare code, because a knob the
+    # record cannot see is the other half of D-036; CONSTRUCTION_ALIASES v7 carries the proof that
+    # False on both sides is byte-identical.  Turning either ON is a construction change and belongs to
+    # the operator after the 2026-10-13 freeze.
+    #
+    # Twenty-first raise OF THIS TABLE, 2026-09-14: +13 beidou_live so the band names the positions it
+    # cannot close.  Twelve of the thirteen are the comment; the code is one predicate and one field.
+    #
+    # `reports.plan_gaps` has always documented `blocked_exit` as "a position smaller than the band can
+    # never be closed to zero", which is a statement about the POSITION.  The rebalancer tested the
+    # TARGET instead - `abs(target_notional) < 1e-9` - and a decaying model target essentially never
+    # lands on exactly zero, so in 320 armed cycles the label fired zero times while the condition it
+    # names held for 44.  ENAUSDT sat at -79 contracts (-11.19 USDT against a 54.32 USDT band) for
+    # 45 cycles and `report daily` printed `blocked_exit: []`; the operator found it by eye in the
+    # venue UI.  The predicate now reads `abs(current_notional) < threshold`, which is the same
+    # sentence the docstring was already making, and the row carries `current_notional` so the reader
+    # can re-derive the verdict instead of trusting the label.
+    #
+    # No order changes - all three band outcomes were already "no order" and still are.  The lines
+    # buy the difference between a stuck position and a symbol that did not need trading, which is
+    # exactly what no instrument in the system could tell apart on 2026-09-14.
+    #
     # Twentieth raise OF THIS TABLE, 2026-09-14: +15 beidou_alpha, +33 beidou_cli so a measurement can
     # reproduce its own headline number.
     #
@@ -2226,7 +2271,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_715,
+    "beidou_alpha": 8_741,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2346,7 +2391,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_850,
+    "beidou_live": 8_929,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

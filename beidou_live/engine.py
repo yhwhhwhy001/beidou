@@ -2103,6 +2103,21 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # on changes which orders the cap refuses, i.e. the book the loop holds - and a knob the
             # record cannot see is the other half of D-036.
             "exempt_reductions": config.rebalance.exempt_reductions,
+            # v7 (+ rebalance.exempt_crossings, + rebalance.flat_inside_band), 2026-09-14.  Declared
+            # before either is ever written, on the same proof as v3-v6: the shipped profile names
+            # neither key and False is off for both, so recomputed against it the values are False on
+            # both sides of the change and only the shape of what is hashed moved.  Without the alias
+            # the next restart would reset M-010's window - and, since 2026-09-14, would also trip
+            # `test_the_construction_is_frozen_until_the_holdout_matures` - for a byte-identical book.
+            #
+            # What False means for each is the literal previous expression, and both are asserted
+            # rather than left to this comment.  `exempt_crossings`: the absolute band applies to
+            # every planned change, including a close to zero - which is NOT what
+            # `beidou_alpha.portfolio.apply_no_trade_band` does, so False is a live/backtest
+            # divergence this knob names rather than creates.  `flat_inside_band`: a target may land
+            # strictly inside the band and leave a position that can never be closed again.
+            "exempt_crossings": config.rebalance.exempt_crossings,
+            "flat_inside_band": config.rebalance.flat_inside_band,
         },
         # v6's third field.  How many consecutive cycles a symbol may come back with no closed
         # bars before the loop treats it as delisted and flattens it.  1 is today's behaviour
@@ -2176,6 +2191,8 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
             "no_trade_band": config.rebalance.no_trade_band,
             "no_trade_rel_band": config.rebalance.no_trade_rel_band,
             "sleeve_max_gross": config.portfolio.sleeve_max_gross,
+            # D2's backtest-visible half, so DL-G9's intersection keeps matching `CONSTRUCTION_KEYS`.
+            "flat_inside_band": config.portfolio.flat_inside_band,
         },
         "book_guards": {
             "max_weight": config.guards.max_weight,
