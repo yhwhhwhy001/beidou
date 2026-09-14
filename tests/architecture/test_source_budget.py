@@ -2297,7 +2297,15 @@ CEILING = {
     # withholds the exits only from the cross-section, so an exiting symbol IS scored.  A state that
     # declares no universe is compared on everything rather than on nothing - an undeclared population
     # is not a licence to check less, the same direction the alert cache now fails in.
-    "beidou_live": 8_831,
+    #
+    # Twenty-third raise OF THIS TABLE, 2026-09-14: +2 beidou_live, and they are an erratum on the
+    # twenty-first.  Moving the dedup default to 3540 left four places in the tree reasoning from
+    # "`dedup_window_seconds` equals the job's period", and the shipped profile plus a second hardcoded
+    # fallback kept the LOOP on 3600 while the check job moved - two windows against one shared state
+    # file, under a comment that says "One dedup window across every process that can alert".  Each
+    # conclusion survived (a standing fact must leave the paging path, and that is true at any window);
+    # the stated fact did not, so the two in `reports.py` now argue from what is invariant instead.
+    "beidou_live": 8_833,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

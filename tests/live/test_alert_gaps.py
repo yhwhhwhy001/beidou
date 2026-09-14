@@ -18,6 +18,8 @@ from pathlib import Path
 
 import httpx
 
+from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS
+
 
 def _ok(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"code": 0})
@@ -123,6 +125,22 @@ async def test_a_clean_startup_says_nothing(tmp_path: Path) -> None:
     sent = await startup_with_foreign_position([])
 
     assert not any("foreign" in message.lower() for message in sent)
+
+
+def test_every_process_that_shares_the_dedup_FILE_shares_its_window() -> None:
+    """`live_cmd` says it out loud - "One dedup window across every process that can alert (DL-L3)" -
+    and for one afternoon that sentence was false.  `HOURLY_CALLER_WINDOW_SECONDS` moved to 3540 and
+    reached `report daily` and `run_check.sh`, which pass no window; the loop kept 3600, because the
+    shipped profile stated the old default and `live_cmd` hardcoded it a second time as a fallback.
+    Two copies of a number that must agree are how they stop agreeing, so the number now has one home
+    and this asserts the shipped profile does not quietly grow a second."""
+    from beidou_shared.config import load_yaml
+
+    alerts = load_yaml("config/live.demo.yaml").get("alerts", {}) or {}
+    window = float(alerts.get("dedup_window_seconds", HOURLY_CALLER_WINDOW_SECONDS))
+
+    assert window == HOURLY_CALLER_WINDOW_SECONDS
+    assert "3600.0)" not in Path("beidou_cli/live_cmd.py").read_text(encoding="utf-8")
 
 
 def test_the_check_script_keeps_the_readings_from_the_runs_that_PASSED() -> None:

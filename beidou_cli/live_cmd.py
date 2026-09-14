@@ -27,7 +27,7 @@ from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore
 from beidou_governance.policy import policy_digest
-from beidou_live.alerts import WebhookAlerts
+from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
     account_kill_switches,
@@ -323,7 +323,7 @@ def live_run(
     alerts = WebhookAlerts(
         str(alert_config.get("webhook_url", "")),
         secondary_url=str(alert_config.get("webhook_url_2", "")),
-        dedup_window_seconds=float(alert_config.get("dedup_window_seconds", 3600.0)),
+        dedup_window_seconds=float(alert_config.get("dedup_window_seconds", HOURLY_CALLER_WINDOW_SECONDS)),
         # One dedup window across every process that can alert (DL-L3): the loop, `report daily` and
         # `run_check.sh` share the file, so a standing problem announces itself once an hour rather
         # than once per process per hour.
@@ -738,7 +738,7 @@ def live_alert_test(profile: str, repeat: int) -> None:
     alerts = WebhookAlerts(
         str(config.get("webhook_url", "")),
         secondary_url=str(config.get("webhook_url_2", "")),
-        dedup_window_seconds=float(config.get("dedup_window_seconds", 3600.0)),
+        dedup_window_seconds=float(config.get("dedup_window_seconds", HOURLY_CALLER_WINDOW_SECONDS)),
         transport=alert_transport(),
     )
     if not alerts.enabled:

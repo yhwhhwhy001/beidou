@@ -1748,7 +1748,8 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     notice is true and worth seeing at review, but nothing can be done with it in the next hour -
     a construction-cadence count is the case that forced the distinction: two promotions landed on
     2026-09-04, a promotion cannot be un-done, and the hourly check paged on it for three days,
-    twice an hour, because `dedup_window_seconds` equals the job's period.  That is precisely the
+    twice an hour - two writers on one channel, and a dedup window that was then equal to the job's
+    period and so suppressed neither of them reliably.  That is precisely the
     repeated alert `alerts.py` says buries the one that matters, so notices leave the paging path
     entirely; they stay in the report's Evidence window block.  Making a notice loud again is a
     matter of moving one append, not of finding a suppression to undo.
@@ -1821,9 +1822,10 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         # RISK-G11.  NOT an alert, and the reasoning is the same distinction this docstring draws.  The
         # amplifier itself is a standing fact the operator ACCEPTED on 2026-09-08 with the denominator
         # ruling, so there is nothing to do about it inside the hour and it must never page (its own
-        # module says so); on the paging path, with `dedup_window_seconds` equal to the hourly job's
-        # period, it would re-announce itself twice an hour for as long as the account holds BTC - the
-        # construction-cadence shape exactly.  What DID change is which side of 1.0 the share sits on,
+        # module says so); on the paging path it would re-announce itself every dedup window for as
+        # long as the account holds BTC - the construction-cadence shape exactly, and one the window
+        # cannot fix in either direction: shorter re-announces more often, longer buries the alert
+        # that matters.  A standing fact has to leave the paging path, not be tuned on it.  What DID change is which side of 1.0 the share sits on,
         # and that is a fact a reader of the equity line needs at review: above 1 the account's equity
         # direction no longer tells them which way the book went.
         notices.append(

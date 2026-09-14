@@ -207,9 +207,9 @@ def test_the_crossing_is_a_notice_and_never_an_alert(tmp_path: Any) -> None:
     """It must not page (this file's own third paragraph), and it must not hold `--check` red.
 
     The operator ruled the denominator on 2026-09-08, so there is nothing to do about the amplifier in
-    the next hour; and `dedup_window_seconds` equals the hourly job's period, so a standing account
-    property on the paging path re-announces itself twice an hour forever - the KILL-R7 shape that
-    created the notices channel in the first place.  Crossing 1.0 is still a fact that changed, so it
+    the next hour; and a standing account property on the paging path re-announces itself every dedup
+    window forever, whatever that window is set to - the KILL-R7 shape that created the notices
+    channel in the first place.  Crossing 1.0 is still a fact that changed, so it
     belongs in the notices, which print beside the report and touch neither the webhook nor the exit code.
     """
     from beidou_live.reports import daily_alerts, daily_payload

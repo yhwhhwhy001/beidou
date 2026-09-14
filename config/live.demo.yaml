@@ -420,4 +420,10 @@ alerts:
   # DL-L3: one URL is a single point of silence, and the breaker (DL-L2) is only allowed to stop the
   # loop cleanly if a channel accepts its last message.  Empty disables the second channel.
   webhook_url_2: "${BEIDOU_ALERTS_WEBHOOK_URL_2:-}"
-  dedup_window_seconds: 3600        # the same alert once an hour, not once a cycle (KILL-R7)
+  # The dedup window is NOT set here.  It has to be strictly shorter than the period of whoever
+  # is calling - the loop once a bar, `run_check.sh` on the hour - which is a property of the
+  # callers and not of this deployment, and a second copy of a number that must agree with the
+  # first is how they stop agreeing: this file said 3600 while `alerts.py` had moved to 3540,
+  # so the loop and the check job ran different windows against one shared state file.  It lives
+  # in `HOURLY_CALLER_WINDOW_SECONDS` (KILL-R7); setting `dedup_window_seconds` here still
+  # overrides it, deliberately, for an operator who has a reason.

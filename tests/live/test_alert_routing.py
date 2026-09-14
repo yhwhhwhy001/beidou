@@ -2,8 +2,8 @@
 
 `com.beidou.check` ran red hourly for three days on a TRUE but unactionable line: two construction
 changes had landed on 2026-09-04 and a promotion cannot be un-done.  It also double-posted to the
-alert channel every hour (run_check.sh's curl plus the report's own webhook), because
-`dedup_window_seconds` is 3600 and the job's period is 3600.  A standing governance fact is exactly
+alert channel every hour: two writers on one channel, and a dedup window then equal to the job's own
+period, which is a coin flip rather than a suppression.  A standing governance fact is exactly
 the repeated alert that `beidou_live/alerts.py` warns makes the one that matters get missed, so it
 no longer pages at all: it stays in the report's Evidence window block, where a human reads it at
 review time.  Operational alerts - drift, risk budget, risk adaptation - are untouched.
