@@ -29,21 +29,21 @@ def _pos(symbol: str, qty: float, mark: float, liq: float | None) -> Position:
 
 def test_a_long_with_no_reachable_liquidation_reports_no_distance() -> None:
     """The 14/14 case.  Not zero distance - no distance."""
-    from beidou_live.health import liquidation_distance
+    from beidou_live.liquidation import liquidation_distance
 
     assert liquidation_distance(_pos("BTCUSDT", 0.1, 80_000.0, None), daily_vol=0.03) is None
 
 
 def test_a_zero_from_the_venue_is_read_as_unreachable_not_as_now() -> None:
     """The bug this test exists to prevent: an alarm on every long, every cycle, forever."""
-    from beidou_live.health import liquidation_distance
+    from beidou_live.liquidation import liquidation_distance
 
     assert liquidation_distance(_pos("BTCUSDT", 0.1, 80_000.0, 0.0), daily_vol=0.03) is None
 
 
 def test_a_short_measures_the_distance_upward_in_daily_vol_units() -> None:
     """TRUMPUSDT on the probe: mark 2.308, liq 206.7 - 89x away, which is 'never' in vol units."""
-    from beidou_live.health import liquidation_distance
+    from beidou_live.liquidation import liquidation_distance
 
     distance = liquidation_distance(_pos("TRUMPUSDT", -51.85, 2.0, 2.6), daily_vol=0.10)
 
@@ -51,7 +51,7 @@ def test_a_short_measures_the_distance_upward_in_daily_vol_units() -> None:
 
 
 def test_a_long_measures_the_distance_downward() -> None:
-    from beidou_live.health import liquidation_distance
+    from beidou_live.liquidation import liquidation_distance
 
     distance = liquidation_distance(_pos("ETHUSDT", 1.0, 2_000.0, 1_800.0), daily_vol=0.05)
 
@@ -59,20 +59,20 @@ def test_a_long_measures_the_distance_downward() -> None:
 
 
 def test_zero_volatility_is_not_a_division() -> None:
-    from beidou_live.health import liquidation_distance
+    from beidou_live.liquidation import liquidation_distance
 
     assert liquidation_distance(_pos("X", 1.0, 100.0, 90.0), daily_vol=0.0) is None
 
 
 def test_a_flat_symbol_has_no_liquidation_distance() -> None:
-    from beidou_live.health import liquidation_distance
+    from beidou_live.liquidation import liquidation_distance
 
     assert liquidation_distance(_pos("X", 0.0, 100.0, 90.0), daily_vol=0.05) is None
 
 
 def test_the_minimum_ignores_the_unreachable_ones() -> None:
     """M-Q06 must read 'the closest position that HAS a liquidation price', or it reads 0 forever."""
-    from beidou_live.health import min_liquidation_distance
+    from beidou_live.liquidation import min_liquidation_distance
 
     positions = [
         _pos("BTCUSDT", 0.1, 80_000.0, None),  # long, unreachable
@@ -90,7 +90,7 @@ def test_the_minimum_ignores_the_unreachable_ones() -> None:
 
 def test_all_unreachable_is_reported_as_such_not_as_a_missing_metric() -> None:
     """'Every position is out of reach' is information; a null is a gap in the instrument."""
-    from beidou_live.health import min_liquidation_distance
+    from beidou_live.liquidation import min_liquidation_distance
 
     result = min_liquidation_distance([_pos("BTCUSDT", 0.1, 80_000.0, None)], {"BTCUSDT": 0.03})
 
@@ -100,14 +100,14 @@ def test_all_unreachable_is_reported_as_such_not_as_a_missing_metric() -> None:
 
 
 def test_the_margin_mode_assertion_accepts_what_validation_assumed() -> None:
-    from beidou_live.health import margin_mode_problems
+    from beidou_live.account_shape import margin_mode_problems
 
     assert margin_mode_problems(multi_assets=True, isolated_symbols=[], expect_multi_assets=True) == []
 
 
 def test_an_isolated_position_is_refused() -> None:
     """§7.3(a): isolated margin manufactures liquidations the strategy never asked for."""
-    from beidou_live.health import margin_mode_problems
+    from beidou_live.account_shape import margin_mode_problems
 
     problems = margin_mode_problems(multi_assets=True, isolated_symbols=["ETHUSDT"], expect_multi_assets=True)
 
@@ -117,7 +117,7 @@ def test_an_isolated_position_is_refused() -> None:
 
 def test_a_changed_collateral_mode_is_refused() -> None:
     """Equity that floats with BTC is a different book from the one the evidence describes."""
-    from beidou_live.health import margin_mode_problems
+    from beidou_live.account_shape import margin_mode_problems
 
     problems = margin_mode_problems(multi_assets=False, isolated_symbols=[], expect_multi_assets=True)
 
@@ -129,7 +129,7 @@ def test_the_assertion_never_offers_to_fix_it() -> None:
     """Changing an account's margin mode under an open book is not a thing a startup check may do."""
     import inspect
 
-    from beidou_live import health
+    from beidou_live import account_shape
 
-    source = inspect.getsource(health.margin_mode_problems)
+    source = inspect.getsource(account_shape.margin_mode_problems)
     assert "post" not in source.lower() and "set_margin" not in source

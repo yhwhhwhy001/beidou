@@ -1952,6 +1952,25 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-fourth raise OF THIS TABLE, 2026-09-15: +34 beidou_live, which is three module headers -
+    # `health.py` split into the four concepts it was holding.
+    #
+    # It held M-001 cycle health, DL-X1 liquidation distance, KILL-R19 margin mode and D-026 construction
+    # identity, under a name that predicts one of them, with `__all__ = ["CycleHealth", "cycle_health"]`
+    # naming two and four more public functions defined after it.  Understanding "did the construction
+    # change?" meant bouncing between five modules, and the alias table sat in `health.py` for one
+    # stated reason: `engine.py` would have imported it circularly.  That is a module chosen by an
+    # import graph rather than by a concept.
+    #
+    # Now `health.py` (cycle health), `liquidation.py`, `account_shape.py`, `construction.py`.  Each
+    # keeps its own direct importers - the split deliberately does NOT follow the review's suggestion to
+    # move these into `engine.py`, which is already the largest module in the package and would have
+    # turned four tested functions into private ones.  `construction.py` has no cycle to dodge: nothing
+    # in it imports the engine.
+    #
+    # The 34 lines are the price of separability, not new behaviour: three docstrings and three import
+    # blocks, no logic added or removed.  Pure moves otherwise, with every importer repointed.
+    #
     # Twenty-third raise OF THIS TABLE, 2026-09-15: +60 beidou_live, so the venue and market ports
     # describe what the engine reads off them.
     #
@@ -2415,7 +2434,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_954,
+    "beidou_live": 8_988,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

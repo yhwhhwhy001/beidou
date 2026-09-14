@@ -21,7 +21,7 @@ Two mechanisms, decided by the operator on 2026-09-07:
 
 from __future__ import annotations
 
-from beidou_live.health import (
+from beidou_live.construction import (
     CONSTRUCTION_ALIASES,
     CONSTRUCTION_PAYLOAD_VERSION,
     canonical_construction,

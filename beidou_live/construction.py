@@ -1,0 +1,100 @@
+"""D-026: when the construction fingerprint's DEFINITION changes, and what that must not reset.
+
+`construction_fingerprint` answers "is this the same book?".  Two things here keep that answer honest
+across changes to the question: a version for the field set being hashed, reported outside the hash so
+bumping it cannot move the digest it explains, and the aliases an operator has declared to mean the
+same book.
+
+Split out of ``health.py`` in 2026-09-15.  The table lived there for one reason - `engine.py` would
+have imported it circularly - which is a module chosen by an import graph rather than by a concept, and
+it is why answering "did the construction change?" meant bouncing between five modules.  A module of
+its own has no cycle to dodge: nothing here imports the engine.
+"""
+
+from __future__ import annotations
+
+# The field set `construction_fingerprint` hashes.  Bumped whenever a key is added or removed, and
+# reported OUTSIDE the hash so that bumping it does not itself move the digest - inside, the version
+# would change the very number it exists to explain.
+#   1: the original 22 fields
+#   2: + `exits.unit_mode` (P22).  The field is right - it decides what the exit overlay does, and
+#      KILL-R14's 7-of-18 unplaceable stops are that setting - but adding it moved the digest while the
+#      book was byte-identical, and `evidence_window` read that as a construction change.
+#   3: + the four `exits.regime_*` (P23), the same day and the same way.  Inert at the shipped config:
+#      `regime_window` defaults to 0 and `regime_tp_scale()` returns None at <= 0, and the profile sets
+#      none of the four - so again the values are unchanged and only the shape moved.  Twice in one day
+#      is why `test_construction_identity` now pins the field set: the next one fails a test instead.
+#   4: + `portfolio.min_history_bars` (2026-09-09).  Inert at the shipped config for the same reason
+#      the two above were: the value is 720 before and after, and only the shape of what is hashed
+#      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
+#      may be held at all, so changing it changes the book - found while asking whether the
+#      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
+CONSTRUCTION_PAYLOAD_VERSION = 6
+
+# Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
+# because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
+#
+# 2026-09-07, restart #5.  Recomputing both field sets against the one live config reproduced both
+# digests exactly - 22 fields -> 0dcd044d..., 23 fields -> b441ea62... - so no construction VALUE
+# changed, only the shape of what was hashed.  Operator ruled the pre-15:00Z rows are the same
+# construction, so M-010's window continues across the boundary instead of restarting.
+#
+# History is not rewritten: the old rows keep the digest they were written with.  The equivalence lives
+# here, in the reader, where it can be read and argued with.
+CONSTRUCTION_ALIASES: dict[str, str] = {
+    # v2 (+ unit_mode), recorded by the running loop from restart #5.
+    "b441ea62d02184bfb6292ec1033f20482bc9c7c0a2c6ebfcc14623241b967417": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v3 (+ the four regime_*), what the next restart will record.  Declared before it is ever written,
+    # which is the right order: the claim is about values that are already known to be unchanged.
+    "c0e5c49c5a4acb1d0e5bb709873ce38b0674c10a027405d5269dbb724d734d1c": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v4 (+ portfolio.min_history_bars), 2026-09-09.  Declared before it is ever written, same as v3,
+    # and on the same proof: recomputed against the shipped config the value is 720 on both sides of
+    # the change, so only the shape of what is hashed moved.  Without this alias the next restart would
+    # reset M-010's 30-day window - which has been running unbroken since 2026-09-04T15:02Z - for a
+    # book that is byte-identical.
+    "dd32720d3faf5ab0e6a2934a76e9d26489095d7b5a7d19d537bcef44751a7cf6": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v5 (+ portfolio.sleeve_max_gross), 2026-09-12 (P30).  Declared before it is ever written, on the
+    # same proof as v3 and v4: recomputed against the shipped profile the value is 0.0 on both sides of
+    # the change - the profile does not name the key and 0.0 is off - so only the shape of what is
+    # hashed moved.  `cap_gross(x, 0.0)` returns `x` and the main book is passed 0.0 regardless, which a
+    # test asserts on the two-book path rather than leaving to this comment.  Without the alias the next
+    # restart would reset M-010's window for a book that is byte-identical.
+    "ab3cb75fb2f8d94813aa44c5b6d869c34bf82bcc78757bf1fcfa0bba4e16e1b3": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v6 (+ rebalance.exempt_reductions, + exits.stale_carry_bars, + inputs.dropped_after), 2026-09-13.  Declared before it is ever written, on the same
+    # proof as v3, v4 and v5: the shipped profile does not name the key and False is off, so recomputed
+    # against it the value is False on both sides of the change and only the shape of what is hashed
+    # moved.  What `False` means is the literal previous expression - the participation cap exempts a
+    # full close and nothing else - which the rebalancer and the backtest replay both assert rather
+    # than leaving to this comment.  `stale_carry_bars` rides the same version and the same proof by a
+    # different route: it is inert on the LIVE path, because `ExitOverlay.apply` skips a symbol whose
+    # close is missing before `exit_step` is reached, so the live construction is unchanged whatever
+    # the value reads.  `dropped_after` is the third, and it is the one that had to be MADE true: the
+    # rule it names - hold a symbol whose bars did not arrive, rather than flattening and re-opening
+    # it next cycle - shipped at 3, which is a different book.  It ships at 1 instead, which is the
+    # behaviour it was written to make visible, so the proof reads the same way as the other two and
+    # raising it stays a priced decision rather than a side effect of deploying a fix.  Without the
+    # alias the next restart would reset M-010's 30-day window, unbroken since 2026-09-04T15:02Z,
+    # for a book that is byte-identical.
+    "18b8b20fb6273b90070cff33a06dff62da98de5e7eebdfef51990ac372c55b85": (
+        "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+}
+
+
+def canonical_construction(digest: str | None) -> str | None:
+    """The digest a row's construction should be COMPARED as.
+
+    One hop only, never a chain: a chain would make the answer depend on resolution order, and a test
+    holds every alias target out of the table's own keys so the single hop is always enough.
+    """
+    if digest is None:
+        return None
+    return CONSTRUCTION_ALIASES.get(str(digest), str(digest))

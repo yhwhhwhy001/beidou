@@ -31,18 +31,16 @@ from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_governance.policy import Policy, policy_digest
 from beidou_live import soak
+from beidou_live.account_shape import margin_mode_problems
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
+from beidou_live.construction import CONSTRUCTION_PAYLOAD_VERSION
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardDecision, GuardParams, describe_guard_reason, evaluate_guards
-from beidou_live.health import (
-    CONSTRUCTION_PAYLOAD_VERSION,
-    margin_mode_problems,
-    min_liquidation_distance,
-)
 from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
+from beidou_live.liquidation import min_liquidation_distance
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import PlannedOrder, RebalanceParams, flatten_orders, plan_rebalance
@@ -2098,7 +2096,7 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # v5 (P30, 2026-09-12).  A per-bar gross cap on each non-main book, applied before its
             # fraction.  It is 0.0 - off - in the shipped profile and in every profile that does not
             # name it, so this field's arrival moves the digest without moving a weight; the alias in
-            # `health.CONSTRUCTION_ALIASES` is declared with that proof, same as v3 and v4.  It belongs
+            # `construction.CONSTRUCTION_ALIASES` is declared with that proof, same as v3 and v4.  It belongs
             # in the fingerprint rather than only in the research CLI because turning it on WOULD change
             # every weight of a book the loop holds, and D-036's other half was `LiveConfig` not
             # carrying `vol_target`: a knob the record cannot see is a knob that moves silently.

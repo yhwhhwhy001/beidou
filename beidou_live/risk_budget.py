@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
 
-from beidou_live.health import canonical_construction
+from beidou_live.construction import canonical_construction
 
 DAY_MS = 86_400_000
 
