@@ -439,6 +439,7 @@ def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
 
     The literal reading is still computed and printed.  Ruling it out of the gate is not deleting it.
     """
+    from beidou_governance.policy import Policy
     from beidou_governance.promote import closed, read_log
     from beidou_live.soak import render, score
 
@@ -447,7 +448,15 @@ def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
         raise click.ClickException(f"no soak record at {path}")
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     log = read_log(Path(root).resolve() / "governance" / "transactions.jsonl")
-    reading = score(rows, required_days=days, transactions_closed=closed(log) if log else None)
+    # R10: the phase list is the policy's, not this call site's.  `score`'s default happens to match it
+    # today, which is exactly how a threshold stops having one home - KILL-AR-20 put it in `Policy` and
+    # nothing read it from there.
+    reading = score(
+        rows,
+        required_days=days,
+        transactions_closed=closed(log) if log else None,
+        no_decision_phases=Policy().no_decision_phases,
+    )
     click.echo(render(reading))
     if check and not reading.passes:
         raise SystemExit(1)

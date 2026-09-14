@@ -1952,6 +1952,30 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-second raise OF THIS TABLE, 2026-09-14: +40 beidou_live, +9 beidou_cli, so that L3's gate
+    # can fail.
+    #
+    # `soak.passes` gates `live soak --check` on whether any ERROR cycle DECIDED anything, reading five
+    # keys off the cycle row.  `guarded_cycle` built that row from scratch in its exception handler,
+    # with `orders` hardcoded to `[]` and the other four absent - so `_decided` returned `()` on every
+    # engine-produced record and the no-decision half could not fail, whatever the loop had done.  The
+    # reachable case is ordinary: `run_cycle` executes orders and only then runs `_quarantine`,
+    # `_summarize` and `_finish_cycle`, so a raise in any of those three leaves fills on the venue and
+    # writes a row saying none were placed.  `test_l3s_criterion_is_ruled` asserted the gate worked by
+    # hand-building a row shape the writer could not emit: the test passed, the composition did not.
+    #
+    # Most of the 40 is the half that is not the fix.  Carrying the keys across made two of them
+    # readable for the first time, and for two of them emptiness is the WRONG question:
+    # `_risk_ladder` returns ten keys on the quietest cycle and is never `{}`, and a pinned universe
+    # writes `adopted: False` once a day - a proposal recorded and deliberately not taken.  Left as an
+    # emptiness test, this commit would have made every failed cycle look like a decision and let the
+    # loop measuring itself retire a book, which is KILL-AR-20 pointing the other way.  `_acted` asks
+    # `acting` and `adopted` instead, and four tests hold the distinction.
+    #
+    # `no_decisions()` is one function both halves name, so a sixth key cannot reach the reader without
+    # the writer gaining it.  The 9 in `beidou_cli` pass `Policy.no_decision_phases` into `score`,
+    # which R10 always meant to be the phase list's only home and which no call site read.
+    #
     # Twenty-first raise OF THIS TABLE, 2026-09-14: +4 beidou_live, for one assignment and the three
     # lines that say why it is there.
     #
@@ -2365,7 +2389,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_854,
+    "beidou_live": 8_894,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2415,7 +2439,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_127,
+    "beidou_cli": 6_136,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

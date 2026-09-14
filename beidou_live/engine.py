@@ -30,6 +30,7 @@ from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_governance.policy import Policy, policy_digest
+from beidou_live import soak
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
 from beidou_live.execution import ExecutionReport, execute_order
@@ -249,6 +250,8 @@ class LiveEngine:
         # A construction can only change at startup (the engine builds its model once - KILL-Q15), so
         # writing it on this process's first cycle records every change exactly once.
         self._construction_recorded = False
+        # The cycle currently in flight, for the ERROR path to read.  None between cycles.
+        self._cycle_record: dict[str, Any] | None = None
         # `state` is the way in for a caller that must run WITHOUT a readable state file.
         # `store.load()` refuses a corrupt one on purpose (it is the only copy of the income
         # watermark, the equity high-water mark and the exit anchors), and `beidou live run`
@@ -625,6 +628,7 @@ class LiveEngine:
             )
 
     async def guarded_cycle(self, bar_open_ms: int) -> dict[str, Any] | None:
+        self._cycle_record = None
         try:
             record = await self.run_cycle(bar_open_ms)
         except Exception as exc:
@@ -642,6 +646,14 @@ class LiveEngine:
             # without this the only trace of an outage is a log line (that is how the -1023 on 2026-09-04
             # left no record).  No `equity` key, so the drift check keeps ignoring it; `bar_open_ms` puts it
             # in the right day, and the targets still in force are carried so the daily report stays readable.
+            # L3 / KILL-AR-20 reads five keys off this row to ask whether a failed cycle DECIDED
+            # anything.  They used to be absent (and `orders` a literal `[]`), so the answer was always
+            # "no" and the gate could not fail: `run_cycle` places orders and only then runs
+            # `_quarantine`, `_summarize` and `_finish_cycle`, so a raise in any of those three left
+            # fills on the venue and a row saying none were placed.  `no_decisions()` is the empty
+            # shape; the partial record overlays whatever this cycle got as far as doing.
+            partial: dict[str, Any] = self._cycle_record or {}
+            decided = soak.no_decisions() | {k: v for k, v in partial.items() if k in soak.DECISION_KEYS}
             self.store.append_cycle(
                 {
                     "bar_open_ms": bar_open_ms,
@@ -651,8 +663,8 @@ class LiveEngine:
                     "consecutive_errors": self.consecutive_errors,
                     "window_seconds": self.rebalance_window,
                     "targets": dict(self.state.last_targets),
-                    "orders": [],
                     "dry_run": self.config.dry_run,
+                    **decided,
                 }
             )
             logger.exception("cycle %s failed", bar_open_ms)
@@ -843,6 +855,9 @@ class LiveEngine:
             "orders": [],
             "skipped": [],
         }
+        # The same object the rest of this method mutates.  `guarded_cycle` reads it when a cycle
+        # raises, so an ERROR row can carry the decisions already taken instead of asserting none.
+        self._cycle_record = record
         self._construction_recorded = True
         await self._announce_guards(decision, bar_open_ms)
         # M-Q06.  Before the skip check on purpose: a book approaching liquidation while a guard has
