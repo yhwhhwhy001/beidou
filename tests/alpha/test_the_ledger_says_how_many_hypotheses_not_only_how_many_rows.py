@@ -1,0 +1,106 @@
+"""A bucket's row count is not its hypothesis count, and the report has to say both.
+
+2026-09-14.  The `mined` bucket held 2,731 rows and 676 distinct `param_key`s - 4.04 rows per
+hypothesis - because `signature` folds on `(param_key, range, symbols, construction, overlay,
+symbol set, search space)` and a re-run under a moved `range_end` is deliberately a second trial
+(KILL-Q5, conservative by design).  That is the rule and this file does not touch it: `n_trials`
+is unchanged by everything here.
+
+What went wrong is a READING.  An analysis read 2,731 as "2,731 candidates were tried", concluded
+the space had been searched 2,731 ways, and judged the miner on it.  Nothing in any artefact
+contradicted that reading, because no artefact carried the other number.  `dsr_inputs` already
+reports `ledger_rows`, `ledger_trials`, `duplicate_rows` and `replayed_rows` - four ways of
+counting the same rows - and not once how many distinct hypotheses those rows are about.
+
+So this adds a fifth field that is reported and never gated, for the same reason `all_trials`
+exists: a number nobody can see is a number nobody can argue with.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from beidou_alpha.validation.ledger import (
+    LEDGER_ENV,
+    TrialRecord,
+    dsr_inputs,
+    ledger_redirection,
+    resolve_ledger_path,
+)
+
+
+def _row(param_key: str, *, range_end: str = "2026-09-06", construction: str = "aaaa") -> TrialRecord:
+    return TrialRecord(
+        strategy="mined",
+        param_key=param_key,
+        sharpe_annual=1.0,
+        bars_per_year=8760.0,
+        recorded_at="2026-09-09T08:29:15+00:00",
+        range_start="2021-01-01",
+        range_end=range_end,
+        symbols=205,
+        run_id="r1",
+        construction_digest=construction,
+    )
+
+
+def test_one_hypothesis_charged_under_three_contexts_is_three_trials_but_one_hypothesis() -> None:
+    """The 2026-09-09 shape: same expression, moved `range_end`/construction, charged again."""
+    prior = [
+        _row("squash(rangepos(24), 0.5)"),
+        _row("squash(rangepos(24), 0.5)", range_end="2026-09-08"),
+        _row("squash(rangepos(24), 0.5)", range_end="2026-09-08", construction="bbbb"),
+    ]
+
+    out = dsr_inputs(prior, {}, 8760.0)
+
+    assert out["ledger_trials"] == 3, "the gate's caliber is unchanged: three signatures, three trials"
+    assert out["distinct_hypotheses"] == 1, "but they are one hypothesis, and the report must say so"
+
+
+def test_distinct_hypotheses_counts_param_keys_not_rows() -> None:
+    prior = [_row("a"), _row("a", range_end="2026-09-08"), _row("b"), _row("c")]
+
+    assert dsr_inputs(prior, {}, 8760.0)["distinct_hypotheses"] == 3
+
+
+def test_an_empty_ledger_has_no_hypotheses() -> None:
+    assert dsr_inputs([], {}, 8760.0)["distinct_hypotheses"] == 0
+
+
+def test_the_new_field_does_not_move_the_gate() -> None:
+    """`n_trials` is what `oos_selection_threshold` reads.  This round must not touch it."""
+    prior = [_row("a"), _row("a", range_end="2026-09-08"), _row("b")]
+
+    out = dsr_inputs(prior, {"grid": 0.01}, 8760.0)
+
+    assert out["n_trials"] == 4, "3 ledger signatures + 1 current grid point, exactly as before"
+
+
+def test_a_redirected_ledger_says_where_it_went(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`BEIDOU_TRIALS_LEDGER` is the one way to not be charged, and it was invisible.
+
+    `resolve_ledger_path`'s docstring calls the variable's "only possible purpose ... to not be
+    charged", and then returns the path with nothing saying it was overridden.  A command that
+    charges the shared ledger and a command that charges a scratch file printed the same thing.
+    """
+    monkeypatch.setenv(LEDGER_ENV, "/tmp/not-the-real-ledger.jsonl")
+
+    assert resolve_ledger_path() == __import__("pathlib").Path("/tmp/not-the-real-ledger.jsonl")
+    assert ledger_redirection() == "/tmp/not-the-real-ledger.jsonl"
+
+
+def test_an_unredirected_ledger_reports_no_redirection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(LEDGER_ENV, raising=False)
+
+    assert ledger_redirection() == ""
+
+
+def test_whitespace_only_is_not_a_redirection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`resolve_ledger_path` strips before testing; this must agree with it or the two disagree."""
+    monkeypatch.setenv(LEDGER_ENV, "   ")
+
+    assert ledger_redirection() == ""
+    assert os.environ[LEDGER_ENV] == "   "

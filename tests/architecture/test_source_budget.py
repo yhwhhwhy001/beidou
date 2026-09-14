@@ -1952,6 +1952,39 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Thirteenth raise, 2026-09-14, and the sentence the rule requires: +63 beidou_alpha, +59
+    # beidou_cli, bought by a misreading that no artefact could have contradicted.  The `mined` bucket
+    # held 2,731 rows and 676 distinct `param_key`s - 4.04 rows per hypothesis, deliberately, because
+    # `signature` folds on the data range and the construction too (KILL-Q5, conservative by design).
+    # Every number the reports carried counted ROWS: `charged`, `candidates`, `declared_remainder`,
+    # `family_prior.before/after`, `ledger_rows`, `ledger_trials`, `duplicate_rows`, `replayed_rows`.
+    # Eight fields, one quantity.  So an analysis read `family_prior.after` as a candidate count,
+    # concluded the space had been searched 2,731 ways, and judged the miner on it; nothing on disk
+    # said otherwise.  `distinct_hypotheses` is the ninth field and the first that counts something
+    # else.  It is REPORTED and never gated - `n_trials` is untouched and so is the folding rule, both
+    # pinned by tests - for the reason `all_trials` exists: a number nobody can see is a number nobody
+    # can argue with.
+    #
+    # The second half is `scoring_reproduction`, and it is the more expensive one because it needed a
+    # comparison that did not exist.  R2 refuses a re-run of an enumerated space unless `--reauthorize`
+    # carries a reason, and the reasons have been specific and checkable.  Nothing has ever recorded
+    # whether one came true.  On 2026-09-09 one did not: 09:50Z charged 658 rows under "3b49af8 fixed
+    # the 90 metrics errors, re-run them" and returned all 658 Sharpes identical to 08:29Z, the same 90
+    # errors included, because that fix had not reached this path (`f4ea9de`, that evening, is what
+    # collected them at 17:25Z).  A round whose authorisation did not come true, charged in full, and
+    # the only way to learn it was to diff two reports by hand.  Whether such rows stay charged is
+    # Q7's kind of ruling and nothing here makes it - `bought_nothing` is printed and filed, not
+    # enforced.
+    #
+    # The cheapest of the three is `ledger_redirection`, ~14 lines: `resolve_ledger_path` calls
+    # `BEIDOU_TRIALS_LEDGER` a variable "whose only possible purpose is to not be charged" and then
+    # returned the path with nothing saying it had been overridden, so a run that charged the shared
+    # book and a run that charged a scratch file printed the same thing.  Reported, never refused -
+    # every test that writes a ledger redirects it, and a guard would break them.
+    #
+    # Most of the 122 lines are docstrings, and that is the point of them: each of the three states
+    # the incident it exists for, because the next reader's failure mode is the one this entry is
+    # about - reading a number without knowing what it counts.
     # Twelfth raise, 2026-09-14, and the sentence the rule requires: +33 beidou_live, +3 beidou_cli for
     # M-007's bar.  Two numbers governed one quantity and the looser one was doing the judging: this
     # metric compared realized standing margin against the PLAN's 50%, while the profile declares
@@ -2023,7 +2056,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_588,
+    "beidou_alpha": 8_651,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2124,7 +2157,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 5_945,
+    "beidou_cli": 6_004,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
