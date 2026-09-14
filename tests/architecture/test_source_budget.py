@@ -1952,6 +1952,32 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-third raise OF THIS TABLE, 2026-09-15: +60 beidou_live, so the venue and market ports
+    # describe what the engine reads off them.
+    #
+    # `ports.py` already carries this lesson in its own words, about `SignalModel`: *a protocol that
+    # omits what the caller actually reads has stopped describing the contract*, written after mypy saw
+    # one of four accesses and said nothing about the other three.  `Venue` and `MarketData` had the
+    # same defect and it ran in both directions at once.  Seven members the engine probes -
+    # `sync_clock`, `hedge_mode`, `margin_mode`, `leverage_brackets`, `mark`, `server_time_ms`,
+    # `client` - appeared nowhere in the file.  And two that DID appear, `venue_time_ms` and
+    # `user_trades`, were declared REQUIRED while every call site probed them and fell back: to the
+    # host clock, which is D-030's silent hour, and to full attribution, which is D-032's.
+    #
+    # `getattr(obj, "name", None)` is invisible to a type checker by construction, so the guard cannot
+    # be mypy and the declaration alone would rot. `VenueProbes` / `MarketDataProbes` hold the optional
+    # surface, and `test_the_ports_describe_what_the_engine_reads.py` compares the set of names the
+    # engine probes against the set the ports declare - in both directions, so a tenth probe fails and
+    # a stale declaration fails too.  `funding_history` is the one exemption and it is named with its
+    # reason: that probe REFUSES (D-023 closing KILL-027) rather than falling back, which is what makes
+    # it required.
+    #
+    # The test cost the omission was hiding, now visible: `FakeMarketData` had no `server_time_ms`, so
+    # every engine test built on it took `_clock_skew`'s all-None branch and D-025's skew/alignment/jump
+    # instrumentation was reachable only through one bespoke subclass.  It is now a setting on the
+    # shared fake.  Absence stays the DEFAULT on purpose - flipping it changed what two hundred existing
+    # tests measure, and broke two of them, one of which says `# no server_time_ms` in its own body.
+    #
     # Twenty-second raise OF THIS TABLE, 2026-09-14: +40 beidou_live, +9 beidou_cli, so that L3's gate
     # can fail.
     #
@@ -2389,7 +2415,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_894,
+    "beidou_live": 8_954,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

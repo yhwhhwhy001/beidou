@@ -65,12 +65,72 @@ class Venue(Protocol):
 
     async def income(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]: ...
 
+
+class VenueProbes(Protocol):
+    """What the engine reads off a venue with ``getattr``, declared.
+
+    Seven members used to be missing from this file entirely and two more (``venue_time_ms``,
+    ``user_trades``) were declared REQUIRED on :class:`Venue` while every call site probed them and
+    fell back.  The port was wrong in both directions at once, and the lesson is already written two
+    protocols down: *a protocol that omits what the caller actually reads has stopped describing the
+    contract*.
+
+    They are genuinely optional - the paper venue has no leverage brackets, the fake market feed has no
+    REST client - so they live here rather than on :class:`Venue`, and the engine still probes.  What
+    changes is that the probe now has something to check itself against: an adapter that means to
+    supply one of these can be type-checked against this protocol, and
+    ``tests/live/test_the_ports_describe_what_the_engine_reads.py`` fails if a call site starts reading
+    a tenth member that nobody declared.
+
+    The one to be careful with is ``venue_time_ms``.  D-030 is the hour of attribution that went to the
+    wrong cycle because the income window was asked for on the host clock; the fallback when this is
+    absent is that same host clock, which is why its absence is worth seeing in a type rather than
+    discovering in a reconciliation.
+    """
+
     def venue_time_ms(self) -> int:
-        """Now on the venue's clock.  ``income`` bounds are venue timestamps, not host ones."""
+        """Now on the venue's clock.  ``income`` bounds are venue timestamps, not host ones (D-030)."""
         ...
 
     async def user_trades(self, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
         """Fills in the window, carrying both the trade id and the order id (D-032)."""
+        ...
+
+    async def sync_clock(self) -> int:
+        """Establish the venue offset up front rather than on the first ``-1021``."""
+        ...
+
+    async def hedge_mode(self) -> bool:
+        """True when the account is in dual-side mode, which the loop refuses to start against."""
+        ...
+
+    async def margin_mode(self) -> Mapping[str, Any]:
+        """Account margin shape, for KILL-R19's refusal."""
+        ...
+
+    async def leverage_brackets(self) -> Mapping[str, int]:
+        """Per-symbol venue leverage caps, for D-016's derivation."""
+        ...
+
+    def mark(self, closes: Mapping[str, float]) -> None:
+        """Paper venue only: move marks onto the newest closed bar."""
+        ...
+
+
+class MarketDataProbes(Protocol):
+    """The same, for the market data port."""
+
+    def server_time_ms(self) -> Any:
+        """The feed's own clock, for D-025's skew/alignment/jump instrumentation.
+
+        Awaited by the caller.  A feed without it makes `_clock_skew` return all-None, which is a
+        reading the daily report can show as absent - not a zero it would show as healthy.
+        """
+        ...
+
+    @property
+    def client(self) -> Any:
+        """The underlying REST client, for DL-Q6's metrics snapshot."""
         ...
 
 
