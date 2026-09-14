@@ -53,6 +53,13 @@ class PortfolioParams:
     # 1.372 gross against tsmom's 0.859, so a third of it is closer to half a main book.  0 is off, and
     # off is bit-identical - the knob ships into a loop that is holding positions.
     sleeve_max_gross: float = 0.0
+    # D2 (2026-09-14).  Must be flipped together with `beidou_live.rebalancer.RebalanceParams`, on the
+    # `exempt_reductions` rule: the two halves replay the same band and only agree because they are
+    # written to the same sentence.  "Never hold a position smaller than the absolute band" - live,
+    # such a position can never be closed again, because the largest gap a zero target can ask for is
+    # |current|, which is inside the band by construction.  Off is bit-identical: `apply_no_trade_band`
+    # is only reached at all when `no_trade_band > 0`, and False leaves its recursion untouched.
+    flat_inside_band: bool = False
 
     def __post_init__(self) -> None:
         if self.vol_target <= 0 or self.min_asset_vol <= 0 or self.max_weight <= 0 or self.max_gross <= 0:
@@ -272,15 +279,25 @@ def build_weights(
     weights = stage2.mul(factor, axis=0)
     weights = weights.where(aligned.notna().any(axis=1).cummax(), other=np.nan)
     if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
-        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band)
+        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band, params.flat_inside_band)
     return weights
 
 
-def apply_no_trade_band(weights: pd.DataFrame, band: float, relative: float = 0.0) -> pd.DataFrame:
+def apply_no_trade_band(
+    weights: pd.DataFrame, band: float, relative: float = 0.0, flat_inside: bool = False
+) -> pd.DataFrame:
     """Keep the previous weight when |Δw| < max(band, relative * |w_prev|).
 
     Path dependent.  Exits to exactly zero, entries from zero and sign flips
     are always executed; only same-direction resizing is suppressed.
+
+    ``flat_inside`` is D2's backtest half and must be flipped together with
+    ``beidou_live.rebalancer.RebalanceParams.flat_inside_band``: a weight
+    strictly inside the absolute band is taken as flat, because live that is
+    a position the planner can never close again - the largest gap a zero
+    target can ask for is ``|current|``, which is inside the band by
+    construction.  Applied to the raw row, before the band's own recursion,
+    so the suppressed-resize rule still sees the target the model asked for.
     """
     values = weights.to_numpy(dtype=float)
     out = np.empty_like(values)
@@ -291,6 +308,8 @@ def apply_no_trade_band(weights: pd.DataFrame, band: float, relative: float = 0.
             out[t] = np.nan
             continue
         current = np.where(np.isnan(row), 0.0, row)
+        if flat_inside:
+            current = np.where(np.abs(current) < band, 0.0, current)
         threshold = np.maximum(band, relative * np.abs(previous))
         same_direction = (np.sign(current) == np.sign(previous)) & (current != 0.0) & (previous != 0.0)
         small = (np.abs(current - previous) < threshold) & same_direction
@@ -343,5 +362,5 @@ def combine_books(books: Mapping[str, pd.DataFrame], params: PortfolioParams) ->
     clipped = total.clip(-params.max_weight, params.max_weight)
     weights = cap_gross(clipped, params.max_gross).where(valid, other=np.nan)
     if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
-        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band)
+        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band, params.flat_inside_band)
     return weights

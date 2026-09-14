@@ -224,7 +224,7 @@ def margin_mode_problems(
 #      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
 #      may be held at all, so changing it changes the book - found while asking whether the
 #      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
-CONSTRUCTION_PAYLOAD_VERSION = 6
+CONSTRUCTION_PAYLOAD_VERSION = 7
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
@@ -280,6 +280,25 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # for a book that is byte-identical.
     "18b8b20fb6273b90070cff33a06dff62da98de5e7eebdfef51990ac372c55b85": (
         "0dcd044d0158c6aec263429eab9cdba9449dba0b55b07807dfd0e3d3a3a9b6e0"
+    ),
+    # v7 (+ rebalance.exempt_crossings, + rebalance.flat_inside_band), 2026-09-14.  The first alias
+    # whose target is NOT `0dcd044d...`: vol_target went 0.30 -> 0.60 on 2026-09-13 (72034790), which
+    # is a real construction change, and `46b8d731...` is what the armed loop has recorded since.
+    #
+    # Declared before either key is ever written, on the same proof as v3-v6: the shipped profile
+    # names neither and False is off for both, so recomputed against it the values are False on both
+    # sides and only the shape of what is hashed moved.  Both Falses are the literal previous
+    # expression and both are asserted rather than argued here -
+    # `test_the_shipped_default_is_todays_live_book_not_the_backtests` pins that the band still
+    # swallows a close to zero, and `test_the_shipped_default_still_creates_the_stub` replays the
+    # 2026-09-14T10:00Z fill that left -11.19 USDT of ENAUSDT standing.
+    #
+    # This alias carries more weight than its predecessors: since 2026-09-14 the construction is
+    # frozen to 2026-10-13T19:00Z, so without it the next restart would not merely reset M-010's
+    # window, it would break an operator ruling.  Which is also the reason both knobs ship off:
+    # turning either ON is a construction change and belongs to the operator, after the freeze.
+    "ccd7bb9764b5fe0cf170f4943fedeb67ca8ec39a790903ec649ef7705d1d82f2": (
+        "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
     ),
 }
 
