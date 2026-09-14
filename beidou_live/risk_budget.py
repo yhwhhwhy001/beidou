@@ -21,6 +21,7 @@ from itertools import pairwise
 from typing import Any
 
 from beidou_live.construction import canonical_construction
+from beidou_live.cycle_record import latest
 
 DAY_MS = 86_400_000
 
@@ -90,11 +91,9 @@ def _latest_ms(rows: Sequence[Mapping[str, Any]]) -> int:
 
 def _latest_collateral_share(rows: Sequence[Mapping[str, Any]]) -> float | None:
     """The newest cycle that recorded one; ``None`` when none did (the field is newer than the log)."""
-    for row in reversed(rows):
-        share = (row.get("collateral") or {}).get("share")
-        if isinstance(share, int | float):
-            return float(share)
-    return None
+    block = latest(rows, "collateral")
+    share = block.get("share") if isinstance(block, Mapping) else None
+    return float(share) if isinstance(share, int | float) else None
 
 
 def collateral_drift(rows: Sequence[Mapping[str, Any]], attribution: Sequence[Mapping[str, Any]]) -> dict[str, Any]:

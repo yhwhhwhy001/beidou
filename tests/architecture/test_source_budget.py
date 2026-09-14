@@ -1952,6 +1952,38 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-sixth raise OF THIS TABLE, 2026-09-15: +155 beidou_live - the cycle record given a
+    # declaration, and its ledger reader stopped re-parsing from byte zero.
+    #
+    # `cycles.jsonl` is the widest interface in this package: ~42 keys written by three methods, read by
+    # six modules under 192 distinct `.get()` names, declared nowhere.  Every defect found in this
+    # package over the last two days was the same shape - one writer and one reader disagreeing about a
+    # key, with nowhere for the disagreement to surface.  `cycle_record.KEYS` is the declaration and
+    # `test_the_cycle_record_is_declared.py` is the join, run against the ENGINE rather than a
+    # hand-built dict, because a hand-built row is exactly what let the L3 test pass while the
+    # composition was wrong.  It earned its keep immediately: `crowding` and `metrics_snapshot` were
+    # written by `run_cycle` and described in no declaration this commit's author had written.
+    #
+    # It is NOT a typed row, and that is a decision rather than an omission.  A field's absence in an
+    # old row means "written before this field existed", so the readers' `.get()` plus `isinstance` is
+    # correct handling; a dataclass with required fields would refuse to read the history the file
+    # exists to keep.  What was missing was a place to compare, not types.
+    #
+    # The reader: `run_cycle` reads `cycles.jsonl` and `attribution.jsonl` twice each per cycle and
+    # `report daily` reads cycles eleven times, and each read re-parsed the whole file - ~7 MB per cycle
+    # at 319 rows, and the ledger grows ~48 MB a year, so ~190 MB re-parsed per cycle after a year.
+    # `_append` writes whole lines and never rewrites one, so the parse now resumes from the cached
+    # byte offset, with a full re-read whenever the file disagrees with the cache in ANY way (shrink,
+    # rewrite, mtime backwards, or an offset that is not on a row boundary).  Eight tests, one of which
+    # counts `json.loads` calls rather than trusting a clock.
+    #
+    # What this commit deliberately did NOT do: collapse the "seven near-identical backwards scans" the
+    # review counted.  Reading them, they are not near-identical - `verify`'s three carry three
+    # different predicates and one spends a paragraph on why it cannot be another, and
+    # `reports.evidence_window`'s is not a lookup but a walk back to where the current construction run
+    # began.  Folding those into a helper would delete the explanations, which is the opposite of
+    # concentrating anything.  `latest()` takes the one question that really was asked twice.
+    #
     # Twenty-fifth raise OF THIS TABLE, 2026-09-15: +178 beidou_alpha, and beidou_live ratcheted DOWN
     # by 67 - R8's state machine lifted out of the engine.
     #
@@ -2459,7 +2491,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_921,
+    "beidou_live": 9_076,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
