@@ -1,4 +1,15 @@
-"""``beidou governance`` - Phase 0 is read-only: replay the rules, write nothing.
+"""``beidou governance`` - replay the rules; the commands that RULE on something record that they did.
+
+This line said "Phase 0 is read-only: replay the rules, write nothing" until 2026-09-14.  `gate`'s own
+docstring was corrected the same day after a session ran it as a read-only check; this one is the same
+sentence one level up, and a reader meets it first.  Four commands here write: `gate` and `recheck`
+append to `governance/verdicts.jsonl`, `enable` writes its flag file, `replay --out` writes its
+artefact.  The claim was true when Phase 0 only replayed and nothing updated it when commands that rule
+were added beside the ones that only read.
+
+Kept as a correction rather than a deletion because it was wrong about something worth keeping:
+recording a ruling is not ACTING on one.  Nothing here retires, promotes, or touches the registry or
+`governance_state.json` - `governance advance` does that.  "Write nothing" was the wrong way to say it.
 
 The git reading lives here rather than in `beidou_governance` deliberately.  What the registry has
 cited, and when, is a fact about this checkout's history; keeping it out of the package is what lets
@@ -503,6 +514,16 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     "read-only check" on the strength of the old first line and appended a row it had not intended.
     Same shape as 2026-09-08's "a command that claims not to charge is charging" - a docstring that
     contradicts its own code is a defect whoever reads it next inherits.
+
+    Before deleting the write to make the word true again: the duplicate problem it looks like was
+    already solved on 2026-09-12, the other way round.  A ruling is `(gate, subject, call, reasons)`
+    and re-reading an unchanged one collapses on read, so running this twice does not put two rows into
+    M-G05's denominator; idempotence was keyed on the DATE until then, which left the hole one day wide.
+    `tests/governance/test_a_reread_of_a_ruling_is_not_a_second_verdict.py` carries that history - and
+    calls this command "a read-only command" in the course of fixing it, which is where the phrase in
+    the two corrected sentences above came from.  The reasons carry the numbers, so a gate whose N moved
+    IS a new ruling and correctly lands its own row; the row written on 2026-09-14 is one of those, not
+    a stray.
 
     What it does not do stays true after the merge that gave `lifecycle.apply` a production caller.
     A FAIL is an event for the state machine (`FAMILY_GATE_FAILED` -> retired), and `governance advance`
