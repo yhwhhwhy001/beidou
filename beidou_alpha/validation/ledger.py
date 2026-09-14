@@ -37,6 +37,22 @@ def _checkout_root(start: Path) -> Path | None:
     return None
 
 
+def ledger_redirection() -> str:
+    """Where ``LEDGER_ENV`` is pointing the ledger, or "" when it is not set.
+
+    Separate from ``resolve_ledger_path`` because the two answer different questions and only one of
+    them has an answer worth printing: the path is what to write, this is whether the shared, tracked
+    ledger is being written at all.  The docstring below calls the variable's "only possible purpose
+    ... to not be charged", and then nothing downstream could tell.  A command that charges the one
+    ledger and a command that charges a scratch file rendered identically, so the one loophole this
+    module names out loud was also the one it reported nothing about.
+
+    Reported, never refused: redirecting is legitimate (every test that writes a ledger does it), and
+    a guard here would break them.  What it may not be is silent.
+    """
+    return os.environ.get(LEDGER_ENV, "").strip()
+
+
 def resolve_ledger_path(*, out: str | Path | None = None, root: Path | None = None, start: Path | None = None) -> Path:
     """The one ledger.  ``out`` is accepted and ignored, which is the entire point of this function.
 
@@ -49,7 +65,7 @@ def resolve_ledger_path(*, out: str | Path | None = None, root: Path | None = No
     Per checkout, deliberately: the ledger is a tracked file, so a worktree's rows reach the others by
     merging, the same path every other artefact here takes.
     """
-    override = os.environ.get(LEDGER_ENV, "").strip()
+    override = ledger_redirection()
     if override:
         return Path(override)
     anchor = root if root is not None else _checkout_root(start or Path.cwd())
@@ -247,5 +263,11 @@ def dsr_inputs(
         "ledger_rows": len(prior),
         "duplicate_rows": len(prior) - len(distinct),  # exact copies of an earlier row
         "replayed_rows": len(distinct) - len(unique),  # the current grid re-run on the same data
+        # How many distinct HYPOTHESES those rows are about.  Reported, never gated - `n_trials` above
+        # is untouched, and `signature`'s folding rule is untouched with it.  It exists because the
+        # four counts beside it all count rows, so an artefact could say 2,731 four different ways and
+        # never once say 676.  An analysis read the former as the latter and judged the miner on it;
+        # nothing in any artefact could contradict the reading, which is the failure this closes.
+        "distinct_hypotheses": len({record.param_key for record in prior}),
         "pooled_sharpes": len(pooled),
     }

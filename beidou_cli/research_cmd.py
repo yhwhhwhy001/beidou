@@ -21,7 +21,7 @@ import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
 from beidou_alpha.mining import enumerate_candidates, to_signal
-from beidou_alpha.mining.search import SearchResult
+from beidou_alpha.mining.search import SearchResult, scoring_reproduction
 from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams, DrawdownThrottleParams, apply_drawdown_throttle
@@ -46,10 +46,12 @@ from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.decompose import decompose_book
 from beidou_alpha.validation.labels import forward_returns
 from beidou_alpha.validation.ledger import (
+    LEDGER_ENV,
     MINED_SEARCH_STRATEGY,
     TrialRecord,
     all_trials,
     dsr_inputs,
+    ledger_redirection,
     ledger_scope,
     parse_ledger,
     resolve_ledger_path,
@@ -1825,6 +1827,25 @@ def _prior_search(search: SearchResult, reports_dir: Path) -> str | None:
     return None
 
 
+def _reproduction_of(rows: list[dict[str, Any]], prior_run: str | None, reports_dir: Path) -> dict[str, Any]:
+    """What this round's scores say against the round whose space it re-enumerated.
+
+    `prior_run` is `_prior_search`'s answer and may carry a parenthesised caveat, so only the leading
+    filename is used.  A round with no predecessor gets `compared: 0` and `bought_nothing: false` -
+    nothing to reproduce is not the same fact as reproducing everything, and the vacuous true would
+    fire on exactly the rounds doing the work.
+    """
+    if not prior_run:
+        return scoring_reproduction([], rows) | {"of": None}
+    name = prior_run.split(" ", 1)[0]
+    try:
+        payload = json.loads((reports_dir / name).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return scoring_reproduction([], rows) | {"of": None, "unreadable": name}
+    previous = payload.get("candidates") if isinstance(payload, dict) else None
+    return scoring_reproduction(previous if isinstance(previous, list) else [], rows) | {"of": name}
+
+
 def _search_space_version(strategy: str, grids: str = "") -> str:
     """For a mined id, how wide the search that produced it was.  Empty for hand-written strategies.
 
@@ -2947,7 +2968,8 @@ def research_mine(
         f"({json.dumps(search.rejected)}) space={search.space_digest} "
         f"on {len(panel.symbols)} symbols x {len(panel.index)} bars"
     )
-    prior_run = _prior_search(search, Path(out).parent if out else Path("reports/research"))
+    reports_dir = Path(out).parent if out else Path("reports/research")
+    prior_run = _prior_search(search, reports_dir)
     if prior_run is not None and not reauthorize:
         raise click.ClickException(
             f"R2: this search space was already enumerated by {prior_run}.  Re-running it charges the "
@@ -3163,25 +3185,62 @@ def research_mine(
     # replay after the range has moved charges every candidate again - conservative by design (KILL-Q5),
     # and +514 rows on 2026-09-08 with nothing on the terminal saying so.  `before` is the difference,
     # exact because `_record_trials` appends only signatures the file did not already hold.
-    family_prior = (
-        len(unique_trials(parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), MINED_SEARCH_STRATEGY)))
-        if ledger_path.exists()
-        else 0
-    )
+    ledger_lines = ledger_path.read_text(encoding="utf-8").splitlines() if ledger_path.exists() else []
+    family_prior = len(unique_trials(parse_ledger(ledger_lines, MINED_SEARCH_STRATEGY))) if ledger_lines else 0
     # `evaluated` counts expressions the enumerator looked at, including those the caps rejected before
     # any data was touched; only the kept ones have a hash to charge.  The remainder is stated rather
     # than absorbed, so nobody has to rediscover that the two numbers differ.
     remainder = search.declared_trials - len(search.candidates)
+    # How many distinct HYPOTHESES the family's denominator is about, beside how many rows it is.  Every
+    # other number in this block counts rows, so the artefact could say 2,731 four ways and never once
+    # say 676 - and on 2026-09-14 an analysis read `family_prior.after` as a candidate count and judged
+    # the miner on it.  Read back off the file like `family_prior`, never derived from this run.
+    distinct_hypotheses = (
+        len({record.param_key for record in parse_ledger(ledger_lines, MINED_SEARCH_STRATEGY)}) if ledger_lines else 0
+    )
     payload["ledger"] = {
         "path": str(ledger_path),
+        # Where the rows went, when that is not the one ledger.  `resolve_ledger_path` calls this
+        # variable's "only possible purpose ... to not be charged"; until now a redirected run and a
+        # charging run produced identical output, so the loophole this module names out loud was the
+        # one it reported nothing about.  Empty string means the shared, tracked ledger was written.
+        "redirected_to": ledger_redirection(),
         "charged": charged,
         "candidates": len(search.candidates),
         "declared_remainder": remainder,
         # The family's denominator in the artefact, not only on the terminal: 2026-09-08's report said
         # `charged: 514` - what the run did - and nothing about what the family cost afterwards.
-        "family_prior": {"strategy": MINED_SEARCH_STRATEGY, "before": family_prior - charged, "after": family_prior},
+        # `distinct_hypotheses` sits inside `family_prior` and not beside it on purpose: `after` is the
+        # number that was misread, so its companion belongs where the misreading happens.  Same key name
+        # as `dsr_inputs` uses for the same quantity - two names for one number is the shape this repo
+        # has had to unpick twice already.
+        "family_prior": {
+            "strategy": MINED_SEARCH_STRATEGY,
+            "before": family_prior - charged,
+            "after": family_prior,
+            "distinct_hypotheses": distinct_hypotheses,
+        },
     }
+    # Did the re-run its authorisation bought actually buy anything?  R2 records the REASON a space was
+    # re-enumerated and has never recorded whether the reason came true.  On 2026-09-09 one did not:
+    # 09:50Z charged 658 rows and returned all 658 Sharpes identical to 08:29Z, the same 90 errors
+    # included, because the fix its `--reauthorize` invoked had not reached this path.  Whether such a
+    # round stays charged is Q7's kind of ruling and nothing here makes it; it only stops being a thing
+    # you can learn solely by diffing two reports by hand.
+    payload["reproduction"] = _reproduction_of(rows, prior_run, reports_dir)
     path, digest = _write(out, run_id, payload, markdown)
+    if payload["ledger"]["redirected_to"]:
+        click.echo(
+            f"ledger REDIRECTED by {LEDGER_ENV} to {payload['ledger']['redirected_to']}: these "
+            f"{charged} row(s) are NOT in the shared book, so the family's denominator did not move"
+        )
+    if payload["reproduction"]["bought_nothing"]:
+        click.echo(
+            f"this round REPRODUCED {payload['reproduction']['of']} exactly: "
+            f"{payload['reproduction']['identical']}/{payload['reproduction']['compared']} candidates "
+            f"returned an identical reading, so the {charged} row(s) it charged bought no new score.  "
+            "Whether they stay charged is a ruling (Q7's precedent, 2026-09-08)"
+        )
     for row in scored[:top]:
         click.echo(
             f"  {row['hash']}  sharpe={row['sharpe']:6.3f}  mdd={row['max_drawdown']:7.3f}  "

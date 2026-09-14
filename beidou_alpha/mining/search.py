@@ -746,3 +746,42 @@ def to_signal(candidate: Candidate) -> SignalSpec:
         needs_spot=lambda params: reads_spot,
         canonical=dict,
     )
+
+
+def _reading(row: Mapping[str, Any]) -> tuple[str, Any]:
+    """What a shortlist row says about one candidate, reduced to the part a re-run is bought for.
+
+    A score, or the absence of one.  The error TEXT is deliberately not part of it: "bought nothing"
+    is a claim about scores, and a round that produced the same non-scores with a differently worded
+    exception still produced no scores.
+    """
+    return ("error",) if "error" in row else ("scored", row.get("sharpe"))  # type: ignore[return-value]
+
+
+def scoring_reproduction(previous: Sequence[Mapping[str, Any]], current: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Did this round reproduce its predecessor, or did it buy something?
+
+    R2 refuses a re-run of an enumerated space unless `--reauthorize` carries a reason, and the
+    reasons given have been specific and checkable ("these 90 errored, the fix landed in 3b49af8, so
+    re-run them").  What no artefact has ever recorded is whether the reason came true.  On
+    2026-09-09 one did not: the 09:50Z round charged 658 rows and returned all 658 Sharpes identical
+    to 08:29Z, the same 90 errors included, because the fix it invoked had not reached that path.
+
+    The round is charged either way and this changes nothing about that - whether a reproduced round
+    stays in the ledger is Q7's kind of ruling, made by a person. This only makes the question
+    answerable from the artefact instead of by diffing two reports by hand.
+
+    `bought_nothing` is false for a first run of a space: nothing to reproduce is not the same fact
+    as reproducing everything, and a vacuous true here would fire on precisely the rounds that are
+    doing the work.
+    """
+    before = {row["hash"]: _reading(row) for row in previous if "hash" in row}
+    after = {row["hash"]: _reading(row) for row in current if "hash" in row}
+    shared = before.keys() & after.keys()
+    return {
+        "compared": len(shared),
+        "identical": sum(1 for key in shared if before[key] == after[key]),
+        "newly_scored": sum(1 for key in shared if before[key][0] == "error" and after[key][0] == "scored"),
+        "unseen": len(after.keys() - before.keys()),
+        "bought_nothing": bool(before) and bool(after) and before == after,
+    }
