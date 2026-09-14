@@ -24,6 +24,7 @@ import pandas as pd
 
 from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
+from beidou_alpha.overlays.ladder import ladder_step
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import evidence_construction_digest
@@ -1490,7 +1491,11 @@ class LiveEngine:
 
         The rungs and the grace live in `Policy`, so they are inside `policy_digest()` and the loop
         already records that every cycle (R9).  Changing one is visible in the record without anything
-        further being added here.
+        further being added here.  The RULE they parameterise lives in
+        `beidou_alpha.overlays.ladder.ladder_step`, pure and replayable; what is left in this method is
+        the I/O it needs - read the record, persist the standing rung, page the operator - and no
+        branch of its own.  Before that split the state machine could not be evaluated without an
+        engine, so four `scratchpad/` scripts rewrote it and D-035 cites numbers they produced.
 
         The grace is two cycles: the first crossing alerts and does nothing, because a single late
         income page or one outsized fill must not halve the risk budget by itself.  The record needs no
@@ -1500,98 +1505,26 @@ class LiveEngine:
         one, so a row that changes no registry digest would break the chain it is meant to prove.
         """
         policy = Policy()
-        base = float(self.config.portfolio.vol_target)
-        standing = dict(self.state.risk_ladder or {})
-        reading = attributed_drawdown_state(
-            self.store.read_jsonl(self.store.cycles_path),
-            self.store.read_jsonl(self.store.attribution_path),
-            RiskBudgetParams(),
+        step = ladder_step(
+            reading=attributed_drawdown_state(
+                self.store.read_jsonl(self.store.cycles_path),
+                self.store.read_jsonl(self.store.attribution_path),
+                RiskBudgetParams(),
+            ),
+            standing=dict(self.state.risk_ladder or {}),
+            base=float(self.config.portfolio.vol_target),
+            rungs=policy.drawdown_ladder,
+            grace_cycles=policy.drawdown_grace_cycles,
+            bar_open_ms=bar_open_ms,
+            now=utc_now_iso(),
         )
-        block: dict[str, Any] = {
-            # Read off the reading rather than asserted here: after 2026-09-14 the ruler carries the
-            # book's unrealised P&L whenever the cycles it reads recorded it, and a label this file
-            # hardcodes would keep saying `attributed_pnl` through the change.
-            "ruler": reading.get("ruler", "attributed_pnl"),
-            "marked_rows": reading.get("marked_rows"),
-            # The drift between this reading's pinned denominator and the equity the positions are
-            # sized off (see `attributed_drawdown_state`).  Carried per cycle rather than recomputed
-            # later, for the same reason `asset_vol` is: recomputing it from the archive answers a
-            # question about a different bar.
-            "equity_over_peak": reading.get("equity_over_peak"),
-            "enforced": bool(reading.get("enforced")),
-            "drawdown": reading.get("value"),
-            "attributed": reading.get("attributed"),
-            "base_vol_target": base,
-            "grace_cycles": policy.drawdown_grace_cycles,
-            "scalar": 1.0,
-            "acting": False,
-        }
-        if not reading.get("enforced"):
-            # A blind reading does not lift a breach that is already standing: "cannot compute" is not
-            # "recovered".  It also cannot start one.
-            block["why"] = reading.get("why")
-            if standing.get("acting"):
-                block.update(
-                    {
-                        "scalar": float(standing["scalar"]),
-                        "acting": True,
-                        "vol_target": float(standing["vol_target"]),
-                        "cycles": int(standing.get("cycles", 0)),
-                        "held_blind": True,
-                    }
-                )
-            return block
-
-        drawdown = float(reading["value"])
-        target = policy.throttle_scalar(drawdown)
-        if target is None:
-            if standing:
-                self.state.risk_ladder = {}
-                await self.alerts.send(
-                    f"北斗：归因回撤回到 {drawdown:.2%}，已在 R8 梯的第一档之上——vol_target 恢复 {base}"
-                )
-                logger.warning("risk ladder cleared at attributed drawdown %.4f", drawdown)
-            return block
-        cycles = int(standing.get("cycles", 0)) + 1
-        # A de-escalation ladder must never ADD size.  `throttle_scalar` returns an ABSOLUTE vol target
-        # and this divides by the running one, so rungs calibrated for a larger k return a scalar above
-        # 1 at a smaller one - an amplifier wearing a brake's name, and it would fire exactly when the
-        # book is already down.  Latent since R8 was wired (0.225 against k=0.15 is 1.5x) and surfaced
-        # on 2026-09-14, when re-deriving the rungs for k=0.60 made their dependence on a k explicit.
-        # Clamped rather than raised: a rung that asks for more than the book already runs is a
-        # mis-calibration to report, not a reason to stop the cycle.
-        raw = float(target) / base if base > 0 else 1.0
-        scalar = min(1.0, raw)
-        acting = cycles > policy.drawdown_grace_cycles
-        self.state.risk_ladder = {
-            "cycles": cycles,
-            "rung": target,
-            "vol_target": target,
-            "scalar": scalar,
-            # True means the rung sits ABOVE the running vol_target, so the ladder asked for no cut at
-            # all.  Reported so a mis-calibrated ladder reads as mis-calibrated instead of as quiet.
-            "rung_above_base": raw > 1.0,
-            "acting": acting,
-            "drawdown": drawdown,
-            "since_bar_ms": int(standing.get("since_bar_ms") or bar_open_ms),
-            "at": utc_now_iso(),
-        }
-        block.update({"cycles": cycles, "rung": target, "vol_target": target})
-        if acting:
-            block.update({"scalar": scalar, "acting": True})
-            if not standing.get("acting") or standing.get("rung") != target:
-                logger.warning("risk ladder acting: vol_target -> %s (scalar %.4f)", target, scalar)
-                await self.alerts.send(
-                    f"北斗：归因回撤 {drawdown:.2%} 连续 {cycles} 个周期在 R8 梯上，"
-                    f"vol_target {base} → {target}（scalar {scalar:.4f}）已生效"
-                )
-        elif cycles == 1:
-            logger.warning("risk ladder first crossing at attributed drawdown %.4f", drawdown)
-            await self.alerts.send(
-                f"北斗：归因回撤 {drawdown:.2%} 触及 R8 梯（vol_target → {target}）。"
-                f"按 {policy.drawdown_grace_cycles} 周期宽限，本周期**不缩仓**"
-            )
-        return block
+        if step.standing is not None:
+            self.state.risk_ladder = step.standing
+        for message in step.warnings:
+            logger.warning("%s", message)
+        for message in step.alerts:
+            await self.alerts.send(message)
+        return step.block
 
     async def _check_probes(self, bar_open_ms: int) -> list[dict[str, Any]]:
         """D-019: evaluate every probe book's stop rule on the attributed P&L; a stopped book leaves the model."""

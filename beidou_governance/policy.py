@@ -28,6 +28,8 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
+from beidou_alpha.overlays.ladder import rung_target
+
 POLICY_VERSION = "0.3.4"
 """0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
 unrealised P&L.  One decision in two halves - see `drawdown_ladder` for why they cannot ship apart.
@@ -227,12 +229,12 @@ class Policy:
     def throttle_scalar(self, drawdown: float) -> float | None:
         """The vol target the ladder asks for at this drawdown, or None above the first rung.
 
-        `drawdown` is negative.  Rungs are checked deepest-first so -0.60 gets 0.15, not 0.225.
+        The NUMBERS are this table's (R10: a threshold the machine can edit is not a threshold).  The
+        RULE is `beidou_alpha.overlays.ladder`'s, because the backtest has to be able to replay it and
+        cannot import this package - the same division D-036 already makes for `clamp_book`.  Four
+        hand-written replays in `scratchpad/` existed because there was nothing to call.
         """
-        for level, target in sorted(self.drawdown_ladder, key=lambda rung: rung[0]):
-            if drawdown <= level:
-                return target
-        return None
+        return rung_target(drawdown, self.drawdown_ladder)
 
 
 #: Where each rule comes from, so nobody reads the table above as measurement (KILL-AR-13).

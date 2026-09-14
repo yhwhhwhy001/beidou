@@ -1952,6 +1952,31 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Twenty-fifth raise OF THIS TABLE, 2026-09-15: +178 beidou_alpha, and beidou_live ratcheted DOWN
+    # by 67 - R8's state machine lifted out of the engine.
+    #
+    # `_risk_ladder` was an `async` private method reading `self.store`, `self.state`, `self.config` and
+    # `self.alerts`, so nothing could evaluate the ladder without an engine.  Everything that needed to
+    # know what it does therefore rewrote it: four replays in `scratchpad/` (`p32b`/`p32c`/`p32d`/`p32e`),
+    # a second unread rung comparison in `risk_budget`, and no twin at all in `beidou_alpha`.  They had
+    # drifted - one omits the `min(1.0, raw)` clamp, one divides by a module constant instead of the
+    # running target, none replays the blind-reading hold - and D-035 cites 20.5pp, 0.4pp and q95 -66.5%
+    # produced by them.  D-036 already requires one semantics per book-level guard, satisfied for
+    # `daily_loss_pause` and `GROSS_CAPPED` via `exposure.py` and not for the larger scalar.
+    #
+    # The rule goes to `beidou_alpha` rather than anywhere in `beidou_live` because the backtest has to
+    # replay it and `beidou_alpha` may import no `beidou_*` - so `ladder_step` takes rungs and grace as
+    # plain values and `Policy` keeps the numbers and delegates.  One implementation, three readers.
+    #
+    # Behaviour-preserving, and not on assertion: the old body was kept as `_dead_risk_ladder` and both
+    # were run over 128 combinations of standing rung x base x drawdown, comparing the cycle block, the
+    # persisted rung AND the operator messages - the messages because paging is deduplicated on their
+    # text, so a silent rewording is a real regression.  Identical on all 128; the old body was deleted
+    # in this commit.  D-033's technique, for D-033's reason.
+    #
+    # Down 67 rather than left at the old number: a ratchet that only goes up would hand the package
+    # free headroom every time something moves out of it.
+    #
     # Twenty-fourth raise OF THIS TABLE, 2026-09-15: +34 beidou_live, which is three module headers -
     # `health.py` split into the four concepts it was holding.
     #
@@ -2314,7 +2339,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_715,
+    "beidou_alpha": 8_893,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2434,7 +2459,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_988,
+    "beidou_live": 8_921,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
