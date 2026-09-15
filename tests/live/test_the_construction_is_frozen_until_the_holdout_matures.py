@@ -31,8 +31,8 @@ from pathlib import Path
 
 from beidou_live.composition import load_registry
 from beidou_live.config import live_config, load_profile
-from beidou_live.engine import construction_fingerprint
 from beidou_live.construction import canonical_construction
+from beidou_live.engine import construction_fingerprint
 
 ROOT = Path(__file__).resolve().parents[2]
 

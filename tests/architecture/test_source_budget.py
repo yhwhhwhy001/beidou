@@ -2130,6 +2130,25 @@ CEILING = {
     # It does not self-heal under the shipped profile: `alpha_registry.yaml` pins 17 symbols, and a
     # pinned universe makes `_maybe_refresh_universe` return before it touches state.  Only a restart
     # with every pinned symbol tradable clears it.
+    # Twenty-third raise OF THIS TABLE, 2026-09-14: +91 beidou_governance for Phase 0's fifth
+    # attribution route, ruled by the operator after this session declined to write it itself.
+    #
+    # The decline is the reason the comment is this long.  The route excuses the artefacts of whoever
+    # proposes it - this session produced the two reports it attributes - and a rule written in that
+    # position is the shape RESEARCH_LOG's Q4c ruling had just refused: loosening a gate in the
+    # direction that flatters the incumbent.  So the lines here are not spent on the happy path, which
+    # is four lines; they are spent on the three conditions that make it useless as a blank cheque,
+    # and on saying out loud which one is load-bearing.
+    #
+    # Identical run settings (`ARM_SETTINGS`) says a pair is a design rather than a coincidence.
+    # Exactly one differing construction key says it measures a knob rather than proposing a book.
+    # And the anchor - one arm must agree with the ADOPTED pointer on every shared key - is the one
+    # that matters: without it two novel constructions could be paired with each other and both walk.
+    # Four of the seven tests are that loophole, not the feature.
+    #
+    # `_construction_agrees` compares shared keys only, on `construction_problems`' rule and for its
+    # reason: the pointer adopted 2026-09-13 predates `flat_inside_band`, and comparing key SETS would
+    # let every newly added construction key quietly disqualify the incumbent from anchoring anything.
     #
     # Twenty-second raise OF THIS TABLE, 2026-09-14: +66 beidou_live, +26 beidou_alpha for two knobs,
     # both shipped OFF, that name the two ways the band manufactures a position it cannot close.
@@ -2680,7 +2699,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_847,
+    "beidou_governance": 3_940,
 }
 
 
