@@ -25,6 +25,8 @@ from pathlib import Path
 
 from beidou_alpha.validation.ledger import TrialRecord, dsr_inputs, parse_ledger, resolve_ledger_path, unique_trials
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 LEGACY = TrialRecord("s", "k1", 1.6, 8760.0, "t1", "2021-01-31", "2026-09-03", 146, "run-legacy")
 
 
@@ -57,7 +59,7 @@ def test_two_legacy_rows_still_fold_into_one_trial() -> None:
     """The old rows' dedup semantics are preserved exactly: missing fields are equal to each other."""
     replay = TrialRecord("s", "k1", 1.6, 8760.0, "t2", "2021-01-31", "2026-09-03", 146, "run-replay")
 
-    assert [r.run_id for r in unique_trials([LEGACY, replay])] == ["run-legacy"]
+    assert [r.run_id for r in unique_trials([LEGACY, replay], range_end_granularity_days=FOLD_DAYS)] == ["run-legacy"]
 
 
 def test_a_new_row_does_not_fold_into_a_legacy_one(  # T-K1-1
@@ -80,7 +82,10 @@ def test_a_new_row_does_not_fold_into_a_legacy_one(  # T-K1-1
         construction_digest="0dcd044d0158",
     )
 
-    assert [r.run_id for r in unique_trials([LEGACY, modern])] == ["run-legacy", "run-modern"]
+    assert [r.run_id for r in unique_trials([LEGACY, modern], range_end_granularity_days=FOLD_DAYS)] == [
+        "run-legacy",
+        "run-modern",
+    ]
 
 
 def test_the_same_grid_point_under_two_constructions_is_two_trials() -> None:
@@ -88,7 +93,7 @@ def test_the_same_grid_point_under_two_constructions_is_two_trials() -> None:
     band_025 = TrialRecord("s", "k1", 1.6, 8760.0, "t1", "a", "b", 146, "r1", construction_digest="aaa")
     band_040 = TrialRecord("s", "k1", 1.7, 8760.0, "t2", "a", "b", 146, "r2", construction_digest="bbb")
 
-    assert len(unique_trials([band_025, band_040])) == 2
+    assert len(unique_trials([band_025, band_040], range_end_granularity_days=FOLD_DAYS)) == 2
 
 
 def test_the_same_count_of_different_symbols_is_two_trials() -> None:
@@ -96,7 +101,7 @@ def test_the_same_count_of_different_symbols_is_two_trials() -> None:
     one = TrialRecord("s", "k1", 1.6, 8760.0, "t1", "a", "b", 146, "r1", symbol_set_hash="111")
     other = TrialRecord("s", "k1", 1.6, 8760.0, "t2", "a", "b", 146, "r2", symbol_set_hash="222")
 
-    assert len(unique_trials([one, other])) == 2
+    assert len(unique_trials([one, other], range_end_granularity_days=FOLD_DAYS)) == 2
 
 
 def test_an_overlay_makes_it_a_different_trial() -> None:
@@ -105,7 +110,7 @@ def test_an_overlay_makes_it_a_different_trial() -> None:
         "s", "k1", 1.5, 8760.0, "t2", "a", "b", 146, "r2", construction_digest="aaa", overlay_digest="stop6tp6"
     )
 
-    assert len(unique_trials([naked, stopped])) == 2
+    assert len(unique_trials([naked, stopped], range_end_granularity_days=FOLD_DAYS)) == 2
 
 
 def test_a_mined_id_from_a_wider_space_is_a_different_trial() -> None:
@@ -113,7 +118,7 @@ def test_a_mined_id_from_a_wider_space_is_a_different_trial() -> None:
     from_267 = TrialRecord("mined_x", "k", 1.7, 8760.0, "t1", "a", "b", 205, "r1", search_space_version="267")
     from_514 = TrialRecord("mined_x", "k", 1.7, 8760.0, "t2", "a", "b", 205, "r2", search_space_version="514")
 
-    assert len(unique_trials([from_267, from_514])) == 2
+    assert len(unique_trials([from_267, from_514], range_end_granularity_days=FOLD_DAYS)) == 2
 
 
 def test_the_extension_does_not_reprice_the_archive(  # T-K1-4 / C-P6
@@ -122,7 +127,7 @@ def test_the_extension_does_not_reprice_the_archive(  # T-K1-4 / C-P6
     rows = [TrialRecord("s", f"k{i}", 1.0 + i, 8760.0, "t", "2021-01-31", "2026-09-03", 146, f"r{i}") for i in range(5)]
     rows.append(TrialRecord("s", "k0", 1.0, 8760.0, "t-later", "2021-01-31", "2026-09-03", 146, "r-replay"))
 
-    pooled = dsr_inputs(rows, {"new": None}, 8760.0, manual_prior_trials=60)
+    pooled = dsr_inputs(rows, {"new": None}, 8760.0, manual_prior_trials=60, range_end_granularity_days=FOLD_DAYS)
 
     assert pooled["ledger_trials"] == 5
     assert pooled["duplicate_rows"] == 1
@@ -196,7 +201,9 @@ def test_the_current_grid_is_still_excluded_once_the_signature_is_longer() -> No
         TrialRecord("s", "k2", 0.4, 8760.0, "t2", "a", "b", 146, "r2"),
     ]
 
-    pooled = dsr_inputs(rows, {"k2": 0.4 / 8760**0.5}, 8760.0, current_range=("a", "b", 146))
+    pooled = dsr_inputs(
+        rows, {"k2": 0.4 / 8760**0.5}, 8760.0, current_range=("a", "b", 146), range_end_granularity_days=FOLD_DAYS
+    )
 
     assert pooled["ledger_trials"] == 1
     assert pooled["replayed_rows"] == 1
@@ -212,6 +219,7 @@ def test_the_same_grid_under_a_different_construction_is_not_a_replay() -> None:
         8760.0,
         current_range=("a", "b", 146),
         current_context=("new", "", "", ""),
+        range_end_granularity_days=FOLD_DAYS,
     )
 
     assert pooled["ledger_trials"] == 1  # the old-construction row still counts

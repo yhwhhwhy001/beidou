@@ -81,7 +81,13 @@ def _selection(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return block if isinstance(block, Mapping) else None
 
 
-def read_gate(strategy: str, report: Mapping[str, Any], ledger_lines: Sequence[str]) -> GateReading:
+def read_gate(
+    strategy: str,
+    report: Mapping[str, Any],
+    ledger_lines: Sequence[str],
+    *,
+    range_end_granularity_days: int,
+) -> GateReading:
     """Recompute one strategy's gate at today's bucket size, holding its evidence fixed."""
     block = _selection(report)
     if block is None:
@@ -169,7 +175,12 @@ def read_gate(strategy: str, report: Mapping[str, Any], ledger_lines: Sequence[s
             int(n_then),
             float(threshold),
         )
-    bucket_today = len(unique_trials(parse_ledger(ledger_lines, ledger_scope(strategy))))
+    bucket_today = len(
+        unique_trials(
+            parse_ledger(ledger_lines, ledger_scope(strategy)),
+            range_end_granularity_days=range_end_granularity_days,
+        )
+    )
     if bucket_today < ledger_then:
         # The ledger is append-only, so this means the file being read is not the one the report was
         # written against.  Deciding on it would retire or spare a book on a truncated record.
@@ -205,6 +216,7 @@ def recheck(
     ledger_lines: Sequence[str],
     *,
     only: Iterable[str] | None = None,
+    range_end_granularity_days: int,
 ) -> tuple[GateReading, ...]:
     """Every enabled strategy's gate at today's N.  `read_report` maps an evidence path to its payload."""
     wanted = set(only) if only is not None else None
@@ -221,7 +233,7 @@ def recheck(
         except (OSError, ValueError) as error:
             out.append(GateReading(entry.id, UNREADABLE, f"{path}: {error}"))
             continue
-        out.append(read_gate(entry.id, report, ledger_lines))
+        out.append(read_gate(entry.id, report, ledger_lines, range_end_granularity_days=range_end_granularity_days))
     return tuple(out)
 
 

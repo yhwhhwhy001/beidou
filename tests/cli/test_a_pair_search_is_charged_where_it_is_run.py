@@ -24,6 +24,8 @@ from beidou_alpha.validation.multiple_testing import max_sharpe_quantile
 from beidou_cli import main
 from beidou_data.store import KlineStore
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
 PAIRS = len(SYMBOLS) * (len(SYMBOLS) - 1) // 2
 # The fixture is 720 bars, so the pre-registered 720-bar formation window would never refit at all.
@@ -163,9 +165,14 @@ def test_the_search_has_its_own_bucket_and_the_denominator_reads_both(
 
     lines = isolated_trials_ledger.read_text(encoding="utf-8").splitlines()
     assert len(_rows(isolated_trials_ledger, "pairs")) == len(report["trial_sharpes"])
-    assert len(unique_trials(parse_ledger(lines, ledger_scope("pairs")))) == PAIRS + len(report["trial_sharpes"])
+    assert len(
+        unique_trials(parse_ledger(lines, ledger_scope("pairs")), range_end_granularity_days=FOLD_DAYS)
+    ) == PAIRS + len(report["trial_sharpes"])
     # A second pair-type id pays for this search without having run it, which is the point of sharing.
-    assert len(unique_trials(parse_ledger(lines, ledger_scope("pairs_coint")))) == PAIRS
+    assert (
+        len(unique_trials(parse_ledger(lines, ledger_scope("pairs_coint")), range_end_granularity_days=FOLD_DAYS))
+        == PAIRS
+    )
 
 
 def test_a_candidate_pair_carries_no_construction_and_no_sharpe(

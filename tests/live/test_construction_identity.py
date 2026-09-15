@@ -96,6 +96,10 @@ EXPECTED_FIELDS = {
         "max_participation",
         "max_order_notional",
         "exempt_reductions",
+        # v7, 2026-09-14.  Both ship False, both are asserted to be bit-identical off, and
+        # CONSTRUCTION_ALIASES carries the declaration - the book did NOT change.
+        "exempt_crossings",
+        "flat_inside_band",
     },
     "exits": {
         "stop_loss",

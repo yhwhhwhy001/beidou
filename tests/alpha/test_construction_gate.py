@@ -17,6 +17,12 @@ LIVE = {
     # P30.  Non-zero in the fixture on purpose: the loop below proves each key is compared by doubling
     # it, and doubling the shipped 0.0 is still 0.0.  The shipped value gets its own test underneath.
     "sleeve_max_gross": 0.86,
+    # D2, 2026-09-14.  The first BOOL in this table, and it broke the loop below rather than the gate:
+    # `_same_param` folds bools with `bool(left) == bool(right)` on purpose (YAML `true` vs JSON `1`),
+    # so doubling True gives 2 and compares EQUAL - the loop would have reported the key as covered
+    # while perturbing nothing.  The loop negates bools instead.  The shipped value is False and gets
+    # its own test underneath, the same way `sleeve_max_gross`'s shipped 0.0 does.
+    "flat_inside_band": True,
 }
 ENTRY = StrategyEntry("tsmom", params={"horizons": [168, 336, 720]})
 
@@ -31,7 +37,11 @@ def test_the_real_divergence_is_caught() -> None:
 def test_a_matching_construction_is_silent_and_every_weight_bearing_key_is_covered() -> None:
     assert construction_problems(ENTRY, {"portfolio": dict(LIVE)}, LIVE) == []
     for key in CONSTRUCTION_KEYS:
-        drifted = {**LIVE, key: (LIVE[key] * 2 if isinstance(LIVE[key], int | float) else LIVE[key])}
+        value = LIVE[key]
+        # Bools first: `isinstance(True, int)` is True, so the numeric branch would silently claim to
+        # perturb one and not (see the fixture note on `flat_inside_band`).
+        perturbed = (not value) if isinstance(value, bool) else (value * 2 if isinstance(value, int | float) else value)
+        drifted = {**LIVE, key: perturbed}
         assert construction_problems(ENTRY, {"portfolio": drifted}, LIVE), f"{key} must be compared"
 
 
@@ -45,6 +55,18 @@ def test_a_sleeve_cap_in_the_evidence_that_the_loop_does_not_run_is_caught() -> 
     off = {**LIVE, "sleeve_max_gross": 0.0}
     problems = construction_problems(ENTRY, {"portfolio": dict(LIVE)}, off)
     assert problems == ["tsmom: portfolio sleeve_max_gross is 0.0 live but 0.86 in the cited evidence"]
+    assert construction_problems(ENTRY, {"portfolio": off}, off) == []
+
+
+def test_evidence_that_never_held_a_sub_band_position_is_caught_against_a_loop_that_does() -> None:
+    """D2's shipped value is False, the one value the doubling loop cannot test - same as the cap above.
+
+    And the asymmetry runs the same way: evidence produced with ``flat_inside_band`` on describes a
+    book that never carried a position it could not close, which is a cleaner book than the loop's.
+    """
+    off = {**LIVE, "flat_inside_band": False}
+    problems = construction_problems(ENTRY, {"portfolio": dict(LIVE)}, off)
+    assert problems == ["tsmom: portfolio flat_inside_band is False live but True in the cited evidence"]
     assert construction_problems(ENTRY, {"portfolio": off}, off) == []
 
 

@@ -901,7 +901,14 @@ def research_validate(
     prior_records = parse_ledger(ledger_lines, ledger_scope(strategy))
     # R0: the other caliber, reported and never applied.  The gate is the strategy bucket; this says what
     # the whole library would have asked for, so the choice stays arguable instead of merely stated.
-    whole_library = len(unique_trials(all_trials(ledger_lines))) or 1
+    whole_library = (
+        len(
+            unique_trials(
+                all_trials(ledger_lines), range_end_granularity_days=Policy().trial_range_end_granularity_days
+            )
+        )
+        or 1
+    )
     period_sharpes = {
         key: (None if value is None else value / math.sqrt(bpy)) for key, value in full_sharpes_raw.items()
     }
@@ -923,6 +930,7 @@ def research_validate(
             _symbol_set_hash(panel.symbols),
             _search_space_version(strategy, grids),
         ),
+        range_end_granularity_days=Policy().trial_range_end_granularity_days,
     )
     mt = multiple_testing_report(
         nets[best_key].to_numpy(dtype=float),
@@ -1913,7 +1921,11 @@ def _standalone_block(
     # an exact replay of a recorded configuration on the same data is one trial, not two
     prior_records = [r for r in records if _trial_signature(r) != _trial_signature(record)]
     pooled = dsr_inputs(
-        prior_records, {key: None if full is None else full / math.sqrt(bpy)}, bpy, manual_prior_trials=prior_trials
+        prior_records,
+        {key: None if full is None else full / math.sqrt(bpy)},
+        bpy,
+        manual_prior_trials=prior_trials,
+        range_end_granularity_days=Policy().trial_range_end_granularity_days,
     )
     values = net.to_numpy(dtype=float)
     mt = multiple_testing_report(
@@ -2273,7 +2285,12 @@ def _charge_signal_search(
     # Read back off the file through the fold the denominator applies, exactly as `mine` reports its
     # family prior - `charged` is what this run added, and the two part ways as soon as the range moves.
     family_prior = (
-        len(unique_trials(parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), bucket)))
+        len(
+            unique_trials(
+                parse_ledger(ledger_path.read_text(encoding="utf-8").splitlines(), bucket),
+                range_end_granularity_days=Policy().trial_range_end_granularity_days,
+            )
+        )
         if ledger_path.exists()
         else 0
     )
@@ -3274,7 +3291,16 @@ def research_mine(
     # and +514 rows on 2026-09-08 with nothing on the terminal saying so.  `before` is the difference,
     # exact because `_record_trials` appends only signatures the file did not already hold.
     ledger_lines = ledger_path.read_text(encoding="utf-8").splitlines() if ledger_path.exists() else []
-    family_prior = len(unique_trials(parse_ledger(ledger_lines, MINED_SEARCH_STRATEGY))) if ledger_lines else 0
+    family_prior = (
+        len(
+            unique_trials(
+                parse_ledger(ledger_lines, MINED_SEARCH_STRATEGY),
+                range_end_granularity_days=Policy().trial_range_end_granularity_days,
+            )
+        )
+        if ledger_lines
+        else 0
+    )
     # `evaluated` counts expressions the enumerator looked at, including those the caps rejected before
     # any data was touched; only the kept ones have a hash to charge.  The remainder is stated rather
     # than absorbed, so nobody has to rediscover that the two numbers differ.

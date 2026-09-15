@@ -36,7 +36,7 @@ class RiskBudgetParams:
     rollback_at: float = 0.70  # -> all the way back
     deescalate_to: float = 0.45
     rollback_to: float = 0.30
-    vol_band: tuple[float, float] = (0.26, 0.38)
+    vol_band: tuple[float, float] = (0.52, 0.76)  # k=0.60, x2 of the k=0.30 pair; profile is authority
     vol_window_days: int = 30
     min_vol_bars: int = 240  # ten days of hourly cycles before the vol estimate says anything
     # M-Q08 states the bar as "slippage <= 2x model", so it is expressed that way rather than as a

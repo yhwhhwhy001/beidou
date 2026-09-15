@@ -1952,7 +1952,12 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
-    # Twenty-seventh raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
+    # Merge note, 2026-09-15: two sessions raised this table the same day and both numbered from
+    # Twentieth.  The seven entries below were renumbered to follow the two above them rather than
+    # to claim their numbers; nothing else in either set was edited, and the VALUES were re-measured
+    # against the merged tree, because neither side's count describes code that now includes both.
+    #
+    # Thirty-first raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
     # the five "this symbol cannot be priced" rules written down, and NOT merged.
     #
     # They live in three packages, carry three numbers, and two bind on only one side: research carries
@@ -1981,7 +1986,7 @@ CEILING = {
     # that command's output IS the hourly alert body and `test_alerts_are_chinese` allows three English
     # tokens in it.  Both guards caught this commit and both were right.
     #
-    # Twenty-sixth raise OF THIS TABLE, 2026-09-15: +155 beidou_live - the cycle record given a
+    # Thirtieth raise OF THIS TABLE, 2026-09-15: +155 beidou_live - the cycle record given a
     # declaration, and its ledger reader stopped re-parsing from byte zero.
     #
     # `cycles.jsonl` is the widest interface in this package: ~42 keys written by three methods, read by
@@ -2013,7 +2018,7 @@ CEILING = {
     # began.  Folding those into a helper would delete the explanations, which is the opposite of
     # concentrating anything.  `latest()` takes the one question that really was asked twice.
     #
-    # Twenty-fifth raise OF THIS TABLE, 2026-09-15: +178 beidou_alpha, and beidou_live ratcheted DOWN
+    # Twenty-ninth raise OF THIS TABLE, 2026-09-15: +178 beidou_alpha, and beidou_live ratcheted DOWN
     # by 67 - R8's state machine lifted out of the engine.
     #
     # `_risk_ladder` was an `async` private method reading `self.store`, `self.state`, `self.config` and
@@ -2038,7 +2043,7 @@ CEILING = {
     # Down 67 rather than left at the old number: a ratchet that only goes up would hand the package
     # free headroom every time something moves out of it.
     #
-    # Twenty-fourth raise OF THIS TABLE, 2026-09-15: +34 beidou_live, which is three module headers -
+    # Twenty-eighth raise OF THIS TABLE, 2026-09-15: +34 beidou_live, which is three module headers -
     # `health.py` split into the four concepts it was holding.
     #
     # It held M-001 cycle health, DL-X1 liquidation distance, KILL-R19 margin mode and D-026 construction
@@ -2057,7 +2062,7 @@ CEILING = {
     # The 34 lines are the price of separability, not new behaviour: three docstrings and three import
     # blocks, no logic added or removed.  Pure moves otherwise, with every importer repointed.
     #
-    # Twenty-third raise OF THIS TABLE, 2026-09-15: +60 beidou_live, so the venue and market ports
+    # Twenty-seventh raise OF THIS TABLE, 2026-09-15: +60 beidou_live, so the venue and market ports
     # describe what the engine reads off them.
     #
     # `ports.py` already carries this lesson in its own words, about `SignalModel`: *a protocol that
@@ -2083,7 +2088,7 @@ CEILING = {
     # shared fake.  Absence stays the DEFAULT on purpose - flipping it changed what two hundred existing
     # tests measure, and broke two of them, one of which says `# no server_time_ms` in its own body.
     #
-    # Twenty-second raise OF THIS TABLE, 2026-09-14: +40 beidou_live, +9 beidou_cli, so that L3's gate
+    # Twenty-sixth raise OF THIS TABLE, 2026-09-14: +40 beidou_live, +9 beidou_cli, so that L3's gate
     # can fail.
     #
     # `soak.passes` gates `live soak --check` on whether any ERROR cycle DECIDED anything, reading five
@@ -2107,7 +2112,7 @@ CEILING = {
     # the writer gaining it.  The 9 in `beidou_cli` pass `Policy.no_decision_phases` into `score`,
     # which R10 always meant to be the phase list's only home and which no call site read.
     #
-    # Twenty-first raise OF THIS TABLE, 2026-09-14: +4 beidou_live, for one assignment and the three
+    # Twenty-fifth raise OF THIS TABLE, 2026-09-14: +4 beidou_live, for one assignment and the three
     # lines that say why it is there.
     #
     # `startup` filters the universe to what the venue will actually trade and did not write the result
@@ -2126,6 +2131,81 @@ CEILING = {
     # pinned universe makes `_maybe_refresh_universe` return before it touches state.  Only a restart
     # with every pinned symbol tradable clears it.
     #
+    # Twenty-second raise OF THIS TABLE, 2026-09-14: +66 beidou_live, +26 beidou_alpha for two knobs,
+    # both shipped OFF, that name the two ways the band manufactures a position it cannot close.
+    # Roughly three quarters of both is comment, and the comments are the deliverable here: each knob
+    # is one branch, and what has to survive is WHY False is the current book and what turning it on
+    # would cost.
+    #
+    # `exempt_crossings` is not a new idea, it is a divergence.  `beidou_alpha.portfolio`'s
+    # `apply_no_trade_band` docstring reads "Exits to exactly zero, entries from zero and sign flips
+    # are always executed; only same-direction resizing is suppressed"; `plan_rebalance` applies the
+    # absolute band to all of them.  `model.py`'s D-033 moved the band from the model layer to the
+    # rebalancer on the stated ground that the rebalancer "applies the identical rule".  It does not,
+    # and nothing in the tree said so - the claim sat in a docstring on one side and was contradicted
+    # by a branch on the other.  The consequence is not academic: the exit overlay fires by setting the
+    # weight to 0 (`exits.py:72`) and then goes through the band, so a stop-loss on a sub-band position
+    # plans no order at all.  ENAUSDT spent 45 cycles in that state.
+    #
+    # `flat_inside_band` is the other half: the stub does not appear, it is manufactured.  A reduction
+    # is sized to the model's target and no rule forbids that target landing inside the band; 7 of 170
+    # armed fills (4%) landed there.  The invariant is "never hold a position smaller than the absolute
+    # band", which covers reductions, sign flips and sub-band entries in one sentence - and it has to,
+    # because the first live stub (2026-09-10, +212.56 -> -51.10) was made by a flip, which a
+    # reduction-only rule would not have caught.
+    #
+    # Both are declared in `construction_fingerprint` rather than left as bare code, because a knob the
+    # record cannot see is the other half of D-036; CONSTRUCTION_ALIASES v7 carries the proof that
+    # False on both sides is byte-identical.  Turning either ON is a construction change and belongs to
+    # the operator after the 2026-10-13 freeze.
+    #
+    # Twenty-first raise OF THIS TABLE, 2026-09-14: +13 beidou_live so the band names the positions it
+    # cannot close.  Twelve of the thirteen are the comment; the code is one predicate and one field.
+    #
+    # `reports.plan_gaps` has always documented `blocked_exit` as "a position smaller than the band can
+    # never be closed to zero", which is a statement about the POSITION.  The rebalancer tested the
+    # TARGET instead - `abs(target_notional) < 1e-9` - and a decaying model target essentially never
+    # lands on exactly zero, so in 320 armed cycles the label fired zero times while the condition it
+    # names held for 44.  ENAUSDT sat at -79 contracts (-11.19 USDT against a 54.32 USDT band) for
+    # 45 cycles and `report daily` printed `blocked_exit: []`; the operator found it by eye in the
+    # venue UI.  The predicate now reads `abs(current_notional) < threshold`, which is the same
+    # sentence the docstring was already making, and the row carries `current_notional` so the reader
+    # can re-derive the verdict instead of trusting the label.
+    #
+    # No order changes - all three band outcomes were already "no order" and still are.  The lines
+    # buy the difference between a stuck position and a symbol that did not need trading, which is
+    # exactly what no instrument in the system could tell apart on 2026-09-14.
+    #
+    # Twenty-third raise OF THIS TABLE, 2026-09-14: caliber ④, the operator's ruling on Q4c -
+    # `range_end` folds to a policy-set granularity before two ledger rows are compared.
+    #
+    # Q4c measured the half that needed measuring.  The same 676 expressions scored on both universes
+    # gave a joint `N_exact` of 641 against a single-universe 337 - ratio 1.90, so **the second
+    # universe is very nearly a full second look and cross-universe re-charges stay charged**.  Only
+    # `range_end` collapses, and that half is arithmetic: a signal reads only data up to bar t, so the
+    # same expression over the same start, symbols and construction produces an IDENTICAL stream on the
+    # shared index when the range ends a few days later.  Zero added independence, not an estimate.
+    #
+    # The argument does not say "drop the field" - it holds for two years later too, and that IS a
+    # second look.  So the fold needs a granularity, a granularity is a threshold, and R10 puts those in
+    # `Policy` (0.3.4 -> 0.3.5).  `beidou_alpha` is the lower layer and cannot import it, so the value
+    # is threaded through as a REQUIRED keyword.  That is most of the line count and most of the churn:
+    # 49 call sites, none of which may default.  A default here would let a caller quietly get the
+    # pre-ruling rule while believing it had the new one - the invisible-default shape this repo was
+    # bitten by twice on 2026-09-14 alone.
+    #
+    # The trap this could have shipped is in `dsr_inputs`: its `exclude` set was assembled by hand in
+    # the shape of a signature.  Quantise the fold and leave the exclusion literal, and every replay
+    # stops matching and is charged a second time - silently, in the direction that looks rigorous.
+    # Both now go through `fold_key`, and a test fails if they ever disagree.
+    #
+    # What it costs the incumbents, measured on the real ledger AFTER the change rather than estimated
+    # before it: `tsmom` 111 -> 105 and `flow` 45 -> 43 folded trials, which LOWERS the bar they face.
+    # `mined` goes 2,073 -> 1,559.  An earlier note in this session put tsmom at "137 -> 101"; that
+    # compared RAW ROWS against folded trials and overstated the incumbent's exposure by six times.
+    # `unique_trials` already dropped exact copies before caliber ④ existed, so the honest before is the
+    # folded before.  The granularity itself is not load-bearing here - 7, 14 and 30 days all give the
+    # same counts - so 7 is taken as the one that folds least among those that fold the case at all.
     # Twentieth raise OF THIS TABLE, 2026-09-14: +15 beidou_alpha, +33 beidou_cli so a measurement can
     # reproduce its own headline number.
     #
@@ -2400,7 +2480,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_902,
+    "beidou_alpha": 9_011,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2520,7 +2600,7 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 9_205,
+    "beidou_live": 9_284,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2570,7 +2650,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_149,
+    "beidou_cli": 6_178,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2600,7 +2680,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_828,
+    "beidou_governance": 3_847,
 }
 
 

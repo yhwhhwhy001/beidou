@@ -58,7 +58,11 @@ def test_a_criterion_that_cannot_be_read_is_not_reported_as_ok() -> None:
 
 def test_every_criterion_readable_and_inside_its_bar_is_still_ok() -> None:
     params = RiskBudgetParams(min_vol_bars=3, min_slippage_fills=1)
-    step = 0.30 / math.sqrt(params.bars_per_year)  # alternating +-step lands the annual vol on the band's middle
+    # Derived from the band, not hardcoded: this test is about "a readable criterion inside its bar is OK",
+    # and a literal here silently re-tests whatever `vol_band`'s default happens to be.  It was 0.30 against
+    # the k=0.30 pair and broke the day the default moved to the k=0.60 one (2026-09-14).
+    low, high = params.vol_band
+    step = (low + high) / 2 / math.sqrt(params.bars_per_year)  # alternating +-step lands on the band's middle
     equity, rows = 100.0, []
     for i in range(40):
         equity *= 1.0 + (step if i % 2 else -step)

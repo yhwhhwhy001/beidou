@@ -30,6 +30,8 @@ from beidou_alpha.validation.ledger import (
     resolve_ledger_path,
 )
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 
 def _row(param_key: str, *, range_end: str = "2026-09-06", construction: str = "aaaa") -> TrialRecord:
     return TrialRecord(
@@ -47,34 +49,50 @@ def _row(param_key: str, *, range_end: str = "2026-09-06", construction: str = "
 
 
 def test_one_hypothesis_charged_under_three_contexts_is_three_trials_but_one_hypothesis() -> None:
-    """The 2026-09-09 shape: same expression, moved `range_end`/construction, charged again."""
+    """Same expression, three contexts, charged three times - one hypothesis.
+
+    The contexts are three CONSTRUCTIONS, not three `range_end`s.  The first version of this test used
+    2026-09-06 / -08 / -08, and caliber ④ (2026-09-14) folds the first two: a signal reads only data up
+    to bar t, so two runs whose ranges end two days apart produce an identical stream on the shared
+    index.  The fixture moved to the axis that still separates rows, which is what the test was always
+    about - `ledger_trials` counts rows under the fold, `distinct_hypotheses` counts hypotheses, and
+    they are different numbers.
+    """
     prior = [
         _row("squash(rangepos(24), 0.5)"),
-        _row("squash(rangepos(24), 0.5)", range_end="2026-09-08"),
-        _row("squash(rangepos(24), 0.5)", range_end="2026-09-08", construction="bbbb"),
+        _row("squash(rangepos(24), 0.5)", construction="bbbb"),
+        _row("squash(rangepos(24), 0.5)", construction="cccc"),
     ]
 
-    out = dsr_inputs(prior, {}, 8760.0)
+    out = dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=FOLD_DAYS)
 
-    assert out["ledger_trials"] == 3, "the gate's caliber is unchanged: three signatures, three trials"
+    assert out["ledger_trials"] == 3, "the gate's caliber is unchanged: three constructions, three trials"
     assert out["distinct_hypotheses"] == 1, "but they are one hypothesis, and the report must say so"
+
+
+def test_two_runs_a_few_days_apart_no_longer_make_two_trials() -> None:
+    """Caliber ④, stated where the old fixture used to assume the opposite."""
+    prior = [_row("a"), _row("a", range_end="2026-09-08")]
+
+    assert dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=FOLD_DAYS)["ledger_trials"] == 1
+    assert dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=0)["ledger_trials"] == 2
 
 
 def test_distinct_hypotheses_counts_param_keys_not_rows() -> None:
     prior = [_row("a"), _row("a", range_end="2026-09-08"), _row("b"), _row("c")]
 
-    assert dsr_inputs(prior, {}, 8760.0)["distinct_hypotheses"] == 3
+    assert dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=FOLD_DAYS)["distinct_hypotheses"] == 3
 
 
 def test_an_empty_ledger_has_no_hypotheses() -> None:
-    assert dsr_inputs([], {}, 8760.0)["distinct_hypotheses"] == 0
+    assert dsr_inputs([], {}, 8760.0, range_end_granularity_days=FOLD_DAYS)["distinct_hypotheses"] == 0
 
 
 def test_the_new_field_does_not_move_the_gate() -> None:
     """`n_trials` is what `oos_selection_threshold` reads.  This round must not touch it."""
-    prior = [_row("a"), _row("a", range_end="2026-09-08"), _row("b")]
+    prior = [_row("a"), _row("a", construction="bbbb"), _row("b")]
 
-    out = dsr_inputs(prior, {"grid": 0.01}, 8760.0)
+    out = dsr_inputs(prior, {"grid": 0.01}, 8760.0, range_end_granularity_days=FOLD_DAYS)
 
     assert out["n_trials"] == 4, "3 ledger signatures + 1 current grid point, exactly as before"
 
