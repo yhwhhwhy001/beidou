@@ -263,7 +263,15 @@ def registry_dataset_problems(
         except ValueError:
             continue
         recorded = payload.get("dataset") if isinstance(payload, dict) else None
-        check = manifest_check(recorded if isinstance(recorded, dict) else None, current)
+        mode = payload.get("universe_mode") if isinstance(payload, dict) else None
+        check = manifest_check(
+            recorded if isinstance(recorded, dict) else None,
+            current,
+            # D-041 + 2026-09-15: the report says which population it ran on, and only a `pit` one is
+            # exempt from the universe field.  Read here rather than inside `manifest_check` because
+            # this is the only caller that holds the whole report payload.
+            universe_mode=mode if isinstance(mode, str) else None,
+        )
         blocking.extend(f"{entry.id}: {message}" for message in check.blocking)
         advisory.extend(f"{entry.id}: {message}" for message in check.advisory)
     return ManifestCheck(blocking, advisory)

@@ -230,3 +230,63 @@ def test_manifest_problems_stays_the_two_buckets_in_order(tmp_path: Path) -> Non
     check = manifest_check(recorded, current)
     assert check.blocking and check.advisory
     assert manifest_problems(recorded, current) == [*check.blocking, *check.advisory]
+
+
+def test_a_pit_report_does_not_block_on_the_universe_file(tmp_path: Path) -> None:
+    """A ``universe_mode: "pit"`` result's population is ``membership.parquet``; it never opens this file.
+
+    ``research_cmd._resolve_symbols`` takes the membership union under ``pit`` and calls
+    ``read_universe`` only under ``static``.  So blocking a pit result here refuses an armed start over
+    a file that result never read.  The 2026-09-09 workaround for that was to freeze the TRADED pool
+    instead, which left the live universe at 16 names from 09-09 to 09-15 while the cited evidence
+    re-ranked every 24 hours (``median_gap_hours: 24.0``, ``union: 211``, ``mean_size: 17.58``).
+    """
+    root = _root(tmp_path, refreshes=30, freq="D")
+    recorded = build_manifest(root).to_dict()
+    (root / "universe.json").write_text(
+        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
+        encoding="utf-8",
+    )
+    check = manifest_check(recorded, build_manifest(root), universe_mode="pit")
+    assert not check.blocking, "a pit result's population is the membership table, not this file"
+    assert check.advisory and "universe.fingerprint" in check.advisory[0]
+
+
+def test_a_static_report_still_blocks_on_the_universe_file(tmp_path: Path) -> None:
+    """``universe.json`` IS a static result's population, so its drift stays the real thing."""
+    root = _root(tmp_path, refreshes=30, freq="D")
+    recorded = build_manifest(root).to_dict()
+    (root / "universe.json").write_text(
+        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
+        encoding="utf-8",
+    )
+    check = manifest_check(recorded, build_manifest(root), universe_mode="static")
+    assert check.blocking and "universe.fingerprint" in check.blocking[0]
+
+
+def test_a_report_declaring_no_universe_mode_still_blocks(tmp_path: Path) -> None:
+    """Only an explicit ``pit`` is exempt.  A report that did not say keeps the block it has.
+
+    The opposite of the ``construction_problems`` precedent one field over, and deliberately so: that
+    one skips a dimension a report predates, this one refuses to loosen an existing block because a
+    report is silent.
+    """
+    root = _root(tmp_path, refreshes=30, freq="D")
+    recorded = build_manifest(root).to_dict()
+    (root / "universe.json").write_text(
+        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
+        encoding="utf-8",
+    )
+    check = manifest_check(recorded, build_manifest(root))
+    assert check.blocking and "universe.fingerprint" in check.blocking[0]
+
+
+def test_a_pit_report_still_blocks_on_the_membership_table(tmp_path: Path) -> None:
+    """The exemption moves ONE field.  A pit result's real gate is the table it actually ran on."""
+    root = _root(tmp_path, refreshes=6, freq="MS")
+    recorded = build_manifest(root).to_dict()
+    index = pd.date_range("2024-01-01", periods=180, freq="D", tz="UTC")
+    pd.DataFrame(True, index=index, columns=["BTCUSDT", "ETHUSDT"]).to_parquet(root / "membership.parquet")
+
+    check = manifest_check(recorded, build_manifest(root), universe_mode="pit")
+    assert check.blocking and "membership.refreshes: 6 -> 180" in check.blocking[0]

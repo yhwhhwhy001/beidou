@@ -45,23 +45,29 @@ version: 1
 # 与 TRUMPUSDT 一样：池子每日仍重排、仍记 universe_update，但 universe_pinned 下不决定
 # 任何事，所以 ENAUSDT 不会自己回来。改 registry 不等于改循环——引擎只在启动时建模，
 # 这条移除要到下次重启才生效。
-universe:
-  - BTCUSDT
-  - ETHUSDT
-  - SOLUSDT
-  - ZECUSDT
-  - XRPUSDT
-  - HYPEUSDT
-  - DOGEUSDT
-  - BNBUSDT
-  - TUTUSDT
-  - 1000PEPEUSDT
-  - SUIUSDT
-  - AKEUSDT
-  - UNIUSDT
-  - LINKUSDT
-  - ADAUSDT
-  - CYSUSDT
+# 2026-09-15（操作者裁定）：钉住取消，`universe: []`。上面整段保留不删——那是 TRUMPUSDT 与
+# ENAUSDT 两次移除的审计线，且它记录的机制仍然成立，只是不再被使用。
+#
+# 取消的理由不是"钉住太麻烦"，是钉住偏离了证据。循环引用的那份报告
+# （reports/research/tsmom-validation-20260913T182325Z.json，verdict PASS）记着
+# `universe_mode: "pit"`，其 dataset.membership 是 refreshes 2042 / median_gap_hours 24.0 /
+# mean_size 17.58 / union 211：**让这本书上线的回测交易的就是一个每 24 小时按同一条 15/20
+# 滞回重排的池子**，五年里进出过 211 个币，从来不是一份冻结的名单。所以冻结的 16 币池子才是
+# 证据没有描述过的那本书，而且漂移单调变大——2026-09-15T01:00Z 的重排提案与实持已差 7 个名字。
+#
+# 钉住当初要挡的那件事（每日重排改写 universe.json → 数据集闸阻塞 → 可干净重启每天到期）是
+# 真的，但处置选错了层：`research_cmd._resolve_symbols` 只在 static 下读 universe.json，pit
+# 报告的总体是 membership.parquet（那一项无条件阻塞）。该冻的是闸的判据，不是交易池。闸已在
+# 同一分支改对。
+#
+# TRUMPUSDT / ENAUSDT 会随第一次重排回来，操作者裁定不加排除：它们"永久占名额"的性质本身是
+# 钉住造成的，池子每天换手时低权重的币会随排名自然出池。可证伪判据：若任一标的连续 5 天记
+# BAND_BLOCKS_ENTRY 且没被重排踢出池子，这条说法即被证伪，届时重议。
+#
+# 生效同样要重启——引擎只在启动时建模。取消后 registry_digest 不再含 universe 键（条件化的），
+# 所以 digest 会变一次；重启后心跳应读到新值。
+# 设计：docs/analysis/2026-09-15-universe-unpin-and-dataset-gate-design.md
+universe: []
 ensemble:
   method: mean                 # weighted mean of per-strategy targets (alternative: rolling_zscore)
   turnover_penalty: 0.0
