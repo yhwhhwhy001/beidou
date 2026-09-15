@@ -1952,10 +1952,24 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
-    # Merge note, 2026-09-15: two sessions raised this table the same day and both numbered from
-    # Twentieth.  The seven entries below were renumbered to follow the two above them rather than
-    # to claim their numbers; nothing else in either set was edited, and the VALUES were re-measured
-    # against the merged tree, because neither side's count describes code that now includes both.
+    # Merge note, 2026-09-15.  The seven entries below (Twenty-fifth..Thirty-first OF THIS TABLE) are
+    # one session's; they were renumbered twice to get out of the way of another session's, and then
+    # the renumbering was STOPPED.  Saying why, because the next person to merge will face the same
+    # choice.
+    #
+    # The number is not a key and has not been for a while.  There are two series in this file - "Nth
+    # raise" (2026-09-04..06) and "Nth raise OF THIS TABLE" (2026-09-14..15) - and both run past
+    # Thirtieth, so every number above the twentieth now names two or three entries.  A third session
+    # raised this table the same day and took Twenty-fifth and Twenty-sixth, dropping "OF THIS TABLE"
+    # while keeping the new dates, which collides with the older series as well.
+    #
+    # Chasing uniqueness across three sessions writing concurrently costs a renumber per merge and
+    # buys nothing: what identifies an entry is its DATE plus what it says, which is how the
+    # Thirteenth entry's own collision was handled and what the session holding Twenty-fourth chose
+    # deliberately.  So the collisions are recorded rather than resolved, here and in their entries.
+    #
+    # What is NOT left to convention: the VALUES.  Every merge re-measures them against the merged
+    # tree, because no side's count describes code that now includes the others'.
     #
     # Thirty-first raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
     # the five "this symbol cannot be priced" rules written down, and NOT merged.
@@ -2619,7 +2633,36 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 9_284,
+    #
+    # Twenty-fifth raise, 2026-09-15.  +40 beidou_live, no other package moves (`live_cmd.py` passes one
+    # argument it already had in hand).  Two thirds of it is `beidou_live/verify.py`: the two digest
+    # readers used to answer "what is the loop running?" by scanning `cycles.jsonl`, which is append-only
+    # and carries NO process identity - so after a restart the newest row is the dead process's, and the
+    # check reported a divergence the restart had just resolved.  Measured 2026-09-14 (loop up 19:10:55Z
+    # holding the 17:50Z `policy.py`, the 19:11:19Z bar SKIPPED and recording no digest, the check
+    # quoting 18:00:29Z's `75764f646ca6` for the rest of the hour); `com.beidou.check` fires at :10,
+    # inside that window every time, and `state.restarts` is past 43.
+    #
+    # The lines are the scoping (`restarted_at` as the takeover boundary, which `startup` already
+    # persists before its first heartbeat) plus the heartbeat as the reading of first resort, and they
+    # buy back an instrument that was not only noisy but SILENT in the one direction that matters:
+    # bc986ec3 put these digests on the restart heartbeat for exactly this window and changed no reader,
+    # so DL-Q0's registry check had the same blind spot, still open, with a passing test that asserted
+    # the write half by source inspection.  The remaining ~8 lines are R9's digest and a `dry_run` flag
+    # on the two pre-cycle heartbeats, without which the governance half stays blind where the registry
+    # half now sees.  Nothing here touches `construction_fingerprint`.
+    #
+    # Twenty-sixth raise, 2026-09-15, +9 beidou_live and nothing else - the same defect as the
+    # twenty-fifth, found by running that fix in production twelve minutes after it shipped.  The
+    # 08:49:16Z restart wrote a heartbeat that correctly said `1db80a06f281` / `d62ac59fa95c`; the
+    # 09:00Z cycle then died on a proxy 503 (the fourth since 09-08, environmental, nothing to do with
+    # the change) and the ERROR heartbeat replaced it with four keys, none of them a digest.  Both
+    # instruments fell to "还没有任何周期记录过 digest" - honest under the new readers, where the old
+    # ones would have quoted a dead process, and still blind in the one window DL-Q0 / R9 exist for.
+    # Six of the nine lines are the paragraph saying that, because the cheap reading of this diff is
+    # "three more fields on a heartbeat" and the expensive one is "an outage is a reason to want the
+    # answer, not a reason to lose it".  Asserted through the engine, not by grepping the source.
+    "beidou_live": 9_333,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

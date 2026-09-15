@@ -123,6 +123,32 @@ async def test_two_bars_slept_through_are_two_rows(august_panel: Panel, tmp_path
     assert clock.now_ms() >= world["bar"] + 3 * HOUR_MS
 
 
+async def test_a_failed_cycle_still_says_what_the_process_is_running(august_panel: Panel, tmp_path: Path) -> None:
+    """The ERROR heartbeat overwrites the one that carried the digests, so it has to carry them itself.
+
+    Measured 2026-09-15, twelve minutes after the restart that shipped the readers: the loop came up at
+    08:49:16Z, wrote a SKIPPED heartbeat that correctly said `1db80a06f281` / `d62ac59fa95c`, and then
+    the 09:00Z cycle died on a proxy 503.  The ERROR heartbeat replaced it with four keys, none of them
+    a digest, and the only cycle row carrying one predated the restart - so both instruments went to
+    "还没有任何周期记录过 digest" for the whole hour.  Silence is honest and still blind, and this is
+    the exact window DL-Q0 / R9 exist for.
+
+    Asserted through the engine rather than by reading the source: `bc986ec3` proved a source grep sees
+    a field written and cannot see whether anything is left holding it.
+    """
+    world = _world(august_panel, tmp_path)
+    engine, market, store = world["engine"], world["market"], world["store"]
+    await engine.startup()
+    market.fail_next = 1
+
+    assert await engine.guarded_cycle(world["bar"]) is None, "the cycle was supposed to fail"
+
+    heartbeat = store.read_heartbeat()
+    assert heartbeat is not None and heartbeat["phase"] == "ERROR"
+    assert heartbeat["registry"] and heartbeat["governance"]
+    assert heartbeat["dry_run"] is False
+
+
 def test_a_skipped_heartbeat_still_says_what_the_process_is_running() -> None:
     """The restart heartbeat has to carry DL-Q0's digests, because it is the only one written
     before a cycle completes - and a restart is exactly when the answer just changed.
@@ -135,3 +161,8 @@ def test_a_skipped_heartbeat_still_says_what_the_process_is_running() -> None:
     source = Path(inspect.getfile(LiveEngine)).read_text(encoding="utf-8")
     body = source.split("def _record_missed_rebalance(")[1].split("\n    async def ")[0]
     assert '"registry"' in body and '"construction"' in body
+    # ...and R9's digest beside DL-Q0's, plus the flag that says whose reading this is.  Added
+    # 2026-09-15 with the reader that finally consults this heartbeat: bc986ec3 wrote the two digests
+    # for this window and changed no reader, so for two days the write was dead and the window it was
+    # meant to close stayed open.  The CLI test asserts the read half.
+    assert '"governance"' in body and '"dry_run"' in body

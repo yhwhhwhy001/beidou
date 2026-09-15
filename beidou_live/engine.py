@@ -495,6 +495,10 @@ class LiveEngine:
                 "history_bars": self.history_bars,
                 "construction": construction_fingerprint(self.config),
                 "registry": registry_digest(self.model),
+                # R9 beside DL-Q0, on the same terms: until a cycle of this process lands, the heartbeat
+                # is the only place that says which RULES it imported.  Gated by the same switch as the
+                # cycle row, so the switch keeps meaning what it says.
+                **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
                 "dry_run": self.config.dry_run,
                 "foreign_positions": sorted(snapshot.foreign_positions),
             }
@@ -610,7 +614,12 @@ class LiveEngine:
                 # exists to say what the process is running; the one moment it could not answer was
                 # the moment right after that answer changed.
                 "registry": registry_digest(self.model),
+                **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
                 "construction": construction_fingerprint(self.config)["digest"][:12],
+                # Which process this reading belongs to.  The heartbeat is one file that whoever runs
+                # against this directory overwrites, and the readers of these digests refuse a dry run's
+                # answer for the same reason they skip its cycle rows.
+                "dry_run": self.config.dry_run,
             }
         )
         if reason == BACKOFF_REASON:
@@ -639,6 +648,15 @@ class LiveEngine:
                     "bar_open_ms": bar_open_ms,
                     "error": f"{type(exc).__name__}: {exc}",
                     "consecutive_errors": self.consecutive_errors,
+                    # This heartbeat OVERWRITES the one that carried the digests, so it has to carry them
+                    # itself or DL-Q0 / R9 lose their answer for the length of the outage.  Measured
+                    # 2026-09-15, twelve minutes after the restart that shipped their readers: the
+                    # 08:49:16Z restart wrote them correctly, the 09:00Z cycle died on a proxy 503, and
+                    # both checks fell to "还没有任何周期记录过 digest" - honest, and still blind, in the
+                    # one window these instruments exist for.  An outage is a reason to want the answer.
+                    "registry": registry_digest(self.model),
+                    **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
+                    "dry_run": self.config.dry_run,
                 }
             )
             # A failed cycle must leave a durable row: the heartbeat is overwritten by the next cycle, so
