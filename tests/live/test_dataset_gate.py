@@ -45,10 +45,14 @@ def _registry_citing(report: Path) -> Registry:
     return Registry(version=1, ensemble_method="mean", turnover_penalty=0.0, strategies=(entry,))
 
 
-def _report(tmp_path: Path, data_root: Path, *, with_manifest: bool = True) -> Path:
+def _report(
+    tmp_path: Path, data_root: Path, *, with_manifest: bool = True, universe_mode: str | None = None
+) -> Path:
     payload: dict[str, object] = {"kind": "validation", "verdict": "PASS"}
     if with_manifest:
         payload["dataset"] = build_manifest(data_root).to_dict()
+    if universe_mode is not None:
+        payload["universe_mode"] = universe_mode
     path = tmp_path / "report.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -145,3 +149,35 @@ def test_a_report_written_without_a_dataset_check_still_renders(tmp_path: Path) 
     payload = daily_payload(store, "2025-09-02")
     assert payload["dataset"] == {"blocking": [], "advisory": []}
     assert daily_markdown(payload)
+
+
+def test_a_pit_report_is_not_blocked_by_the_universe_file_at_startup(tmp_path: Path) -> None:
+    """The WIRING, not just the predicate: the gate has to read ``universe_mode`` off the report.
+
+    A correct predicate nobody passes the mode to is this repository's most frequent defect - a
+    producer and a consumer that are each right on their own.  So the join is tested, not assumed.
+    """
+    root = _data_root(tmp_path)
+    registry = _registry_citing(_report(tmp_path, root, universe_mode="pit"))
+    (root / "universe.json").write_text(
+        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
+        encoding="utf-8",
+    )
+
+    check = registry_dataset_problems(registry, data_root=root)
+    assert not check.blocking, "a pit result's population is the membership table, not this file"
+    assert check.advisory and "universe.fingerprint" in check.advisory[0]
+
+
+def test_a_static_report_is_still_blocked_by_the_universe_file_at_startup(tmp_path: Path) -> None:
+    """The other half of the join: static keeps the block, so the exemption cannot be a blanket one."""
+    root = _data_root(tmp_path)
+    registry = _registry_citing(_report(tmp_path, root, universe_mode="static"))
+    (root / "universe.json").write_text(
+        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
+        encoding="utf-8",
+    )
+
+    check = registry_dataset_problems(registry, data_root=root)
+    assert check.blocking and check.blocking[0].startswith("tsmom: ")
+    assert "universe.fingerprint" in check.blocking[0]
