@@ -25,6 +25,26 @@ version: 1
 #   registry_digest e204447bef68 -> 9e1bf73c3691，重启后心跳应读到后者。
 # 池子每日仍照常重排、照常记进 cycles.jsonl 的 universe_update，但 universe_pinned 下它
 # 不决定任何事，所以 TRUMPUSDT 不会自己回来。
+# 2026-09-14T19:42Z（操作者指示）：ENAUSDT 移出，与上一条同形、同理由、同证据形状。
+# 它的模型目标已缩到权益的 0.016%（1.78 USDT），而 `no_trade_band: 0.005` 要求一笔调仓至少
+# 0.5% 权益（当时 54.76 USDT），于是它从 2026-09-14T17:00Z 起每根周期都被记成
+# BAND_BLOCKS_ENTRY：占着一个名额、永远建不了仓。
+# 到这一步的路径与 TRUMPUSDT 不同，值得记下来，因为它是带宽的另一侧：ENAUSDT 先被带宽
+# 困在**有仓位**的那一面——09-14T10:00Z 一笔 reduce-only 把它留在 −11.19 USDT（5x 下保证金
+# 2.24 USDT），而带宽 54.32 USDT，目标归零能要求的最大缺口就是 11.19，撞不动，止损也打不出
+# 订单（退出层只把权重改成 0，改完照样过带宽）。操作者 17:00Z 前手工平掉它之后，它才落到
+# BAND_BLOCKS_ENTRY 这一侧。判据与旋钮见 f44016a9 / ad70e81a，读数见 RESEARCH_LOG 同日条目。
+# 移除时无敞口：17:00Z 与 18:00Z 两根都记 BAND_BLOCKS_ENTRY，而该标签只在 current_qty == 0
+# 时发出，是循环自己从 positionRisk 读的——所以移除不平任何仓位。
+# 先测后改，四项都是量出来的而不是推的：
+#   构造指纹 ccd7bb9764b5（别名解析为 46b8d731530a）删前删后一致 —— M-010 的 30 天窗口
+#     **不清零**；`test_the_universe_list_is_not_what_this_pins` 正是把这件事钉住的那条；
+#   启动证据门 registry_evidence_problems 删前删后都是 0（dataset 那 2 条是当日已有的
+#     advisory，blocking 为 none，与本次无关）；
+#   registry_digest 9e1bf73c3691 -> 1db80a06f281，重启后心跳应读到后者。
+# 与 TRUMPUSDT 一样：池子每日仍重排、仍记 universe_update，但 universe_pinned 下不决定
+# 任何事，所以 ENAUSDT 不会自己回来。改 registry 不等于改循环——引擎只在启动时建模，
+# 这条移除要到下次重启才生效。
 universe:
   - BTCUSDT
   - ETHUSDT
@@ -34,7 +54,6 @@ universe:
   - HYPEUSDT
   - DOGEUSDT
   - BNBUSDT
-  - ENAUSDT
   - TUTUSDT
   - 1000PEPEUSDT
   - SUIUSDT
