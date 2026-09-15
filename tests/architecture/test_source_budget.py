@@ -2470,7 +2470,40 @@ CEILING = {
     # Six of the nine lines are the paragraph saying that, because the cheap reading of this diff is
     # "three more fields on a heartbeat" and the expensive one is "an outage is a reason to want the
     # answer, not a reason to lose it".  Asserted through the engine, not by grepping the source.
-    "beidou_live": 8_978,
+    #
+    # Twenty-fourth raise, 2026-09-15: +60 beidou_live, no other package moves.  The number is a collision
+    # and is recorded rather than renumbered, on the thirteenth entry's own precedent.  A parallel session
+    # declared 25-31 for its entries and left 20-24 to this branch, and all five of those were already
+    # spent - twenty-fourth once, the other four twice or more - so this takes the least-spent one instead
+    # of continuing at twenty-seventh into a range another session is writing into right now.
+    #
+    # DL-GB0, the giveback ruler.  `noise_scale`'s `peak_giveback_u` measures inside the UTC day and its
+    # own docstring said so; the operator on 2026-09-15 was asking about a fall that started the previous
+    # evening.  The report answered 145.2 U / 0.43 design daily sigma to a question whose answer was
+    # 430.1 U / 1.28, and no instrument on the page could produce the second number.  The new keys read the
+    # high-water mark the LOOP wrote - `throttle.equity_hwm`, the field D-015's throttle acts on - rather
+    # than recomputing a high off the equity path, because the two can disagree and only one of them is
+    # what the account is actually being throttled against.
+    #
+    # About two thirds of the 60 lines is docstring, and two paragraphs of it are the deliverable because
+    # a schema cannot carry them.  First: the mark's age is when it became VISIBLE, not when it happened.
+    # The 2026-09-14 high was set inside the 20:24Z restart gap, whose two cycles wrote heartbeat rows with
+    # no equity field at all, so the earliest row carrying the mark is the 21:00Z bar and the true age can
+    # be a bar older.  Second: the three drawdowns now printed together (3.86% equity against the loop's
+    # high, -1.92% R8's attributed ladder, 0.43 sigma day-inside) point the same way with OPPOSITE signs,
+    # and the ladder's is copied exactly as the loop writes it - flipping a sign to make a table tidy would
+    # stop the field matching the record it came from.  `drawdown_vs_hwm_pct` is computed as giveback/HWM
+    # and reproduces `throttle.drawdown` to the last digit, which is the check that the rulers share a book.
+    #
+    # One number in the delivery contract does not survive being computed: it asked for 1.89 sigma_11h, and
+    # a single clock gives 10.0 hours and 1.98.  The 11 came from dating the mark by its bar (09-14T21:00Z)
+    # and "now" by the row's WRITE time (09-15T08:00Z), which is D-025's two clocks one subtraction apart.
+    # Both timestamps here are `as_of_ms`, `_day_of`'s own preference, so the hours are the data's.
+    #
+    # Deliberately NOT bought: the ROE line the analysis asks for stays out until the operator says which
+    # of the venue's percentages they read (A-GB01), and nothing here touches `construction_fingerprint` -
+    # this is a report-layer change inside the KILL-006 holdout, and the frozen-construction test agrees.
+    "beidou_live": 9_038,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

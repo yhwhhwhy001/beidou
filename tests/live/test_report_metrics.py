@@ -202,6 +202,65 @@ def test_noise_scale_without_vol_target_or_cycles_does_not_crash(tmp_path: Path)
 
     empty = noise_scale(_store(tmp_path, []), "2026-09-07", vol_target=None)
     assert empty["design_daily_sigma_u"] is None and empty["peak_giveback_u"] is None
+    assert empty["giveback_since_hwm_u"] is None and empty["giveback_since_hwm_hours"] is None
+    assert empty["giveback_since_hwm_in_horizon_sigma"] is None and empty["equity_hwm_u"] is None
+
+
+def test_noise_scale_measures_the_giveback_from_the_loops_own_high_water_mark(tmp_path: Path) -> None:
+    """DL-GB0: the fall the operator sees starts at the HWM, and the HWM is older than today.
+
+    The day-inside ruler reads 140 U here and the account has given back 440 U, for no reason other than
+    that the high was set yesterday - which is exactly the gap that had 2026-09-15's report answering 0.43
+    sigma to a question about 1.28.  Three things are pinned: the mark is the loop's `throttle.equity_hwm`
+    and not a high recomputed from the equity path; the age of that mark is dated from the earliest cycle
+    row CARRYING it; and the horizon sigma shrinks the 24-hour sigma to those hours instead of reading an
+    eight-hour fall against a day.
+
+    The heartbeat at bar 21 is the case worth having a test for.  That restart is where the high actually
+    happened - it is the shape of the 2026-09-14T20:24Z gap, whose two cycles wrote rows with no equity
+    field at all - so the first row that can carry the new mark is bar 22, and `giveback_since_hwm_hours`
+    reads 8 and not 9.  Visible, not true; the docstring says so and this is the row that makes it true.
+    """
+    from beidou_live.reports import noise_scale
+
+    def armed(i: int, equity: float, hwm: float, ladder: float) -> dict:
+        return _aligned(i, equity, throttle={"equity_hwm": hwm}, risk_ladder={"drawdown": ladder})
+
+    cycles: list[dict] = [armed(i, 10_000.0, 10_000.0, 0.0) for i in range(21)]
+    cycles.append({"bar_open_ms": _aligned(21, 0.0)["bar_open_ms"], "bar": "bar-21", "phase": "ERROR"})
+    cycles += [armed(22, 10_900.0, 11_000.0, -0.01), armed(23, 10_850.0, 11_000.0, -0.01)]
+    day_two = [10_690.0, 10_680.0, 10_700.0, 10_650.0, 10_600.0, 10_580.0, 10_560.0]
+    cycles += [armed(24 + n, value, 11_000.0, -0.02) for n, value in enumerate(day_two)]
+
+    result = noise_scale(_store(tmp_path, cycles), _day_of_bar(int(cycles[-1]["bar_open_ms"])), vol_target=0.30)
+    design = 10_560.0 * 0.30 / math.sqrt(365.0)
+    assert result["peak_giveback_u"] == pytest.approx(140.0), "the day-inside ruler only sees 10,700 -> 10,560"
+    assert result["equity_hwm_u"] == pytest.approx(11_000.0)
+    assert result["giveback_since_hwm_u"] == pytest.approx(440.0)
+    assert result["giveback_since_hwm_in_design_sigma"] == pytest.approx(440.0 / design)
+    assert result["giveback_since_hwm_hours"] == pytest.approx(8.0)
+    assert result["giveback_since_hwm_in_horizon_sigma"] == pytest.approx(440.0 / (design * math.sqrt(8.0 / 24.0)))
+    assert result["drawdown_vs_hwm_pct"] == pytest.approx(0.04)
+    assert result["ladder_drawdown_pct"] == pytest.approx(-0.02), "R8's ruler is copied with the sign it was written"
+
+
+def test_noise_scale_does_not_report_a_negative_giveback_above_the_mark(tmp_path: Path) -> None:
+    """A cycle that sets a new high writes the mark and the equity in the same row, so the fall is 0, not -0.
+
+    The floor matters because the mark is read off the row and the equity off the same row: without it a
+    book making new highs would print a negative giveback and a negative sigma, which reads as a gain on a
+    ruler that only measures losses.  The mark being one bar old also makes the age 0 hours, and a 0-hour
+    horizon has no sigma to divide by - reported as absent rather than as an infinity.
+    """
+    from beidou_live.reports import noise_scale
+
+    cycles = [_aligned(i, 10_000.0 + i, throttle={"equity_hwm": 10_000.0 + i}) for i in range(30)]
+    result = noise_scale(_store(tmp_path, cycles), _day_of_bar(int(cycles[-1]["bar_open_ms"])), vol_target=0.30)
+    assert result["giveback_since_hwm_u"] == pytest.approx(0.0)
+    assert result["giveback_since_hwm_in_design_sigma"] == pytest.approx(0.0)
+    assert result["giveback_since_hwm_hours"] == pytest.approx(0.0)
+    assert result["giveback_since_hwm_in_horizon_sigma"] is None
+    assert result["ladder_drawdown_pct"] is None, "no ladder block on the row means no reading, not a zero"
 
 
 def test_noise_scale_does_not_count_a_cooldown_as_an_exit(tmp_path: Path) -> None:

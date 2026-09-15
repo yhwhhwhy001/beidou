@@ -831,6 +831,27 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     so far in the current construction, and ``exits_so_far`` counts the exits that actually happened over
     that same evidence window - not over ``realised``'s 30 days, which is a different span, and not counting
     COOLDOWN, which records a cycle an earlier exit blocked rather than an exit of its own.
+
+    DL-GB0: ``peak_giveback`` resets at midnight and the giveback an operator sees does not.  On 2026-09-15
+    the day-inside ruler read 145.2 U / 0.43 sigma while the number being asked about was the 430 U back
+    from the 09-14T21:00Z high - 1.28 design daily sigma.  So ``giveback_since_hwm_u`` measures from the
+    high-water mark the LOOP wrote (``throttle.equity_hwm``, the one D-015's throttle acts on) and not from
+    a high this function recomputes off the equity path: the instrument reads the loop's reading.
+    ``giveback_since_hwm_hours`` dates that mark to the EARLIEST cycle row still carrying it, which is when
+    the mark became visible and not when it happened - the 2026-09-14 high was set inside the 20:24Z restart
+    gap, whose two cycles wrote heartbeat rows with no equity at all, so the first row to carry it is the
+    21:00Z bar and the true age can be a bar older.  ``giveback_since_hwm_in_horizon_sigma`` divides by the
+    design sigma scaled to those hours, because a fall of ten hours measured against a 24-hour sigma reads
+    small by construction: the same 430 U is 1.28 sigma_d and 1.98 sigma_10h.
+
+    The last three keys are a reconciliation, not new measurements.  One page carried three drawdowns and
+    the operator read the largest: ``drawdown_vs_hwm_pct`` is equity against the loop's own high (it
+    reproduces ``throttle.drawdown`` exactly, which is the check), ``ladder_drawdown_pct`` is R8's ruler -
+    attributed P&L against the ladder's own anchor, a different book on a different window - and
+    ``giveback_in_design_sigma`` above is the day-inside one.  The two percentages point the same way with
+    OPPOSITE signs: the ladder's is copied as the loop writes it, negative, because changing a sign to make
+    a table tidy would make the field stop matching the record it came from.  ROE is deliberately absent
+    (A-GB01: which of the venue's three percentages the operator reads is not yet known).
     """
     trailing = _cycles(store, window_days=30)
     today = [row for row in trailing if _day_of(row) == day]
@@ -847,6 +868,27 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     for value in equities:
         peak = value if peak is None else max(peak, value)
         giveback = (peak - value) if giveback is None else max(giveback, peak - value)
+
+    def stamp(row: Mapping[str, Any]) -> int:
+        """`_day_of`'s preference order in milliseconds: the data's clock before the host's (D-025)."""
+        return int(row.get("as_of_ms") or row.get("bar_open_ms") or 0)
+
+    last_row = today[-1] if today else None
+    recorded_hwm = (last_row.get("throttle") or {}).get("equity_hwm") if last_row else None
+    hwm = float(recorded_hwm) if recorded_hwm is not None else None
+    since_hwm = max(0.0, hwm - last) if (hwm is not None and last is not None) else None
+    # Walk back from the day's last cycle while the loop kept writing the same mark, and stop at the row
+    # that carried a lower one.  Bounded by that cycle rather than by the end of `trailing`, so asking for
+    # a past `--date` cannot date the mark from rows written after the day being reported on.
+    anchor = stamp(last_row) if last_row else None
+    oldest_at_hwm = None
+    for row in reversed([row for row in trailing if anchor and stamp(row) <= anchor]):
+        mark = (row.get("throttle") or {}).get("equity_hwm")
+        if hwm is None or mark is None or float(mark) != hwm:
+            break
+        oldest_at_hwm = row
+    hours = (anchor - stamp(oldest_at_hwm)) / (DAY_MS / 24.0) if (oldest_at_hwm and anchor) else None
+    horizon = design * math.sqrt(hours / 24.0) if (design and hours and hours > 0) else None
     window = evidence_window(store)
     bars = int(window.get("bars") or 0)
     since = int(window.get("since_ms") or 0)
@@ -867,6 +909,13 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         "giveback_in_design_sigma": (giveback / design) if (giveback is not None and design) else None,
         "expected_exits_so_far": BACKTEST_EXITS_PER_WEEK / 7.0 * (bars / 24.0),
         "exits_so_far": exits,
+        "giveback_since_hwm_u": since_hwm,
+        "giveback_since_hwm_in_design_sigma": (since_hwm / design) if (since_hwm is not None and design) else None,
+        "giveback_since_hwm_hours": hours,
+        "giveback_since_hwm_in_horizon_sigma": (since_hwm / horizon) if (since_hwm is not None and horizon) else None,
+        "equity_hwm_u": hwm,
+        "drawdown_vs_hwm_pct": (since_hwm / hwm) if (since_hwm is not None and hwm) else None,
+        "ladder_drawdown_pct": (last_row.get("risk_ladder") or {}).get("drawdown") if last_row else None,
     }
 
 
@@ -2285,21 +2334,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "pool_quarantined": json_dumps((payload.get("events") or {}).get("pool_quarantined") or []),
                 },
             ),
-            (
-                "Noise scale (DL-EX0)",
-                {
-                    "design_daily_sigma_u": _fmt_num((payload.get("noise_scale") or {}).get("design_daily_sigma_u")),
-                    "realised_daily_sigma_u": _fmt_num(
-                        (payload.get("noise_scale") or {}).get("realised_daily_sigma_u")
-                    ),
-                    "peak_giveback_u": _fmt_num((payload.get("noise_scale") or {}).get("peak_giveback_u")),
-                    "giveback_in_design_sigma": _fmt_num(
-                        (payload.get("noise_scale") or {}).get("giveback_in_design_sigma")
-                    ),
-                    "expected_exits_so_far": _fmt_num((payload.get("noise_scale") or {}).get("expected_exits_so_far")),
-                    "exits_so_far": (payload.get("noise_scale") or {}).get("exits_so_far"),
-                },
-            ),
+            ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
             (
                 "Exit counterfactuals (M-005, monitoring only)",
                 {
@@ -2359,6 +2394,31 @@ def daily_markdown(payload: dict[str, Any]) -> str:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
+
+
+def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """DL-EX0's day-inside ruler, then DL-GB0's cross-day one, then the three drawdowns side by side.
+
+    The order is the argument.  Two labels carry "(today)" because the day-inside reading is the one that
+    silently disagreed with the account, `hours` is printed so the horizon sigma can be checked by hand, and
+    the two percentages are adjacent so the page answers "which drawdown is the drawdown" instead of leaving
+    a reader to pick the worst of three.  What each number measures is in `noise_scale`'s docstring.
+    """
+    return {
+        "design_daily_sigma_u": _fmt_num(block.get("design_daily_sigma_u")),
+        "realised_daily_sigma_u": _fmt_num(block.get("realised_daily_sigma_u")),
+        "peak_giveback_u (today, UTC)": _fmt_num(block.get("peak_giveback_u")),
+        "giveback_in_design_sigma (today)": _fmt_num(block.get("giveback_in_design_sigma")),
+        "equity_hwm_u": _fmt_num(block.get("equity_hwm_u")),
+        "giveback_since_hwm_u": _fmt_num(block.get("giveback_since_hwm_u")),
+        "giveback_since_hwm_hours": _fmt_num(block.get("giveback_since_hwm_hours")),
+        "giveback_since_hwm_in_design_sigma": _fmt_num(block.get("giveback_since_hwm_in_design_sigma")),
+        "giveback_since_hwm_in_horizon_sigma": _fmt_num(block.get("giveback_since_hwm_in_horizon_sigma")),
+        "drawdown_vs_hwm_pct (equity)": _fmt_pct(block.get("drawdown_vs_hwm_pct")),
+        "ladder_drawdown_pct (R8, attributed)": _fmt_pct(block.get("ladder_drawdown_pct")),
+        "expected_exits_so_far": _fmt_num(block.get("expected_exits_so_far")),
+        "exits_so_far": block.get("exits_so_far"),
+    }
 
 
 def _fmt_num(value: Any) -> str:
