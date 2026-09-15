@@ -34,8 +34,10 @@ from beidou_shared.config import load_yaml
 ROOT = Path(__file__).resolve().parents[2]
 
 DEAD_PROCESS_GOVERNANCE = "75764f646ca6"  # the 18:00:29Z reading, written by a process that is gone
-# Synthetic on purpose: the real 2026-09-14 reading was `9e1bf73c3691`, which is this repository's
-# own current digest - using it would make the test pass for the wrong reason the day it changes.
+# Synthetic on purpose.  The real 2026-09-14 reading was `9e1bf73c3691` - which was this repository's
+# OWN digest when this test was written, so using it would have made the test pass for the wrong
+# reason; f4c86054 has since moved the tree to `1db80a06f281` by dropping ENAUSDT, which is exactly
+# the kind of move that must not be able to decide whether this test means anything.
 DEAD_PROCESS_REGISTRY = "dead0badc0de"
 
 
