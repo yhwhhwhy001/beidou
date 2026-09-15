@@ -113,7 +113,7 @@ AKEUSDT：入场 0.01519，现价 0.018566，价格 **+22.2%**；5 倍杠杆下�
 
 **出处**（全部只读复核）
 
-- 权益 / 浮盈 / 毛敞口 / 抵押品占比 / 高水位 / 阶梯回撤：`.beidou/live/cycles.jsonl` 最后一根完整周期（bar 2026-09-15T07:00Z，写于 08:00Z）的 `equity`、`unrealized`、`gross_before`、`collateral.share`、`throttle.equity_hwm`、`risk_ladder.drawdown`（这是最后一根有读数的完整周期；再之后 08:49Z 是另一会话重启后的 SKIPPED 行，09:01Z 那根是 1082 代理 503 的 ERROR 行，两者都没有权益读数）。
+- 权益 / 浮盈 / 毛敞口 / 抵押品占比 / 高水位 / 阶梯回撤：`.beidou/live/cycles.jsonl` 最后一根完整周期（bar 2026-09-15T07:00Z，写于 08:00Z）的 `equity`、`unrealized`、`gross_before`、`collateral.share`、`throttle.equity_hwm`、`risk_ladder.drawdown`（这是最后一根有读数的完整周期；再之后 08:49:23Z 是一次重启后的 SKIPPED 行（`state.restarts` 47、`restarted_at` 08:49:16Z；前一个进程死于 SIGKILL，由 launchd 拉起——**发起者未经证实**，本文不作归因），09:01:01Z 那根是 1082 代理 503 的 ERROR 行，两者都没有权益读数）。
 - 入场价 / 波动单位 / 杠杆 / 当日起点：`.beidou/live/state.json` 的 `exit_states`、`leverage_set`、`day_start_equity`、`equity_hwm`。
 - 阶梯档位：`beidou_governance/policy.py:217` 的 `drawdown_ladder = ((-0.49, 0.45), (-0.70, 0.30))`，报告副本在 `config/live.demo.yaml` 的 `risk_budget`（`deescalate_at` 0.49 / `rollback_at` 0.70）；降档的年化与回撤代价在同文件第 96–100 行（P32 的 k 阶梯表）。
 - 每周 1.9 次退出：`beidou_live/reports.py:819`（P11 回测 562 次退出 / 49,735 根小时 bar）；当日回吐的定义在同文件 `noise_scale()`。
