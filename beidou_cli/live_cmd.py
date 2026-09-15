@@ -518,7 +518,7 @@ def live_status(
     # last cycle recorded against the file's own digest is the only thing that can see that gap - the
     # construction fingerprint covers the portfolio layer, the evidence gate runs before the edit, and
     # `live verify` rebuilds its model from the same file it would be checking.
-    recorded = last_recorded_registry_digest(store)
+    recorded = last_recorded_registry_digest(store, state.restarted_at)
     if recorded is None:
         click.echo("registry：还没有任何周期记录过 digest")
     else:
@@ -533,7 +533,7 @@ def live_status(
     # R9 / RISK-G8, same shape one layer up: the loop imports `policy.py` once, so a rule edit changes
     # the repository and not the process.  The digest was already in every cycle row; this is the
     # comparison that turns it into an instrument.
-    recorded_policy = last_recorded_governance_digest(store)
+    recorded_policy = last_recorded_governance_digest(store, state.restarted_at)
     if recorded_policy is None:
         click.echo("治理规则：还没有任何周期记录过 digest")
     elif recorded_policy == policy_digest():

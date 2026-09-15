@@ -2441,7 +2441,25 @@ CEILING = {
     # by widening the tolerance the monitor fires on - which is the move that would have been cheaper
     # in lines and wrong.  It also carries the price: the book acts 15s later on a 3600s bar, and
     # DL-L4's rebalance window widens by the same 15s because it is derived from this.
-    "beidou_live": 8_929,
+    #
+    # Twenty-fifth raise, 2026-09-15.  +40 beidou_live, no other package moves (`live_cmd.py` passes one
+    # argument it already had in hand).  Two thirds of it is `beidou_live/verify.py`: the two digest
+    # readers used to answer "what is the loop running?" by scanning `cycles.jsonl`, which is append-only
+    # and carries NO process identity - so after a restart the newest row is the dead process's, and the
+    # check reported a divergence the restart had just resolved.  Measured 2026-09-14 (loop up 19:10:55Z
+    # holding the 17:50Z `policy.py`, the 19:11:19Z bar SKIPPED and recording no digest, the check
+    # quoting 18:00:29Z's `75764f646ca6` for the rest of the hour); `com.beidou.check` fires at :10,
+    # inside that window every time, and `state.restarts` is past 43.
+    #
+    # The lines are the scoping (`restarted_at` as the takeover boundary, which `startup` already
+    # persists before its first heartbeat) plus the heartbeat as the reading of first resort, and they
+    # buy back an instrument that was not only noisy but SILENT in the one direction that matters:
+    # bc986ec3 put these digests on the restart heartbeat for exactly this window and changed no reader,
+    # so DL-Q0's registry check had the same blind spot, still open, with a passing test that asserted
+    # the write half by source inspection.  The remaining ~8 lines are R9's digest and a `dry_run` flag
+    # on the two pre-cycle heartbeats, without which the governance half stays blind where the registry
+    # half now sees.  Nothing here touches `construction_fingerprint`.
+    "beidou_live": 8_969,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

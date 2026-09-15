@@ -135,3 +135,8 @@ def test_a_skipped_heartbeat_still_says_what_the_process_is_running() -> None:
     source = Path(inspect.getfile(LiveEngine)).read_text(encoding="utf-8")
     body = source.split("def _record_missed_rebalance(")[1].split("\n    async def ")[0]
     assert '"registry"' in body and '"construction"' in body
+    # ...and R9's digest beside DL-Q0's, plus the flag that says whose reading this is.  Added
+    # 2026-09-15 with the reader that finally consults this heartbeat: bc986ec3 wrote the two digests
+    # for this window and changed no reader, so for two days the write was dead and the window it was
+    # meant to close stayed open.  The CLI test asserts the read half.
+    assert '"governance"' in body and '"dry_run"' in body
