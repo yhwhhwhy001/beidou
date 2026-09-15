@@ -200,7 +200,7 @@ def _universe_drift_blocks(
     build its sensitivity arm, and the shipped registry cites exactly such a report -
     ``book-tsmom-flow-20260908T105322Z.json``, ``universe_mode: "pit"`` with
     ``robustness_universe: "static"``.  It is harmless today only because ``book`` writes no
-    ``dataset`` block (``build_manifest`` is called by ``validate`` and ``mine`` alone), so that
+    ``dataset`` block (only ``validate`` and ``mine`` write one into a report), so that
     report reaches ``manifest_check`` as ``None`` and never reaches this predicate at all.  Give
     ``book`` a manifest and this exemption starts waving through a report that did read the file.
     """
