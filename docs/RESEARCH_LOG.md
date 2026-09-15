@@ -10922,6 +10922,28 @@ AKEUSDT 在 16:00Z 收到 4.90σ（距 6σ 差 10.0%）之后，它第一次有�
   不可达」，那更糟。要做应先观测几天直连可达性，而不是拿一次 ping 换掉一条在跑的路径。
   落点是 launchd plist 或 `env.sh`——**改 `~/.zshrc` 无效**，`run_live.sh` 只 `eval` 形如
   `export BEIDOU_*` 的行。
+
+  > **Corrected 2026-09-15T17:20Z：上面那句「实测直连」是错的，B 的前提不成立。** 系统解析把
+  > `fapi.binance.com` / `demo-fapi.binance.com` 答成 **198.18.0.29 / 198.18.0.41**——RFC 2544 段，
+  > 即 Shadowrocket 的 fake-IP 透明代理；向 1.1.1.1 的外部 DNS 查询直接超时。所以取消 `HTTP_PROXY`
+  > 后的那次 curl **并没有直连币安**，它只是从显式代理换到了同一个 App 的透明路径。0.54s / 0.48s
+  > 量的是「透明 vs 显式」，不是「直连 vs 代理」。**这台机器上量不到真正的直连**，那要关掉代理 App
+  > 才谈得上，是另一个决定。
+  >
+  > 于是 B 的含义要改写：**加 `NO_PROXY` 不会绕开代理**，只会把循环从显式路径挪到透明路径。它仍
+  > 可能值得做（四次失败全在显式路径上），但买到的是「换一条路」而不是「不走代理」。
+  >
+  > 路径归属的实测（`lsof -nP -a -p <pid> -iTCP`）：armed 循环 **PID 30758 连 `127.0.0.1:1082`**，
+  > 影子循环 **PID 802 连 `198.18.0.29:443`**——两个 launchd 任务跑在两条不同的路径上。巡检任务
+  > 也在显式路径：`check.stdout.log` 的 FAIL 行里有 3 次 ProxyError、2 次 ConnectTimeout。
+  >
+  > 还有一条方法上的教训：`launchctl getenv HTTP_PROXY` 从会话 shell 读是**空的**，而三个证据
+  > （循环的 ProxyError、巡检的 ProxyError、lsof 看到的 1082 连接）都说明 launchd 起的进程里有它。
+  > **`getenv` 读到空不等于那些进程没有**，别拿它下结论。代理本身不在仓库任何文件里声明，是继承来的。
+  >
+  > 证据收集已改按正确口径进行：`deploy/run_proxy_probe.sh` + `com.beidou.proxy-probe.plist`
+  > 每 5 分钟采样两条路径 × 两个 host，只读、不认证（`/fapi/v1/ping`，weight 1），
+  > 追加写 `~/Library/Application Support/beidou/proxy-probe.jsonl`。
 - **C：周期级立即重试。** 成功周期从收盘到写盘中位 **14.0s**（p90 27.0s），本次失败在收盘后
   61.0s、窗口 87.6s，**还剩 26.6s，放得进**。但那 61 秒里客户端已打满 5 次全被 503，第 6 次面对的
   是同一场未结束的中断，不是新机会；且要动 M-004 的退避语义。期望收益低。

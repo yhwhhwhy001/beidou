@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Path reachability probe, every 5 minutes: explicit HTTP proxy on :1082 versus the transparent
+      fake-IP path, for both venue hosts.  Read-only and unauthenticated (/fapi/v1/ping, weight 1);
+      it never writes to the venue or to any live state directory.  Evidence for the NO_PROXY
+      question raised by the transport failures of 2026-09-15; see deploy/run_proxy_probe.sh for
+      what the two arms do and do NOT mean.
+      Temporary by intent: a few days of samples, then read and remove.
+      Install (operator action):
+        cp deploy/com.beidou.proxy-probe.plist ~/Library/LaunchAgents/
+        launchctl load -w ~/Library/LaunchAgents/com.beidou.proxy-probe.plist
+      Remove (operator action):
+        launchctl unload -w ~/Library/LaunchAgents/com.beidou.proxy-probe.plist
+        rm ~/Library/LaunchAgents/com.beidou.proxy-probe.plist
+    -->
+    <key>Label</key>
+    <string>com.beidou.proxy-probe</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/maguannan/beidou/deploy/run_proxy_probe.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/maguannan/beidou</string>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/proxy-probe.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/proxy-probe.stderr.log</string>
+</dict>
+</plist>
