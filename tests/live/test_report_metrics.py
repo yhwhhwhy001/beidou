@@ -263,6 +263,77 @@ def test_noise_scale_does_not_report_a_negative_giveback_above_the_mark(tmp_path
     assert result["ladder_drawdown_pct"] is None, "no ladder block on the row means no reading, not a zero"
 
 
+def test_noise_scale_restates_the_giveback_on_the_operators_usdt_ruler(tmp_path: Path) -> None:
+    """A-GB01: the operator reads the venue's USDT equity, so the same fall is a bigger percentage.
+
+    Everything pinned here is a CONVERSION of a number measured above it.  The numerator is still the fall
+    from `throttle.equity_hwm`, measured on total equity; only the denominator becomes
+    `collateral.usdt_equity`.  The account is half collateral in this fixture, so the same 1,000 U reads
+    20.00% on the operator's screen and 10.00% against equity - a 2x gap that is entirely the denominator
+    and not a disagreement about what happened.
+
+    The two fixtures differ in the direction a bug would take: the earlier rows carry a DIFFERENT USDT
+    balance, so a reader that took the first recorded split rather than the day's last cycle fails here,
+    and the ladder/HWM keys are asserted unchanged so a future edit cannot quietly move a numerator onto
+    the USDT series - which would be a fourth high-water mark, the thing this key exists not to become.
+    """
+    from beidou_live.reports import noise_scale
+
+    def armed(i: int, equity: float, usdt: float) -> dict:
+        return _aligned(
+            i,
+            equity,
+            throttle={"equity_hwm": 11_000.0},
+            collateral={"equity": equity, "usdt_equity": usdt, "collateral": equity - usdt, "share": 1 - usdt / equity},
+        )
+
+    cycles = [armed(i, 10_600.0, 6_000.0) for i in range(29)] + [armed(29, 10_000.0, 5_000.0)]
+    result = noise_scale(_store(tmp_path, cycles), _day_of_bar(int(cycles[-1]["bar_open_ms"])), vol_target=0.30)
+
+    design = 10_000.0 * 0.30 / math.sqrt(365.0)
+    assert result["usdt_equity_u"] == pytest.approx(5_000.0), "the day's last cycle, not the first split recorded"
+    assert result["giveback_since_hwm_u"] == pytest.approx(1_000.0), "the numerator stays on total equity"
+    assert result["giveback_since_hwm_in_usdt_pct"] == pytest.approx(1_000.0 / 5_000.0)
+    assert result["giveback_since_hwm_in_usdt_pct"] != pytest.approx(1_000.0 / 10_000.0), "denominator is USDT equity"
+    assert result["design_daily_sigma_in_usdt_pct"] == pytest.approx(design / 5_000.0)
+    assert result["design_daily_sigma_in_usdt_pct"] != pytest.approx(design / 10_000.0), "not the equity line"
+    assert result["design_daily_sigma_u"] == pytest.approx(design), "the sigma itself is unchanged by the restatement"
+    assert result["equity_hwm_u"] == pytest.approx(11_000.0), "no high-water mark is recomputed on the USDT series"
+    assert result["drawdown_vs_hwm_pct"] == pytest.approx(1_000.0 / 11_000.0), "the equity ruler still reads its own"
+
+
+def test_noise_scale_reports_no_usdt_ruler_when_the_venue_did_not_report_one(tmp_path: Path) -> None:
+    """Three keys absent beats three keys wrong: a missing USDT balance is not a zero balance.
+
+    Two silences reach here by different routes - a row written before the engine recorded the split at
+    all (no `collateral` key), and a row whose `collateral` block exists with `usdt_equity: None` because
+    the venue payload carried no USDT asset.  `collateral_share` already refuses to call the second one
+    zero, and dividing by either would print an infinity or a 0.00% where the honest answer is "n/a".
+    """
+    from beidou_live.reports import noise_scale
+
+    day = _day_of_bar(int(_aligned(29, 0.0)["bar_open_ms"]))
+    for n, cycles in enumerate(
+        (
+            [_aligned(i, 10_000.0, throttle={"equity_hwm": 11_000.0}) for i in range(30)],
+            [
+                _aligned(
+                    i,
+                    10_000.0,
+                    throttle={"equity_hwm": 11_000.0},
+                    collateral={"equity": 10_000.0, "usdt_equity": None, "collateral": None, "share": None},
+                )
+                for i in range(30)
+            ],
+        )
+    ):
+        result = noise_scale(_store(tmp_path / f"case{n}", cycles), day, vol_target=0.30)
+        assert result["usdt_equity_u"] is None
+        assert result["design_daily_sigma_in_usdt_pct"] is None
+        assert result["giveback_since_hwm_in_usdt_pct"] is None
+        assert result["giveback_since_hwm_u"] == pytest.approx(1_000.0), "the rulers above it still read"
+
+
 def test_noise_scale_does_not_count_a_cooldown_as_an_exit(tmp_path: Path) -> None:
     """`ExitOverlay.apply` appends an event for every truthy reason, and `exit_step` returns COOLDOWN once per
     *blocked* cycle, so at the live `cooldown_bars: 24` a single take-profit writes 24 more rows behind it.

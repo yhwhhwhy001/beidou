@@ -850,8 +850,33 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     attributed P&L against the ladder's own anchor, a different book on a different window - and
     ``giveback_in_design_sigma`` above is the day-inside one.  The two percentages point the same way with
     OPPOSITE signs: the ladder's is copied as the loop writes it, negative, because changing a sign to make
-    a table tidy would make the field stop matching the record it came from.  ROE is deliberately absent
-    (A-GB01: which of the venue's three percentages the operator reads is not yet known).
+    a table tidy would make the field stop matching the record it came from.
+
+    A-GB01, answered 2026-09-15: the percentage the operator reads is the venue's USDT equity.  Checked
+    against the account - USDT equity 4,932.05 at 09-13T22:00Z to 5,311.89 at 09-14T19:00Z is +7.70%, the
+    "涨了 8 个点" the equity line scored as +3.78% - so the last three keys CONVERT numbers already computed
+    above into that reader's unit.  They are conversions, not measurements.  Both numerators stay on total
+    equity: ``giveback_since_hwm_u`` is measured from ``throttle.equity_hwm`` and stays that way, because a
+    high-water mark recomputed on the USDT series would be a FOURTH ruler on a page whose problem is that it
+    already carries three.  Only the denominator moves, to ``collateral.usdt_equity`` off the day's last
+    cycle.  That denominator is about 47% of equity (``collateral.share`` 0.5256 on 2026-09-15, the rest BTC
+    and other collateral), so the same money reads about 2.1x larger as a share of USDT equity than as a
+    share of equity - which is the whole of "8 points against 3.8 points".  Two adjacent lines on the page
+    are NOT in that ratio and the difference is not a bug: ``drawdown_vs_hwm_pct`` divides by the HIGH-WATER
+    MARK, so it sits against ``giveback_since_hwm_in_usdt_pct`` at hwm/usdt_equity - 2.18 on 2026-09-15,
+    against 2.11 for the collateral share alone.  Same numerator, three denominators, all of them named.
+
+    Worth stating plainly, because the cheap reading is that the operator is simply on the wrong ruler: USDT
+    equity is CLOSER to the book's own P&L than total equity is.  Trades settle in USDT, while collateral
+    repricing moves total equity without touching it.  Measured on this event: low to peak was +400.80
+    equity against +379.84 USDT, and the 20.96 difference is BTC being remarked; peak to now is -207.35
+    against -187.41, difference -19.94.  ``## Collateral repricing (RISK-G11)`` is the section that measures
+    exactly that, and it has reported repricing at 41% of an equity move.  So this ruler is not wrong - it
+    has a smaller denominator and it leaves collateral noise out.  It is also not the book: deposits,
+    withdrawals, commissions and funding all change USDT equity directly, and the book-level ruler is still
+    ``risk_ladder.drawdown`` (attributed P&L plus unrealized).  Three instruments, three jobs, none of them
+    a substitute for another.  ROE stays out on purpose: it is a fourth percentage the operator does not
+    read, and printing it would re-open the question these keys close.
     """
     trailing = _cycles(store, window_days=30)
     today = [row for row in trailing if _day_of(row) == day]
@@ -877,6 +902,11 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     recorded_hwm = (last_row.get("throttle") or {}).get("equity_hwm") if last_row else None
     hwm = float(recorded_hwm) if recorded_hwm is not None else None
     since_hwm = max(0.0, hwm - last) if (hwm is not None and last is not None) else None
+    # A-GB01's denominator, off the SAME row `hwm` and `last` came from, so the three readings share a
+    # cycle.  Rows written before the engine recorded the split carry no `collateral` at all, and a
+    # missing USDT balance reads as absent rather than as zero - `collateral_share`'s own rule.
+    recorded_usdt = (last_row.get("collateral") or {}).get("usdt_equity") if last_row else None
+    usdt = float(recorded_usdt) if recorded_usdt is not None else None
     # Walk back from the day's last cycle while the loop kept writing the same mark, and stop at the row
     # that carried a lower one.  Bounded by that cycle rather than by the end of `trailing`, so asking for
     # a past `--date` cannot date the mark from rows written after the day being reported on.
@@ -916,6 +946,12 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         "equity_hwm_u": hwm,
         "drawdown_vs_hwm_pct": (since_hwm / hwm) if (since_hwm is not None and hwm) else None,
         "ladder_drawdown_pct": (last_row.get("risk_ladder") or {}).get("drawdown") if last_row else None,
+        # A-GB01: the two numbers above, over the denominator the operator's screen divides by.  `usdt`
+        # is truth-tested rather than compared to None because a zero USDT balance divides no better
+        # than a missing one.
+        "usdt_equity_u": usdt,
+        "design_daily_sigma_in_usdt_pct": (design / usdt) if (design and usdt) else None,
+        "giveback_since_hwm_in_usdt_pct": (since_hwm / usdt) if (since_hwm is not None and usdt) else None,
     }
 
 
@@ -2403,6 +2439,12 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     silently disagreed with the account, `hours` is printed so the horizon sigma can be checked by hand, and
     the two percentages are adjacent so the page answers "which drawdown is the drawdown" instead of leaving
     a reader to pick the worst of three.  What each number measures is in `noise_scale`'s docstring.
+
+    The last three lines are A-GB01's conversion and are placed last for that reason: the rulers come
+    first, then the same fall restated in the unit the operator's screen uses.  The denominator is printed
+    rather than left implicit so each percentage can be divided back by hand - which is the only way to see
+    that `giveback_since_hwm_in_usdt_pct` and `drawdown_vs_hwm_pct (equity)` share a numerator and differ
+    by hwm/usdt_equity, not by the collateral share.  No ROE line - `noise_scale`'s docstring says why.
     """
     return {
         "design_daily_sigma_u": _fmt_num(block.get("design_daily_sigma_u")),
@@ -2416,6 +2458,9 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "giveback_since_hwm_in_horizon_sigma": _fmt_num(block.get("giveback_since_hwm_in_horizon_sigma")),
         "drawdown_vs_hwm_pct (equity)": _fmt_pct(block.get("drawdown_vs_hwm_pct")),
         "ladder_drawdown_pct (R8, attributed)": _fmt_pct(block.get("ladder_drawdown_pct")),
+        "usdt_equity_u (A-GB01 denominator)": _fmt_num(block.get("usdt_equity_u")),
+        "design_daily_sigma_in_usdt_pct": _fmt_pct(block.get("design_daily_sigma_in_usdt_pct")),
+        "giveback_since_hwm_in_usdt_pct": _fmt_pct(block.get("giveback_since_hwm_in_usdt_pct")),
         "expected_exits_so_far": _fmt_num(block.get("expected_exits_so_far")),
         "exits_so_far": block.get("exits_so_far"),
     }

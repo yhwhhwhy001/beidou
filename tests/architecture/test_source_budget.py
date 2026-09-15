@@ -2503,7 +2503,42 @@ CEILING = {
     # Deliberately NOT bought: the ROE line the analysis asks for stays out until the operator says which
     # of the venue's percentages they read (A-GB01), and nothing here touches `construction_fingerprint` -
     # this is a report-layer change inside the KILL-006 holdout, and the frozen-construction test agrees.
-    "beidou_live": 9_038,
+    #
+    # Twenty-fourth raise, 2026-09-15, again: +45 beidou_live, no other package moves.  The number collides
+    # with the entry directly above - written by this same branch one commit earlier - and is recorded
+    # rather than renumbered, on the thirteenth entry's precedent: three sessions are writing into 20-31
+    # concurrently, and a unique number bought by re-reading the whole file is worth less than a correct
+    # +45.  Read the two twenty-fourths as one pair; this is the second half of DL-GB0.
+    #
+    # A-GB01, the question the entry above left open, is answered: the operator reads the venue's USDT
+    # equity.  4,932.05 at 09-13T22:00Z to 5,311.89 at 09-14T19:00Z is +7.70% - the "涨了 8 个点" the same
+    # window scored as +3.78% on equity (10,607.99 to 11,008.79).  The delivery contract dated those two
+    # readings 23:00Z and 20:00Z; a single clock puts them an hour earlier, and 09-14T20:00Z has no cycle
+    # at all - it is the restart gap the entry above dates the high from.  So the three new keys RESTATE
+    # numbers the page already computes: `design_daily_sigma_in_usdt_pct` and
+    # `giveback_since_hwm_in_usdt_pct` keep their numerators on total equity and only divide by
+    # `collateral.usdt_equity`.  No new high-water mark is computed on the USDT series, deliberately: this
+    # page's own defect is that it carries three drawdown rulers, and a fourth anchor would be that defect
+    # again rather than a fix for it.
+    #
+    # Most of the 45 lines is the paragraph a schema cannot carry, and it says something counterintuitive
+    # enough that leaving it out would invite a later reader to "correct" the operator: USDT equity is
+    # CLOSER to the book's P&L than total equity is.  Trades settle in USDT; BTC collateral repricing moves
+    # total equity and not USDT equity.  Measured on this event - low to peak +400.80 equity against
+    # +379.84 USDT (20.96 of repricing), peak to now -207.35 against -187.41 (-19.94) - which is the same
+    # quantity `## Collateral repricing (RISK-G11)` reports at 41% of an equity move.  The ruler is not
+    # wrong; it has a smaller denominator (share 0.5256 collateral, so about 2.11x against equity) and it
+    # excludes collateral noise.  It is still not the book - flows, commissions and funding move it directly
+    # - and `risk_ladder.drawdown` stays the attributed ruler.  Four of the lines are a late correction
+    # earned by actually rendering the page: `drawdown_vs_hwm_pct`, the percentage that now sits directly
+    # above the new one, divides by the HIGH-WATER MARK and not by equity, so the two adjacent lines differ
+    # by 2.18x and not by the collateral share's 2.11x.  Stating "about 2.1x" and leaving a reader to
+    # divide 6.75 by 3.11 would have been an instrument that fails its own arithmetic check.
+    #
+    # Deliberately NOT bought, and now for a reason rather than for a missing answer: ROE.  The operator
+    # named one of the venue's percentages, and printing the other two would put a fourth and fifth number
+    # on a page whose whole problem was that a reader had to choose among the ones already there.
+    "beidou_live": 9_083,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
