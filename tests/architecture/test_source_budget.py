@@ -1992,6 +1992,21 @@ CEILING = {
     #
     # Design: docs/analysis/2026-09-15-universe-unpin-and-dataset-gate-design.md
     #
+    # Thirty-fourth raise OF THIS TABLE, 2026-09-15: +5 beidou_data - annotating a slip that the
+    # thirty-third raise introduced, inside the very paragraph it paid eleven lines to make accurate.
+    #
+    # That raise gave the reason `book` writes no `dataset` block as "`build_manifest` is called by
+    # `validate` and `mine` alone".  There is a third caller - `beidou_live.config.
+    # registry_dataset_problems`, which builds the CURRENT manifest it compares cited reports against -
+    # so the parenthetical was false as written while the conclusion it supported was true.  The wording
+    # was narrowed to "only `validate` and `mine` write one into a report" in `b30a9c3d`, which cost no
+    # lines; these five are the annotation, not the fix.
+    #
+    # Annotated rather than quietly corrected, for the reason the thirty-second entry gives one screen
+    # up - and the case is stronger here, because the slip appeared INSIDE a correction.  A reader who
+    # finds this paragraph narrowed twice learns that the second narrowing was reviewed too; one who
+    # finds it silently right learns nothing, and has no reason to check the third.
+    #
     # Thirty-third raise OF THIS TABLE, 2026-09-15: +11 beidou_data - narrowing a claim the entry below
     # made too broadly, after a review found a counter-example that ships in this very registry.
     #
@@ -2831,7 +2846,7 @@ CEILING = {
     # `onchain.CommunityClient` had carried it all along, with the comment saying why.  Its two 5xx
     # tests each really slept 1+2+4 seconds, which is 14s on the laptop and ~42s on CI - and `Types`
     # had been red for 23 pushes, so the test step never ran and `suite_duration.py` never saw them.
-    "beidou_data": 5_467,
+    "beidou_data": 5_472,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are

@@ -203,6 +203,11 @@ def _universe_drift_blocks(
     ``dataset`` block (only ``validate`` and ``mine`` write one into a report), so that
     report reaches ``manifest_check`` as ``None`` and never reaches this predicate at all.  Give
     ``book`` a manifest and this exemption starts waving through a report that did read the file.
+
+    Corrected 2026-09-15: the parenthetical above read "``build_manifest`` is called by ``validate``
+    and ``mine`` alone", and a review found that false - ``beidou_live.config.registry_dataset_problems``
+    calls it too, to build the CURRENT manifest it compares cited reports against.  The conclusion it
+    supported held, but the false half is the half a reader chasing this warning would grep for.
     """
     if universe_mode == "pit":
         return False
