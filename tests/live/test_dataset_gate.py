@@ -45,9 +45,7 @@ def _registry_citing(report: Path) -> Registry:
     return Registry(version=1, ensemble_method="mean", turnover_penalty=0.0, strategies=(entry,))
 
 
-def _report(
-    tmp_path: Path, data_root: Path, *, with_manifest: bool = True, universe_mode: str | None = None
-) -> Path:
+def _report(tmp_path: Path, data_root: Path, *, with_manifest: bool = True, universe_mode: str | None = None) -> Path:
     payload: dict[str, object] = {"kind": "validation", "verdict": "PASS"}
     if with_manifest:
         payload["dataset"] = build_manifest(data_root).to_dict()
