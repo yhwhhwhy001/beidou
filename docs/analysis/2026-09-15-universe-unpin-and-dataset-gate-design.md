@@ -123,7 +123,7 @@ def _universe_drift_blocks(previous, current, universe_mode=None) -> bool:
 `beidou_live/engine.py:1201-1215` 的采纳支恢复：
 
 - `self.universe = fresh`，`state.universe` 跟着更新
-- 出池的进 `state.leaving` → 走 reduce-only 平掉（D-014）
+- 出池的进 `state.leaving` → 走 reduce-only 平掉（D-014）——**但不是无条件的，见下面副作用第 4 条**
 - 进池的自动 `_ensure_leverage`，当周期即进 `managed_symbols()` 参与模型
 - `universe_sink` 写回 `universe.json`（`source: "live-refresh"`）
 - 发一条换手告警
@@ -140,9 +140,29 @@ def _universe_drift_blocks(previous, current, universe_mode=None) -> bool:
    明写 "Recovery is the pool's decision alone: a quarantined symbol returns only when the daily
    refresh selects it again."，钉住才是打断这条恢复路径的东西（`engine.py:1090` 的告警正是为此
    而写）。`reject_streak` 在隔离时被清空，所以回来的币要重新累计 `quarantine_after: 3` 次拒单
-   才会再被隔离——震荡有界，且每次都告警。
+   才会再被隔离——震荡有界。
+   **更正（2026-09-15 终审）：原句写的是"震荡有界，且每次都告警"，后半句是错的。**
+   `engine.py:1090` 那条告警整段在 `if self.config.universe_pinned:` 里面，取消钉住后
+   `universe_pinned` 为 False，隔离事件**不再发告警**，只剩 `logger.warning` 一行。同时
+   `model.universe` 变空后 `AlphaModel.without_symbols`（`beidou_alpha/model.py:121`）成为
+   no-op，`registry_digest` 也不再随隔离移动——后者在本文件副作用第 1 条里已被当作"不再声称
+   所以不是假话"接受，但两件事合起来意味着隔离此后**既不告警也不动 digest**。剩下的可观测
+   路径是 `cycles.jsonl` 的 `quarantined` 字段与 `beidou report daily` 的 `pool_quarantined`。
+   不在本次一并修：把告警提出 `if` 之外要新增中文文案行，会再动零余量的 `beidou_live` 天花板，
+   且要过 `test_alerts_are_chinese`，不该搭这趟车。
 3. 中途进池的币要等下次重启才过启动过滤（`docs/RESEARCH_LOG.md:2359` 记的既有残余，本次不
    引入也不修复）。
+4. **出池不等于一定平得掉。** `rebalancer.py:39` 的 `exempt_crossings` 默认 `False`，且
+   `config/live.demo.yaml` 没有设过这个键。出池标的目标被压 0 后 `same_direction_resize` 为
+   False，相对带宽不适用，阈值停在 `no_trade_band * equity` = 0.5% 权益（当前约 54 U）。所以
+   **持仓名义小于约 54 U 的出池标的会记 `BAND_BLOCKS_EXIT`，留在 `leaving` 里每周期被扫描却
+   永不平掉**。这不是本次引入的（`rebalancer.py` 自己的注释就记着 ENAUSDT 2026-09-14T11:00Z
+   起 −11.19 U 对 54.32 U 带宽的实例），但取消钉住把它从"操作者手工移除时偶发"变成"每日重排
+   都可能发生"——低权重名字正是既容易被排名换掉、又容易把持仓衰减到带宽以下的那一类。
+   **这是 §2.3 那条 `BAND_BLOCKS_ENTRY` 判据的出口侧孪生**，所以给它一条对称的可证伪判据：
+   若某标的出池后连续 5 天记 `BAND_BLOCKS_EXIT` 仍未平掉，带宽的两侧就都需要重议。
+   §6 的首日估算不受影响：TUTUSDT 713 U / CYSUSDT 570 U / AKEUSDT ≈146 U 都远高于 54 U，
+   "书会变成纯多"那句仍然成立。
 
 ### 2.3 TRUMPUSDT / ENAUSDT（操作者已裁定：让它们回来）
 
