@@ -186,12 +186,23 @@ def _universe_drift_blocks(
     something it did itself.  A symbol set that moves while the source holds still is the real thing -
     the book being traded is no longer the book the evidence describes.
 
-    2026-09-15: ``universe_mode == "pit"`` exempts the field outright.  ``research_cmd._resolve_symbols``
-    calls ``read_universe`` only under ``static``; a pit result's population is the union of
-    ``membership.parquet``, which blocks unconditionally.  Blocking a pit result here refuses a start
-    over a file it never opened - and the fix shipped for that on 2026-09-09 was to freeze the TRADED
-    pool instead, which held the live universe at 16 names while the cited evidence re-ranked every 24
-    hours.  Only an EXPLICIT ``pit`` is exempt: a report that declares no mode keeps its block.
+    2026-09-15: ``universe_mode == "pit"`` exempts the field outright.  ``_resolve_symbols`` calls
+    ``read_universe`` only under ``static``, so a pit VALIDATION or MINE result's population is the
+    union of ``membership.parquet``, which blocks unconditionally one field over.  Blocking such a
+    result here refuses a start over a file it never opened - and the fix shipped for that on
+    2026-09-09 was to freeze the TRADED pool instead, which held the live universe at 16 names while
+    the cited evidence re-ranked every 24 hours.  Only an EXPLICIT ``pit`` is exempt: a report that
+    declares no mode keeps its block.
+
+    Narrowed from "a pit result" to those two commands on 2026-09-15, because the first wording was
+    not true of every pit report and this repository reads these paragraphs as fact.  ``research book
+    --universe pit --robustness static`` DOES read ``universe.json`` (``research_cmd.py:2470``) to
+    build its sensitivity arm, and the shipped registry cites exactly such a report -
+    ``book-tsmom-flow-20260908T105322Z.json``, ``universe_mode: "pit"`` with
+    ``robustness_universe: "static"``.  It is harmless today only because ``book`` writes no
+    ``dataset`` block (``build_manifest`` is called by ``validate`` and ``mine`` alone), so that
+    report reaches ``manifest_check`` as ``None`` and never reaches this predicate at all.  Give
+    ``book`` a manifest and this exemption starts waving through a report that did read the file.
     """
     if universe_mode == "pit":
         return False
