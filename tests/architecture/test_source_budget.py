@@ -1981,13 +1981,31 @@ CEILING = {
     # universe at 16 names from 09-09 to 09-15 while the cited evidence re-ranked every 24 hours
     # (`median_gap_hours: 24.0`, `union: 211`).  The pin is being removed in the same branch.
     #
-    # Most of the added lines are the two docstrings: the exemption is a one-line predicate, and what
-    # costs lines is writing down WHY only an explicit `pit` is exempt.  That paragraph is the thing a
-    # future reader needs, because the obvious "simplification" - exempt anything that is not `static` -
-    # would silently loosen the gate for every report written before `universe_mode` was recorded.
+    # Most of the added lines are the prose: the exemption is a one-line predicate, and what costs lines
+    # is writing down WHY only an explicit `pit` is exempt.  That paragraph is the thing a future reader
+    # needs, because the obvious "simplification" - exempt anything that is not `static` - would silently
+    # loosen the gate for every report written before `universe_mode` was recorded.
+    # Corrected 2026-09-15: this said "the two docstrings".  It is one docstring (`_universe_drift_blocks`)
+    # plus one inline comment (`registry_dataset_problems`), and a review caught the slip.  Corrected
+    # rather than deleted, because a ledger entry that quietly rewrites itself is worth less than one
+    # that shows where it was wrong.
     #
     # Design: docs/analysis/2026-09-15-universe-unpin-and-dataset-gate-design.md
     #
+    # Thirty-third raise OF THIS TABLE, 2026-09-15: +11 beidou_data - narrowing a claim the entry below
+    # made too broadly, after a review found a counter-example that ships in this very registry.
+    #
+    # `_universe_drift_blocks` said "a pit result's population is the union of `membership.parquet`", and
+    # that is not true of every pit report: `research book --universe pit --robustness static` reads
+    # `universe.json` at `research_cmd.py:2470` to build its sensitivity arm, and the registry cites
+    # `book-tsmom-flow-20260908T105322Z.json`, which is `universe_mode: "pit"` with
+    # `robustness_universe: "static"` - it really did read the file.  Harmless today only because `book`
+    # writes no `dataset` block, so that report reaches `manifest_check` as `None`.
+    #
+    # Eleven lines to narrow one sentence is the trade this table exists to make visible, and it is worth
+    # taking: the gate's exemption is now described by something that is true of every report it applies
+    # to, and the ONE condition keeping the counter-example harmless is written next to it rather than
+    # rediscovered by whoever gives `book` a manifest.
     # Thirty-first raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
     # the five "this symbol cannot be priced" rules written down, and NOT merged.
     #
@@ -2813,7 +2831,7 @@ CEILING = {
     # `onchain.CommunityClient` had carried it all along, with the comment saying why.  Its two 5xx
     # tests each really slept 1+2+4 seconds, which is 14s on the laptop and ~42s on CI - and `Types`
     # had been red for 23 pushes, so the test step never ran and `suite_duration.py` never saw them.
-    "beidou_data": 5_456,
+    "beidou_data": 5_467,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
