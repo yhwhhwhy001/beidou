@@ -25,7 +25,8 @@ from beidou_alpha.validation.metrics import (
 )
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
-from beidou_live.health import canonical_construction
+from beidou_live.construction import canonical_construction
+from beidou_live.cycle_record import latest
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
@@ -1718,10 +1719,7 @@ def daily_payload(
         "equity_change_pct": (equities[-1] / equities[0] - 1.0) if len(equities) >= 2 and equities[0] else None,
         # L1-10: the last cycle's split of that equity into USDT and collateral.  Rows written before the
         # engine recorded it carry nothing, and nothing is what gets reported - not a zero.
-        "collateral": next(
-            (row["collateral"] for row in reversed(cycles) if isinstance(row.get("collateral"), dict)),
-            None,
-        ),
+        "collateral": latest(cycles, "collateral"),
         "orders": statuses,
         "traded_notional": traded,
         "realized_pnl": realized,

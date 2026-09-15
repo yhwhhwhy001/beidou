@@ -41,9 +41,36 @@ class FakeMarketData:
         self.funding_history_calls: list[tuple[list[str], int]] = []
         self.lag_bars = 0
         self.fail_next = 0
+        # D-025's instrumentation runs only when the feed can be asked for its own clock.  This fake
+        # could not be, so `_clock_skew` took its all-None branch in every test built on it and the
+        # skew/alignment/jump path was reachable through one bespoke subclass.
+        #
+        # Default None - the probe stays ABSENT - because flipping it would quietly change what two
+        # hundred existing tests measure, and one of them says `# no server_time_ms` in its own body.
+        # Set it to a number of milliseconds to make the feed's clock that far from the host's; the
+        # tests that want the instrumentation ask for it.
+        self.server_skew_ms: int | None = None
 
     def bar_open_ms(self, position: int) -> int:
         return int(pd.Timestamp(self.panel.index[position]).timestamp() * 1000)
+
+    @property
+    def server_time_ms(self) -> Callable[[], Any]:
+        """Present only when a skew is configured.
+
+        A property that raises `AttributeError` is how a fake says a member is ABSENT: the engine asks
+        `getattr(self.market, "server_time_ms", None)` and gets None, which is what a real feed without
+        a clock endpoint looks like.  A method that always exists and raises when called would instead
+        look like a feed whose clock is broken - a different thing, and one `_clock_skew` swallows.
+        """
+        if self.server_skew_ms is None:
+            raise AttributeError("this feed exposes no clock")
+        skew = self.server_skew_ms
+
+        async def probe() -> int:
+            return self.bar_open_ms(self.cursor) + skew
+
+        return probe
 
     async def closed_bars(self, symbols: Sequence[str], interval: str, limit: int) -> dict[str, pd.DataFrame]:
         if self.fail_next > 0:

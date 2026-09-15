@@ -71,6 +71,7 @@ from beidou_live.reports import (
 )
 from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.scheduler import SystemClock
+from beidou_live.staleness import RULES, rules_binding
 from beidou_live.state import LiveState, StateStore, StateUnreadable
 from beidou_live.verify import (
     cycle_clock,
@@ -439,6 +440,7 @@ def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
 
     The literal reading is still computed and printed.  Ruling it out of the gate is not deleting it.
     """
+    from beidou_governance.policy import Policy
     from beidou_governance.promote import closed, read_log
     from beidou_live.soak import render, score
 
@@ -447,7 +449,15 @@ def live_soak(state_dir: str, days: float, root: str, check: bool) -> None:
         raise click.ClickException(f"no soak record at {path}")
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     log = read_log(Path(root).resolve() / "governance" / "transactions.jsonl")
-    reading = score(rows, required_days=days, transactions_closed=closed(log) if log else None)
+    # R10: the phase list is the policy's, not this call site's.  `score`'s default happens to match it
+    # today, which is exactly how a threshold stops having one home - KILL-AR-20 put it in `Policy` and
+    # nothing read it from there.
+    reading = score(
+        rows,
+        required_days=days,
+        transactions_closed=closed(log) if log else None,
+        no_decision_phases=Policy().no_decision_phases,
+    )
     click.echo(render(reading))
     if check and not reading.passes:
         raise SystemExit(1)
@@ -574,6 +584,18 @@ def live_status(
                 f"周期成功率 {health.success_rate:.1%} < {min_success_rate:.0%}"
                 f"（{health.attempts} 次中失败 {health.failures} 次，最近一次在 {health.last_failure}）"
             )
+    # "Why did that symbol flatten?" is asked at this prompt, and the answer was spread over five
+    # settings in three packages with two of them binding on only one side of the system.  Printed as
+    # the live half plus the count of what research does differently, so the divergence is visible to
+    # the operator who would have to price closing it (see `beidou_live/staleness.py`).
+    live_rules = rules_binding("live")
+    research_only = [rule for rule in RULES if rule.binds == "research"]
+    click.echo(
+        f"不可交易判定：实盘 {len(live_rules)} 条（"
+        + "、".join(rule.label for rule in live_rules)
+        + "）"
+        + (f"；研究侧另有 {len(research_only)} 条实盘不绑（{research_only[0].label}）" if research_only else "")
+    )
     if problems:
         raise click.ClickException("; ".join(problems))
 

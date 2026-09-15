@@ -57,7 +57,7 @@ from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
 from beidou_live.config import registry_evidence_problems, store_directory
-from beidou_live.health import CONSTRUCTION_ALIASES
+from beidou_live.construction import CONSTRUCTION_ALIASES
 from beidou_shared.config import load_yaml
 
 REGISTRY = "config/alpha_registry.yaml"

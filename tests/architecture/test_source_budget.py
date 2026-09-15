@@ -1952,6 +1952,198 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # computable at all; `marked_pnl` computes it; both are printed.  The GATE does not move today and the
 # lines say why: `max_loss` is inside `construction_fingerprint`, so changing it clears M-010's window.
 CEILING = {
+    # Merge note, 2026-09-15.  The seven entries below (Twenty-fifth..Thirty-first OF THIS TABLE) are
+    # one session's; they were renumbered twice to get out of the way of another session's, and then
+    # the renumbering was STOPPED.  Saying why, because the next person to merge will face the same
+    # choice.
+    #
+    # The number is not a key and has not been for a while.  There are two series in this file - "Nth
+    # raise" (2026-09-04..06) and "Nth raise OF THIS TABLE" (2026-09-14..15) - and both run past
+    # Thirtieth, so every number above the twentieth now names two or three entries.  A third session
+    # raised this table the same day and took Twenty-fifth and Twenty-sixth, dropping "OF THIS TABLE"
+    # while keeping the new dates, which collides with the older series as well.
+    #
+    # Chasing uniqueness across three sessions writing concurrently costs a renumber per merge and
+    # buys nothing: what identifies an entry is its DATE plus what it says, which is how the
+    # Thirteenth entry's own collision was handled and what the session holding Twenty-fourth chose
+    # deliberately.  So the collisions are recorded rather than resolved, here and in their entries.
+    #
+    # What is NOT left to convention: the VALUES.  Every merge re-measures them against the merged
+    # tree, because no side's count describes code that now includes the others'.
+    #
+    # Thirty-first raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
+    # the five "this symbol cannot be priced" rules written down, and NOT merged.
+    #
+    # They live in three packages, carry three numbers, and two bind on only one side: research carries
+    # a position for `stale_carry_bars=2` bars with the stop live, live zeroes the target and re-opens
+    # next cycle with the trailing anchor gone.  Two books.
+    #
+    # The values are unchanged, and that is the decision rather than the shortfall.  `exits.py` already
+    # said reusing the loop's number was the point ("research and live disagreeing ... is KILL-027's
+    # shape") and then admitted it binds in research only; the live half is `dropped_after`, and
+    # `construction.py`'s v6 note records the operator's ruling in as many words - raising it "stays a
+    # priced decision rather than a side effect of deploying a fix".  Making it bind here, from the
+    # other direction, would be exactly that side effect.
+    #
+    # So what was bought is that the disagreement is data with a test behind it instead of prose.  That
+    # is not a preference: the same comment still claimed `stale_carry_bars` was "not yet in
+    # `construction_fingerprint`" two days after v6 put it there.  Prose about five settings in three
+    # packages goes stale; a table joined to `__dataclass_fields__` fails instead.
+    #
+    # Priced, so the flip is a decision and not an argument: over the 322 live cycles on record
+    # `inputs.dropped` is non-empty in ZERO of them.  The five PIT members with internal gaps are none
+    # of them in the pinned universe, which is why research binds and live never has.  The divergence
+    # is latent.
+    #
+    # The +13 in `beidou_cli` is the entry point the reachability guard demanded - correctly: a module
+    # nothing can run is not a control.  `live status` now prints which rules bind, in Chinese, because
+    # that command's output IS the hourly alert body and `test_alerts_are_chinese` allows three English
+    # tokens in it.  Both guards caught this commit and both were right.
+    #
+    # Thirtieth raise OF THIS TABLE, 2026-09-15: +155 beidou_live - the cycle record given a
+    # declaration, and its ledger reader stopped re-parsing from byte zero.
+    #
+    # `cycles.jsonl` is the widest interface in this package: ~42 keys written by three methods, read by
+    # six modules under 192 distinct `.get()` names, declared nowhere.  Every defect found in this
+    # package over the last two days was the same shape - one writer and one reader disagreeing about a
+    # key, with nowhere for the disagreement to surface.  `cycle_record.KEYS` is the declaration and
+    # `test_the_cycle_record_is_declared.py` is the join, run against the ENGINE rather than a
+    # hand-built dict, because a hand-built row is exactly what let the L3 test pass while the
+    # composition was wrong.  It earned its keep immediately: `crowding` and `metrics_snapshot` were
+    # written by `run_cycle` and described in no declaration this commit's author had written.
+    #
+    # It is NOT a typed row, and that is a decision rather than an omission.  A field's absence in an
+    # old row means "written before this field existed", so the readers' `.get()` plus `isinstance` is
+    # correct handling; a dataclass with required fields would refuse to read the history the file
+    # exists to keep.  What was missing was a place to compare, not types.
+    #
+    # The reader: `run_cycle` reads `cycles.jsonl` and `attribution.jsonl` twice each per cycle and
+    # `report daily` reads cycles eleven times, and each read re-parsed the whole file - ~7 MB per cycle
+    # at 319 rows, and the ledger grows ~48 MB a year, so ~190 MB re-parsed per cycle after a year.
+    # `_append` writes whole lines and never rewrites one, so the parse now resumes from the cached
+    # byte offset, with a full re-read whenever the file disagrees with the cache in ANY way (shrink,
+    # rewrite, mtime backwards, or an offset that is not on a row boundary).  Eight tests, one of which
+    # counts `json.loads` calls rather than trusting a clock.
+    #
+    # What this commit deliberately did NOT do: collapse the "seven near-identical backwards scans" the
+    # review counted.  Reading them, they are not near-identical - `verify`'s three carry three
+    # different predicates and one spends a paragraph on why it cannot be another, and
+    # `reports.evidence_window`'s is not a lookup but a walk back to where the current construction run
+    # began.  Folding those into a helper would delete the explanations, which is the opposite of
+    # concentrating anything.  `latest()` takes the one question that really was asked twice.
+    #
+    # Twenty-ninth raise OF THIS TABLE, 2026-09-15: +178 beidou_alpha, and beidou_live ratcheted DOWN
+    # by 67 - R8's state machine lifted out of the engine.
+    #
+    # `_risk_ladder` was an `async` private method reading `self.store`, `self.state`, `self.config` and
+    # `self.alerts`, so nothing could evaluate the ladder without an engine.  Everything that needed to
+    # know what it does therefore rewrote it: four replays in `scratchpad/` (`p32b`/`p32c`/`p32d`/`p32e`),
+    # a second unread rung comparison in `risk_budget`, and no twin at all in `beidou_alpha`.  They had
+    # drifted - one omits the `min(1.0, raw)` clamp, one divides by a module constant instead of the
+    # running target, none replays the blind-reading hold - and D-035 cites 20.5pp, 0.4pp and q95 -66.5%
+    # produced by them.  D-036 already requires one semantics per book-level guard, satisfied for
+    # `daily_loss_pause` and `GROSS_CAPPED` via `exposure.py` and not for the larger scalar.
+    #
+    # The rule goes to `beidou_alpha` rather than anywhere in `beidou_live` because the backtest has to
+    # replay it and `beidou_alpha` may import no `beidou_*` - so `ladder_step` takes rungs and grace as
+    # plain values and `Policy` keeps the numbers and delegates.  One implementation, three readers.
+    #
+    # Behaviour-preserving, and not on assertion: the old body was kept as `_dead_risk_ladder` and both
+    # were run over 128 combinations of standing rung x base x drawdown, comparing the cycle block, the
+    # persisted rung AND the operator messages - the messages because paging is deduplicated on their
+    # text, so a silent rewording is a real regression.  Identical on all 128; the old body was deleted
+    # in this commit.  D-033's technique, for D-033's reason.
+    #
+    # Down 67 rather than left at the old number: a ratchet that only goes up would hand the package
+    # free headroom every time something moves out of it.
+    #
+    # Twenty-eighth raise OF THIS TABLE, 2026-09-15: +34 beidou_live, which is three module headers -
+    # `health.py` split into the four concepts it was holding.
+    #
+    # It held M-001 cycle health, DL-X1 liquidation distance, KILL-R19 margin mode and D-026 construction
+    # identity, under a name that predicts one of them, with `__all__ = ["CycleHealth", "cycle_health"]`
+    # naming two and four more public functions defined after it.  Understanding "did the construction
+    # change?" meant bouncing between five modules, and the alias table sat in `health.py` for one
+    # stated reason: `engine.py` would have imported it circularly.  That is a module chosen by an
+    # import graph rather than by a concept.
+    #
+    # Now `health.py` (cycle health), `liquidation.py`, `account_shape.py`, `construction.py`.  Each
+    # keeps its own direct importers - the split deliberately does NOT follow the review's suggestion to
+    # move these into `engine.py`, which is already the largest module in the package and would have
+    # turned four tested functions into private ones.  `construction.py` has no cycle to dodge: nothing
+    # in it imports the engine.
+    #
+    # The 34 lines are the price of separability, not new behaviour: three docstrings and three import
+    # blocks, no logic added or removed.  Pure moves otherwise, with every importer repointed.
+    #
+    # Twenty-seventh raise OF THIS TABLE, 2026-09-15: +60 beidou_live, so the venue and market ports
+    # describe what the engine reads off them.
+    #
+    # `ports.py` already carries this lesson in its own words, about `SignalModel`: *a protocol that
+    # omits what the caller actually reads has stopped describing the contract*, written after mypy saw
+    # one of four accesses and said nothing about the other three.  `Venue` and `MarketData` had the
+    # same defect and it ran in both directions at once.  Seven members the engine probes -
+    # `sync_clock`, `hedge_mode`, `margin_mode`, `leverage_brackets`, `mark`, `server_time_ms`,
+    # `client` - appeared nowhere in the file.  And two that DID appear, `venue_time_ms` and
+    # `user_trades`, were declared REQUIRED while every call site probed them and fell back: to the
+    # host clock, which is D-030's silent hour, and to full attribution, which is D-032's.
+    #
+    # `getattr(obj, "name", None)` is invisible to a type checker by construction, so the guard cannot
+    # be mypy and the declaration alone would rot. `VenueProbes` / `MarketDataProbes` hold the optional
+    # surface, and `test_the_ports_describe_what_the_engine_reads.py` compares the set of names the
+    # engine probes against the set the ports declare - in both directions, so a tenth probe fails and
+    # a stale declaration fails too.  `funding_history` is the one exemption and it is named with its
+    # reason: that probe REFUSES (D-023 closing KILL-027) rather than falling back, which is what makes
+    # it required.
+    #
+    # The test cost the omission was hiding, now visible: `FakeMarketData` had no `server_time_ms`, so
+    # every engine test built on it took `_clock_skew`'s all-None branch and D-025's skew/alignment/jump
+    # instrumentation was reachable only through one bespoke subclass.  It is now a setting on the
+    # shared fake.  Absence stays the DEFAULT on purpose - flipping it changed what two hundred existing
+    # tests measure, and broke two of them, one of which says `# no server_time_ms` in its own body.
+    #
+    # Twenty-sixth raise OF THIS TABLE, 2026-09-14: +40 beidou_live, +9 beidou_cli, so that L3's gate
+    # can fail.
+    #
+    # `soak.passes` gates `live soak --check` on whether any ERROR cycle DECIDED anything, reading five
+    # keys off the cycle row.  `guarded_cycle` built that row from scratch in its exception handler,
+    # with `orders` hardcoded to `[]` and the other four absent - so `_decided` returned `()` on every
+    # engine-produced record and the no-decision half could not fail, whatever the loop had done.  The
+    # reachable case is ordinary: `run_cycle` executes orders and only then runs `_quarantine`,
+    # `_summarize` and `_finish_cycle`, so a raise in any of those three leaves fills on the venue and
+    # writes a row saying none were placed.  `test_l3s_criterion_is_ruled` asserted the gate worked by
+    # hand-building a row shape the writer could not emit: the test passed, the composition did not.
+    #
+    # Most of the 40 is the half that is not the fix.  Carrying the keys across made two of them
+    # readable for the first time, and for two of them emptiness is the WRONG question:
+    # `_risk_ladder` returns ten keys on the quietest cycle and is never `{}`, and a pinned universe
+    # writes `adopted: False` once a day - a proposal recorded and deliberately not taken.  Left as an
+    # emptiness test, this commit would have made every failed cycle look like a decision and let the
+    # loop measuring itself retire a book, which is KILL-AR-20 pointing the other way.  `_acted` asks
+    # `acting` and `adopted` instead, and four tests hold the distinction.
+    #
+    # `no_decisions()` is one function both halves name, so a sixth key cannot reach the reader without
+    # the writer gaining it.  The 9 in `beidou_cli` pass `Policy.no_decision_phases` into `score`,
+    # which R10 always meant to be the phase list's only home and which no call site read.
+    #
+    # Twenty-fifth raise OF THIS TABLE, 2026-09-14: +4 beidou_live, for one assignment and the three
+    # lines that say why it is there.
+    #
+    # `startup` filters the universe to what the venue will actually trade and did not write the result
+    # back to `state.universe`.  The other three mutation sites all pair the two lists; this one was
+    # the exception, and `store.save` at the end of `startup` then persisted the PRE-filter list.
+    #
+    # Four lines rather than one because the failure is invisible where it is caused.  `live verify`
+    # (M-011) reads only `state.universe`, so the reproduction ranked and demeaned over a population
+    # strictly larger than the one the cycle scored - which moves EVERY cross-sectional contribution,
+    # not the dropped symbol's.  A reader who finds this assignment and deletes it as redundant gets a
+    # globally red monitor with nothing in the record able to name the cause, which is KILL-027's shape
+    # one floor down from where KILL-027 was closed.  The comment names D-042 so the contract it
+    # implements is one grep away.
+    #
+    # It does not self-heal under the shipped profile: `alpha_registry.yaml` pins 17 symbols, and a
+    # pinned universe makes `_maybe_refresh_universe` return before it touches state.  Only a restart
+    # with every pinned symbol tradable clears it.
     # Twenty-third raise OF THIS TABLE, 2026-09-14: +91 beidou_governance for Phase 0's fifth
     # attribution route, ruled by the operator after this session declined to write it itself.
     #
@@ -2321,7 +2513,7 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 8_824,
+    "beidou_alpha": 9_011,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2503,7 +2695,7 @@ CEILING = {
     # Deliberately NOT bought: the ROE line the analysis asks for stays out until the operator says which
     # of the venue's percentages they read (A-GB01), and nothing here touches `construction_fingerprint` -
     # this is a report-layer change inside the KILL-006 holdout, and the frozen-construction test agrees.
-    "beidou_live": 9_038,
+    "beidou_live": 9_393,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2553,7 +2745,7 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_156,
+    "beidou_cli": 6_178,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2583,7 +2775,7 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_938,
+    "beidou_governance": 3_940,
 }
 
 

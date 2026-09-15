@@ -49,6 +49,7 @@ from p32e_ruler_divergence import DATA, K, drawdown_path, realised_split
 from beidou_alpha.backtest import run_backtest
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams
+from beidou_alpha.overlays.ladder import ladder_step
 from beidou_cli.research_cmd import _load, _membership, _resolve_symbols
 from beidou_governance.policy import Policy
 from beidou_live.composition import build_model, cost_model, load_registry
@@ -62,8 +63,32 @@ def rescaled(k: float) -> tuple[tuple[float, float], ...]:
     return ((-0.70 * BUDGET, 0.75 * k), (-1.00 * BUDGET, 0.50 * k))
 
 
-def ladder(mark: np.ndarray, realised: np.ndarray, policy: Policy, ruler: str) -> tuple[np.ndarray, np.ndarray]:
-    """(throttled mark-to-market returns, scalars).  `ruler` decides what the ladder reads."""
+#: The rungs as they stood BEFORE policy 0.3.3 - calibrated at k=0.30 against a 50% budget and left
+#: alone when k doubled.  D-035 cites "a measured median 20.5pp of CAGR" for exactly this arm, and
+#: neither of the two arms above is it any more: after 0.3.3 re-derived the shipped rungs for -70%,
+#: `rescaled(0.60)` and `Policy().drawdown_ladder` are the same ladder, so the run had no way to
+#: reproduce the number its own conclusion rests on.  Added 2026-09-15.
+UNRESCALED = ((-0.35, 0.225), (-0.50, 0.15))
+
+
+def ladder_legacy(mark: np.ndarray, realised: np.ndarray, policy: Policy, ruler: str) -> tuple[np.ndarray, np.ndarray]:
+    """The hand-written replay this script shipped with, now FROZEN as a reference, not an alternative.
+
+    Three ways it differed from the loop it claimed to replay, found when `ladder_step` was extracted
+    from `LiveEngine._risk_ladder` on 2026-09-15:
+
+    * no `min(1.0, raw)` clamp - a rung above the running target became an amplifier;
+    * `standing / K` divides by a module constant rather than by the base actually in force;
+    * no blind-reading hold, because a backtest reading never fails to compute.
+
+    All three are latent at k=0.60 under the shipped rungs - 0.45/0.60 and 0.30/0.60 are both below 1,
+    `K` IS the base this script runs, and a replay always has a reading - so `scalar_drift_vs_legacy`
+    measured 0 on every arm of both universes, and D-035's numbers survived the swap unchanged.
+
+    Kept for exactly one job: if someone edits `ladder_step`, the drift column stops being 0 and this
+    run says so.  It is not a second implementation to read the ladder from - nothing calls it but the
+    comparison - which is the distinction the four `p32*` replays failed to keep.
+    """
     equity = hwm = 1.0
     path = peak = 1.0
     cycles, standing = 0, None
@@ -78,6 +103,43 @@ def ladder(mark: np.ndarray, realised: np.ndarray, policy: Policy, ruler: str) -
             cycles += 1
             standing = rung if cycles > policy.drawdown_grace_cycles else standing
         scalar = (standing / K) if standing is not None else 1.0
+        scalars[t] = scalar
+        out[t] = scalar * mark[t]
+        path += scalar * realised[t] * equity
+        equity *= 1.0 + out[t]
+        peak = max(peak, path)
+        hwm = max(hwm, equity)
+    return out, scalars
+
+
+def ladder(mark: np.ndarray, realised: np.ndarray, policy: Policy, ruler: str) -> tuple[np.ndarray, np.ndarray]:
+    """(throttled mark-to-market returns, scalars), stepped by the SHIPPED state machine.
+
+    `beidou_alpha.overlays.ladder.ladder_step` is what `LiveEngine._risk_ladder` runs; calling it here
+    is the whole point of having extracted it.  What stays local is everything the backtest has to
+    stand in for: the two rulers, the equity and realised paths, and `enforced: True` - a replay always
+    has a reading, so the blind-hold branch is unreachable here by construction rather than by
+    omission.
+    """
+    equity = hwm = 1.0
+    path = peak = 1.0
+    standing: dict = {}
+    out = np.empty(len(mark))
+    scalars = np.ones(len(mark))
+    for t in range(len(mark)):
+        drawdown = (equity / hwm - 1.0) if ruler == "mtm" else (path / peak - 1.0 if peak > 0 else 0.0)
+        step = ladder_step(
+            reading={"enforced": True, "value": drawdown},
+            standing=standing,
+            base=K,
+            rungs=policy.drawdown_ladder,
+            grace_cycles=policy.drawdown_grace_cycles,
+            bar_open_ms=t,
+            now="",
+        )
+        if step.standing is not None:
+            standing = step.standing
+        scalar = float(step.block["scalar"])
         scalars[t] = scalar
         out[t] = scalar * mark[t]
         path += scalar * realised[t] * equity
@@ -115,12 +177,23 @@ def main(mode: str, draws: int) -> None:
     starts = np.stack([rng.integers(0, n - BLOCK, size=blocks) for _ in range(draws)])
     print(f"[{mode}] k={K} bars={n} blocks/draw={blocks} draws={draws}")
     print(f"{'ladder':>12}{'ruler':>10}{'A q95':>9}{'A P<-50':>9}{'B q95':>9}{'B P<-50':>9}"
-          f"{'B CAGR':>9}{'B cost':>9}{'trip%':>8}")
+          f"{'B CAGR':>9}{'B cost':>9}{'trip%':>8}{'drift':>10}")
     out = []
-    for name, rungs in (("shipped", Policy().drawdown_ladder), ("rescaled", tuple(rescaled(K)))):
+    # The two arms are the same ladder at k=0.60, and saying so is worth more than printing it twice:
+    # `rescaled(0.60)` is ((-0.49, 0.45), (-0.70, 0.30)) and so is `Policy().drawdown_ladder`, because
+    # policy 0.3.3 already re-derived the shipped rungs for the -70% budget.  Kept as two arms so the
+    # identity is visible in the output rather than asserted here; they differ only in float noise.
+    for name, rungs in (
+        ("shipped", Policy().drawdown_ladder),
+        ("rescaled", tuple(rescaled(K))),
+        ("unrescaled", UNRESCALED),
+    ):
         policy = replace(Policy(), drawdown_ladder=tuple(rungs))
         for ruler in ("mtm", "realised"):
             thr, sc = ladder(mark, realised, policy, ruler)
+            # Paired against the hand-written replay this script used to carry, on the same series.
+            _thr_legacy, sc_legacy = ladder_legacy(mark, realised, policy, ruler)
+            drift = float(np.abs(sc - sc_legacy).max())
             a = np.array([drawdown_path(np.cumprod(1.0 + np.concatenate([thr[s:s + BLOCK] for s in row]))).min()
                           for row in starts])
             b = np.empty(draws)
@@ -142,12 +215,15 @@ def main(mode: str, draws: int) -> None:
                 "B_cagr_cost_q90": float(np.percentile(raw - cagr, 90)),
                 "historical_throttled_share": float((sc < 1.0 - 1e-9).mean()),
                 "B_draws_that_ever_tripped": float(np.mean(raw - cagr > 1e-9)),
+                # max |scalar_shipped - scalar_legacy| over the historical path.  0 means replacing the
+                # hand-written replay with `ladder_step` moved nothing on this panel at this k.
+                "scalar_drift_vs_legacy": drift,
             }
             out.append(row_out)
             print(f"{name:>12}{ruler:>10}{row_out['A_q95']:>9.1%}{row_out['A_p_breach_50']:>9.1%}"
                   f"{row_out['B_q95']:>9.1%}{row_out['B_p_breach_50']:>9.1%}"
                   f"{row_out['B_cagr_median']:>9.1%}{row_out['B_cagr_cost_median']:>9.1%}"
-                  f"{row_out['B_draws_that_ever_tripped']:>8.1%}")
+                  f"{row_out['B_draws_that_ever_tripped']:>8.1%}{drift:>10.2e}")
     Path(f"scratchpad/p32d-{mode}.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
     print(f"wrote scratchpad/p32d-{mode}.json")
 

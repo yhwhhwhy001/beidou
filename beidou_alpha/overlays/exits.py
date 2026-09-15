@@ -63,8 +63,17 @@ class ExitParams:
     # definition of "this data is too old to act on" (`pool.quarantine_after: 3` is the same shape one
     # level up).  Research and live disagreeing about when a symbol stops being tradable is KILL-027's
     # shape, so this reuses the loop's number rather than inventing a second one.  At 1h, two bars is a
-    # data hiccup; three is a halt or a delisting.  Not yet in `construction_fingerprint` - the live
-    # adapter skips a NaN close before `exit_step` sees it, so today this binds in research only.
+    # data hiccup; three is a halt or a delisting.
+    #
+    # It still binds in research ONLY: `ExitOverlay.apply` skips a non-finite close before `exit_step`
+    # is reached, so reusing the loop's number is an intent this file states and does not yet keep.  The
+    # live half of the same question is `inputs.dropped_after`, and `construction.py`'s v6 note records
+    # the operator's ruling that raising it is a priced decision rather than a side effect of a fix -
+    # so the two are left disagreeing on purpose, and `beidou_live/staleness.py` is where all five
+    # rules and which side each binds on are written down, with a test joining the table to the code.
+    #
+    # Corrected 2026-09-15: this comment said "not yet in `construction_fingerprint`" after v6 had put
+    # it there.  Left as prose it went stale in two days, which is the argument for the table.
     #
     # What the bound costs, measured on the 1h PIT archive (scratchpad/
     # exit_gap_reanchor_blast_radius.py sweeps it).  The five gapped members' holes are runs of 518,
