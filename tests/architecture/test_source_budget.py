@@ -2459,7 +2459,18 @@ CEILING = {
     # the write half by source inspection.  The remaining ~8 lines are R9's digest and a `dry_run` flag
     # on the two pre-cycle heartbeats, without which the governance half stays blind where the registry
     # half now sees.  Nothing here touches `construction_fingerprint`.
-    "beidou_live": 8_969,
+    #
+    # Twenty-sixth raise, 2026-09-15, +9 beidou_live and nothing else - the same defect as the
+    # twenty-fifth, found by running that fix in production twelve minutes after it shipped.  The
+    # 08:49:16Z restart wrote a heartbeat that correctly said `1db80a06f281` / `d62ac59fa95c`; the
+    # 09:00Z cycle then died on a proxy 503 (the fourth since 09-08, environmental, nothing to do with
+    # the change) and the ERROR heartbeat replaced it with four keys, none of them a digest.  Both
+    # instruments fell to "还没有任何周期记录过 digest" - honest under the new readers, where the old
+    # ones would have quoted a dead process, and still blind in the one window DL-Q0 / R9 exist for.
+    # Six of the nine lines are the paragraph saying that, because the cheap reading of this diff is
+    # "three more fields on a heartbeat" and the expensive one is "an outage is a reason to want the
+    # answer, not a reason to lose it".  Asserted through the engine, not by grepping the source.
+    "beidou_live": 8_978,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

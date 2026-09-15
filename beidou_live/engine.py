@@ -641,6 +641,15 @@ class LiveEngine:
                     "bar_open_ms": bar_open_ms,
                     "error": f"{type(exc).__name__}: {exc}",
                     "consecutive_errors": self.consecutive_errors,
+                    # This heartbeat OVERWRITES the one that carried the digests, so it has to carry them
+                    # itself or DL-Q0 / R9 lose their answer for the length of the outage.  Measured
+                    # 2026-09-15, twelve minutes after the restart that shipped their readers: the
+                    # 08:49:16Z restart wrote them correctly, the 09:00Z cycle died on a proxy 503, and
+                    # both checks fell to "还没有任何周期记录过 digest" - honest, and still blind, in the
+                    # one window these instruments exist for.  An outage is a reason to want the answer.
+                    "registry": registry_digest(self.model),
+                    **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
+                    "dry_run": self.config.dry_run,
                 }
             )
             # A failed cycle must leave a durable row: the heartbeat is overwritten by the next cycle, so

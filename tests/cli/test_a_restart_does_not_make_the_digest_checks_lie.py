@@ -144,3 +144,28 @@ def test_a_dry_run_process_may_not_answer_for_the_live_one(tmp_path: Path) -> No
 
     assert "治理规则：还没有任何周期记录过 digest" in output
     assert "registry：还没有任何周期记录过 digest" in output
+
+
+def test_a_failing_first_bar_does_not_take_both_instruments_out_with_it(tmp_path: Path) -> None:
+    """2026-09-15 09:00Z: the first cycle after a restart died on a proxy 503.
+
+    An outage is a reason to want the answer, not a reason to lose it - and `consecutive_errors` well
+    below the streak bar means the check is otherwise still reporting a healthy loop.
+    """
+    profile = _profile(tmp_path)
+    _restarted_loop(
+        tmp_path,
+        dead_row={"governance": DEAD_PROCESS_GOVERNANCE, "registry": DEAD_PROCESS_REGISTRY},
+        heartbeat={
+            "phase": "ERROR",
+            "error": "ProxyError: 503 Service Unavailable",
+            "consecutive_errors": 1,
+            "governance": policy_digest(),
+            "registry": _running_registry_digest(profile),
+        },
+    )
+
+    output = _check(profile)
+
+    assert f"registry：与正在运行的循环一致（{_running_registry_digest(profile)}）" in output
+    assert f"治理规则：与正在运行的循环一致（{policy_digest()}）" in output
