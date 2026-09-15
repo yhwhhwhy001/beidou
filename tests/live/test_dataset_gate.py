@@ -179,3 +179,31 @@ def test_a_static_report_is_still_blocked_by_the_universe_file_at_startup(tmp_pa
     check = registry_dataset_problems(registry, data_root=root)
     assert check.blocking and check.blocking[0].startswith("tsmom: ")
     assert "universe.fingerprint" in check.blocking[0]
+
+
+def test_a_report_declaring_no_universe_mode_is_still_blocked_at_startup(tmp_path: Path) -> None:
+    """Silence is not an exemption - checked where the reading actually happens.
+
+    `registry_dataset_problems` is the only caller that holds a whole report payload, so the
+    `.get("universe_mode")` and the `isinstance` guard beside it are the two lines that decide what an
+    unstated mode means.  Defaulting them to `"pit"`, or rewriting the predicate as `!= "static"`,
+    would exempt every report written before the field was recorded.
+
+    This lives here rather than beside `manifest_check` on purpose: a unit-layer version passes the
+    argument itself, so it exercises a call the production path never makes and is a verbatim
+    duplicate of `test_a_changed_symbol_set_under_the_same_source_blocks`.  Moved 2026-09-15.
+    """
+    root = _data_root(tmp_path)
+    report = _report(tmp_path, root)
+    assert "universe_mode" not in json.loads(report.read_text(encoding="utf-8")), (
+        "the fixture has to actually omit the key, or this test proves nothing about silence"
+    )
+    registry = _registry_citing(report)
+    (root / "universe.json").write_text(
+        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
+        encoding="utf-8",
+    )
+
+    check = registry_dataset_problems(registry, data_root=root)
+    assert check.blocking and check.blocking[0].startswith("tsmom: ")
+    assert "universe.fingerprint" in check.blocking[0]

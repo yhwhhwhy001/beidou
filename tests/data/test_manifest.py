@@ -264,23 +264,6 @@ def test_a_static_report_still_blocks_on_the_universe_file(tmp_path: Path) -> No
     assert check.blocking and "universe.fingerprint" in check.blocking[0]
 
 
-def test_a_report_declaring_no_universe_mode_still_blocks(tmp_path: Path) -> None:
-    """Only an explicit ``pit`` is exempt.  A report that did not say keeps the block it has.
-
-    The opposite of the ``construction_problems`` precedent one field over, and deliberately so: that
-    one skips a dimension a report predates, this one refuses to loosen an existing block because a
-    report is silent.
-    """
-    root = _root(tmp_path, refreshes=30, freq="D")
-    recorded = build_manifest(root).to_dict()
-    (root / "universe.json").write_text(
-        json.dumps({"symbols": ["BTCUSDT", "SOLUSDT"], "source": "pool-refresh", "selected_at_ms": 2}),
-        encoding="utf-8",
-    )
-    check = manifest_check(recorded, build_manifest(root))
-    assert check.blocking and "universe.fingerprint" in check.blocking[0]
-
-
 def test_a_pit_report_still_blocks_on_the_membership_table(tmp_path: Path) -> None:
     """The exemption moves ONE field.  A pit result's real gate is the table it actually ran on."""
     root = _root(tmp_path, refreshes=6, freq="MS")
