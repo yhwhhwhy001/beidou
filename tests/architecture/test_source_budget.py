@@ -1971,6 +1971,23 @@ CEILING = {
     # What is NOT left to convention: the VALUES.  Every merge re-measures them against the merged
     # tree, because no side's count describes code that now includes the others'.
     #
+    # Thirty-second raise OF THIS TABLE, 2026-09-15: +17 beidou_data, +8 beidou_live - the dataset
+    # gate stopped checking pit reports against a file they never open.
+    #
+    # `research_cmd._resolve_symbols` calls `read_universe` only under `static`; a `universe_mode: "pit"`
+    # report's population is the union of `membership.parquet`, which blocks unconditionally one field
+    # over.  So the universe block was refusing armed starts over `universe.json` for reports that never
+    # read it - and the 2026-09-09 fix for THAT was to freeze the traded pool, which held the live
+    # universe at 16 names from 09-09 to 09-15 while the cited evidence re-ranked every 24 hours
+    # (`median_gap_hours: 24.0`, `union: 211`).  The pin is being removed in the same branch.
+    #
+    # Most of the added lines are the two docstrings: the exemption is a one-line predicate, and what
+    # costs lines is writing down WHY only an explicit `pit` is exempt.  That paragraph is the thing a
+    # future reader needs, because the obvious "simplification" - exempt anything that is not `static` -
+    # would silently loosen the gate for every report written before `universe_mode` was recorded.
+    #
+    # Design: docs/analysis/2026-09-15-universe-unpin-and-dataset-gate-design.md
+    #
     # Thirty-first raise OF THIS TABLE, 2026-09-15: +129 beidou_live, +13 beidou_cli, +9 beidou_alpha -
     # the five "this symbol cannot be priced" rules written down, and NOT merged.
     #
@@ -2735,7 +2752,7 @@ CEILING = {
     # and main had reached 9_393 through it.  Neither side's number describes the merged tree, so this is
     # the merged tree's own count - 9_438 - taken from the failing assertion rather than from 9_393 + 45,
     # which is the repository's rule for exactly this conflict and the third time today it has been hit.
-    "beidou_live": 9_438,
+    "beidou_live": 9_446,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2796,7 +2813,7 @@ CEILING = {
     # `onchain.CommunityClient` had carried it all along, with the comment saying why.  Its two 5xx
     # tests each really slept 1+2+4 seconds, which is 14s on the laptop and ~42s on CI - and `Types`
     # had been red for 23 pushes, so the test step never ran and `suite_duration.py` never saw them.
-    "beidou_data": 5_439,
+    "beidou_data": 5_456,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
