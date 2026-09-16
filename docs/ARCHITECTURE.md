@@ -14,9 +14,13 @@ demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (s
 | `beidou_alpha` | 特征、信号、集成、组合构建、**overlays**（退出层、回撤节流）、回测、验证、报告。**纯函数，零 I/O** | numpy、pandas |
 | `beidou_exchange` | Binance USDⓈ-M REST：签名与时钟重同步、**限频错误的退避**（被动）、写入歧义语义（`OrderOutcomeUnknown`）、规则量化、下单/查单/仓位、杠杆档位、时间窗分页；host allowlist + kill-switch | shared、httpx |
 | `beidou_live` | bar 驱动循环：目标权重 → 节流 → 退出层 → 护栏 → 与真实仓位求差 → 参与率/保证金缩放 → 幂等下单 → 对账 → 归因/心跳/日报（含 P13 风险预算监控）；每日池刷新与显式平仓 | alpha、data、exchange、shared |
-| `beidou_cli` | `beidou data sync\|pool\|status\|spot\|metrics\|onchain\|index\|macro`、`research backtest\|validate\|diagnose\|correlate\|overlay\|book\|decompose\|mine\|list`、`governance`（17 个子命令：`next\|advance\|plan\|gate\|apply\|canary\|replay\|status\|tenure\|transactions\|verdicts\|review\|divergence\|reopen\|window\|enable\|disable`）、`live run\|status\|verify\|soak\|flatten\|kill-switch\|alert-test`、`report daily\|weekly` | 全部 |
+| `beidou_cli` | `beidou data sync\|pool\|status\|spot\|metrics`、`research backtest\|validate\|diagnose\|correlate\|overlay\|book\|decompose\|mine\|list`、`governance`（17 个子命令：`next\|advance\|plan\|gate\|apply\|canary\|replay\|status\|tenure\|transactions\|verdicts\|review\|divergence\|reopen\|window\|enable\|disable`）、`live run\|status\|verify\|soak\|flatten\|kill-switch\|alert-test`、`report daily\|weekly` | 全部 |
 
 上表 2026-09-13 更正过一处：`beidou_exchange` 原本写的是「限频、熔断」，而代码里从来没有主动配额管理，也没有断路器——只有被动的 429/418 + `Retry-After` 退避重试。`X-MBX-USED-WEIGHT-*` 被记进 `used_weight` 但没有任何读取方，`consecutive_transport_failures` 同样只写不读，所以一个正走向权重上限的客户端和一个闲着的客户端在日志里长得一模一样。现在两者各有一条**边沿触发的 warning**（`USED_WEIGHT_WARN` / `TRANSPORT_FAILURE_WARN`），**仍然不 sleep**：主动节流会改变实盘循环运行中的行为，那是一次要单独定价的改动，不是补文档的副产品。唯一的「熔断」是 kill-switch 文件加 host allowlist（`guard.py`），已单列。
+
+2026-09-16 操作者裁定**撤出三条数据源**：`beidou_data` 的 `index_price.py`(307) / `macro.py`(844) / `onchain.py`(606)，连同 `beidou data index|macro|onchain` 三个命令与五个测试文件，共 1,757 行源码 + 2,092 行测试。它们 2026-09-10 落地，**建成了、也一直可达**，但没有任何读取方：`research_cmd._load` 只 join `metrics` 与 `spot`，`beidou_alpha` 没有任何叶子或信号读它们的列，`deploy/run_data.sh` 从落地当天起就把三者排除在日程外并写明了理由，`.beidou/data/` 里从来没有过它们的 store。
+
+**这件事对本文件的意义不是少了三行，而是一类缺陷没有仪器**：`test_every_module_is_reachable_from_an_entry_point` 问的是「每个模块能不能被跑到」，三者都能，所以它一路全绿；没有任何东西问过「有没有东西真的在跑它」。唯一判断对了的是 `run_data.sh` 里的一段注释，而注释不是任何守卫会去读的东西。撤出前后五条命令的输出**逐字节相同**（`governance reopen|replay|next`、`report weekly`、`live run --dry-run --cycles 0`），这也是它们确实没被读过的最后一道证明。要拉回来：`git show 71863e9e`。
 
 架构测试在 `tests/architecture/`，2026-09-16 更正——这里原本写的是「唯一的架构测试：
 `test_import_rules.py`」，而那句话在第二个文件落地的那天就过期了，此后又过期了六次：

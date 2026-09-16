@@ -11045,3 +11045,59 @@ AKEUSDT 在 16:00Z 收到 4.90σ（距 6σ 差 10.0%）之后，它第一次有�
 数据层（596 + 641 行）与 macro/onchain/index 三条数据源（1,757 + 2,092 行）是否撤出，属于操作者
 裁定，本轮只定价不执行。注意 `beidou_live/liquidation.py`（DL-X1 强平距离观测）**在用**，不属于
 前者，别一起带走。
+
+---
+
+## 2026-09-16（续）· 撤出 macro / onchain / index 三条数据源（操作者裁定）
+
+撤出 `beidou_data/index_price.py`(307) / `macro.py`(844) / `onchain.py`(606)，`beidou data
+index|macro|onchain` 三个命令，五个测试文件（2,092 行），以及 `scratchpad/verify_live.py`（#29 的
+联网观测半，随它的被观测对象一起走）。共 **1,757 行源码 + 2,092 行测试**。要拉回来：`git show 71863e9e`。
+
+**为什么它们能在树里活六天而没有一个守卫说话。** 三者 2026-09-10 落地，**建成了、也一直可达**——
+`test_every_module_is_reachable_from_an_entry_point` 从那天起就一路全绿，因为它问的是「每个模块
+**能不能**被跑到」，而三者都能。**没有任何东西问过「有没有东西真的在跑它」。** 这两个问题差一个字，
+差出 3,849 行。
+
+唯一判断对了的是 `deploy/run_data.sh` 里那段把三者排除在日程外的注释，它当时就把理由写全了
+（#29「NOTHING reads the store」、#31「一年的等待和一天花同样 49 个请求」、#32「作者裁定不建 store」）。
+**而注释不是任何守卫会去读的东西**——六天后一次审查只能从零把同一个结论再推一遍。这条与同日那条
+「没有人按名字引用它 ≠ 没有人读它」是一对：一个是 grep 看不见 glob，一个是守卫问错了问题。
+
+**撤出前后五条命令的输出逐字节相同**，这是「它们确实没被读过」的最后一道证明，也是撤出可以安全
+执行的判据：
+
+```
+governance reopen    IDENTICAL   （含 regime-47 的「3/4 present; missing liquidations」——那 3 项是
+                                  OI / 多空比 / 基差，出自 metrics 与 spot，本来就与这三条无关）
+governance replay    IDENTICAL   （AC-G0 仍 15 reproduced / 31 differences / 0 unattributed）
+governance next      IDENTICAL
+report weekly        IDENTICAL
+live run --dry-run --cycles 0     IDENTICAL   （启动证据门 / 数据集门读数不变）
+```
+
+另外两条独立证据：`research_cmd._load` 只 join `metrics` 与 `spot`；`.beidou/data/` 里从来没有过
+这三条的 store（只有 funding / klines / metrics / metrics_snapshot / spot_klines / membership /
+universe）——**磁盘上的空缺本身就是「从未被读」的记录**。
+
+**动到的一个真正的契约，写清楚免得日后当成遗漏。** `alignment.CONTRACTS` 由各 feed 在 **import 时**
+注册，`test_every_foreign_column_that_can_reach_the_panel_is_declared` 断言它与各 feed 列的并集**精确
+相等**（不是子集）。这条「强制下一个 feed 来改这里」的设计两个方向都付过账：#32 加 macro 时它红过一次，
+这次撤出时它又红了一次。并集现在是 metrics + spot 两条。
+
+**随之丢掉的一样东西**：`onchain` 当初刻意维护自己的 registry 而不并入 `CONTRACTS`，那条
+`assert not set(ONCHAIN_PANEL_COLUMNS) & set(CONTRACTS)` 是「这个分离是一次决定而不是疏漏」的记录。
+registry 和那条断言随 feed 一起没了。将来若有新的链上 feed，它**不继承这个分离**——直接走这条相等式，
+而 #32 的模块注释本来就已经论证过分离的理由过期了。
+
+**行数棘轮同步降表（这是这次唯一容易被漏掉的一步）。** `beidou_data` 5,472 → 3,718，
+`beidou_cli` 6,178 → 5,943。降表和抬表一样要在同一提交写理由：这个棘轮已经零余量地跑了几周，
+留下 1,757 + 235 行的松弛，等于**静默给下一次改动批了一份没人申请过的额度**——与「抬表不写理由」
+是同一个缺陷，符号相反，而且没有红测试会抓它。降完七个包**全部回到零余量**。
+
+降表本身当场演了一次它为什么值得：我先把 `beidou_data` 降到 3,715，之后才去修
+`alignment.spot_verification_frame` 那句指向 `beidou_data.index_price` note 8 的悬空引用（+3 行），
+下一次全量跑就红了。天花板随后记成 3,718，并把这三行单独记一条。
+
+四道门：format 358 全过、lint 全过、mypy **116** 个源文件 0 错、pytest **1,967 项全绿 114s**
+（2,074 → 1,967，差的 107 项是随五个测试文件走的）。

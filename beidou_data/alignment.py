@@ -486,8 +486,11 @@ SPOT_MIN_OVERLAP_BARS = 24
 def spot_verification_frame(frame: pd.DataFrame) -> pd.DataFrame:
     """A kline frame under the names `CONTRACTS` keys the spot columns by, stamp untouched.
 
-    Renaming and nothing else, which is what keeps the comparison real - `beidou_data.index_price`'s
-    note 8 states the general form of this, and spot needs the one qualification that feed does not.
+    Renaming and nothing else, which is what keeps the comparison real: anything this function did to
+    the VALUES would be a transform the verification then "confirms" on data it produced itself.  (The
+    general form of that rule used to be stated in `beidou_data.index_price` note 8; that feed was
+    withdrawn 2026-09-16, so it is stated here instead of pointed at.)  Spot needs one qualification
+    that rule does not cover, and it is the next paragraph.
     `klines_to_frame` DOES touch the stamp here: the spot monthly archive switched to microseconds at
     2025-01 (`beidou_data.spot` note 5) and the parser normalises that to milliseconds.  A unit
     normalisation is a SCALE and the hypotheses under test are SHIFTS of one bar, so it cannot launder a

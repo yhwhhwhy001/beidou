@@ -2835,7 +2835,14 @@ CEILING = {
     # the comment saying why the two directions are deliberately not symmetric: release refuses before
     # touching anything, because it must not report a success it did not achieve; engage still writes
     # what it can and only then exits non-zero, because a kill switch fails toward stopping.
-    "beidou_cli": 6_178,
+    # **降表**, 2026-09-16 (6_178 -> 5_943), and the sentence the rule requires works the same way in
+    # this direction.  `beidou data onchain|index|macro` were withdrawn with their modules, which took
+    # 206 lines of command bodies and 29 of imports out of `data_cmd.py`.  Lowering a ceiling is not
+    # optional bookkeeping: this ratchet has run at zero headroom for weeks, so leaving 235 lines of
+    # slack here would have silently bought the next change a free allowance nobody argued for - which
+    # is the same defect as raising a ceiling without a reason, with the sign flipped and no red test
+    # to catch it.  A ratchet only means something while it is tight.
+    "beidou_cli": 5_943,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -2846,7 +2853,26 @@ CEILING = {
     # `onchain.CommunityClient` had carried it all along, with the comment saying why.  Its two 5xx
     # tests each really slept 1+2+4 seconds, which is 14s on the laptop and ~42s on CI - and `Types`
     # had been red for 23 pushes, so the test step never ran and `suite_duration.py` never saw them.
-    "beidou_data": 5_472,
+    # **降表**, 2026-09-16 (5_472 -> 3_715): the operator withdrew `index_price.py` (307),
+    # `macro.py` (844) and `onchain.py` (606) - 1,757 lines, the single largest block of non-alpha
+    # source in the tree that nothing read.  All three were BUILT and REACHABLE the whole time, which
+    # is why no guard in this directory ever objected: `test_every_module_is_reachable_from_an_entry_point`
+    # asks whether a module can be run, not whether anything runs it.  What actually held was the
+    # negative evidence on the other side - `research_cmd._load` joins only `metrics` and `spot`, no
+    # leaf or signal reads an on-chain, index or macro column, and `deploy/run_data.sh` had held all
+    # three out of the daily job since the day they landed with the reasons written out.  `.beidou/data/`
+    # confirmed it from the disk: no store was ever written for any of them.
+    # Same rule as the `beidou_cli` entry above - the ceiling comes down with the code, because a
+    # ratchet carrying 1,757 lines of slack is not measuring anything.  This is also the first entry in
+    # this file that moves the alpha share the right way without adding a line of alpha.
+    # +3 on top of that (3_715 -> 3_718), same commit, and worth recording as its own line because the
+    # ratchet caught it rather than me: `alignment.spot_verification_frame`'s docstring pointed at
+    # "`beidou_data.index_price` note 8" for the general rule that a renaming may not touch the values.
+    # Withdrawing that feed would have left the one statement of that rule as a dangling pointer, so it
+    # is now stated where it is used.  I had already lowered the ceiling to 3_715 before making the
+    # edit; the suite went red on the next full run, which is exactly the zero-headroom behaviour the
+    # two lowerings above were for.
+    "beidou_data": 3_718,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
