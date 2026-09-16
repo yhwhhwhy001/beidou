@@ -2573,7 +2573,20 @@ CEILING = {
     # error bar; the rest is the docstring carrying the two measurements (40.000000000000014 here, a hair
     # below 40 there) and why the tolerance is that error bar rather than a constant that happened to
     # work.  The ninth raise's finding one screen up is why that docstring was not golfed instead.
-    "beidou_alpha": 9_040,
+    # Tenth raise, 2026-09-17 (9_040 -> 9_098, +58 beidou_alpha), with the sentence the rule requires:
+    # D-043's unselected-evidence cap in `validation/verdict.py`.  `walk_forward.summary` has emitted
+    # `oos_is_full_sample_tail` since KILL-Q2 and `research validate` printed it to the terminal, but
+    # `decide` never read it, so a report could carry its own disclaimer - "no fold had a choice to
+    # make" - and still come back PASS.  The shipped tsmom evidence is exactly that shape: grid_size 2,
+    # five folds, every one picking the same point, `oos_sharpe` 1.5919 against a deflated threshold of
+    # 1.5493, which is 2.7% of headroom on a number that is not an out-of-sample record at all.
+    # About 45 of the 58 lines are `_unselected`'s docstring, and they are the part worth the ratchet:
+    # the measured blast radius (10 archived reports, all PASS -> WEAK_PASS, none to FAIL) and the
+    # reason this caps rather than fails - `registry.py:369` admits WEAK_PASS to live use, so the rule
+    # can say what it means without stopping a loop that is holding positions.  Deleting that paragraph
+    # to fit under the ceiling would leave a threshold nobody can argue with, which is the failure mode
+    # the ninth raise's note already named.
+    "beidou_alpha": 9_098,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2818,7 +2831,20 @@ CEILING = {
     # 17 lines are that distinction plus `failed_bar_error`, which exists so the page names what broke
     # instead of sending the reader to open the report.  The cadence was priced before it was chosen:
     # one failed bar re-announces hourly until UTC midnight.
-    "beidou_live": 9_501,
+    # Same commit, 2026-09-17 (9_501 -> 9_568, +67 beidou_live): D-044 splits attributed income by NET
+    # exposure instead of by magnitude.  E-050 took magnitudes to stop a signed denominator exploding,
+    # and the side effect went unnoticed - inside one symbol every strategy then carries the sign of
+    # that SYMBOL's P&L, whatever side it is on.  Measured on the running loop the day this was written:
+    # flow and tsmom overlapped on ENA, LINK and TRUMP and disagreed on all three (flow short ~-0.07 of
+    # equity against tsmom long 1.0), so on 100 USDT of income the old split paid the short sleeve about
+    # +6.5 where its own exposure earns about -7.4.  `probe.probe_status` sums that series and is the
+    # only automatic control on a sleeve running against a book-level REJECT, so the sign error was in
+    # the brake.  E-050's own failure is answered by REFUSING - legs that cancel to within
+    # `MIN_NET_SHARE` of their gross return no owner and book as `cancelled` - rather than by a bound
+    # that keeps the wrong sign.  The lines are that paragraph, the `cancelled` bucket kept apart from
+    # `unattributed` (nobody held it vs. the legs cancelled are different facts), and the `basis` key
+    # plus the `probe` filter that stops the 30-day window adding two different quantities together.
+    "beidou_live": 9_568,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

@@ -91,13 +91,35 @@ async def test_external_transfer_rebaselines_and_is_recorded(august_panel: Panel
     assert "tsmom" in rows[-1]["by_strategy"]  # the first cycle's fills are attributed to the targets that caused them
 
 
-def test_attribution_shares_are_magnitudes_and_flows_are_separated() -> None:
+def test_attribution_splits_by_net_exposure_and_flows_are_separated() -> None:
+    """D-044: a strategy on the other side of a symbol is charged the other sign.
+
+    E-050's own scenario, re-priced.  `a` is long 0.5 and `b` short 0.3 while the symbol loses 4, so
+    the book's net exposure is +0.2 and the loss belongs to the long: `a` -10, `b` +6, summing to the
+    -4 that actually happened.  The magnitude rule this replaces paid them -2.5 and -1.5 - both
+    charged for a loss only one of them was positioned for.
+    """
     conflict = attribute(
         [{"symbol": "X", "incomeType": "REALIZED_PNL", "income": "-4"}],
         {"a": {"X": 0.5}, "b": {"X": -0.3}},
         {"a": 1.0, "b": 1.0},
     )
-    assert conflict["by_strategy"]["a"] == pytest.approx(-2.5) and conflict["by_strategy"]["b"] == pytest.approx(-1.5)
+    assert conflict["by_strategy"]["a"] == pytest.approx(-10.0) and conflict["by_strategy"]["b"] == pytest.approx(6.0)
+    assert sum(conflict["by_strategy"].values()) == pytest.approx(conflict["total"])
+    assert conflict["basis"] == "net_exposure"
+    # E-050's failure mode is refused rather than rewritten: legs that cancel to within MIN_NET_SHARE
+    # of their gross have no attributable owner, so the income is booked as cancelled, not split.
+    cancelled = attribute(
+        [{"symbol": "X", "incomeType": "REALIZED_PNL", "income": "-4"}],
+        {"a": {"X": 0.5}, "b": {"X": -0.48}},
+        {"a": 1.0, "b": 1.0},
+    )
+    assert cancelled["by_strategy"] == {}
+    assert cancelled["unattributed"] == pytest.approx(-4.0)
+    assert cancelled["cancelled"] == {"X": pytest.approx(-4.0)}
+    # A symbol nobody held is an absence, not a cancellation - the two must not read the same.
+    absent = attribute([{"symbol": "Z", "incomeType": "REALIZED_PNL", "income": "-4"}], {"a": {"X": 0.5}}, {"a": 1.0})
+    assert absent["unattributed"] == pytest.approx(-4.0) and absent["cancelled"] == {}
     reset = attribute([{"symbol": "", "incomeType": "TRANSFER", "income": "5000"}], {}, {})
     assert reset["by_symbol"] == {} and reset["total"] == 0.0
     assert reset["external_flows"] == {"total": 5000.0, "rows": 1, "by_type": {"TRANSFER": 5000.0}}

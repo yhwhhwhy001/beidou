@@ -101,7 +101,12 @@ async def test_a_firing_main_book_is_not_removed_from_the_model(tmp_path: Any) -
     sentinel = engine.model
 
     engine.store.append_attribution(
-        {"at": "2026-09-09T02:00:00+00:00", "until_ms": 1_788_919_200_000, "by_strategy": {"tsmom": -500.0}}
+        {
+            "at": "2026-09-09T02:00:00+00:00",
+            "until_ms": 1_788_919_200_000,
+            "basis": "net_exposure",
+            "by_strategy": {"tsmom": -500.0},
+        }
     )
     statuses = await LiveEngine._check_probes(engine, 1_788_919_200_000)
 

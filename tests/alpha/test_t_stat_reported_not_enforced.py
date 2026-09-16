@@ -22,9 +22,32 @@ from pathlib import Path
 from typing import Any
 
 from beidou_alpha.validation.multiple_testing import SELECTION_GATE
-from beidou_alpha.validation.verdict import decide
+from beidou_alpha.validation.verdict import VerdictThresholds, decide
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# D-043 (2026-09-17): the ten archived reports whose stored PASS the unselected-evidence cap turns
+# into WEAK_PASS.  Listed by name rather than counted, because the guard below is pre-registered and
+# "how many flipped" is the one thing a widened guard can hide.  Every entry is tsmom at grid_size 2:
+# eight carry `oos_is_full_sample_tail: true`, two carry a PBO the small grid exempted.  Re-deriving
+# any of them under a real grid is what takes it OFF this list - the list shrinking is the repair.
+D043_CAPPED = frozenset(
+    {
+        "tsmom-validation-20260903T181803Z.json",
+        "tsmom-validation-20260904T020211Z.json",
+        "tsmom-validation-20260908T105259Z.json",
+        "tsmom-validation-20260908T182204Z.json",
+        "tsmom-validation-20260909T055023Z.json",
+        "tsmom-validation-20260909T055957Z.json",
+        "tsmom-validation-20260913T182325Z.json",
+        "tsmom-validation-20260913T201638Z.json",
+        "tsmom-validation-20260914T174319Z.json",
+        "tsmom-validation-20260914T174503Z.json",
+    }
+)
+# The same rules with D-043 switched off: what `decide` said the day before it existed.  Used to
+# prove the cap is the ONLY thing that moved, rather than asserting that nothing moved at all.
+BEFORE_D043 = VerdictThresholds(cap_unselected_at_weak=False)
 
 
 def _clean(**walk_forward: Any) -> dict[str, Any]:
@@ -138,14 +161,66 @@ def test_no_archived_verdict_changes_for_any_reason_but_the_gate_rename() -> Non
     asserted separately below.  Dropping these reports from the check instead would have left the
     pre-registered guard asserting nothing at all, so the comparison is made on the one axis the
     change does not touch: supply the gate, and the stored verdict must still come back.
+
+    2026-09-17 (D-043): judged with the unselected-evidence cap switched OFF, which is what "for no
+    reason but" now means.  The cap's own flips are asserted by name in the two tests below rather
+    than absorbed here - a guard that silently grows a new exemption every time a rule lands is a
+    guard that has stopped being pre-registered.
     """
     checked = 0
     for name, report in _archived_reports():
         checked += 1
         with_gate = {**report, "oos_selection": {**report["oos_selection"], "gate": SELECTION_GATE}}
-        assert decide(with_gate)[0] == report["verdict"], name
+        assert decide(with_gate, BEFORE_D043)[0] == report["verdict"], name
 
     assert checked >= 12
+
+
+def test_d043_flips_exactly_the_reports_it_was_measured_on() -> None:
+    """The cap's blast radius, pinned by name: 10 reports, all PASS -> WEAK_PASS, nothing else moves.
+
+    Both directions are asserted.  A report on the list that stops flipping has either been
+    re-derived under a real grid (the repair) or the cap has gone quietly vacuous; a report off the
+    list that starts flipping is a rule reaching further than it was measured to.  Either way the
+    list is the thing that has to be edited, in the commit that says why.
+    """
+    flipped: set[str] = set()
+    for path in sorted(ROOT.glob("reports/research/**/*.json")):
+        report = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(report, dict) or "verdict" not in report:
+            continue
+        walk_forward = report.get("walk_forward")
+        if not isinstance(walk_forward, dict) or "oos_sharpe" not in walk_forward:
+            continue
+        before = decide(report, BEFORE_D043)[0]
+        after, reasons = decide(report)
+        if before == after:
+            continue
+        flipped.add(path.name)
+        assert (before, after) == ("PASS", "WEAK_PASS"), f"{path.name}: {before} -> {after}"
+        assert reasons, f"{path.name}: a cap with no reason is indistinguishable from the Sharpe bar"
+
+    assert flipped == D043_CAPPED, (
+        f"unexpected: {sorted(flipped - D043_CAPPED)}, missing: {sorted(D043_CAPPED - flipped)}"
+    )
+
+
+def test_the_report_the_live_registry_cites_is_one_of_them() -> None:
+    """Stated on its own because it is the finding, not a side effect.
+
+    The shipped tsmom evidence clears every numeric gate and is still a single-configuration
+    backtest: 5 folds, `grid_size` 2, every fold picking the same point, `selection_consistent`
+    true.  `oos_is_full_sample_tail` said so in the artefact from the day the field existed, and
+    `research validate` printed the sentence to the terminal - `decide` was the only reader that
+    could not see it, which is why the registry could carry a PASS the report itself qualified.
+    """
+    cited = ROOT / "reports/research/tsmom-validation-20260913T182325Z.json"
+    report = json.loads(cited.read_text(encoding="utf-8"))
+    assert report["walk_forward"]["oos_is_full_sample_tail"] is True
+    assert decide(report, BEFORE_D043)[0] == "PASS"
+    verdict, reasons = decide(report)
+    assert verdict == "WEAK_PASS"
+    assert any("full_sample_tail" in reason for reason in reasons)
 
 
 def test_every_archived_report_is_refused_on_the_gate_it_cannot_name() -> None:
@@ -164,10 +239,14 @@ def test_every_archived_report_is_refused_on_the_gate_it_cannot_name() -> None:
 
 
 def test_a_report_that_names_its_gate_is_judged_on_its_numbers() -> None:
-    """The other half of the same finding: naming the gate is what lets ``decide`` read the threshold."""
+    """The other half of the same finding: naming the gate is what lets ``decide`` read the threshold.
+
+    On the numbers, with D-043 off (`D043_CAPPED` owns the cap's flips).  The assertion this test
+    exists for is the gate one below it: no report that names its gate may be refused FOR the gate.
+    """
     reports = _archived_reports(with_gate=True)
     assert reports, "no archived report names its gate yet"
     for name, report in reports:
-        verdict, reasons = decide(report)
+        verdict, reasons = decide(report, BEFORE_D043)
         assert verdict == report["verdict"], name
         assert not any("gate" in reason for reason in reasons), name

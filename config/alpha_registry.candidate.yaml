@@ -348,7 +348,7 @@ strategies:
     evidence:
       report: reports/research/tsmom-validation-20260913T182325Z.json
       sha256: cff07c6777295defce2acf7b045544f633c2f62c5ef766391eab4950236ef951
-      verdict: PASS
+      verdict: WEAK_PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
     # 它的 30 天滚动归因盈亏既没有被约束，也从来没有被计算过。规则看不见的东西，规则就管不住。

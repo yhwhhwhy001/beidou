@@ -190,10 +190,18 @@ def test_ledger_pools_trials_and_verdict_ignores_pbo_for_tiny_grids() -> None:
         "cpcv": {"fraction_negative": 0.0},
         "cost_stress": {"x2": 1.3},
     }
-    assert decide(base)[0] == "PASS"
+    # D-043: the tiny grid still exempts PBO from FAILING - CSCV cannot rank two configurations - but
+    # the exemption is no longer free.  It caps the verdict at WEAK_PASS and says so, where it used to
+    # return PASS with nothing in the artefact recording that the gate had not run.
+    verdict, reasons = decide(base)
+    assert verdict == "WEAK_PASS" and any("exempted" in r for r in reasons)
     wide = {**base, "multiple_testing": {**base["multiple_testing"], "grid_trials": 8}}
     verdict, reasons = decide(wide)
     assert verdict == "FAIL" and any("pbo" in r for r in reasons)
+    # ...and a small grid whose PBO is fine is untouched: the cap is about the gate not running, not
+    # about the grid being small.
+    calm = {**base, "multiple_testing": {**base["multiple_testing"], "pbo": 0.1}}
+    assert decide(calm) == ("PASS", [])
 
 
 def test_verdict_is_oos_first_and_dsr_is_informational() -> None:
