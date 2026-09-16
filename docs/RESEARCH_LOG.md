@@ -10967,3 +10967,81 @@ AKEUSDT 在 16:00Z 收到 4.90σ（距 6σ 差 10.0%）之后，它第一次有�
 
 本轮未改任何配置或代码；排查全程只读，唯一对外动作是对两个 host 的 ping，打的是循环本来就在打的
 地址。
+
+---
+
+## 2026-09-16 · 全仓冗余与错误文件审查，并按裁定执行
+
+分析与更正：`docs/analysis/2026-09-16-repo-redundancy-review.md`（正文 + 文末《执行后的更正》）。
+提交：`67fd14e0`（候选 registry）、`1ba355f0`（说明层 + 恢复误删）、`79fc16c3`（归档 + fixture +
+.gitignore）、`dfe24f0d`（账本守卫 + 出处注记）。四道门：format 366 / lint / mypy 119 个源文件
+0 错 / pytest **2,074 项全绿 114s**。
+
+**最值得记住的一条，因为它在执行时真的炸了一次。** 审查用「有没有人按文件名 grep 到」当作
+「有没有用」的判据，据此挑出 40 份孤儿报告并归档了 39 份。`beidou governance next` 当场变了：
+`shortlist_candidates` 9 → 12、「minus 3 already validated」→「minus 0」。`assemble()` 判断一个
+候选「已经验过」靠扫 `reports/research/*.json`，被移走的三份 `mined_*-validation-*.json` 正是那
+三个候选的验证证据——**照那一版做下去，下一轮挖掘会在已经做完的工作上重新花账本行**，而账本只
+追加、拿不回来。
+
+> **「没有人按名字引用它」不等于「没有人读它」。** 全仓有五处按 glob 读报告目录的代码
+> （`_payloads` 的 `*.json`、两处 `mine-shortlist-*.json`、`_validations_since` 的
+> `*-validation-*.json` + `book-*.json`、daily 的 `*.json`），它们看的是**文件名模式**而不是引用
+> 关系。grep 看不见这条边。清点表在 `reports/research/archive/README.md`。
+
+同一条规则的另一面同日出现第二次：审查提议删 `scripts/p12_stage1_compare.py`（无人引用、写死
+`/private/tmp/p12`、跑不了第二次），而它是 `reports/research/p12-stage1-20260904T073645Z.json`
+的**唯一出处**，那份报告被本文件引用——`FIELDS` 正是该报告 `runs.*` 的键集。删掉它会在仓库里留下
+一个被引用的数字而没有任何东西说得出它怎么算的。改为保留 + docstring 记出处，并明说这份比较
+**不能从仓库复现**（要先用 `p12_stage1_membership.py` 重建被筛过的数据根）。
+
+据此可归档的范围收窄到不匹配任何 glob 模式的四种名字：`overlay-*`(10 组) / `tsmom-backtest-*`(7) /
+`correlate-*`(4) / `decompose-*`(2)，共 **23 组 46 个文件**。移动前后四条命令输出**逐字节相同**：
+`governance replay`（AC-G0 仍 15 reproduced / 31 differences / 0 unattributed）、`governance next`、
+`report weekly`、`live run --dry-run --cycles 0`。
+
+**候选 registry 的头注是假的，而 soak 正在照它跑（`67fd14e0`）。**
+`config/alpha_registry.candidate.yaml` 开头写着它与 armed registry「只差这段注释块」。那句话
+09-12 成立，09-15 起不成立：该文件最后一次改动是 `6e87e7ed`，armed 此后动了三次，两者在
+`universe`（18 个钉住的币 vs `[]`，`081f57da` 取消钉住）与 `evidence.report`
+（`20260908T182204Z` vs `20260913T182325Z`）上分了岔。`com.beidou.shadow` 从 09-15T04:24Z 起跑的
+90 个周期因此 soak 的是一份没人会部署的 registry——canary 的正控制「一份应该通过的 registry，
+通过了」已经退化成「一份没人会部署的 registry，通过了」。候选按 armed 重新生成、soak 重启
+（原 90 周期记录移到 `.beidou/live-shadow-dry-run.20260916-drifted-candidate`，不追加：一份
+`cycles.jsonl` 只能描述一个候选）。重启后 universe 17 个币、`pool_refresh=False`，与 armed 同源。
+
+守卫做成**条件式**：头注还在声称「NOTHING ELSE」时，非注释正文必须与 armed 逐行相同；那句话被
+删掉（文件终于成为真正的晋级候选）时断言自动放开。不变量是「这份文件不谎报自己」，不是「两份
+文件相同」——后者会在它第一次干正事的那天挡住它。负控制已跑（旧文件上失败、新文件上通过）。
+这条与 D-041 同形，低一层：**改文件不等于改进程**，引擎只在启动时建模。
+
+**`.claude/skills/backtest-guard/` 是误删，已恢复（1,941 行）。** 它消失在 `7a950806` 里，而那个
+提交从标题到正文全是 P24 退出层的研究结论，一个字没提这次删除。`.gitignore` 的 `.claude/*` +
+`!.claude/skills/` 是刻意写成这样的（注释写明 git 不会下降到被排除的**目录**里），即当初明确选择
+入库。README 的 MIT 例外条款、`.gitignore` 的再包含、`pyproject.toml` 的 ruff 排除项，这三处引用
+在它消失后指向了空气八天。
+
+**D-035 的档位证据此前不在仓库里。** 正文写「产物：`scratchpad/p32d-{pit,static}.json`」，而
+`.gitignore` 的 `scratchpad/*.json` 把它们挡在外面——唯一副本躺在
+`.claude/worktrees/deepen-live-loop/`，一个已合入、随时会被 `git worktree remove` 清掉的工作树。
+按 `p10-portfolio-smoothing-20260904.json` 的先例入库到 `reports/research/`；核对过两份各 6 行，
+`A_q95` / `B_q95` / `historical_throttled_share` / `scalar_drift_vs_legacy` 与 D-035 正文引用的数
+逐个对上。治理回放只收 dict 形状的 JSON，这两份是 list，不进归因表（replay 输出前后逐字节相同）。
+
+**`scratchpad/p24_record.py` 是唯一一个写真实账本且已经跑过的入库脚本（`dfe24f0d`）。** 它的 8 行
+在 `trials.jsonl` 里（`P24-arm1`/`P24-arm2` 各 4 行，09-08）。没有任何东西拦得住第二次运行：
+`_record_trials` 按 (param_key, range, symbols) 去重而不是按 run_id，`recorded_at` 每次重打戳。
+守卫放在**回测之前**——测量要跑几分钟，一个几分钟后才到达的拒绝会教人去找能跳过它的开关；
+拒绝而不是静默跳过——一个什么都不写还退 0 的脚本，是让人得出「那次计费没发生过」的方式。
+实测 0.33s 退出码 1，账本 sha256 不变。
+
+**`beidou report weekly` 的输出此前无人忽略。** 命令写 `<reports_dir>/weekly/<date>.{json,md}`，
+而 `.gitignore` 只忽略 `reports/daily/`，于是一份生成的报告躺在 `git status` 里像谁没写完的改动。
+已按同一条理由加进 .gitignore。审查期间跑命令才发现——**只读文件读不出来这一类缺陷**。
+
+**未动的两件事。** ① `trials.jsonl` 里 `mine-shortlist-20260907T043712Z` 的 514 行（全账本 22%）
+指向一份仓库里从未存在过的报告，但按本文件 2505 行那是 DL-K2 之后「只记账不重搜」的补记账重跑，
+不是错账；账本只追加是 DSR 分母可信的前提，删行要一次带署名的裁定（Q7 先例）。② liquidation
+数据层（596 + 641 行）与 macro/onchain/index 三条数据源（1,757 + 2,092 行）是否撤出，属于操作者
+裁定，本轮只定价不执行。注意 `beidou_live/liquidation.py`（DL-X1 强平距离观测）**在用**，不属于
+前者，别一起带走。
