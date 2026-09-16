@@ -15,6 +15,7 @@ import pandas as pd
 
 from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.panel import interval_seconds
+from beidou_alpha.registry import MAIN_BOOK
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.metrics import (
     DECAY_WINDOW_DAYS,
@@ -1324,6 +1325,23 @@ def _probe_correlation_note(payload: Mapping[str, Any], strategy: str) -> str:
     return f" corr({pair})={float(row['correlation']):+.2f} over {row.get('bars')} bars"
 
 
+def _weight_cap_line(cap: Mapping[str, Any]) -> str:
+    """D-046 on one line.  An undercount must not render like a count, so the bound says it is one."""
+    if not cap.get("readable"):
+        return f"读不出（{cap.get('why', '无读数')}）"
+    names = "、".join(f"{symbol} {count}" for symbol, count in (cap.get("by_symbol") or {}).items()) or "无"
+    line = (
+        f"max_weight {cap['max_weight']}：{cap['bound_cycles']}/{cap['cycles']} 个周期"
+        f"（{cap['share']:.1%}）截断了至少一个名字；{names}"
+    )
+    if cap.get("gross_capped_bars"):
+        line += (
+            f"。**这是下界**：期间 {cap['gross_capped_bars']} 根 bar 触到 gross 上限，"
+            "那些 bar 上被单币上限截过的名字已被整行缩放，这里看不见"
+        )
+    return line
+
+
 def _risk_adaptation_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     """Same rule as `_risk_budget_lines`: a spread that could not be computed says why, not "n/a"."""
     leverages = block.get("leverage_distinct")
@@ -1344,6 +1362,8 @@ def _risk_adaptation_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "status": f"{block.get('status')} - stage 1 removes {1.0 - float(block['compression']):.0%} of the "
         f"market's dispersion (compression {block['compression']:.2f}, alert above {block['limit']:.2f}, "
         f"judged on the {block.get('judged', 'combined')} reading)",
+        # D-046: the first of this block's four listed causes that is measured rather than named.
+        "单币上限绑定": _weight_cap_line(block.get("weight_cap") or {}),
         "market vol spread": f"{block['vol_spread']:.1f}x across {block['symbols']} held symbols",
         "risk contribution spread": f"{block['risk_spread']:.1f}x - this is what sizing equalises",
         # Both readings, always, whichever one the gate took: the combined book is what is actually
@@ -1481,7 +1501,83 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
         "limit": RISK_COMPRESSION_LIMIT,
         "status": "ALERT" if compression is not None and compression > RISK_COMPRESSION_LIMIT else "OK",
         "leverage_distinct": distinct_leverage,
+        # D-046: one of the four honest causes this docstring lists, turned from a possibility into a
+        # reading.  See `weight_cap_bindings`.
+        "weight_cap": weight_cap_bindings(cycles, max_weight_of(store)),
         "rows": rows,
+    }
+
+
+def max_weight_of(store: StateStore) -> float | None:
+    """The per-symbol cap the loop is running, off the newest construction it recorded.
+
+    `construction_full` carries it under `guards`, and `beidou_live.config` builds both
+    `GuardParams.max_weight` and `PortfolioParams.max_weight` from the one `portfolio.max_weight`
+    key, so the guard copy IS the construction copy - there is no second number to get wrong.
+
+    Read from the record rather than from the config file on purpose: the engine builds its model
+    once at startup, so a `max_weight` edited on disk is not the cap the running loop is applying
+    (KILL-Q15's shape).  ``None`` when no cycle carries a construction, which is the honest answer
+    for a record written before the payload existed.
+    """
+    latest: float | None = None
+    for row in store.read_jsonl(store.cycles_path):
+        full = row.get("construction_full")
+        if not isinstance(full, Mapping):
+            continue
+        value = (full.get("guards") or {}).get("max_weight")
+        if isinstance(value, int | float) and float(value) > 0:
+            latest = float(value)
+    return latest
+
+
+def weight_cap_bindings(cycles: Sequence[Mapping[str, Any]], max_weight: float | None) -> dict[str, Any]:
+    """How often stage 3's per-symbol cap truncated a name, and which names (D-046).
+
+    `risk_adaptation`'s docstring lists ``max_weight`` binding on the calmest names as one of the
+    reasons compression can rise with stage 1 untouched.  It was a possibility, not a reading - and
+    it stopped being hypothetical when ``vol_target`` went to 0.60, because a cap that never bound at
+    0.15 starts binding when every weight is four times larger.  Nothing had to be recorded to
+    measure it: ``book_weights`` has been in the cycle row since 2026-09-12 (it was put there for the
+    probe's mark-to-market), and a name the cap truncated sits at exactly ``max_weight``.
+
+    **The reading is a LOWER bound, and the bound has a name.**  Stage 3 clips per symbol and then
+    scales the whole row if gross exceeds ``max_gross``, so on a gross-capped bar a truncated name
+    lands at ``max_weight * factor`` and this stops seeing it.  ``gross_capped_bars`` is therefore
+    reported beside the count rather than assumed away: while it is 0 the reading is exact, and the
+    moment it is not, the share below is an undercount.  Measured over the whole record on
+    2026-09-17: 0 of 376 cycles have ever carried ``GROSS_CAPPED``, so today it is exact.
+
+    What it found, and why the config comment beside ``vol_target`` needed it: 49 of the 95 cycles
+    carrying ``book_weights`` truncate at least one name, and the names are **BTCUSDT (49) and
+    BNBUSDT (27)** - not BTCUSDT alone, which is what that comment had recorded from a narrower
+    sample.  Both are what inverse-vol sizing does with the calmest names in the book.
+    """
+    usable = [row for row in cycles if (row.get("book_weights") or {}).get(MAIN_BOOK)]
+    gross_capped = sum(1 for row in cycles if "GROSS_CAPPED" in (row.get("guard_reasons") or []))
+    if max_weight is None:
+        return {"readable": False, "why": "no cycle records a construction, so the cap is unknown"}
+    if not usable:
+        return {"readable": False, "why": "no cycle in this window records `book_weights`"}
+    # Floating point: a clipped weight is `max_weight` to the last bit in the row that produced it,
+    # but it has been through JSON, so this asks "at the cap" rather than "equal to it".
+    edge = max_weight * (1.0 - 1e-9)
+    by_symbol: dict[str, int] = {}
+    bound = 0
+    for row in usable:
+        names = [s for s, w in (row["book_weights"][MAIN_BOOK]).items() if abs(float(w)) >= edge]
+        bound += 1 if names else 0
+        for symbol in names:
+            by_symbol[symbol] = by_symbol.get(symbol, 0) + 1
+    return {
+        "readable": True,
+        "max_weight": max_weight,
+        "cycles": len(usable),
+        "bound_cycles": bound,
+        "share": bound / len(usable),
+        "by_symbol": dict(sorted(by_symbol.items(), key=lambda item: -item[1])),
+        # 0 means the share above is exact rather than a lower bound; see the docstring.
+        "gross_capped_bars": gross_capped,
     }
 
 

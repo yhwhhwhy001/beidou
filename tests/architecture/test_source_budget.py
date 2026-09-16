@@ -2866,7 +2866,21 @@ CEILING = {
     # row - `skip the whole cycle` claimed `binds="both"` and never did, since `_replay_book_guards` has
     # no staleness branch - plus the paragraph on `equity_hwm` accumulating a collateral-driven peak
     # while the throttle that reads it is disabled, which is the trap whoever enables it would inherit.
-    "beidou_live": 9_631,
+    # Twelfth raise, 2026-09-17 (9_631 -> 9_727, +96 beidou_live): D-046 reads the per-symbol cap's
+    # binding instead of listing it as a possibility.  `risk_adaptation`'s docstring has named
+    # "`max_weight` binding on the calmest names" as one of four honest reasons compression can rise
+    # with stage 1 untouched, and it stopped being hypothetical when `vol_target` went to 0.60 - a cap
+    # that never bound at 0.15 binds when every weight is four times larger.  NOTHING had to be
+    # recorded to measure it: `book_weights` has been in the cycle row since 2026-09-12, put there for
+    # the probe's mark-to-market, and a truncated name sits at exactly `max_weight`.  Reading it
+    # corrected the config comment beside `vol_target`, which recorded "**只截 BTCUSDT**" from a
+    # narrower sample: the record says BTCUSDT 49 and BNBUSDT 27, over 49 of the 95 cycles that carry
+    # the field.  About half the lines are the two paragraphs that keep the number honest - the cap is
+    # read off the RUNNING construction rather than the config file (KILL-Q15: the engine builds its
+    # model once), and the count is a LOWER bound on any window that was also gross-capped, because
+    # stage 3 clips per symbol and then scales the row.  GROSS_CAPPED is 0 of 376 cycles today, so the
+    # reading is exact; the guard is written now rather than the first time it is not.
+    "beidou_live": 9_727,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
