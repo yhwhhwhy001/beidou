@@ -15,6 +15,12 @@ dist/
 # runtime state and daily live reports (never commit); research validation reports ARE committed as registry evidence
 .beidou/
 reports/daily/
+# `reports/weekly/` joined it 2026-09-16, found by running `beidou report weekly` during a repo review:
+# the command writes `<reports_dir>/weekly/<date>.{json,md}` (live_cmd.py) and NOTHING ignored it, so a
+# generated report sat in `git status` looking like an unfinished edit.  Same rule as the daily one and
+# for the same reason the rule below gives: the cost is not the noise, it is that a real stray file
+# stops being visible among them.
+reports/weekly/
 *.log
 .env
 .env.*
