@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from beidou_alpha.validation.cpcv import cpcv_splits
-from beidou_alpha.validation.labels import forward_returns, non_overlapping
+from beidou_alpha.validation.labels import execution_forward_returns, forward_returns, non_overlapping
 from beidou_alpha.validation.metrics import information_coefficient, newey_west_tstat, normal_cdf, normal_ppf
 from beidou_alpha.validation.multiple_testing import (
     benjamini_hochberg,
@@ -106,6 +106,26 @@ def _persistent_noise_scores(close: pd.DataFrame, seed: int, phi: float = 0.95) 
     for t in range(1, shocks.shape[0]):
         values[t] = phi * values[t - 1] + shocks[t]
     return pd.DataFrame(values, index=close.index, columns=close.columns)
+
+
+def test_a_label_looks_forward_and_the_execution_label_fills_at_the_next_open() -> None:
+    """The direction of both labels had no anchor: reversing either shift left the whole suite green.
+
+    Nothing trades on them - `research diagnose` is the only caller - but the SIGN is what that table is
+    read for.  KILL-042 is literally "a negative time-series IC alongside a profitable book", so a
+    reversed label would not have broken the diagnosis, it would have inverted it.
+    """
+    close = pd.DataFrame({"X": [100.0, 110.0, 121.0]})
+    open_ = pd.DataFrame({"X": [100.0, 100.0, 110.0]})
+
+    fwd = forward_returns(close, 1)
+    assert fwd.iloc[0, 0] == pytest.approx(0.10)  # decided on bar 0, earns bar 1
+    assert fwd.iloc[1, 0] == pytest.approx(0.10)
+    assert pd.isna(fwd.iloc[2, 0])  # the last bar has no future to label with
+
+    executed = execution_forward_returns(open_, close, 1)
+    assert executed.iloc[0, 0] == pytest.approx(0.10)  # fills at open_1 = 100, marks at close_1 = 110
+    assert pd.isna(executed.iloc[2, 0])
 
 
 def test_overlapping_labels_inflate_naive_t_but_not_newey_west_or_non_overlapping() -> None:

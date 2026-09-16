@@ -40,6 +40,19 @@ def test_the_ladder_fires_at_its_two_thresholds_and_names_the_action() -> None:
     rolled = drawdown_state([*flat, _cycle(5, 29.0)], params)  # -71%
     assert rolled["action"] == "vol_target -> 0.3"
 
+    # The thresholds THEMSELVES, which this test's name promised and the points above straddled: the
+    # rungs compare with `>=`, and until now `>` passed here too.  `equity` is picked so the drawdown
+    # is exact in binary (1 - 51/100 == 0.49 and 1 - 30/100 == 0.70 both hold), so what this reads is
+    # the comparison rather than a rounding.  `risk_budget`'s four fields are the REPORTING copy of
+    # `Policy.drawdown_ladder`; the acting side's own boundary is pinned in
+    # `test_the_extracted_ladder_is_the_ladder_that_traded`, and these two must not disagree.
+    at_deescalate = drawdown_state([*flat, _cycle(5, 51.0)], params)  # exactly -49%
+    assert at_deescalate["value"] == params.deescalate_at
+    assert at_deescalate["action"] == "vol_target -> 0.45"
+    at_rollback = drawdown_state([*flat, _cycle(5, 30.0)], params)  # exactly -70%
+    assert at_rollback["value"] == params.rollback_at
+    assert at_rollback["action"] == "vol_target -> 0.3"
+
 
 def test_a_rebaselined_cycle_resets_the_high_water_mark() -> None:
     """The demo account resets, and a reset arrives as a TRANSFER row rather than as a loss."""
