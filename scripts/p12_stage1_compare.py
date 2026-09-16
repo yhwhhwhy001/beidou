@@ -1,4 +1,24 @@
-"""P12 stage 1: collect the baseline and screened backtests into one comparison record."""
+"""P12 stage 1: collect the baseline and screened backtests into one comparison record.
+
+PROVENANCE, added 2026-09-16.  A repository review first proposed DELETING this file - it is cited by
+nothing and its inputs are hard-coded to `/private/tmp/p12`, a session temp directory that has not
+existed since the day it ran, so it cannot be re-run.  That was wrong, and the reason is worth keeping
+because it generalises: **this file is the only record of how a committed report was produced.**
+`reports/research/p12-stage1-20260904T073645Z.json` is cited from `docs/RESEARCH_LOG.md`, and it is
+this script's output - `FIELDS` below is exactly that report's `runs.*` key set, and `LABELS` is
+exactly its `baseline / m=2 / m=4 / m=8`.  Deleting the script would have left a cited number in the
+repository with nothing in the repository saying how it was computed.
+
+The hard-coded temp paths are therefore NOT a defect to fix; they are a fact about a run that already
+happened, and editing them would make this file describe a run nobody did.  What is true and worth
+stating plainly: this comparison is **not reproducible from the repository** - re-running P12 stage 1
+means re-running `p12_stage1_membership.py` to rebuild the screened roots first.  P12 was measured
+INERT at stage 1 and was never adopted, so nothing downstream depends on reproducing it.
+
+The general rule this is an instance of: "nothing references it by name" is not the same as "nothing
+depends on it".  A script can be the sole provenance of an artefact that IS referenced, and grep does
+not see that edge.
+"""
 
 from __future__ import annotations
 
