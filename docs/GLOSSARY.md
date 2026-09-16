@@ -1,6 +1,6 @@
 # 术语表
 
-这份词表定的是**怎么写**，不是概念本身是什么意思。概念的定义在 `docs/ARCHITECTURE.md` 和 `docs/RESEARCH_LOG.md`。
+这份词表定的是**怎么写**，不是概念本身是什么意思。概念的定义在 `CONTEXT.md`，实现决策在 `docs/ARCHITECTURE.md`，判定过程在 `docs/RESEARCH_LOG.md`。
 
 ## 判据
 
