@@ -745,6 +745,25 @@ class LiveEngine:
         )
         latest_bar_ms = int(targets.as_of.timestamp() * 1000)
         # exposure throttle (D-015): one scalar on the whole book, driven by venue equity vs its high-water mark
+        #
+        # READ THIS BEFORE ENABLING `drawdown_throttle`.  The ruler here is VENUE equity, which on a
+        # multi-assets-margin account moves with the collateral's own price: L1-10 measures 52% of this
+        # account as collateral and 73% of its equity moves as repricing.  So a BTC selloff prints a
+        # drawdown against a high-water mark this book never earned, and the throttle would de-risk the
+        # strategy for a reason that has nothing to do with the strategy - in the bar where cutting
+        # exposure is most expensive.  R8's ladder measures `attributed_drawdown_state` precisely to
+        # take that term out (`_risk_ladder`'s docstring says so in as many words), so the system holds
+        # two rulers for one question and only one of them is clean.
+        #
+        # The line below runs anyway, every cycle, because `equity_hwm` is state and not a decision -
+        # `config.throttle` is disabled, `drawdown_scalar` returns 1.0, and nothing downstream moves.
+        # The trap is that the mark is ACCUMULATING while the rule that reads it is off: whoever flips
+        # `drawdown_throttle.enabled` inherits a peak set by a collateral price, possibly months old,
+        # and the throttle bites from its first cycle.  Enabling it therefore means re-deriving D-017
+        # at today's `vol_target` (the config says that much) AND re-basing this mark - or moving it
+        # onto the attributed series the ladder already computes, which is the repair that would leave
+        # one ruler instead of two.  `_ingest_income` re-bases it on external flows only, which is a
+        # different question (money arriving) from this one (the denominator is not the book).
         hwm = max(self.state.equity_hwm or snapshot.equity, snapshot.equity)
         self.state.equity_hwm = hwm
         drawdown = 0.0 if hwm <= 0 else max(0.0, 1.0 - snapshot.equity / hwm)

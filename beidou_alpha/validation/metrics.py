@@ -44,12 +44,27 @@ def sharpe(returns: pd.Series | np.ndarray, bars_per_year: float, ddof: int = 1)
 
 
 def max_drawdown(returns: pd.Series | np.ndarray) -> float:
+    """Worst peak-to-trough of the compounded equity path, floored at -1.0 (a total loss).
+
+    The floor is not cosmetic.  A bar at or below -100% takes the equity path to zero or negative,
+    and ``cumprod`` keeps multiplying: a subsequent +2% then makes a negative equity MORE negative,
+    and the ratio to the running peak comes back below -1.  Measured on ``[0.01, -1.5, 0.02, 0.03]``
+    this returned -1.5253, i.e. "a 152% drawdown", on a path that was wiped out at the second bar.
+    ``compound`` right above already answers the same series with -1.0; the two disagreeing about
+    whether a book ended at zero is worse than either answer alone.
+
+    Wiped out is where the series stops meaning anything, so it is where the reading stops too.
+    This is a floor and not a truncation of the path: everything before the wipe-out is scored
+    normally, and a book that never goes below -100% is bit-identical to what this returned before
+    (the shipped book, at ``max_gross`` 2.0, has never come close - its worst OOS bar is two orders
+    of magnitude away).  Reached only by a synthetic series or by a leverage this system refuses.
+    """
     values = np.asarray(returns, dtype=float)
     values = np.where(np.isfinite(values), values, 0.0)
     equity = np.cumprod(1.0 + values)
     peak = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
     drawdown = equity / peak - 1.0
-    return float(drawdown.min()) if drawdown.size else 0.0
+    return float(max(drawdown.min(), -1.0)) if drawdown.size else 0.0
 
 
 def hit_rate(returns: pd.Series | np.ndarray) -> float | None:
@@ -208,7 +223,20 @@ def sign_bucketed_ic(
 
 
 def newey_west_tstat(series: pd.Series | np.ndarray, max_lags: int | None = None) -> dict[str, float | None]:
-    """t-statistic of the mean with Newey-West (Bartlett) HAC variance; the fix for overlapping labels (D-011)."""
+    """t-statistic of the mean with Newey-West (Bartlett) HAC variance; the fix for overlapping labels (D-011).
+
+    ``max_lags`` defaults to Newey & West's own bandwidth rule, ``4 * (n/100)^(2/9)``, which is about
+    16 lags on five years of hourly bars.  That is the right order for the series `walk_forward`
+    actually hands it - per-bar PORTFOLIO returns, ``w_t * r_{t+1}``, whose autocorrelation is close
+    to zero because the weights are persistent and the returns are not - and it would be far too
+    short for an overlapping-label series with a 168-bar horizon.  `research_cmd`'s IC path is that
+    second case and passes ``max_lags=horizon`` explicitly; nothing else should rely on the default
+    without asking which of the two shapes it has.
+
+    Left alone rather than tightened, 2026-09-17, and the reason is D-P2 rather than statistics: this
+    t no longer gates anything.  `verdict.decide` reads it only to check that it was reported at all,
+    so moving the bandwidth would re-write an archived field in every report to change no decision.
+    """
     values = np.asarray(series, dtype=float)
     values = values[np.isfinite(values)]
     n = values.size

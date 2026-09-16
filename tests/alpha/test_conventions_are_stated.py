@@ -19,7 +19,8 @@ nothing reads is a paragraph that gets deleted by the next person who tidies the
 from __future__ import annotations
 
 import beidou_alpha.backtest as backtest_module
-from beidou_alpha.validation.metrics import sharpe
+from beidou_alpha.portfolio import ewma_portfolio_vol
+from beidou_alpha.validation.metrics import compound, max_drawdown, newey_west_tstat, sharpe
 
 
 def test_the_sharpe_convention_names_its_risk_free_rate() -> None:
@@ -51,3 +52,43 @@ def test_a_validation_report_names_the_size_it_assumed() -> None:
     source = inspect.getsource(research_cmd.research_validate.callback)
     for field in ('"impact_model"', '"preregistration"', '"evidence_construction"'):
         assert field in source, f"the validation report no longer carries {field}"
+
+
+def test_a_wiped_out_book_does_not_report_a_drawdown_past_a_total_loss() -> None:
+    """2026-09-17: `compound` and `max_drawdown` used to disagree about the same wipe-out.
+
+    A bar at or below -100% takes the compounded path to zero or negative and `cumprod` keeps going,
+    so a later +2% makes a negative equity more negative and the ratio to the running peak falls below
+    -1.  `compound` has always floored at -1.0; this one did not, and returned -1.5253 on the series
+    below - "a 152% drawdown" on a book that was gone at the second bar.
+    """
+    wiped = [0.01, -1.5, 0.02, 0.03]
+
+    assert compound(wiped) == -1.0
+    assert max_drawdown(wiped) == -1.0, "the two must agree that a wipe-out is a wipe-out"
+
+    # The floor is a floor, not a truncation: an ordinary path is untouched, to the last digit.
+    ordinary = [0.02, -0.05, 0.01, -0.03]
+    equity = 1.0
+    peak = 1.0
+    worst = 0.0
+    for r in ordinary:
+        equity *= 1.0 + r
+        peak = max(peak, equity)
+        worst = min(worst, equity / peak - 1.0)
+    assert max_drawdown(ordinary) == worst
+
+
+def test_the_covariance_says_what_a_missing_return_means() -> None:
+    """`fillna(0.0)` reads a hole in the archive as a flat bar, which biases the scalar UP."""
+    doc = ewma_portfolio_vol.__doc__ or ""
+    assert "FLAT bar" in doc, "the assumption is named"
+    assert "biased UP" in doc, "and so is its direction - a bias with no sign is not a disclosure"
+    assert "1,005 symbol-bars" in doc, "with the size of what is carried, measured"
+
+
+def test_the_hac_bandwidth_says_which_series_its_default_is_for() -> None:
+    """The default suits per-bar portfolio returns and not an overlapping-label series."""
+    doc = newey_west_tstat.__doc__ or ""
+    assert "max_lags=horizon" in doc, "the caller that must override it is named"
+    assert "no longer gates anything" in doc, "and why it was left alone rather than tuned"
