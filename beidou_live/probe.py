@@ -16,6 +16,7 @@ from itertools import pairwise
 from typing import Any
 
 from beidou_alpha.registry import MAIN_BOOK, Registry
+from beidou_live.attribution import ATTRIBUTION_BASIS
 
 DAY_MS = 86_400_000
 
@@ -202,6 +203,7 @@ def probe_status(
     window_start = max(now_ms - params.window_days * DAY_MS, accepted_ms or 0)
     pnl = 0.0
     rows_in_window = 0
+    stale_basis = 0
     first_ms: int | None = None
     for row in attribution_rows:
         stamp = _row_time_ms(row)
@@ -212,6 +214,20 @@ def probe_status(
             continue
         first_ms = stamp if first_ms is None else min(first_ms, stamp)
         if stamp < window_start or stamp > now_ms:
+            continue
+        # D-044: rows written under the magnitude split are a different quantity and may not be added
+        # to these.  Inside one symbol that rule gave every strategy the sign of the SYMBOL's P&L, so
+        # for a short-only sleeve beside a long book the two series need not even agree on direction -
+        # summing them produces a number that is neither.  Skipped and counted, never converted:
+        # re-deriving an old row needs that cycle's contributions, and only the latest are kept.
+        #
+        # What the gap costs, said plainly because it is a real one: the window empties at the
+        # changeover and refills over `window_days`.  It changes no behaviour today - this rule cannot
+        # fire at all at its current threshold (30-day sigma 0.137% against a 2% `max_loss`, above) -
+        # and reaching the 2026-10-03 re-derivation with a clean series is worth more than reaching it
+        # with a mixed one, since that re-derivation reads this very quantity's own distribution.
+        if row.get("basis") != ATTRIBUTION_BASIS:
+            stale_basis += 1
             continue
         try:
             pnl += float(by_strategy[params.strategy])
@@ -234,6 +250,9 @@ def probe_status(
         "strategy": params.strategy,
         "window_days": params.window_days,
         "rows": rows_in_window,
+        # D-044: window rows dropped for carrying the retired magnitude basis.  Reported so a
+        # thin window reads as "the caliber changed" rather than as "the sleeve stopped trading".
+        "stale_basis_rows": stale_basis,
         "pnl": pnl,
         "pnl_pct": pnl_pct,
         "max_loss": params.max_loss,

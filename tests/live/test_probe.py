@@ -24,7 +24,29 @@ NOW = 1_756_800_000_000  # 2025-09-02T08:00Z
 
 
 def _rows(*pnls: tuple[int, float]) -> list[dict]:
-    return [{"until_ms": stamp, "by_strategy": {"flow": pnl, "tsmom": 1.0}} for stamp, pnl in pnls]
+    return [
+        {"until_ms": stamp, "basis": "net_exposure", "by_strategy": {"flow": pnl, "tsmom": 1.0}} for stamp, pnl in pnls
+    ]
+
+
+def test_a_row_on_the_retired_basis_is_skipped_rather_than_added() -> None:
+    """D-044: the 30-day window may not mix the two splitting rules.
+
+    The magnitude rule gave every strategy in a symbol the sign of that SYMBOL's P&L, so for a
+    short-only sleeve sitting beside a long main book the old rows can carry the opposite sign to
+    what the sleeve's own exposure earned.  Adding them to net-exposure rows produces a number that
+    is neither, and it would be the number a stop fires on.
+
+    The skipped rows are counted, not silently dropped: a window that thins out because the caliber
+    changed has to be distinguishable from a sleeve that stopped trading.
+    """
+    probe = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.01)
+    legacy = [{"until_ms": NOW - 5 * DAY_MS, "by_strategy": {"flow": -500.0, "tsmom": 1.0}}]  # no `basis` key
+    status = probe_status(probe, legacy, equity=10_000.0, now_ms=NOW)
+    assert status["rows"] == 0 and status["pnl"] == 0.0 and status["pnl_pct"] is None
+    assert status["stale_basis_rows"] == 1 and status["stop"] is False
+    mixed = probe_status(probe, legacy + _rows((NOW - DAY_MS, -30.0)), equity=10_000.0, now_ms=NOW)
+    assert mixed["rows"] == 1 and mixed["pnl"] == -30.0 and mixed["stale_basis_rows"] == 1
 
 
 def test_probe_status_windows_stop_and_review() -> None:
@@ -105,7 +127,12 @@ async def test_engine_stops_a_probe_book_and_keeps_it_stopped(august_panel: Pane
     assert store.read_heartbeat()["probes"] == {"probe": "OK"}
     # losses attributed to the sleeve inside the trailing window: -2% of equity
     store.append_attribution(
-        {"bar_open_ms": bar, "until_ms": clock.now_ms(), "by_strategy": {"breakout": -200.0, "tsmom": 40.0}}
+        {
+            "bar_open_ms": bar,
+            "until_ms": clock.now_ms(),
+            "basis": "net_exposure",
+            "by_strategy": {"breakout": -200.0, "tsmom": 40.0},
+        }
     )
     market.cursor += 1
     second = await engine.run_cycle(bar + 3_600_000)

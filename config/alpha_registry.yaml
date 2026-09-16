@@ -301,10 +301,23 @@ strategies:
     # DL-R4 的标注同样仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴。
     # 预登记物证：`--prereg 96d659ae`（commit 时间写进了报告的 preregistration 块）。但那条预登记
     # 本身是**补记**的，日志同日条目第一句就写了这件事；下游不得援引「预登记的选择规则」。
+    # 2026-09-17（D-043）：PASS -> WEAK_PASS。判定规则没有放松，是补上了一个一直算得出、一直印
+    # 得出、却没有任何判定代码读过的字段：这份报告的 `oos_is_full_sample_tail` 是 true。
+    # 上面第 301 行三天前就把这件事写成中文了——「两臂全折同选，这个 OOS 是一条全样本序列的尾巴」。
+    # 人知道，报告知道，`research validate` 还把这句话打到终端上；只有 `decide` 看不见，于是
+    # registry 可以写一个报告自己已经限定过的 PASS。补的是那一条读取路径，不是一条新门槛。
+    #
+    # 三件事没有变，写在这里免得下一个读者把降级当成降配置：
+    #   * 循环照常跑。`registry.py:369` 允许 WEAK_PASS 上线，启动门读这个字符串、不重算。
+    #   * 权重、参数、构造一个都没动；`registry_digest` 不含 evidence 块，指纹不变。
+    #   * 数字一个都没变。变的是这个数字被允许支撑多强的结论。
+    #
+    # 摘掉这个上限只有一条路：在一个**真的有选择**的 grid 上重跑 validate——多个参数点，各折可以
+    # 选出不同的赢家。那才是 walk-forward 声称在测量的东西。在那之前 WEAK_PASS 是实话。
     evidence:
       report: reports/research/tsmom-validation-20260913T182325Z.json
       sha256: cff07c6777295defce2acf7b045544f633c2f62c5ef766391eab4950236ef951
-      verdict: PASS
+      verdict: WEAK_PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
     # 它的 30 天滚动归因盈亏既没有被约束，也从来没有被计算过。规则看不见的东西，规则就管不住。

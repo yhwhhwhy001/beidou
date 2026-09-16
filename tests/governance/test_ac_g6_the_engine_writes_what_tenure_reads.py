@@ -73,7 +73,12 @@ async def _run(panel: Panel, tmp_path: Path, *, loss: float | None, flows: dict 
     await engine.run_cycle(bar)
     if loss is not None:
         store.append_attribution(
-            {"bar_open_ms": bar, "until_ms": clock.now_ms(), "by_strategy": {"breakout": loss, "tsmom": 40.0}}
+            {
+                "bar_open_ms": bar,
+                "until_ms": clock.now_ms(),
+                "basis": "net_exposure",
+                "by_strategy": {"breakout": loss, "tsmom": 40.0},
+            }
         )
     market.cursor += 1
     await engine.run_cycle(bar + 3_600_000)

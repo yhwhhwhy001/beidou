@@ -85,7 +85,9 @@ def test_bars_outside_the_window_are_not_counted() -> None:
 def test_the_gate_still_reads_the_realised_caliber_and_says_what_the_other_would_say() -> None:
     """The two disagreeing IS the finding, so both are reported and only one gates - for now."""
     params = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.02)
-    attribution = [{"bar_open_ms": BASE + HOUR, "by_strategy": {"flow": -1.0}}]  # -0.01% of equity
+    attribution = [
+        {"bar_open_ms": BASE + HOUR, "basis": "net_exposure", "by_strategy": {"flow": -1.0}}
+    ]  # -0.01% of equity
     cycles = [
         _cycle(0, {"BTCUSDT": 1.0}, {"BTCUSDT": 100.0}),
         _cycle(1, {"BTCUSDT": 1.0}, {"BTCUSDT": 96.0}),  # -4% marked, past the -2% threshold
@@ -100,6 +102,8 @@ def test_the_gate_still_reads_the_realised_caliber_and_says_what_the_other_would
 def test_a_real_realised_breach_still_stops_the_book() -> None:
     """The falsifier: adding a second reading must not disarm the gate that exists."""
     params = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.02)
-    attribution = [{"bar_open_ms": BASE + HOUR, "by_strategy": {"flow": -500.0}}]  # -5% of equity
+    attribution = [
+        {"bar_open_ms": BASE + HOUR, "basis": "net_exposure", "by_strategy": {"flow": -500.0}}
+    ]  # -5% of equity
     status = probe_status(params, attribution, equity=10_000.0, now_ms=_now(1), cycles=[])
     assert status["stop"] is True and status["status"] == "STOP"
