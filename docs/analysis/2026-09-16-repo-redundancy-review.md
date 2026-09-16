@@ -317,10 +317,20 @@ docstring，删 134 行换不来什么，而误删一份记录换不回来。
 `reports/weekly/<date>.{json,md}`，而 `.gitignore` 只忽略 `reports/daily/`，于是生成的报告躺在
 `git status` 里像未完成的改动。已按同一条理由加进 .gitignore。
 
-## 仍然待裁定：第二节 A / B（约 5,000 行）
+## 第二节 B 已执行（`e616cdb3`），A 仍待裁定
 
-**没有执行，也不建议由我执行**——这是正文里唯一标了「需要操作者裁定」的大项，删它等于替操作者
-决定两块功能的去留。价钱如下，两块可以分开裁定：
+**B 撤出了**（操作者同日裁定）：`index_price.py` / `macro.py` / `onchain.py` 加三个命令、五个测试
+文件与 `scratchpad/verify_live.py`，**1,757 行源码 + 2,092 行测试**。判据是五条命令的输出撤出前后
+**逐字节相同**（`governance reopen|replay|next`、`report weekly`、`live run --dry-run --cycles 0`），
+外加两条独立证据：`research_cmd._load` 只 join `metrics` 与 `spot`，`.beidou/data/` 里从来没有过
+这三条的 store。行数棘轮同步降表（`beidou_data` 5,472 → 3,718、`beidou_cli` 6,178 → 5,943），
+七个包回到零余量。细节见 `docs/RESEARCH_LOG.md` 同日第二条。
+
+那一轮还补上了正文没说的一条：这三条之所以能活六天没被任何守卫拦住，是因为
+`test_every_module_is_reachable_from_an_entry_point` 问的是「模块**能不能**被跑到」而不是
+「有没有东西真的在跑它」——与本节开头那条 glob/grep 的教训是一对。
+
+**A 仍未执行，也不建议由我执行**——删它等于替操作者决定一块功能的去留。价钱如下：
 
 | | 源码 | 测试 | 今天的状态 |
 | --- | --- | --- | --- |
