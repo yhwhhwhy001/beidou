@@ -16,11 +16,48 @@
 | 状态 / 健康检查 | `beidou live status --check` |
 | 核对实盘输出可复现（M-011） | `beidou live verify --check`（用公共数据 + `state.json` 离线重算上一周期的 contributions；差异必须为 0） |
 | 检查唤醒时刻与 bar 边界的对齐 | `beidou live status --check`（对齐误差 > 60s 非零退出；整数个 bar 的偏移不算问题，D-025） |
-| 定时刷新研究数据（每日 01:20，klines + 资金费率 + 池刷新） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
+| 因子挖掘（每轮记 514 行账本，先看 R1 预算） | `beidou research mine --strategy tsmom --universe pit --baseline tsmom`；只测量不计费：`--measure` |
+| 定时刷新研究数据（每日 01:20，klines + 资金费率 + **现货** + 池刷新） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
 | 定时跑上面两项（每小时 :10） | `cp deploy/com.beidou.check.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.check.plist` |
 | 一键平仓 | `beidou live flatten --yes` |
 | 停止加仓（可逆） | `beidou live kill-switch --engage` / `--release` |
-| 日报 | `beidou report daily` |
+| 日报 / 周报 | `beidou report daily`；`beidou report weekly`（含 90% alpha 投入占比 `effort_share`） |
+
+2026-09-16 补：上表此前漏掉整个 `governance` 组、三个 launchd 任务、`live soak`、`research mine`
+与 `report weekly`。漏的不是边角——`governance` 是晋级线本身，而漏掉的三个任务里有两个正在这台
+机器上跑。下面两节补上。
+
+## 治理（`beidou governance`，17 个子命令）
+
+自主开关是**每个工作副本**的运行期状态，不入库：`governance/ENABLED` 存在时这个 checkout 才允许
+写 registry。没有它，`apply` 只会预演。
+
+| 目的 | 命令 |
+| --- | --- |
+| 下一步该做什么（读证据 + 状态，只决定不执行） | `beidou governance next` |
+| 把记录里已经发生的事折进状态 | `beidou governance advance` |
+| 晋级计划 / 家族门读数 | `beidou governance plan`；`beidou governance gate` |
+| 事务化写 registry（需要 `governance/ENABLED`） | `beidou governance apply` |
+| 部署健康金丝雀（读 shadow soak，不判 alpha） | `beidou governance canary` |
+| 规则重放：每份报告都要能被解释（AC-G0 未归因项必须为 0） | `beidou governance replay` |
+| 状态 / 在位时长 / 事务链 / 机器判定 / 人工复核 | `beidou governance status\|tenure\|transactions\|verdicts\|review` |
+| 进程持有的 registry 与磁盘上的是否分岔 | `beidou governance divergence` |
+| 重开条件 / 批次窗口 | `beidou governance reopen`；`beidou governance window` |
+
+## 另外三个 launchd 任务
+
+| 任务 | 干什么 | 装载 |
+| --- | --- | --- |
+| `com.beidou.shadow` | L4 金丝雀 soak：拿 `config/alpha_registry.candidate.yaml` 在 armed 循环旁边跑 168 个 dry-run 周期，写 `.beidou/live-shadow-dry-run`，不碰账户、不重排 universe。`KeepAlive` 只在崩溃时生效——soak 在 168 周期**正常结束**，那里重启等于静默开始第二次。读数：`beidou governance canary` | `cp deploy/com.beidou.shadow.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.shadow.plist` |
+| `com.beidou.paper-l3` | §5 L3 的七天累积器：`--paper` 在 mainnet 价位上撮合，`--state-dir .beidou/paper-l3`，无凭据、结构上不可能变成交易进程。读数：`beidou live soak --check`（**报告而不闸**：前六天按构造必然为假，接进 `failed` 等于每小时误报一周） | `cp deploy/com.beidou.paper-l3.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.paper-l3.plist` |
+| `com.beidou.proxy-probe` | 每 60s 对两个场地域名各采两条路径（显式 :1082 代理 vs 透明 fake-IP），只读 `/fapi/v1/ping`，写 `~/Library/Application Support/beidou/proxy-probe.jsonl`。存在的理由：至今全部实盘周期失败都是到场地路径上的传输错误 | `cp deploy/com.beidou.proxy-probe.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.proxy-probe.plist` |
+
+改了候选 registry 之后 soak **必须重启**才会生效（引擎只在启动时建模），且原 `cycles.jsonl` 要移走
+而不是追加——一份 soak 记录只能描述一个候选：
+
+```bash
+launchctl bootout gui/$(id -u)/com.beidou.shadow && mv .beidou/live-shadow-dry-run .beidou/live-shadow-dry-run.$(date -u +%Y%m%d) && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.shadow.plist
+```
 
 ## 改了 registry / profile 之后
 
