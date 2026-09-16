@@ -44,13 +44,12 @@
 | 进程持有的 registry 与磁盘上的是否分岔 | `beidou governance divergence` |
 | 重开条件 / 批次窗口 | `beidou governance reopen`；`beidou governance window` |
 
-## 另外三个 launchd 任务
+## 另外两个 launchd 任务
 
 | 任务 | 干什么 | 装载 |
 | --- | --- | --- |
 | `com.beidou.shadow` | L4 金丝雀 soak：拿 `config/alpha_registry.candidate.yaml` 在 armed 循环旁边跑 168 个 dry-run 周期，写 `.beidou/live-shadow-dry-run`，不碰账户、不重排 universe。`KeepAlive` 只在崩溃时生效——soak 在 168 周期**正常结束**，那里重启等于静默开始第二次。读数：`beidou governance canary` | `cp deploy/com.beidou.shadow.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.shadow.plist` |
 | `com.beidou.paper-l3` | §5 L3 的七天累积器：`--paper` 在 mainnet 价位上撮合，`--state-dir .beidou/paper-l3`，无凭据、结构上不可能变成交易进程。读数：`beidou live soak --check`（**报告而不闸**：前六天按构造必然为假，接进 `failed` 等于每小时误报一周） | `cp deploy/com.beidou.paper-l3.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.paper-l3.plist` |
-| `com.beidou.proxy-probe` | 每 60s 对两个场地域名各采两条路径（显式 :1082 代理 vs 透明 fake-IP），只读 `/fapi/v1/ping`，写 `~/Library/Application Support/beidou/proxy-probe.jsonl`。存在的理由：至今全部实盘周期失败都是到场地路径上的传输错误 | `cp deploy/com.beidou.proxy-probe.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.proxy-probe.plist` |
 
 改了候选 registry 之后 soak **必须重启**才会生效（引擎只在启动时建模），且原 `cycles.jsonl` 要移走
 而不是追加——一份 soak 记录只能描述一个候选：
