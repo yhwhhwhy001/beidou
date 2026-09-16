@@ -46,10 +46,19 @@ entries:
     queued: 2026-09-08
     earliest_window: 2026-10-03
     change: >-
-      采纳 P26 的重推结果（若采纳）。`config/live.demo.yaml` 的 `portfolio.vol_target` 现为 0.30。
+      采纳 P26 的重推结果（若采纳）。**2026-09-17 更正：`portfolio.vol_target` 现为 0.60，不是 0.30。**
+      这一行写于 2026-09-08，D-035 在 09-14 把 k 换成 0.60（操作者裁定 `96d659ae`，判据从 Sharpe
+      改为绝对收益、回撤预算 −70%），循环 09-15 重启后跑的就是 0.60——`cycles.jsonl` 最近一次
+      `construction_full` 是 `vol_target: 0.6`，digest `ccd7bb9764b5` 与心跳一致。
     measured: >-
       P26 于 2026-09-08 跑完（`scratchpad/p26_vol_target_under_impact.py`，7 档 vol_target × 5 档资金）。
       **已跑未采纳**——§19/§20 的「仍未做」措辞已于 2026-09-10 更正。
+      **2026-09-17 更正：P26 的结论已被 D-035 撤回。** 「argmax k = 0.15，在每个资金档」只在 pit 上
+      成立（脚本把 universe 写死了），D-035 写明「只撤回不替换，因为 static 那条曲线跨度只有 0.106、
+      没有误差棒」。所以本条现在指向的是一个**没有替代品的空位**：窗口开的时候，要么先重跑 P26
+      （两个 universe，价钱见 cost），要么承认没有可采纳的结果并把本条关掉。
+      按 09-14 的基线重读还有一件事要注意：E-FQ27 说的「若采纳是往下不是往上」是相对 0.30 讲的，
+      当前基线 0.60 使这个「往下」的幅度比该句写下时大一倍。
     why_it_waits: >-
       `vol_target` 在 `construction_fingerprint` 里，采纳它是 Phase 4a 的构造变更。
       §20 另写明：采纳还要按 D-033/D-034 先例重出证据，加账本行、计入 R1。
