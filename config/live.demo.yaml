@@ -200,6 +200,15 @@ portfolio:
   # 定价必然把最大权重给最平静的名字）；不截时峰值 0.1651，需削 9.1%。P32 的收益数字没有因此错，stage 3 本来
   # 就先 clip 再算 gross；错的是先前把它描述成「不会截断」。M-015 的 compression 会因此升高，`risk_adaptation`
   # 的 docstring 已把这列为合法升高的原因之一——越过 0.76 要先按这条读，不要当成 stage 1 失效。
+  #
+  # 2026-09-17（D-046）更正一处并把这条接上仪器：**不是只截 BTCUSDT。** 上面那句是对的那一半——
+  # 逆波动率定价确实把最大权重给最平静的名字——但名单不止一个。`report daily` 现在直接读
+  # `book_weights`（那一列 2026-09-12 就为探针的盯市 P&L 记着了，没人读过），全记录上的读数是
+  # **49/95 个带 `book_weights` 的周期截断至少一个名字，BTCUSDT 49 次、BNBUSDT 27 次**。
+  # 37.9% 与 51.6% 的差别是样本不同（293 个周期 vs 95 个带 `book_weights` 的），不是矛盾。
+  # 这个读数在 `GROSS_CAPPED` 出现过的窗口里是**下界**——那时整行被缩放，被截的名字就不在 0.15 上了；
+  # 全记录 376 个周期里 GROSS_CAPPED 出现 0 次，所以今天它是精确值，日报会在不精确时自己说明。
+  # 也就是说：这一条从此不必靠重放脚本去量，改 k 或改 `max_weight` 之后下一份日报就会说话。
   # Reverting is this one line (and `vol_band` below).
   vol_target: 0.60            # annualised portfolio volatility target
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
