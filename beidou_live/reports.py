@@ -1705,6 +1705,9 @@ def restart_cost(
         # engine could separate them; a failed bar is a miss and is not a skip, so they now differ.
         "skipped_bars": skips,
         "failed_bars": failed_bars,
+        # Named separately from the reason line because `daily_alerts` pages on this half and an alert
+        # that says only "1 根 bar" sends the reader to open the report to find out what broke.
+        "failed_bar_error": failures[-1] if failures else None,
         # Restarts are counted and named rather than folded into the lateness they used to inflate.
         "restarts": restarts,
         "worst_restart_late_seconds": max(restart_late) if restart_late else None,
@@ -1955,12 +1958,26 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             "本窗口权益方向与书的盈亏方向相反（RISK-G11，只报告不相减）"
         )
     restarts = payload.get("restarts") or {}
+    if failed_bars := int(restarts.get("failed_bars") or 0):
+        # The half of M-Q03 that pages, split out on the operator's decision 2026-09-16.  The argument
+        # below is about a restart: it cannot be un-restarted, so the miss is already past and belongs
+        # at review.  A bar whose CYCLE FAILED is a different animal.  The exit overlay rests no order
+        # at the venue - stops are computed inside the cycle and sent as MARKET reduceOnly - so the
+        # hour it lost had no stop check at all, and what to do about it is on the path to the venue
+        # while that path is still broken.  `failed_bars` is absent from every report written before
+        # this split, and reads as zero, which is the right answer for days nothing counted.
+        notices_first = "；".join(str(r) for r in restarts.get("reasons") or [])
+        alerts.append(
+            f"M-Q03 周期失败丢掉 {failed_bars} 根 bar（这些小时没有再平衡，也没有退出检查）："
+            f"{restarts.get('failed_bar_error') or notices_first}；失败动作：查到交易所的这条路径"
+        )
     if str(restarts.get("status")) == "ALERT":
         # M-Q03.  A notice for the reason the plan itself gives: its registered failure action is
         # "查重启原因", an investigation at review.  The miss is already past by the time this renders,
         # `live status --check` already pages when the loop is actually down, and a single planned
-        # deployment restart would otherwise hold the hourly check red until UTC midnight.  Making it
-        # loud is moving this one append into the list above.
+        # deployment restart would otherwise hold the hourly check red until UTC midnight.  Kept as the
+        # COMPLETE record even when the half above already paged: the alert is the actionable subset,
+        # this is what a reader at review needs, and the two go to different places.
         notices.append("M-Q03 迟到成交：" + "；".join(str(r) for r in restarts.get("reasons") or []))
     lagging = payload.get("long_run_sharpe") or {}
     if str(lagging.get("status")) == "FAIL":

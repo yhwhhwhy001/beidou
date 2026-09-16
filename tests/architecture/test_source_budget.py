@@ -2798,7 +2798,17 @@ CEILING = {
     # in any of those three leaves fills on the venue).  That second paragraph is the one that stops a
     # later reader from "simplifying" this into charging every ERROR row, which would report the opposite
     # of what happened on exactly the cycles that did the most.
-    "beidou_live": 9_484,
+    #
+    # Thirty-fourth raise OF THIS TABLE, 2026-09-16, same day and the sentence the rule requires: +17
+    # beidou_live, splitting M-Q03's two halves in `daily_alerts` on the operator's decision - a failed
+    # bar PAGES, a restart miss stays a notice.  The existing comment argues the notice from a restart:
+    # it cannot be un-restarted, so the miss is already past.  That argument does not transfer to a bar
+    # whose cycle failed, because the exit overlay rests no order at the venue and the lost hour had no
+    # stop check, so the thing to do is on the path to the venue while it is still broken.  Most of the
+    # 17 lines are that distinction plus `failed_bar_error`, which exists so the page names what broke
+    # instead of sending the reader to open the report.  The cadence was priced before it was chosen:
+    # one failed bar re-announces hourly until UTC midnight.
+    "beidou_live": 9_501,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
