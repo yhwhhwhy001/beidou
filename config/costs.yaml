@@ -16,6 +16,29 @@ use_actual_funding: true  # backtests charge the historical funding rate on held
 #        not a verdict; M-Q08's own ruler (`decision_close`) had no readings yet on 2026-09-08.
 #   9.2  the upper bound of that sample's 95% interval [2.01, 9.19], n=101, demo, over four days.
 # Change a number here only with the fill sample that justifies it.
+#
+# 2026-09-17: M-Q08's ruler HAS readings now, and the line above saying it does not is why this is
+# recorded rather than left for the next audit to re-find.  `trades.jsonl` has carried
+# `decision_close` since that note was written; `scratchpad/decision_close_slippage_measurement.py`
+# reads it.  81 filled demo orders, 32,019 USDT:
+#       mean +4.89 bps, median +2.96, notional-weighted +4.43, p10/p90 -4.32/+29.40
+#       95% CI of the mean [-1.09, +10.87]
+# The reference points are made to meet before the numbers are compared, because `slippage_bps` sits
+# on top of a fill at the NEXT OPEN while this measures from the decision CLOSE.  The same script
+# prices that gap on the same fills (`--with-gap`, n=68): notional-weighted -0.02 bps, i.e. nil here.
+#       backtest, from the decision close  ~ +1.98 bps   (gap + slippage_bps 2.0)
+#       measured, from the decision close    +4.43 bps   - about 2.2x
+#
+# `slippage_bps` is NOT changed on this, and the rule one line up is the reason rather than an excuse:
+#   * the interval still contains the assumption, so 81 fills cannot reject 2.0 - only stop supporting
+#     it comfortably;
+#   * `slippage_stress_bps` already prices 2.0 / 5.5 / 9.2, so the measured centre is inside a grid
+#     that is already run and `verdict.decide` already reads the x2 cell;
+#   * every fill is DEMO.  KILL-Q12 holds real capital out of scope for this class of reason, and the
+#     p90/p10 spread (+29.4 vs -4.3) says a minority of orders pay most of the cost - which is where a
+#     demo book and a real one differ most.
+# What would settle it: more fills, and fills that are not all demo.  Until then the honest state is
+# that the assumption is no longer the best estimate and the sample is not good enough to replace it.
 slippage_stress_bps: [2.0, 5.5, 9.2]
 
 # DL-C1 / KILL-A (2026-09-08): the impact model, off by default.
