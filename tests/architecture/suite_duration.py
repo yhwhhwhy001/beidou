@@ -85,7 +85,41 @@ PLAN_SECONDS = 30
 # over its own slowest reading.  Left at 400: tightening towards the faster of two readings would set
 # the bar by the luckier run, and that 17.5s of noise is already a fifth of the headroom it would be
 # trimming.  Two CI readings stand behind this number where six stood behind 240.
-CEILING_SECONDS = 400
+#
+# 2026-09-16: 400 was breached at 400.3s - 1,939 passed, 2 skipped, and nothing else in the run was red.
+# The ratchet was the only gate that fired, on a suite where every single test passed, and it fired on
+# three tenths of a second.
+#
+# Twenty-two CI readings now stand where two stood behind 400.  They do not describe a suite that got
+# slower.  They describe a box whose speed is not a constant:
+#
+#      2026-09-15   2,064-2,071 tests    207.2s .. 393.7s     100.0 .. 190.1 ms/test
+#      2026-09-16   1,924-1,939 tests    267.9s .. 400.3s     138.3 .. 207.3 ms/test
+#
+# The pair that settles it: 09-15 ran 2,071 tests in 207.2s; 09-16 ran 1,939 tests in 400.3s.  One
+# hundred and thirty-two FEWER tests, and the wall clock doubled.  Per test the spread on this single
+# platform is 2.07x, and 1,939 x 207.3ms = 401.9s - so the breach is not an anomaly needing an
+# explanation.  It is what this suite reads on the slow end of `ubuntu-latest`, and it was always going
+# to be reached; the only question was which commit would be standing there when it was.
+#
+# That same number retires what 400 was trusted to do.  The 240 note above claims this gate catches a
+# step change of "tens of seconds".  Against 193s of spread in the noise it cannot, and it could not at
+# 400 either - a sleep worth 50s is indistinguishable here from a runner having an average morning.
+# What a snug ceiling buys is therefore not sensitivity; it is a red light wired to the runner's luck,
+# on an instrument whose own docstring says a gate that cries wolf gets deleted, returning us to no
+# instrument at all.  600 is not blunter than 400 was.  It is 400 with the illusion removed.
+#
+# 600 = 1.50x the slowest reading ever taken (400.3s), against the 1.6x the 240 was set at over its own
+# slowest.  It clears the observed spread with 200s to spare, and it still sits inside the job's
+# `timeout-minutes: 15` - which is the honest backstop for a suite that has genuinely stopped
+# terminating, and always was.
+#
+# What this does NOT fix: drift is now entirely the printed line's job, and that line prints a wall
+# clock the table above just showed to be 2x noise.  The quantity that held still across both days is
+# ms/test.  Putting it on the printed line is the follow-up this commit owes and deliberately does not
+# pay - it changes `measurement_line`'s signature and the test that pins it, and this commit is the
+# ceiling.
+CEILING_SECONDS = 600
 
 # Below this many selected tests the run was filtered (`pytest tests/live`, `-k`, `-m`), and a filtered
 # run is not the thing the plan put a number on.  847 selected as of 2026-09-08 and 1,873 as of
