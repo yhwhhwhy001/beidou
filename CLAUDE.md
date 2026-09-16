@@ -58,6 +58,33 @@
 
 动手前先确认当前分支与工作树状态。要在另一个分支上工作时用 `git worktree` 另开一份，**不要在主工作树上切分支**——那会动到别人正在编辑的文件。2026-09-16 就发生过：一个 session 建分支后另一个切走了，两个 commit 落到了别人的分支上，最后靠独立 worktree 把它们 cherry-pick 回正确的分支才理清。
 
+## 重启实盘循环
+
+操作者 2026-09-17 要求把这条写死。当时 13.4 天里 `state.restarts` 已经到 **51**（约 3.8 次/天），
+而 M-010 要 30 天连续记录、`realised_vol` 要单构造窗口、L3 要 7 天无 ERROR。
+
+**重启不清构造指纹，但每次都可能吃掉一根 bar 的退出检查。** exit overlay 在 bar 收盘判定
+（`beidou_live/exits.py`），一根没跑的周期就是那根 bar 没有退出检查，而且不会补——判据不看
+`extreme`。2026-09-15 量到命中概率约 1.16%，AKEUSDT 逼近 6σ 时它第一次有价钱。
+
+三条，顺序不能反：
+
+1. **选周期之间的窗口**。循环在每根 1h bar 收盘后约 20–35s 跑完。安全窗口是**整点后 5 分钟到下一个
+   整点前 10 分钟**。不要在整点前几分钟重启。
+2. **重启前跑两个构造测试**，确认这次重启不改构造：
+   ```bash
+   .venv/bin/python -m pytest tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py tests/live/test_construction_identity.py -q
+   ```
+   红了就不是「重启」，是构造变更，要按 K-EX14 与冻结裁定走。
+3. **重启后把「谁、为什么」记进 `docs/RESEARCH_LOG.md`**，只写可观测事实（PID、`restarted_at`、
+   `restarts`、源文件 mtime 对进程启动时刻、两个测试的结果）。**不按时间相关性给实盘动作归因**——
+   多会话并行下，「我改完代码，循环就重启了」不构成「是我重启的」。
+
+重启命令与幂等性见 `docs/RUNBOOK.md`（`launchctl kickstart -k gui/$(id -u)/com.beidou.live`；
+clientOrderId 按 bar 派生，先查后下）。要确认循环此刻跑的是哪份代码，比较源文件 mtime 与进程启动
+时刻（`ps -eo pid,lstart,command | grep "live run"`），不要读 `cycles.jsonl` 的最后一行——重启后
+那是已死进程的。
+
 ## 改 ratchet 要带理由
 
 `CEILING_SECONDS`（`tests/architecture/suite_duration.py`）和 source budget 表（`tests/architecture/test_source_budget.py`）都是 ratchet：**抬顶只允许发生在写明理由的那个 commit 里**，理由写进紧挨着常量的注释，带上测量数据。

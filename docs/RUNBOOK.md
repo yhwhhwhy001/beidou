@@ -67,7 +67,7 @@ launchctl bootout gui/$(id -u)/com.beidou.shadow && mv .beidou/live-shadow-dry-r
 launchctl kickstart -k gui/$(id -u)/com.beidou.live
 ```
 
-重启是幂等的（clientOrderId 按 bar 派生，先查后下）。重启后看 `.beidou/live/heartbeat.json` 的 `phase`、`universe_size`、`leverage`。
+重启是幂等的（clientOrderId 按 bar 派生，先查后下），但**要挑周期之间的窗口**：exit overlay 在 bar 收盘判定，一根没跑的周期就是那根 bar 没有退出检查，而且不会补。安全窗口是整点后 5 分钟到下一个整点前 10 分钟；重启前先跑 `tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py` 与 `test_construction_identity.py`确认这次重启不改构造（纪律与理由见 `CLAUDE.md`「重启实盘循环」）。重启后看 `.beidou/live/heartbeat.json` 的 `phase`、`universe_size`、`leverage`。
 
 ### 采纳 exit overlay / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
 
