@@ -228,6 +228,36 @@ def effective_trials(returns_matrix: np.ndarray) -> float:
     return effective_trials_from_correlation(correlation, dead=n_trials - int(live.sum()))
 
 
+def _li_ji_count(eigenvalues: np.ndarray) -> float:
+    """Li & Ji's ``f(lambda) = I(lambda >= 1) + frac(lambda)``, summed, with its integer edge closed.
+
+    That ``frac`` makes ``f`` discontinuous at every integer from 2 up: approaching 40 from below, ``f``
+    tends to 1 + 1 = 2; AT 40 it is 1 + 0 = 1.  The formula is not wrong - a real correlation matrix
+    does not put an eigenvalue on an integer - but a wall of identical columns puts one exactly there,
+    and that is the degenerate case this estimator is most often asked about, the one its own docstring
+    promises ("40 copies of one column give ~1").
+
+    2026-09-16: that promise broke on CI and held on this laptop, same commit, same seed.  The true
+    eigenvalue of 40 identical columns is exactly 40; `eigvalsh` returns 40.000000000000014 here and a
+    hair BELOW 40 on `ubuntu-latest`, and `floor` turns that hair into a whole unit - the estimator read
+    1.0000000000001767 locally against 2.0000000000001084 there.  Nothing about the search changed.  It
+    reported twice the independence because a BLAS rounded the other way, on a number the gate publishes
+    for a person to read.
+
+    So snap an eigenvalue onto its nearest integer when it sits within `eigvalsh`'s own error bar,
+    ``n * eps * ||A||_2`` - the standard bound for a symmetric eigensolver, 3.6e-13 for that 40x40 case
+    against the 1.4e-14 actually observed.  Two things make this a fix rather than a fudge: the snap is
+    far below any spacing this estimator can resolve, and ``f`` is CONTINUOUS at lambda = 1 (both sides
+    give 1), so the only values it can move are ones already sitting on a discontinuity.
+    """
+    if eigenvalues.size == 0:
+        return 0.0
+    nearest = np.round(eigenvalues)
+    tolerance = eigenvalues.size * np.finfo(float).eps * max(float(eigenvalues.max()), 1.0)
+    snapped = np.where(np.abs(eigenvalues - nearest) <= tolerance, nearest, eigenvalues)
+    return float(np.sum((snapped >= 1.0).astype(float) + (snapped - np.floor(snapped))))
+
+
 def effective_trials_from_correlation(correlation: np.ndarray, *, dead: int = 0) -> float:
     """Li & Ji's count taken from the correlation matrix itself - the estimator's one implementation.
 
@@ -248,8 +278,7 @@ def effective_trials_from_correlation(correlation: np.ndarray, *, dead: int = 0)
         return 0.0 if dead == 0 else float(dead)
     if not np.all(np.isfinite(matrix)):
         return float(n_live + dead)
-    eigenvalues = np.abs(np.linalg.eigvalsh(matrix))
-    counted = float(np.sum((eigenvalues >= 1.0).astype(float) + (eigenvalues - np.floor(eigenvalues))))
+    counted = _li_ji_count(np.abs(np.linalg.eigvalsh(matrix)))
     return min(max(counted, 1.0), float(n_live)) + float(dead)
 
 

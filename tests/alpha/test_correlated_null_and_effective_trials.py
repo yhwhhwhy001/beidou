@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from beidou_alpha.validation.multiple_testing import (
+    _li_ji_count,
     effective_trials,
     max_sharpe_quantile,
     sampling_variance,
@@ -88,6 +89,33 @@ def test_effective_trials_collapses_a_wall_of_copies_to_one() -> None:
     copies = np.repeat(single, 40, axis=1)
 
     assert effective_trials(copies) == pytest.approx(1.0, abs=0.5)
+
+
+def test_the_count_does_not_hinge_on_which_way_the_eigensolver_rounded() -> None:
+    """40 identical columns have eigenvalue exactly 40, and Li & Ji's ``frac`` is discontinuous there.
+
+    Red on CI and green on this laptop from the same commit, same seed (2026-09-16): `eigvalsh` returned
+    40.000000000000014 here and a hair below 40 there, so `floor` took 40 in one place and 39 in the
+    other, and the estimator published 1.0000000000001767 against 2.0000000000001084 - twice the
+    independence, from a rounding direction.  The test above cannot catch that: it asks the BLAS that
+    happens to be running.  What the estimator needs is that BOTH sides of the integer give the same
+    count, which is a property of the arithmetic and can be pinned without a random matrix at all.
+    """
+    below = np.array([40.0 - 2e-14] + [0.0] * 39)
+    above = np.array([40.0 + 2e-14] + [0.0] * 39)
+    exact = np.array([40.0] + [0.0] * 39)
+
+    assert _li_ji_count(below) == pytest.approx(1.0, abs=1e-9)
+    assert _li_ji_count(above) == pytest.approx(1.0, abs=1e-9)
+    assert _li_ji_count(exact) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_the_snap_leaves_a_genuinely_fractional_eigenvalue_alone() -> None:
+    """The tolerance must only move values already sitting on a discontinuity, never real structure."""
+    spread = np.array([2.5, 1.5, 0.7, 0.3])
+
+    # (1 + 0.5) + (1 + 0.5) + (0 + 0.7) + (0 + 0.3)
+    assert _li_ji_count(spread) == pytest.approx(4.0)
 
 
 def test_effective_trials_never_exceeds_the_column_count() -> None:
