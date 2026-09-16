@@ -89,7 +89,13 @@ async def test_an_hour_long_backoff_charges_the_bar_it_slept_through(august_pane
 
 
 async def test_the_reporter_counts_it_with_no_change_on_its_side(august_panel: Panel, tmp_path: Path) -> None:
-    """M-Q03's `max_missed_rebalances: 0` can finally see this path - through the reporter as it stands."""
+    """M-Q03's `max_missed_rebalances: 0` can finally see this path - through the reporter.
+
+    This asserted 1 until 2026-09-16, when the reporter began charging the bar that FAILED as well as
+    the bars slept through - the other half this module's own docstring left open.  One failure here
+    costs TWO bars: the one whose cycle raised, and the one whose close went by while the loop slept.
+    The 1 was never the number of bars lost; it was the number of them anything counted.
+    """
     world = _world(august_panel, tmp_path)
     engine, market, store = world["engine"], world["market"], world["store"]
     await engine.startup()
@@ -99,7 +105,8 @@ async def test_the_reporter_counts_it_with_no_change_on_its_side(august_panel: P
     await engine.guarded_cycle(world["bar"])
 
     cost = restart_cost(store.read_jsonl(store.cycles_path))
-    assert cost["missed_rebalances"] == 1
+    assert (cost["failed_bars"], cost["skipped_bars"]) == (1, 1), "the bar that failed, and the one slept through"
+    assert cost["missed_rebalances"] == 2
     assert cost["status"] == "ALERT", "against the shipped threshold of 0 this is a finding, not a footnote"
 
 

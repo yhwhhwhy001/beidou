@@ -30,6 +30,7 @@ from beidou_live.cycle_record import latest
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
+from beidou_live.soak import _decided
 from beidou_live.state import LiveState, StateStore, StateUnreadable
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
@@ -1231,6 +1232,10 @@ def _restart_cost_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "status": block.get("status"),
         "missed_rebalances": f"{block.get('missed_rebalances')} (M-Q03 阈值 {limits.get('missed_rebalances')})",
+        # Split out from 2026-09-16, because the two halves send a reader to different places: a skip is
+        # a restart or a backoff and is read in the deploy log, a failed bar is a request that did not
+        # come back and is read on the path to the venue.
+        "of_which_cycles_failed": block.get("failed_bars", 0),
         "late_cycle_share": (
             "无可判周期（没有周期记下它当时的窗口）"
             if share is None
@@ -1601,7 +1606,17 @@ def restart_cost(
     held.  KILL-R6 named the per-cycle share as the acceptable reading and that is what is judged.
     """
     params = params or RiskBudgetParams()
-    missed = restarts = unreadable = 0
+    skips = restarts = unreadable = 0
+    # The bar a cycle FAILED on, charged here from 2026-09-16.  The 2026-09-13 work charged the bars
+    # the backoff SLEPT THROUGH and left this one open in its own docstring; four bars since
+    # 2026-09-08 have no successful cycle and M-Q03 read zero on every one of those days.  Charged by
+    # BAR rather than by row, because a bar is what a rebalance belongs to: `lost` collects the bars
+    # that failed deciding nothing, `accounted` the bars that need no second charge - they got there
+    # anyway (a later retry, or a restart that found the book already set), or a skip row above has
+    # already charged them - and the difference is what is owed.
+    lost: set[int] = set()
+    accounted: set[int] = set()
+    failures: list[str] = []
     windows: list[float] = []
     # How late each SCHEDULED cycle woke, from its own row, paired with the bar that row allowed it.
     # The annotation is the fix for a contradiction, not decoration: this was `list[float]` while the
@@ -1626,7 +1641,9 @@ def restart_cost(
             # carries the window the engine allowed, so `widest_window_seconds` keeps it; only the miss
             # COUNT declines to charge it.
             if reason != ALREADY_REBALANCED_REASON:
-                missed += 1
+                skips += 1
+            if isinstance(bar := row.get("bar_open_ms"), int):
+                accounted.add(bar)
             if isinstance(window := row.get("window_seconds"), int | float):
                 windows.append(float(window))
             if reason != BACKOFF_REASON and isinstance(value := row.get("late_seconds"), int | float):
@@ -1636,6 +1653,17 @@ def restart_cost(
         # falls back to the widest the engine allowed that day, for rows written before it did.
         if isinstance(window := row.get("window_seconds"), int | float):
             windows.append(float(window))
+        # A cycle can fail AFTER placing orders - `run_cycle` places them and only then quarantines,
+        # summarizes and finishes - and that bar WAS rebalanced.  The five keys that answer it are
+        # already written onto the ERROR row for L3, and are read here through the same function, so a
+        # sixth cannot be added to one side alone.  Failed rows go on to the lateness accounting below
+        # unchanged: the cycle did wake, and it is only the rebalance that was lost.
+        if isinstance(bar := row.get("bar_open_ms"), int):
+            if row.get("phase") == "ERROR" and not _decided(row):
+                lost.add(bar)
+                failures.append(str(row.get("error") or "未记录"))
+            else:
+                accounted.add(bar)
         woke = _woke_seconds_after_close(row, interval_ms)
         if woke is None:
             unreadable += 1
@@ -1651,13 +1679,20 @@ def restart_cost(
     late = [value for value, bar in judged if bar is not None and value > bar]
     measurable = [value for value, bar in judged if bar is not None]
     share = (len(late) / len(measurable)) if measurable else None
+    failed_bars = len(lost - accounted)
+    missed = skips + failed_bars
     reasons: list[str] = []
     if missed > params.max_missed_rebalances:
+        # The failure action names what actually happened.  "查重启原因" was the only one offered, and
+        # on the four bars this reporter could not see until 2026-09-16 there was no restart to read:
+        # the loop stayed up and a request to the venue failed.
         worst_restart = max(restart_late) if restart_late else 0.0
-        reasons.append(
-            f"漏掉 {missed} 次再平衡（M-Q03 阈值 {params.max_missed_rebalances}）；"
-            f"最迟的一次在 bar 收盘后 {worst_restart:.0f} 秒；失败动作：查重启原因"
+        where = (
+            f"其中 {failed_bars} 根是周期失败（{failures[-1]}）；失败动作：查这条路径，不是重启"
+            if failed_bars
+            else f"最迟的一次在 bar 收盘后 {worst_restart:.0f} 秒；失败动作：查重启原因"
         )
+        reasons.append(f"漏掉 {missed} 次再平衡（M-Q03 阈值 {params.max_missed_rebalances}）；{where}")
     if share is not None and share > params.max_late_cycle_share:
         reasons.append(
             f"迟到周期占比 {share:.1%} 高于 M-Q03 的 {params.max_late_cycle_share:.0%}"
@@ -1666,7 +1701,10 @@ def restart_cost(
     return {
         "cycles": len(rows),
         "missed_rebalances": missed,
-        "skipped_bars": missed,
+        # Kept apart from 2026-09-16.  These were the same rows and the docstring above said a future
+        # engine could separate them; a failed bar is a miss and is not a skip, so they now differ.
+        "skipped_bars": skips,
+        "failed_bars": failed_bars,
         # Restarts are counted and named rather than folded into the lateness they used to inflate.
         "restarts": restarts,
         "worst_restart_late_seconds": max(restart_late) if restart_late else None,

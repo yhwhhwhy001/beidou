@@ -2785,7 +2785,20 @@ CEILING = {
     # and main had reached 9_393 through it.  Neither side's number describes the merged tree, so this is
     # the merged tree's own count - 9_438 - taken from the failing assertion rather than from 9_393 + 45,
     # which is the repository's rule for exactly this conflict and the third time today it has been hit.
-    "beidou_live": 9_446,
+    #
+    # Thirty-third raise OF THIS TABLE, 2026-09-16, and the sentence the rule requires: +38 beidou_live,
+    # 34 in `reports.restart_cost` and 4 rendering the split, so that the bar a cycle FAILED on is
+    # charged to M-Q03 and a reader can see which half it belongs to.  The
+    # 2026-09-13 work charged the bars the backoff sleeps THROUGH and said in its own docstring that the
+    # failed bar itself still reached no counter; four bars since 2026-09-08 have no successful cycle and
+    # `max_missed_rebalances: 0` read clean on every one of those days.  About twenty of the 34 lines are
+    # the two paragraphs: why the charge is by BAR and not by row (a retry or a restart can still settle
+    # it, and 2026-09-08T05:00 is in the record twice), and why a failed cycle that already placed orders
+    # is NOT charged (`run_cycle` places orders before it quarantines, summarizes and finishes, so a raise
+    # in any of those three leaves fills on the venue).  That second paragraph is the one that stops a
+    # later reader from "simplifying" this into charging every ERROR row, which would report the opposite
+    # of what happened on exactly the cycles that did the most.
+    "beidou_live": 9_484,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
