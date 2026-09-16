@@ -8,7 +8,7 @@ numbers, and two of them bind on only one side of the system:
     carry through gaps       beidou_alpha/overlays/exits.py          stale_carry_bars=2  research only
     skip the symbol          beidou_live/exits.py  (ExitOverlay)     unbounded           live
     hold, then flatten       beidou_live/engine.py (_hold_dropped)   dropped_after=1     live only
-    skip the whole cycle     beidou_live/guards.py                   stale_bars_max=2    both (D-036)
+    skip the whole cycle     beidou_live/guards.py                   stale_bars_max=2    live only
     leave the pool           beidou_live/engine.py (_quarantine)     quarantine_after=3  live only
 
 That spread is the finding.  On a bar a symbol cannot be priced on, research carries the position for
@@ -36,6 +36,15 @@ cycles on record, `inputs.dropped` is non-empty in 0 of them and `dropped_inputs
 of them.  The five PIT members of the 1h archive that carry internal gaps (1,005 symbol-bars) are none
 of them in the pinned live universe, which is why the research side binds and the live side never has.
 The divergence is latent, not active - which is the reason to price the flip rather than ship it.
+
+**One correction to this table, 2026-09-17.**  `skip the whole cycle` was listed as binding on both
+sides.  It does not and never has: `_replay_book_guards` carries no staleness branch, and D-036's
+shared definition is `BookGuardParams`, which holds the caps and the daily-loss pause and not this.
+The entry was wrong rather than the code - a backtest has no bar that arrived late - so the row now
+reads `live only`, and `test_a_rule_that_claims_a_research_half_has_one` checks the claim against the
+alpha-side parameter objects instead of only checking that the word is spelled correctly.  Worth its
+own paragraph: a table written so that a wrong entry could be argued with carried a wrong entry for
+as long as nothing read it back.
 """
 
 from __future__ import annotations
@@ -107,8 +116,18 @@ RULES: tuple[Rule, ...] = (
         label="整周期跳过",
         module="beidou_live.guards",
         setting="stale_bars_max",
-        binds="both",
-        note="D-036: the book-level guard, with one semantics the backtest replays.",
+        binds="live",
+        note=(
+            "D-036 shares the two BOOK guards with the replay - the caps and the daily-loss pause - "
+            "and this is not one of them.  It read `both` until 2026-09-17 on the strength of that "
+            "neighbouring sentence; `_replay_book_guards` has never had a staleness branch and "
+            "`BookGuardParams` has never carried this field.  The correction is the entry, not the "
+            "code: there is no bar in a backtest that arrived too late.  This rule asks whether the "
+            "newest CLOSED bar is more than N intervals behind the one the scheduler woke for - a "
+            "question about a clock and a feed, and a panel is neither, since every row in it is "
+            "present by construction.  So it binds live and has no research half to drift from, "
+            "which is a different fact from a divergence and has to read as one."
+        ),
     ),
     Rule(
         name="leave the pool",

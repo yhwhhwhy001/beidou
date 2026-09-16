@@ -80,7 +80,30 @@ class PortfolioParams:
 
 
 def ewma_portfolio_vol(returns: pd.DataFrame, weights: pd.DataFrame, halflife: int, bars_per_year: float) -> pd.Series:
-    """Annualised sqrt(w_t' Sigma_t w_t) with an EWMA covariance recursion; Sigma_t uses returns through t."""
+    """Annualised sqrt(w_t' Sigma_t w_t) with an EWMA covariance recursion; Sigma_t uses returns through t.
+
+    ``fillna(0.0)`` reads a missing return as a FLAT bar, and that is an assumption rather than a
+    neutral default.  Before a symbol lists it is harmless and exact: `asset_vol` is NaN there, stage 1
+    zeroes the weight, and a zero row contributes nothing to a quadratic form it is also weighted out
+    of.  Inside a symbol's own history it is not harmless - a hole in the archive enters the recursion
+    as evidence of calm, so the covariance is biased DOWN, the stage-2 scalar `vol_target / this` is
+    biased UP, and the book runs slightly hot for about a halflife afterwards.
+
+    Recorded rather than fixed, for a reason that is about the estimator and not about effort.  There
+    is no one-line repair: the recursion updates a full matrix from `outer(row, row)`, so a single
+    absent symbol cannot be skipped without either dropping the whole bar for every symbol (throwing
+    away the names that did print) or moving to pairwise-available covariances (which need not stay
+    positive semi-definite, and this feeds a variance).  Any of those is a different estimator, it
+    moves every archived number, and it would have to be re-validated against the evidence the
+    registry cites - a construction change, which is D-026's shape and belongs behind a flag with its
+    own measurement.
+
+    The size of what is being carried, so the decision can be argued with: `beidou_data.pool` measures
+    5 point-in-time members with internal gaps, 1,005 symbol-bars, against a panel of roughly 123
+    symbols across 43,800 bars - about 0.02% of cells - and none of the five has ever been in the
+    pinned live universe.  A hole wide enough to matter would have to open in a name the book is
+    actually holding, which is also the case in which `beidou_live.staleness`'s rules fire first.
+    """
     r = returns.fillna(0.0).to_numpy(dtype=float)
     w = weights.fillna(0.0).to_numpy(dtype=float)
     n_bars, n_assets = r.shape

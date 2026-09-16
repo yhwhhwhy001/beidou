@@ -11,6 +11,7 @@ takes rather than something that drifts shut and nobody notices.
 from __future__ import annotations
 
 from beidou_alpha.overlays.exits import ExitParams
+from beidou_alpha.overlays.exposure import BookGuardParams
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GuardParams
 from beidou_live.staleness import RULES, Rule, rules_binding
@@ -44,13 +45,19 @@ def test_the_two_halves_still_disagree_and_the_table_says_so() -> None:
 
     If this ever fails, the divergence closed - which is good, and which must be accompanied by the
     priced decision `construction.py`'s v6 note reserves, not discovered afterwards in a diff.
+
+    2026-09-17: the intersection is now EMPTY, and that is a correction rather than a change.  This
+    line read `== {"skip the whole cycle"}` because the table claimed that rule bound on both sides;
+    it never did (`_replay_book_guards` has no staleness branch), so the assertion was pinning the
+    wrong entry rather than catching it.  Not one of these five rules has both halves - which sharpens
+    the module's own finding instead of softening it.
     """
     research = {rule.name for rule in rules_binding("research")}
     live = {rule.name for rule in rules_binding("live")}
 
     assert "carry through gaps" in research and "carry through gaps" not in live
     assert "hold, then flatten" in live and "hold, then flatten" not in research
-    assert research & live == {"skip the whole cycle"}, "D-036's guard is the only rule both sides run"
+    assert not research & live, "no staleness rule runs on both sides; a new one doing so is news"
 
 
 def test_the_shipped_numbers_are_the_ones_the_table_was_written_against() -> None:
@@ -77,3 +84,31 @@ def test_every_rule_says_which_side_it_binds_on() -> None:
     for rule in RULES:
         assert rule.binds in {"research", "live", "both"}, f"{rule.name} has no side"
         assert rule.note.strip(), f"{rule.name} has no note, so the table is a list of names"
+
+
+def test_a_rule_that_claims_a_research_half_has_one() -> None:
+    """The check the spelling test above cannot make: is the claimed side true?
+
+    `skip the whole cycle` read `binds="both"` until 2026-09-17 on the strength of D-036 sharing the
+    BOOK guards with the backtest replay.  It was never one of them - `_replay_book_guards` replays
+    the caps and the daily-loss pause, and `BookGuardParams` is that shared definition - so the table
+    asserted a research half that does not exist, and passed, because the only test on `binds` asked
+    whether the word was one of three strings.
+
+    Research runs `beidou_alpha`, so a rule binding there has to be a setting `beidou_alpha` can read.
+    That is a weaker statement than "the replay honours it" and it is checkable without importing the
+    replay's internals, which is what makes it a test rather than a second copy of the table.
+    """
+    alpha_side = set(ExitParams.__dataclass_fields__) | set(BookGuardParams.__dataclass_fields__)
+
+    for rule in RULES:
+        if rule.binds not in {"research", "both"}:
+            continue
+        assert rule.setting in alpha_side, (
+            f"{rule.name!r} claims to bind on the research side, but {rule.setting!r} is not a field "
+            f"of any beidou_alpha parameter object - so nothing in a backtest can read it"
+        )
+
+    # ...and the correction itself, pinned so it cannot quietly revert.
+    assert _rule("skip the whole cycle").binds == "live"
+    assert "stale_bars_max" not in set(BookGuardParams.__dataclass_fields__)

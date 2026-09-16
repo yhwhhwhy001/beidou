@@ -57,7 +57,9 @@ class ExitOverlay:
                 closes = pd.DataFrame({"x": frame["close"].astype(float).to_numpy()})
                 scale = regime_tp_scale(closes, self.params)
                 tp_scale = float(scale["x"].iloc[-1]) if scale is not None else 1.0
-            state = self._reconcile(ExitState.from_dict(states.get(symbol, {})), positions.get(symbol), close, sigma)
+            state = self._reconcile(
+                ExitState.from_dict(states.get(symbol, {})), positions.get(symbol), close, sigma, bar_open_ms
+            )
             before = state
             state, weight, reason = exit_step(
                 state,
@@ -90,7 +92,9 @@ class ExitOverlay:
         value = daily_vol(closes, self.params)["x"].iloc[-1]
         return float(value) if pd.notna(value) else float("nan")
 
-    def _reconcile(self, state: ExitState, position: Position | None, close: float, sigma: float) -> ExitState:
+    def _reconcile(
+        self, state: ExitState, position: Position | None, close: float, sigma: float, bar: int
+    ) -> ExitState:
         """Adopt the venue's position as the truth for *direction*; the entry reference is fixed at first entry.
 
         The venue's VWAP is adopted only when the direction changed or the
@@ -99,9 +103,30 @@ class ExitOverlay:
         exactly as ``apply_exits`` does in the backtest (E-047): re-anchoring
         to the venue VWAP every cycle made the live take-profit reference
         drift with every rebalance.
+
+        D-045: a position the overlay has ALREADY exited, and which is still on the venue, is not a
+        new entry.  ``exit_step`` drops the anchors when a rule fires - correct in a backtest, where
+        weight 0 IS flat on the next bar - but live the order can fail to land: `plan_rebalance`
+        refuses a close inside the absolute band (`BAND_BLOCKS_EXIT`, and `rebalancer.py` records
+        ENAUSDT sitting that way for days), below `minNotional`, or on a venue rejection.  The next
+        cycle then saw `state.direction` 0 against a held position, took the `!= held` branch, and
+        re-entered: `entry_price` came back from the venue VWAP (so the real cost survived) but
+        ``unit`` was rebuilt from THIS bar's sigma, which is not what D-012 means by "k daily sigmas
+        fixed at entry".  Measured on a position entered at 100 and marked at 87: a re-anchor while
+        sigma reads 0.01 puts the 6-sigma stop 6 points away and fires; at 0.08 it puts it 48 points
+        away and the stop is gone.  Volatility rising is exactly when an exit order is most likely to
+        miss, so the failure biased toward releasing the stop in the bar that needed it.
+
+        The state already carries what distinguishes the two cases, so nothing is added to it:
+        ``cooldown_direction`` is the side the rule fired on and ``cooldown_until`` is how long that
+        decision stands.  Inside that window the overlay keeps saying flat - `exit_step` reaches its
+        COOLDOWN branch and returns 0.0 - so the rebalancer keeps being asked to close.  Past it, a
+        position still standing is a fresh holding decision and re-anchoring is the honest reading.
         """
         held = 0 if position is None or position.qty == 0.0 else (1 if position.qty > 0 else -1)
         if held == 0:
+            return replace(state, direction=0)
+        if bar < state.cooldown_until and held == state.cooldown_direction:
             return replace(state, direction=0)
         if state.direction != held or math.isnan(state.entry_price) or math.isnan(state.unit):
             entry = position.entry_price if position is not None and position.entry_price > 0 else close

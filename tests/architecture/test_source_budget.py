@@ -2586,7 +2586,17 @@ CEILING = {
     # can say what it means without stopping a loop that is holding positions.  Deleting that paragraph
     # to fit under the ceiling would leave a threshold nobody can argue with, which is the failure mode
     # the ninth raise's note already named.
-    "beidou_alpha": 9_098,
+    # Eleventh raise, 2026-09-17 (9_098 -> 9_149, +51 beidou_alpha), same audit, second batch.  Three
+    # items, and two of them add only prose: `max_drawdown` now floors at -1.0, because `cumprod` past
+    # a -100% bar keeps multiplying and reported -1.5253 on a book that was gone at bar two while
+    # `compound` said -1.0 for the same series; `ewma_portfolio_vol` states that `fillna(0.0)` reads an
+    # archive hole as a FLAT bar and which way that biases the scalar; `newey_west_tstat` says which
+    # series its default bandwidth is for and why it was left alone (D-P2 - it gates nothing).  The two
+    # unfixed ones are deliberate and the paragraphs say so: the covariance repair is a different
+    # estimator behind a flag, not a line, and re-tuning a bandwidth that decides nothing would rewrite
+    # an archived field to change no verdict.  A disclosure with no direction and no size is the thing
+    # this repo keeps finding written down with nothing behind it, so the sizes are in there.
+    "beidou_alpha": 9_149,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2844,7 +2854,19 @@ CEILING = {
     # that keeps the wrong sign.  The lines are that paragraph, the `cancelled` bucket kept apart from
     # `unattributed` (nobody held it vs. the legs cancelled are different facts), and the `basis` key
     # plus the `probe` filter that stops the 30-day window adding two different quantities together.
-    "beidou_live": 9_568,
+    # Same commit (9_568 -> 9_631, +63 beidou_live).  D-045: an exit the venue did not execute stops
+    # being re-entered as a new position.  `exit_step` drops the anchors when a rule fires - right in a
+    # backtest, where weight 0 IS flat next bar - and live the close can fail to land (`BAND_BLOCKS_EXIT`,
+    # `minNotional`, a rejection), after which `_reconcile` saw direction 0 against a held position and
+    # rebuilt `unit` from THAT bar's sigma.  On a long entered at 100 and marked at 87 a re-anchor at
+    # sigma 0.01 leaves the 6-sigma stop 6 points away and it fires; at 0.08 it is 48 points away and the
+    # stop is gone - and rising volatility is exactly when an exit order misses, so the bias released the
+    # stop in the bar that needed it.  No field was added: `cooldown_direction` and `cooldown_until`
+    # already say which side a rule fired on and for how long.  The rest is `staleness.py`'s corrected
+    # row - `skip the whole cycle` claimed `binds="both"` and never did, since `_replay_book_guards` has
+    # no staleness branch - plus the paragraph on `equity_hwm` accumulating a collateral-driven peak
+    # while the throttle that reads it is disabled, which is the trap whoever enables it would inherit.
+    "beidou_live": 9_631,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
