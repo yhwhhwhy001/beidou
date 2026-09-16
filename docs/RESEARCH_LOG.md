@@ -11161,8 +11161,9 @@ inherit it」——在 `test_metrics_reach_the_panel_without_the_five_minutes.py
 四道门：format 354、lint 全过、mypy **114** 个源文件 0 错、pytest **1,926 项全绿 114s**。
 ## 2026-09-16（续三）· 撤出代理探针（操作者裁定）
 
-撤出 `deploy/com.beidou.proxy-probe.plist`(43) 与 `deploy/run_proxy_probe.sh`(80)，共 **123 行**，
-并从 `docs/RUNBOOK.md` 的 launchd 表里摘掉对应那行。要拉回来：`git show 321db7c5`。
+撤出 `deploy/com.beidou.proxy-probe.plist`(44) 与 `deploy/run_proxy_probe.sh`(80)，共 **124 行**，
+并从 `docs/RUNBOOK.md` 的 launchd 表里摘掉对应那行。要拉回来：`git show 321db7c5` 拿脚本，
+plist 最后在树里的样子（300s 版）见 `git show 4492458b`。
 
 **和本日前两次撤出都不是同一种情形**，写清楚免得合并成一句「删了没用的东西」。macro/onchain/index 是
 建成了没人读；清算数据层是数据源本身不存在。这一个**两样都不是**——它是按计划用完的仪器。它自己的注释
@@ -11195,7 +11196,11 @@ plist 原注释按「故障持续约 61 秒」论证 60s 周期不可让步，�
 而论证的语气读起来像是测过。这条留给下一次写 cadence 论证的人：**把估计标成估计**，否则它会以事实的
 面目活到有人去查为止。
 
-（撤出之后这条已无操作意义，记在这里是因为它是判据本身的教训，不是探针的。）
+**改动本身先落了地再被撤。** 周期 60s → 300s 在 `4492458b` 合进 `main`（PR #17），数小时后本条撤出
+把整个文件删掉，合并时是一次 modify/delete 冲突，按删除方解决。历史读起来会是「改了又删」，写在这里
+免得下一个翻 log 的人以为中间丢了一步。
+
+（撤出之后周期这件事已无操作意义，记在这里是因为它是判据本身的教训，不是探针的。）
 
 ### 数据文件与一处已修的格式伤
 
