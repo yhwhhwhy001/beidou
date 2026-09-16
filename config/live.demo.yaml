@@ -187,6 +187,14 @@ portfolio:
   # to it.  Until that exists this line is written but NOT in force; the loop keeps running whatever it
   # loaded at startup (0.30), because the engine only builds the model once.
   #
+  # 2026-09-17 更正：上面那句「循环还在跑启动时加载的 0.30」已经不成立，而且欠的那笔账也已经还了。
+  # 证据重出在 09-13（`tsmom-validation-20260913T182325Z.json`，其 `portfolio.vol_target` 就是 0.6），
+  # registry 的 evidence 指针也移到了它；循环 09-15 重启，`cycles.jsonl` 最近一次 `construction_full`
+  # 是 `vol_target: 0.6`，digest `ccd7bb9764b5` 与心跳一致，`live status --check` 报 registry 与治理
+  # 规则都与运行中的循环一致。所以这一行现在是 in force 的。
+  # 留着原句不删：它记录的是当时的真实状态，而「一句话在两天内过期」正是这个仓库反复量到的那种失败
+  # ——D-043 的那条也是同一形状（一个字段算得出、印得出、没有判定代码读过）。
+  #
   # 2026-09-14 补声明（并行会话 beidou-41 量到，本会话复核一致）：k=0.60 下 `max_weight 0.15` 开始绑定，
   # 111/293 个实盘周期（37.9%）至少截断一个名字，而且**只截 BTCUSDT**（σ 0.304 对全书中位 0.736——逆波动率
   # 定价必然把最大权重给最平静的名字）；不截时峰值 0.1651，需削 9.1%。P32 的收益数字没有因此错，stage 3 本来
