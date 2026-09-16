@@ -116,3 +116,38 @@ def test_the_shared_records_are_written_by_the_account_process_and_only_it() -> 
         assert trades_the_account(**{**live, flag: True}) is False
     assert trades_the_account(**{**live, "state_dir": "/tmp/canary"}) is False
     assert trades_the_account(**{**live, "registry_override": "candidate.yaml"}) is False
+
+
+def test_the_candidate_does_not_lie_about_what_it_is() -> None:
+    """The identity in the candidate's own header is checked by something other than a sentence.
+
+    `config/alpha_registry.candidate.yaml` opens by saying it is byte-different from the armed registry
+    "by this comment block and NOTHING ELSE", because the canary's first job is a POSITIVE CONTROL and a
+    control that has drifted is not one.  That claim was true on 2026-09-12 and false by 2026-09-15: the
+    armed registry moved three times (most consequentially `081f57da`, which unpinned the universe) and
+    the candidate did not, so a 90-cycle soak was quietly soaking an 18-symbol population the armed loop
+    no longer traded, against a superseded evidence pointer.  Nothing said a word, because every other
+    identity in this repository is checked by an instrument - the registry digest, the construction
+    fingerprint, the evidence sha256 - and this one was checked by prose.
+
+    Conditional on the claim rather than asserting it outright, which is the whole point.  The header's
+    last line is "Replace this file with the first real promotion candidate when one exists", and a real
+    candidate MUST differ semantically or it is not a candidate.  So the invariant is not "these files
+    agree" - it is "this file does not lie about itself".  Whoever writes the first real candidate
+    deletes the NOTHING ELSE sentence in the same edit, and this test relaxes on its own.
+    """
+    root = Path(__file__).resolve().parents[2]
+    candidate = (root / "config" / "alpha_registry.candidate.yaml").read_text(encoding="utf-8")
+    armed = (root / "config" / "alpha_registry.yaml").read_text(encoding="utf-8")
+
+    def body(text: str) -> list[str]:
+        return [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+    claims_identity = any("NOTHING ELSE" in line for line in candidate.splitlines() if line.lstrip().startswith("#"))
+    if not claims_identity:
+        return  # a real promotion candidate; it is allowed - required, even - to differ.
+    assert body(candidate) == body(armed), (
+        "the candidate registry claims it differs from the armed one by comments alone, and it does not. "
+        "Either regenerate it (`cat <header> config/alpha_registry.yaml > config/alpha_registry.candidate.yaml`) "
+        "or, if this is a real promotion candidate now, delete the 'NOTHING ELSE' claim from its header."
+    )
