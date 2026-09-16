@@ -22,6 +22,10 @@ demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (s
 
 **这件事对本文件的意义不是少了三行，而是一类缺陷没有仪器**：`test_every_module_is_reachable_from_an_entry_point` 问的是「每个模块能不能被跑到」，三者都能，所以它一路全绿；没有任何东西问过「有没有东西真的在跑它」。唯一判断对了的是 `run_data.sh` 里的一段注释，而注释不是任何守卫会去读的东西。撤出前后五条命令的输出**逐字节相同**（`governance reopen|replay|next`、`report weekly`、`live run --dry-run --cycles 0`），这也是它们确实没被读过的最后一道证明。要拉回来：`git show 71863e9e`。
 
+同日第二次裁定**撤出 #19 的清算数据层**：`beidou_data/liquidations.py`(451) 与 `liquidation_archive.py`(145)，连同三个测试文件与归档 fixture。它们与上面三条的情形不同——不是「没人读」，是**数据源本身不存在**：Binance 根本不发布 USDⓈ-M 清算历史，唯一的币本位归档早于实盘期 23 个月停更，所以平价义务不可满足、RISK-G3 一直把该列挡在实盘外。它们此前是 `EXEMPT` 里仅有的两个条目，理由写的是「作为查过什么的记录而留下」；撤出的论据正是这句话本身——**记录属于日志和 git 历史，不属于 import 图**，在那里它按零余量的行数棘轮计费，并被每一个审计这个包的人重读一遍。`EXEMPT` 现在是空的，即**树里每个生产模块都能从某条命令走到**，这是那道守卫有史以来能报出的最强状态。
+
+**没有撤的**：`beidou_live/liquidation.py`（DL-X1 的清算**距离**，每周期写进 `cycles.jsonl`）与它的测试。一个是为不存在的数据准备的 ingest，另一个是读交易所自己那个字段的仪器，两者只是名字像。`governance reopen` 的 `regime-47` 读数也一字未变（仍是 `3/4 present; missing liquidations`）：那个探针问的是**磁盘**上有没有 store，不是代码在不在——撤掉 ingest 没有让那条重开条件变得无法回答，因为那个 ingest 本来也回答不了它。
+
 架构测试在 `tests/architecture/`，2026-09-16 更正——这里原本写的是「唯一的架构测试：
 `test_import_rules.py`」，而那句话在第二个文件落地的那天就过期了，此后又过期了六次：
 

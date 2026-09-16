@@ -48,15 +48,28 @@ ENTRY_POINTS = (
 )
 
 #: Each name says what would make it reachable, so an exemption is an argument rather than a shrug.
-EXEMPT: dict[str, str] = {
-    "beidou_data.liquidations": (
-        "#19 判定不可用 (2026-09-09): Binance publishes no USDⓈ-M liquidation history, and the only "
-        "coin-margined archive stopped 23 months before the live period, so the parity obligation is "
-        "unmeetable and RISK-G3 keeps the column out of live.  The module stays as the record of what "
-        "was checked; a CLI for it would be a command that can only fail."
-    ),
-    "beidou_data.liquidation_archive": "The archive half of #19; same ruling, same reason.",
-}
+#: EMPTY since 2026-09-16, which is the strongest state this file has ever been able to report: every
+#: production module in the tree can be reached from a `beidou` command.  It held two entries until
+#: then, both for #19's liquidation ingest:
+#:
+#:     "beidou_data.liquidations"        #19 判定不可用 (2026-09-09): Binance publishes no USDⓈ-M
+#:                                       liquidation history, and the only coin-margined archive
+#:                                       stopped 23 months before the live period, so the parity
+#:                                       obligation is unmeetable and RISK-G3 keeps the column out of
+#:                                       live.  "The module stays as the record of what was checked;
+#:                                       a CLI for it would be a command that can only fail."
+#:     "beidou_data.liquidation_archive" "The archive half of #19; same ruling, same reason."
+#:
+#: The operator withdrew both.  The argument that retired them is the one their own exemption made:
+#: a module kept "as the record of what was checked" is a record, and a record belongs in the log and
+#: in git history, not in the import graph where it costs non-alpha lines against a ratchet at zero
+#: headroom.  `docs/RESEARCH_LOG.md` and `git show 0b306e5b` hold what they checked.
+#:
+#: An empty dict is deliberate rather than a tidy-up: `test_the_exemptions_are_named_rather_than_counted`
+#: refuses an entry naming a module that no longer exists, so these two had to go the moment the files
+#: did - the same pruning rule that deleted the three data-feed exemptions in 2026-09-10.  Do not
+#: replace this with a count; the whole file exists because a count lets the next one in silently.
+EXEMPT: dict[str, str] = {}
 # Retired 2026-09-10: `beidou_data.onchain`, `beidou_data.index_price` and `beidou_data.macro` became
 # reachable through `beidou data onchain|index|macro`, so their exemptions were DELETED rather than
 # annotated - `test_the_exemptions_are_named_rather_than_counted` enforces that from the other side,

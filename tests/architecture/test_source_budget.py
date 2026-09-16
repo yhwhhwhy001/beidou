@@ -2872,7 +2872,21 @@ CEILING = {
     # is now stated where it is used.  I had already lowered the ceiling to 3_715 before making the
     # edit; the suite went red on the next full run, which is exactly the zero-headroom behaviour the
     # two lowerings above were for.
-    "beidou_data": 3_718,
+    # **再降表**, 2026-09-16 (3_718 -> 3_122): the operator withdrew #19's liquidation ingest -
+    # `liquidations.py` (451) and `liquidation_archive.py` (145), with their two test files and the
+    # archive fixture.  These were the LAST two entries in `EXEMPT` over in the reachability guard, so
+    # that list is now empty: every production module in the tree can be reached from a command, which
+    # is the strongest state that guard has ever been able to report.
+    # The argument that retired them is the one their own exemption made.  It said the modules stay "as
+    # the record of what was checked" - and a record belongs in the log and in git history, not in the
+    # import graph, where it is charged against a ratchet running at zero headroom and re-read by every
+    # person auditing this package.  What #19 checked is not in doubt and is not lost: Binance publishes
+    # no USDⓈ-M liquidation history at all, and the only coin-margined archive stopped 23 months before
+    # the live period, so the parity obligation was unmeetable and RISK-G3 kept the column out of live.
+    # NOT removed, and the distinction matters: `beidou_live/liquidation.py` (DL-X1's liquidation
+    # DISTANCE, in `beidou_live` and wired into every cycle record) and its tests are untouched.  One is
+    # an ingest for data that does not exist; the other is an instrument reading the venue's own field.
+    "beidou_data": 3_122,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are

@@ -457,9 +457,9 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
             ("oi", "metrics"),
             ("lsr", "metrics"),
             ("basis", "spot_klines"),
-            ("index", "index_klines"),
-            ("onchain", "onchain"),
-            ("macro", "macro"),
+            # `index` / `onchain` / `macro` rows dropped 2026-09-16 with those feeds; no condition asked
+            # for them.  `liquidations` stays though its ingest went too: this probe asks the DISK, and
+            # regime-47's question is whether the data exists, not whether we can fetch it.
             ("liquidations", "liquidations"),
         )
         if (store / probe).is_dir() and any((store / probe).iterdir())

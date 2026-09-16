@@ -11101,3 +11101,61 @@ registry 和那条断言随 feed 一起没了。将来若有新的链上 feed，
 
 四道门：format 358 全过、lint 全过、mypy **116** 个源文件 0 错、pytest **1,967 项全绿 114s**
 （2,074 → 1,967，差的 107 项是随五个测试文件走的）。
+
+---
+
+## 2026-09-16（续二）· 撤出 #19 的清算数据层（操作者裁定）
+
+撤出 `beidou_data/liquidations.py`(451) 与 `liquidation_archive.py`(145)，三个测试文件
+（`tests/data/test_liquidation_ingest.py` 302、`test_liquidation_alignment.py` 339、
+`tests/alpha/test_liquidations_reach_the_panel_as_missing_when_missing.py` 107）与归档 fixture。
+共 **596 行源码 + 748 行测试**。要拉回来：`git show 0b306e5b`。
+
+**与上一条撤出不是同一种情形**，写清楚免得合并成一句「删了没用的代码」。macro/onchain/index 是
+**建成了没人读**；这一层是**数据源本身不存在**——Binance 根本不发布 USDⓈ-M 清算历史，唯一的币本位
+归档早于实盘期 23 个月停更，所以平价义务不可满足、RISK-G3 一直把该列挡在实盘外。这是 2026-09-09
+就量过并裁定的事（#19），此后它们作为 `EXEMPT` 的两个条目留在树里。
+
+**撤出的论据就是那条豁免自己写的话。** 它写的是「模块作为**查过什么的记录**留下；给它做个 CLI 等于
+做一个只会失败的命令」。记录属于日志和 git 历史，不属于 import 图——在那里它按**零余量**的行数棘轮
+计费，并被每一个审计 `beidou_data` 的人重读一遍。#19 查过什么没有丢，也不存疑，上一段就是它。
+
+**`EXEMPT` 现在是空的。** 即：树里每个生产模块都能从某条 `beidou` 命令走到。这是那道守卫有史以来
+能报出的最强状态，而且它是**自己空掉的**——`test_the_exemptions_are_named_rather_than_counted` 会
+拒绝一个指向已不存在模块的条目，所以文件一删，条目当天就必须走，与 2026-09-10 删掉三条数据源豁免
+时是同一条剪枝规则。别把它改成计数：整个文件存在的理由就是计数会让下一个静默混进来。
+
+**没有撤的，以及为什么这不是犹豫。** `beidou_live/liquidation.py`（DL-X1 的清算**距离**，在
+`beidou_live` 里、每周期写进 `cycles.jsonl`）与 `tests/live/test_liquidation_*`、
+`helpers_liquidation.py` 原样保留，35 项测试全绿。一个是为**不存在的数据**准备的 ingest，另一个是
+读**交易所自己那个字段**的仪器，两者只是名字像。A-P2 探针 2026-09-06 实测过那个字段的读法
+（14/14 多头 liq==0、4/4 空头非零，0 意味着「在当前权益下不可达」而不是「已到强平」）。
+
+**五条命令输出逐字节相同**，其中一条值得单独记：
+
+```
+governance reopen    IDENTICAL —— regime-47 仍读「3/4 present; missing liquidations」
+```
+
+那个探针问的是**磁盘**上有没有 `.beidou/data/liquidations/`，不是代码在不在
+（`governance_cmd.py` 的 `columns` 由目录存在性构成）。所以撤掉 ingest **没有**让这条重开条件变得
+无法回答——因为那个 ingest 本来也回答不了它。这是「代码可达性」与「数据可得性」是两件事的一个干净例子。
+
+顺手清掉上一次撤出留下的三行：那张探针表里还挂着 `index_klines` / `onchain` / `macro` 三个 store，
+指向再也不可能被创建的目录。没有任何重开条件问过它们，所以删掉不动任何判定。
+
+**我自己那份清单漏了一个文件。** 审查报告第二节 A 列了 5 个文件，而
+`tests/alpha/test_liquidations_reach_the_panel_as_missing_when_missing.py` 不在其中——它住在
+`tests/alpha/` 而我按 `tests/data/` 找的。全量跑时它红了三项。该文件四个测试里三个用
+`to_panel_columns`，第四个（`metric()` 缺列时返回 None 而不是 0）是 Panel 的通用保证，且它自己的
+docstring 就写着「`metric()` already draws this line for the metrics columns; the liquidation ones
+inherit it」——在 `test_metrics_reach_the_panel_without_the_five_minutes.py:62` 与
+`test_slicing_a_panel_keeps_the_columns_it_carried.py:69,70` 各有一份，所以整文件删掉不丢保证。
+教训与本日前两条同形：**按目录找文件是又一个会漏的判据**，跑一次全量才是。
+
+**行数棘轮**：`beidou_data` 3,718 → 3,122。`beidou_cli` 不动，但过程值得记——清掉三行探针后我写了
+9 行注释解释「为什么 liquidations 这一行留下」，`beidou_cli` 当场**超表 6 行**。把注释压到 3 行、
+理由写进这里，才回到 5,943 的零余量。棘轮就是这样工作的：**散文的合适位置是日志，不是被计费的源码**。
+七个包仍全部零余量。
+
+四道门：format 354、lint 全过、mypy **114** 个源文件 0 错、pytest **1,926 项全绿 114s**。

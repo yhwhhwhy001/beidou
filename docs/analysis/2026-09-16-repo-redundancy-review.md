@@ -317,7 +317,10 @@ docstring，删 134 行换不来什么，而误删一份记录换不回来。
 `reports/weekly/<date>.{json,md}`，而 `.gitignore` 只忽略 `reports/daily/`，于是生成的报告躺在
 `git status` 里像未完成的改动。已按同一条理由加进 .gitignore。
 
-## 第二节 B 已执行（`e616cdb3`），A 仍待裁定
+## 第二节 A 与 B 都已执行（`e616cdb3`、本节末的清算那一笔）
+
+> **再更正**：下面「A 仍未执行」那句话在写下之后不久就不成立了——操作者同日裁定把 A 也撤出。
+> A 的执行结果与它漏掉的一个文件记在本节最后。整节保持原样，这样两次裁定之间那个状态还在。
 
 **B 撤出了**（操作者同日裁定）：`index_price.py` / `macro.py` / `onchain.py` 加三个命令、五个测试
 文件与 `scratchpad/verify_live.py`，**1,757 行源码 + 2,092 行测试**。判据是五条命令的输出撤出前后
@@ -342,3 +345,23 @@ docstring，删 134 行换不来什么，而误删一份记录换不回来。
 
 删之前要注意的一条：`beidou_live/liquidation.py`（强平距离观测，DL-X1）与
 `tests/live/test_liquidation_*` **在用**，不属于 A，别一起带走。
+
+### A 的执行结果（2026-09-16 同日第二次裁定）
+
+撤出 `beidou_data/liquidations.py`(451) 与 `liquidation_archive.py`(145)、**三个**测试文件与归档
+fixture，共 **596 行源码 + 748 行测试**。五条命令输出撤出前后逐字节相同，其中 `governance reopen`
+的 `regime-47` 仍读 `3/4 present; missing liquidations`——那个探针问的是**磁盘**上有没有 store，
+不是代码在不在，所以撤掉 ingest 没有让那条重开条件变得无法回答（它本来也回答不了）。
+`EXEMPT` 因此**空了**：树里每个生产模块都能从某条命令走到。
+
+**本报告在这里漏了一个文件。** 上表列了 5 个，实际是 6 个——
+`tests/alpha/test_liquidations_reach_the_panel_as_missing_when_missing.py`(107) 不在其中，因为我
+按 `tests/data/` 找的，而它住在 `tests/alpha/`。全量跑时它红了三项。**「按目录找文件」是这份报告里
+第三个会漏的判据**，前两个是「按文件名 grep」和「模块可达性」。三次都是同一形状：一个看起来能回答
+问题的判据，实际只覆盖了问题的一部分。真正的判据只有一个——把四道门全量跑一遍。
+
+（该文件四个测试里三个用 `to_panel_columns`；第四个是 Panel 的通用保证，它自己的 docstring 就写着
+继承自 metrics 那一份，而那份在另外两个文件里各有一份，所以整文件删掉不丢保证。）
+
+**没有撤的**：`beidou_live/liquidation.py` 与 `tests/live/test_liquidation_*`、
+`helpers_liquidation.py`（DL-X1 清算距离，35 项全绿），正如上表的注所说。
