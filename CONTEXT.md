@@ -37,35 +37,35 @@ _Avoid_: 历史池、回溯池
 **Reference**（参照总体）：
 横截面算子（秩、去均值、广度）所依据的标的全体。是**显式契约**，不是调用者恰好加载了哪些列。
 
-### 信号与书
+### 信号与 sleeve
 
 **Signal**（信号）：
 一个把面板数据映射到每标的分数的纯函数。自己声明是否消费资金费率历史。
 _Avoid_: 因子、alpha、indicator
 
 **Strategy**（策略）：
-Registry 里的一个条目：一个 Signal 加上一组参数、一个权重、一个证据指针、一个书归属。
+Registry 里的一个条目：一个 Signal 加上一组参数、一个权重、一个证据指针、一个 sleeve 归属。
 _Avoid_: model、策略实例
 
 **Registry**：
-声明哪些 Strategy 启用、各自什么参数、集成方法、有哪些非主书的那份文件。引擎**只在启动时**读它。
+声明哪些 Strategy 启用、各自什么参数、集成方法、有哪些非 main sleeve 的那份文件。引擎**只在启动时**读它。
 
-**Book**（书）：
-独立构建、独立做波动率目标的一组仓位。多本书按 fraction 求和后再套主书的上限与带。
-_Avoid_: sleeve、子组合、sub-portfolio
+**Sleeve**：
+独立构建、独立做波动率目标的一组仓位。多个 sleeve 按 fraction 求和后再套 main sleeve 的上限与带。
+_Avoid_: 分仓、袖子、子组合、sub-portfolio、book
 
-**Main book**（主书）：
-承载全部风险预算的那本书。只有主书时，构建路径与单书时代逐位不变。
+**Main sleeve**：
+承载全部风险预算的那个 sleeve。只有 main sleeve 时，构建路径与单 sleeve 时代逐位不变。
 
-**Probe book**（探针书）：
-组合层 ACCEPT 但信号级未 PASS，由操作者显式放行上线的小书。按 30 天归因 P&L 自动停书。
-_Avoid_: 实验书、paper book
+**Probe sleeve**：
+组合层 ACCEPT 但信号级未 PASS，由操作者显式放行上线的小 sleeve。按 30 天归因 P&L 自动停掉。
+_Avoid_: 实验 sleeve、paper sleeve
 
 **Fraction**：
-一本非主书占主书风险预算的比例。
+一个非 main sleeve 占 main sleeve 风险预算的比例。
 
 **Ensemble**（集成）：
-把多个 Strategy 的目标合成一本书的目标的方法。
+把多个 Strategy 的目标合成一个 sleeve 的目标的方法。
 
 **Target weights**（目标权重）：
 一根 bar 上每个标的应持有的、以权益为单位的敞口。是 alpha 侧的唯一产出。
@@ -90,14 +90,14 @@ _Avoid_: 目标仓位（那是乘过权益之后的东西）
 **每条路径只算一层**：回测里它是仓位递推，实盘里参照的是交易所真实仓位。
 
 **Overlay**（覆盖层）：
-作用在已构建好的书之上的一层调整。当前有两个：exit overlay 与回撤节流。
+作用在已构建好的 sleeve 之上的一层调整。当前有两个：exit overlay 与回撤节流。
 
 **Exit overlay**：
 bar 收盘评估的止损／移动止损／止盈加冷却期，阈值以**入场时**的日波动率为单位。
 参考价固定为首次入场价，同向加减仓不重锚。交易所原生条件单明确不做。
 
 **Drawdown throttle**（回撤节流）：
-按距权益高水位的回撤，乘在整本书上的一个标量。
+按距权益高水位的回撤，乘在整个 sleeve 上的一个标量。
 
 **Margin cap**：
 在 gross 上限处初始保证金占权益的比例上限。交易所杠杆由它反推，只改变保证金效率，不改变敞口。
@@ -143,7 +143,7 @@ kill-switch、flatten。**语义只有一份**，回测重放实盘真正会做�
 一个文件。存在即拒绝一切写入场地的操作。与 host allowlist 一起，是系统里唯一的「熔断」。
 
 **Flatten**（平仓）：
-把整本书显式清零的人工操作。
+把全部仓位显式清零的人工操作。
 
 **Venue**（场地）：
 下单去的那个交易所端点。与行情来源分开——行情读 mainnet 公共接口，下单走 demo。
@@ -190,7 +190,7 @@ _Avoid_: 结果、评分
 全部治理阈值的唯一存放处，**在代码里而不是配置里**——机器能改的 YAML 等于机器能移动自己的及格线。
 
 **Lifecycle**（生命周期）：
-一本书的状态机：candidate → validated → booked → queued → probe → main，以及回退路径。
+一个 sleeve 的状态机：candidate → validated → booked → queued → probe → main，以及回退路径。
 每一次拒绝都必须指名是哪条规则拒的。
 
 **Canary**（金丝雀）：
