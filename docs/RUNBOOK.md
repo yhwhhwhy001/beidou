@@ -8,15 +8,15 @@
 | 手动刷新实盘交易池（30 日成交量 + 滞回） | `beidou data pool refresh`（实盘循环每个 UTC 日也会自动做一次） |
 | 重建时点成员表（研究用，先同步 878 个候选的日线） | `beidou data pool history [--sync-members]` |
 | 单策略回测 / 验证 | `beidou research backtest --strategy tsmom`；`beidou research validate --strategy tsmom --universe pit --prior-trials N`（`--min-tenure K` 只交易已入池 ≥K 次的老牌币） |
-| 退出层 / 回撤节流证据 | `beidou research overlay --universe pit` |
-| 信号 vs 构建归因（D-024，不计账本） | `beidou research decompose --strategy tsmom --universe pit --from 2021-01-01` |
+| exit overlay / 回撤节流证据 | `beidou research overlay --universe pit` |
+| 信号 vs 构建归因（D-024，不计 ledger） | `beidou research decompose --strategy tsmom --universe pit --from 2021-01-01` |
 | 独立小书证据（主书 + fraction × 小书，D-018） | `beidou research book --main tsmom --sleeve flow --sleeve-params '{"long_side": false}' --universe pit --robustness static --prior-trials N` |
 | 探针书状态（D-019） | `beidou live status`（心跳 `probes`）、日报 `Probe books` 段；自动停书后 `state.json.stopped_books` 有记录；手动停书：registry 里该策略 `enabled: false` 后重启 |
 | 启动实盘（launchd 已托管） | `launchctl load -w ~/Library/LaunchAgents/com.beidou.live.plist`；手动：`deploy/run_live.sh` |
 | 状态 / 健康检查 | `beidou live status --check` |
 | 核对实盘输出可复现（M-011） | `beidou live verify --check`（用公共数据 + `state.json` 离线重算上一周期的 contributions；差异必须为 0） |
 | 检查唤醒时刻与 bar 边界的对齐 | `beidou live status --check`（对齐误差 > 60s 非零退出；整数个 bar 的偏移不算问题，D-025） |
-| 因子挖掘（每轮记 514 行账本，先看 R1 预算） | `beidou research mine --strategy tsmom --universe pit --baseline tsmom`；只测量不计费：`--measure` |
+| 因子挖掘（每轮记 514 行 ledger，先看 R1 预算） | `beidou research mine --strategy tsmom --universe pit --baseline tsmom`；只测量不计费：`--measure` |
 | 定时刷新研究数据（每日 01:20，klines + 资金费率 + **现货** + 池刷新） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
 | 定时跑上面两项（每小时 :10） | `cp deploy/com.beidou.check.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.check.plist` |
 | 一键平仓 | `beidou live flatten --yes` |
@@ -36,7 +36,7 @@
 | --- | --- |
 | 下一步该做什么（读证据 + 状态，只决定不执行） | `beidou governance next` |
 | 把记录里已经发生的事折进状态 | `beidou governance advance` |
-| 晋级计划 / 家族门读数 | `beidou governance plan`；`beidou governance gate` |
+| 晋级计划 / family gate 读数 | `beidou governance plan`；`beidou governance gate` |
 | 事务化写 registry（需要 `governance/ENABLED`） | `beidou governance apply` |
 | 部署健康金丝雀（读 shadow soak，不判 alpha） | `beidou governance canary` |
 | 规则重放：每份报告都要能被解释（AC-G0 未归因项必须为 0） | `beidou governance replay` |
@@ -69,9 +69,9 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 
 重启是幂等的（clientOrderId 按 bar 派生，先查后下）。重启后看 `.beidou/live/heartbeat.json` 的 `phase`、`universe_size`、`leverage`。
 
-### 采纳退出层 / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
+### 采纳 exit overlay / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
 
-M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何退出层或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：P13 阶梯触发（回撤 −35% / −50%），那是预登记的降档，不是采纳。
+M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何 exit overlay 或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：P13 阶梯触发（回撤 −35% / −50%），那是预登记的降档，不是采纳。
 
 窗口起点**不写在这里**：它随每一次构造变更移动，写死在正文里的日期只会过期（这一段最初写的 2026-09-06T10:19Z / 最早采纳日 2026-10-06 就是如此，`unit_mode` 进指纹后一次重启即作废）。要当前答案，读这两处之一——`beidou report daily` 的 evidence-window 一节（`since_ms` 是起点、`bars` 是已积累的周期数），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar。最早采纳日 = 该起点 + 30 天。
 
@@ -116,7 +116,7 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - `heartbeat.json` 的 `history_bars`（当前 1,442）与 `external_flows`；`cycles.jsonl` 的 `external_flows`（`rebaselined: true` = 该周期发生了非交易性现金流，日起点 / 高水位已重置，日报 drift 跳过该 bar）。
 - 账户在 demo UI 里被重置后不需要任何操作：下一周期自动重建仓位；`beidou report daily` 的 External cash flows 段显示金额。
 - `state.json.last_contributions` 是 NO_ACTION 的 hold 种子（D-022），不要手动删除；删除等于把所有未触发信号的仓位归零一次。
-- `beidou live verify`：contributions 必须逐币复现（`ok: true`）；`target_diffs` 非零只是提示——退出层 / 节流 / 护栏在模型之后动作。`bar_matched: false` 说明 `state.json` 来自另一根 bar，等下一周期再跑。2026-09-04 01:00Z 的实测：两本书差异均为 0.0。
+- `beidou live verify`：contributions 必须逐币复现（`ok: true`）；`target_diffs` 非零只是提示——exit overlay / 节流 / 护栏在模型之后动作。`bar_matched: false` 说明 `state.json` 来自另一根 bar，等下一周期再跑。2026-09-04 01:00Z 的实测：两本书差异均为 0.0。
 - `cycles.jsonl` 的 `gross_before` 自 D-023 起按 `positionRisk` 的仓位求和；此前恒为 0（账户报文不带 positions 数组），满仓也显示为空仓。
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。

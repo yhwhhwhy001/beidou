@@ -2,7 +2,7 @@
 
 > 分析头部（deep-analysis V3.3）
 > - Interaction Mode: **Yellow**。关键事实全部来自代码与已提交的研究报告；唯一的外部事实（RD-Agent `fin_factor_report` 的输入输出形态）取自其公开文档，标 E3。
-> - S/M/L: **L**。命中两个维度：`reports/research/trials.jsonl` 是 D-020/D-028 判决的核心链路，改变它的计数语义即改变什么能上实盘；LLM 提案者进入 alpha 遴选路径，属难回滚（账本一旦被污染，此前 135 行的 DSR 数字全部不可比）。
+> - S/M/L: **L**。命中两个维度：`reports/research/trials.jsonl` 是 D-020/D-028 判决的核心链路，改变它的计数语义即改变什么能上实盘；LLM 提案者进入 alpha 遴选路径，属难回滚（ledger 一旦被污染，此前 135 行的 DSR 数字全部不可比）。
 > - 当前 Gate 决策上限：**Weak GO（对调整后方案 O-1）**。原方案 G3 FAIL（相对价值实测为 0）→ PIVOT；O-1 过 G6（§6.6，0 OPEN P0/P1）与 G7（§8.7）。G2 PASS：P0 Claim 由 E1 证据判为 REFUTED，不是 UNKNOWN。
 > - 外部动作授权：**无**。本轮只读代码与既有报告，未跑 `research validate`，未写 `trials.jsonl`，未改实盘配置。
 > - 缘起：与 microsoft/RD-Agent 的对照评分。建议是我给的，本轮结论是它被仓库里已有的证据推翻。
@@ -13,7 +13,7 @@
 
 | 项目 | 结论 |
 | --- | --- |
-| Final Decision | **PIVOT → Weak GO（O-1）**。原方案（接 `fin_factor_report`）不成立——提案者不是瓶颈。调整后方案 O-1（给 `Expr` 补读 `panel.funding` 的叶节点，一次预登记搜索裁决 C-003）过 G6 / G7，授权为**有边界的证伪实验，预期阴性**。契约见 §8，Firewall 两条互斥重开条件见 §7.2；提交、跑 validate、写账本三件事由操作者执行 |
+| Final Decision | **PIVOT → Weak GO（O-1）**。原方案（接 `fin_factor_report`）不成立——提案者不是瓶颈。调整后方案 O-1（给 `Expr` 补读 `panel.funding` 的叶节点，一次预登记搜索裁决 C-003）过 G6 / G7，授权为**有边界的证伪实验，预期阴性**。契约见 §8，Firewall 两条互斥重开条件见 §7.2；提交、跑 validate、写 ledger 三件事由操作者执行 |
 | 本轮最重要的发现 | **C-002 的「剪刀」由逻辑推演变为实测**：20 条加密因子里，**没有一条落进「能表达、但枚举想不到」那一格**——而那是 LLM 提案者唯一能占的位置 |
 | 第二重要的发现 | `expr.py` 里 `funding` 出现 **0 次**。表达式语言读五个字段（`close` / `high` / `low` / `quote_volume` / `taker_buy_quote`），读不到 `panel.funding`、`open`、`volume`(base)、`trades` |
 | 被推翻的 Claim | C-001「北斗的瓶颈是候选供给」——P14 的 225 个候选就是反例，且它当时就在仓库里 |
@@ -105,7 +105,7 @@ P14 更直接：枚举提案者已经产出 225 个候选，最好的一个比�
 | 替代路径 | 可用性 | 成本 | 真实增量 | 结论 |
 | --- | --- | --- | --- | --- |
 | 不行动 | 立即 | 0 | — | 对照 |
-| 加 `Funding` 叶节点，重跑 225 + 资金费族 | 数小时 | 单文件；`research backtest` 不写账本 | 打开第 13/14 条，同时验 C-003 | **最优先** |
+| 加 `Funding` 叶节点，重跑 225 + 资金费族 | 数小时 | 单文件；`research backtest` 不写 ledger | 打开第 13/14 条，同时验 C-003 | **最优先** |
 | 加第 8–12 条那五个节点 | 数天 | 中；`features` 里已有两个现成函数 | 打开 5 条 | 次优先，各自独立提案 |
 | 接新数据源（OI / 现货 / 订单簿） | 数周 | 高；新下载、校验、时点对齐 | 打开 6 条 | 待定 |
 | **接 `fin_factor_report`** | 数周 | LLM 依赖（破坏 E-004 的离线 CI 与 D-024 的证据可复现）+ 语料（加密无对应生态）+ 自适应试验计数（开放统计问题） | **§3 实测为 0** | **否决** |
@@ -120,7 +120,7 @@ P14 更直接：枚举提案者已经产出 225 个候选，最好的一个比�
 
 - **没跑 `research validate`，没写 `trials.jsonl`。** 本轮零试验额度消耗，与 P14 同一条规矩。
 - **没有验 C-003。** 「加了资金费节点之后是否出现越过同口径 tsmom 基线的候选」是下一步的实验，本文件只把它定义为 Falsifier，不预测结果。**重跑必须在 `vol_target 0.30` 上重建两边**（E-013）：候选与 tsmom 基线都要，P14 的 1.0745 与 1.6972 都是 0.15 口径，不能当作「之前」那一臂直接用。
-- **`research mine` 的报告不能自我复现。** 它记 dataset / universe_mode / range / symbols / declared_trials / evaluated / rejected / candidates，但**不记 `--funding`、不记成本模型、不记 execution、不记 profile 的组合参数**。定 U-3 因此要靠四臂暴力复算去反推两个本该被写下来的参数。这与 D-024 对 validate 报告的要求（「折向量可从报告自身复现」）是同一条标准，`mine` 没有达到。**已在 O-1 里补上**（DL-P17-04，见 §12.3）。
+- **`research mine` 的报告不能自我复现。** 它记 dataset / universe_mode / range / symbols / declared_trials / evaluated / rejected / candidates，但**不记 `--funding`、不记成本模型、不记 execution、不记 profile 的组合参数**。定 U-3 因此要靠四臂暴力复算去反推两个本该被写下来的参数。这与 D-024 对 validate 报告的要求（「fold 向量可从报告自身复现」）是同一条标准，`mine` 没有达到。**已在 O-1 里补上**（DL-P17-04，见 §12.3）。
 - **`_store_fact` 的缺陷本轮只诊断不修**，理由是修它会让所有历史报告的 funding 事实开始不匹配，需要一个刻意的决定而不是一次顺手修改。**该决定已由同日 D-040（`bd7cd6e`）作出**：全仓带清单的报告只有 4 份，修复前 3 份本来就在告警，所以「淹掉一片告警」量出来是 1 份；v1 的零判为**「未记录」**而不是漂移，因为 `{0, 0, _digest({})}` 与空目录在记录里无法分辨，「未知」是它的准确读数。D-041 顺带给 `manifest_problems` 接上了第一个调用方——此前它没有生产调用者。
 - **第 8–12 条的五个节点没有排期。** 它们各自是独立提案，不与资金费节点捆绑——捆绑会让一次搜索的 `declared_trials` 无谓膨胀，而那正是 `search.py` 文档字符串里那条规则要防的。
 - **自适应提案的试验计数问题没有解决，只是绕开了。** 结论是不接 LLM 提案者，所以这个开放统计问题本轮不需要答案。若将来重开，A-004 仍然 OPEN：DSR 的零假设假定可交换抽样，而条件于前轮结果的提案不是。
@@ -137,7 +137,7 @@ P14 更直接：枚举提案者已经产出 225 个候选，最好的一个比�
 | 冻结输入 | 本文件 §0–§5（E-010 撤回后的版本）、`RESEARCH_LOG` P17、Phase 5–6 的 O-1 + F-4 范围与六条预登记规则 |
 | 审查者与原作者关系 | **同一 Agent**。锚定风险真实且已经兑现过一次：E-010 的错误推断是我写的，也是我读了两天后才发现的 |
 | 可访问证据 | 只引用 E-001 ～ E-013 与仓库内已提交的报告 |
-| 不得执行的外部动作 | 不跑 `validate`，不写账本，不改实盘 |
+| 不得执行的外部动作 | 不跑 `validate`，不写 ledger，不改实盘 |
 
 ### 6.2 最强反方论点
 
@@ -156,7 +156,7 @@ P14 更直接：枚举提案者已经产出 225 个候选，最好的一个比�
 | KILL-P17-05 | 「排序在 0.30 上会动」是推断不是证据：E-013 只测了一个候选的绝对值 | C-003 依据 | E-013 | P2 | **ACCEPTED** | 降格为「可能动」。重跑本来就要在 0.30 做，排序顺带回答，不单独立项 |
 | **KILL-P17-06** | 「tsmom 同口径基线」没定义：registry 现在 crowding ON（09-05 重启），correlate 里的 1.6972 是哪个配置已不可考 | 规则 4 | registry 注释；E-012 | P1 | **MITIGATED** | DL-P17-05：基线 = registry 当前参数，**同一次运行**里重算并写进报告 |
 | **KILL-P17-07** | `uses_funding` 从树派生没有测试守着；F-2 就是 KILL-027 | F-2 / 验收 | `search.py:242` | P1 | **MITIGATED** | T-P17-03：`to_signal(c).needs_funding({})` 当且仅当树含 `Funding` |
-| KILL-P17-08 | mine **跨运行不记账**。P14「两轮搜索」：第一轮 255 个候选不在任何申报数里，只有第二轮的 225。按运行申报而非累计申报，是 p-hacking 的现成入口——机制存在，尚无实例造成伤害 | 账本完整性 | `RESEARCH_LOG` P14 | P1 | **ACCEPTED（既有设计）** | 与手写策略的 `--prior-trials` 手工申报同一先例；不由 O-1 引入也不由 O-1 解决。**另立项**：mine 追加 search ledger（run_id + hash 集合），累计去重数可算。进 Scope Firewall |
+| KILL-P17-08 | mine **跨运行不记账**。P14「两轮搜索」：第一轮 255 个候选不在任何申报数里，只有第二轮的 225。按运行申报而非累计申报，是 p-hacking 的现成入口——机制存在，尚无实例造成伤害 | ledger 完整性 | `RESEARCH_LOG` P14 | P1 | **ACCEPTED（既有设计）** | 与手写策略的 `--prior-trials` 手工申报同一先例；不由 O-1 引入也不由 O-1 解决。**另立项**：mine 追加 search ledger（run_id + hash 集合），累计去重数可算。进 Scope Firewall |
 | **KILL-P17-09** | 根因可能不是特征宽度，是**这个市场在这个频率上只有一个因子**。5 个信号的机制性死因全指向这里 | 问题定义 | 第一～五轮 | P1 | **UNKNOWN** | O-1 恰好是判别实验：资金费是唯一非价格信息源，它也阴性则该假设升为主要解释，下一步转**频率 / universe**，而不是数据源。进 Scope Firewall 的重开条件 |
 | KILL-P17-10 | 约 280 候选 × 约 40 s ≈ 3 h；操作者等不及改回 0.15「求可比」 | 规则 4 | `u3_attrib.py` 计时 | P2 | **ACCEPTED** | 批处理，`--out` 进仓库 |
 
@@ -275,7 +275,7 @@ D-P17-06 的三个形状（**族的定义是这三条，网格只是参数**）�
 
 | 分类 | 说明 |
 | --- | --- |
-| Ownership | Engineering / Test / Approval / Runtime / Learning Owner 均为操作者（单人）。Agent 写代码与测试；**不提交、不跑 validate、不写账本** |
+| Ownership | Engineering / Test / Approval / Runtime / Learning Owner 均为操作者（单人）。Agent 写代码与测试；**不提交、不跑 validate、不写 ledger** |
 | 边界 | **改**：`beidou_alpha/mining/expr.py`、`beidou_alpha/mining/search.py`、`beidou_cli/research_cmd.py`（仅 `research_mine` 与 `_resolve_mined`）、`tests/alpha/`。**不改**：`features.py`、`panel.py`、`signals/`、`validation/`、`beidou_live/`、`manifest.py` |
 | 不可破坏规则 | 架构导入方向；`enumerate_candidates` 不碰数据；现有 225 hash 逐位不变；`trials.jsonl` 零写入；`to_signal` 产出仍是普通 `SignalSpec` |
 | 数据 | 读 `panel.funding`（已有）；无新存储、无迁移 |
@@ -310,7 +310,7 @@ D-P17-06 的三个形状（**族的定义是这三条，网格只是参数**）�
 | --- | --- | --- | --- | --- | --- | --- |
 | AC-P17-01 | Functional | 分支 | `pytest -m "not network"`、`ruff format --check`、`ruff check`、`mypy` | 全绿，T-P17-01 ～ 11 在内 | CI 输出 | 不合并 |
 | AC-P17-02 | Scenario | 主 checkout，0.30 profile，funding 数据在盘 | `beidou research mine --universe pit --baseline tsmom --from 2021-01-01` | 报告落 `reports/research/`；从 JSON 重建命令行；`scored == evaluated`；`errored == 0`；`baseline.sharpe` 存在 | 报告 JSON + sha256 | 报告不合格则不进入 AC-03 |
-| AC-P17-03 | Hypothesis | AC-02 通过 | 按 D-P17-05 选 top-3，各跑 `validate --prior-trials <evaluated> --universe pit` | 按 M-P17-01 裁决 C-003；三份 validate 报告与账本行 | `reports/research/` + `trials.jsonl` | 结果无所谓成败，**裁决本身就是产物** |
+| AC-P17-03 | Hypothesis | AC-02 通过 | 按 D-P17-05 选 top-3，各跑 `validate --prior-trials <evaluated> --universe pit` | 按 M-P17-01 裁决 C-003；三份 validate 报告与 ledger 行 | `reports/research/` + `trials.jsonl` | 结果无所谓成败，**裁决本身就是产物** |
 
 ### 8.6 Source Trace Matrix
 
@@ -332,7 +332,7 @@ D-P17-06 的三个形状（**族的定义是这三条，网格只是参数**）�
 - [x] 主路径、异常、降级、回滚明确
 - [x] 四类契约一致
 - [x] P0/P1 Delivery Item 均有 Source Trace
-- [x] Owner 与人类确认点明确：提交、跑 validate、写账本三件事由操作者执行
+- [x] Owner 与人类确认点明确：提交、跑 validate、写 ledger 三件事由操作者执行
 - [x] 敏感数据 N/A
 - [x] Learning Contract 有基线、阈值、窗口、失败动作（§9）
 
@@ -359,7 +359,7 @@ D-P17-06 的三个形状（**族的定义是这三条，网格只是参数**）�
 
 | 原 Claim | 实际结果 / Evidence | 支持 / 推翻 | 偏差原因 | Decision / Scope 更新 | Pattern |
 | --- | --- | --- | --- | --- | --- |
-| C-003 当前特征面板已被搜尽 | AC-P17-02：carry 42 个候选 **0 个正边际**（最好 −0.1128）。AC-P17-03：边际前三各跑 `validate --prior-trials 267`，**3/3 FAIL**，账本 +3 行 | **支持** | — | **C-003 SUPPORTED**；§7.2 Firewall 打开「频率 / universe」，数据源仍关 | 最好那个候选（OOS 0.86）过了每一道硬门，只死在 D-028 的选择缩减上——而阈值 1.27 **几乎全部是那 267 次搜索的代价**（n=1 时阈值为 0）。`search.py` 那条规则第一次在真实候选上咬合 |
+| C-003 当前特征面板已被搜尽 | AC-P17-02：carry 42 个候选 **0 个正边际**（最好 −0.1128）。AC-P17-03：边际前三各跑 `validate --prior-trials 267`，**3/3 FAIL**，ledger +3 行 | **支持** | — | **C-003 SUPPORTED**；§7.2 Firewall 打开「频率 / universe」，数据源仍关 | 最好那个候选（OOS 0.86）过了每一道硬门，只死在 D-028 的选择缩减上——而阈值 1.27 **几乎全部是那 267 次搜索的代价**（n=1 时阈值为 0）。`search.py` 那条规则第一次在真实候选上咬合 |
 | D-P17-03 预期阴性 | **兑现。** carry 轴 0/42 正边际，中位 −0.7416 | 支持 | — | — | 预登记预期为阴性的实验，兑现时不需要重新解释 |
 | KILL-09 单因子市场 | 仍 UNKNOWN。carry 阴性把它往「主要解释」推了一步，但 267 个里仍有 3 个正边际（全是动量、全在原有 225 里），所以「只有一个因子」并未被这次实验确立 | 未判 | — | — | — |
 | （计划外）P14 结论的第二条限定 | 按全样本 Sharpe 的第 1 名与 tsmom 相关 **0.461**、第 3 名相关 **0.915**；按边际的第 2 名在 Sharpe 排序里只排第 13 | 新增 | P14 按全样本 Sharpe 排序，而问题问的是「第二本**不相关**的书」 | E-013 之外新增一条同量级限定 | **排序键和 `vol_target` 一样，是结论的一部分**——KILL-P17-01 的机制在这份数据上被直接看见 |
@@ -368,7 +368,7 @@ D-P17-06 的三个形状（**族的定义是这三条，网格只是参数**）�
 
 ## 10. Final Decision 与质量评分
 
-**Final Decision：Weak GO**——O-1 作为有边界的证伪实验。授权范围：写 DL-P17-01 ～ 05 的代码与测试；**提交、跑 validate、写账本由操作者执行**。
+**Final Decision：Weak GO**——O-1 作为有边界的证伪实验。授权范围：写 DL-P17-01 ～ 05 的代码与测试；**提交、跑 validate、写 ledger 由操作者执行**。
 
 | 维度 | 分 | 说明 |
 | --- | --- | --- |
@@ -487,7 +487,7 @@ D-P17-06 写的是「精确网格在实现时定」，定成：
 
 十节点的那 6 棵是负号 momentum×carry——负号本身要两个节点。抬升是惰性的，理由是**单调性**：放宽上界只会放进树，不会丢掉树，而既有的没有一个超过 8。
 
-**余量恰恰是没有的**：pre-carry 那 225 个的复杂度分布是 `{2: 30, 3: 30, 4: 45, 5: 45, 8: 75}`——三分之一恰好坐在旧 cap 上，8 是最大的一档。首版 docstring 写「nothing existing sits near the cap」是实测的反面，已改（`af104bc`）。
+**headroom 恰恰是没有的**：pre-carry 那 225 个的复杂度分布是 `{2: 30, 3: 30, 4: 45, 5: 45, 8: 75}`——三分之一恰好坐在旧 cap 上，8 是最大的一档。首版 docstring 写「nothing existing sits near the cap」是实测的反面，已改（`af104bc`）。
 
 留在 8 的代价实测：`evaluated 267 / kept 261 / too_complex 6`——**六棵被计入 `declared_trials` 然后丢弃**，最差的两头都占。
 
@@ -518,9 +518,9 @@ P14 那份 shortlist 记了数据集清单却没记自己的 `--funding`、成�
 
 ### 12.5 仍然没做
 
-- **AC-P17-02 与 AC-P17-03 均已跑完**（2026-09-06）。裁决取到：**C-003 SUPPORTED**，账本 135 → 138。详见 `RESEARCH_LOG` P17 §七、§八。
+- **AC-P17-02 与 AC-P17-03 均已跑完**（2026-09-06）。裁决取到：**C-003 SUPPORTED**，ledger 135 → 138。详见 `RESEARCH_LOG` P17 §七、§八。
 - **§7.2 Firewall：「频率 / universe」已打开，「数据源」仍关。** 这是两条互斥重开条件里的后一条被选中。
 - **KILL-09（单因子市场）仍 UNKNOWN**：carry 阴性加这三个 FAIL 把它往主要解释推了一步，但重开条件只授权换频率 / universe 去测它，没有确立它。
-  - 后记（2026-09-06）：频率那一臂已跑，**P19 / C-004 REFUTED**（日线 238 个候选，top-3 全 FAIL），账本 142 → 145。KILL-09 仍 UNKNOWN——只是又往主要解释推了一步，universe 宽度与数据源两条仍未测。详见 `RESEARCH_LOG` P19 判定节。本节其余部分是 P17 当时的记录，不回改。
+  - 后记（2026-09-06）：频率那一臂已跑，**P19 / C-004 REFUTED**（日线 238 个候选，top-3 全 FAIL），ledger 142 → 145。KILL-09 仍 UNKNOWN——只是又往主要解释推了一步，universe 宽度与数据源两条仍未测。详见 `RESEARCH_LOG` P19 判定节。本节其余部分是 P17 当时的记录，不回改。
 - **研究路径的 `needs_funding` 未强制**：`AlphaModel.targets` 有检查，`evaluate` 没有，所以 `research backtest --strategy tsmom --no-funding` 仍会静默跑一个 crowding 修正器失效的 tsmom。本轮只关掉了 `--baseline` 这一条路径，另七个 research 命令仍敞着，已另立任务。
 - **提交正文里三个不可从提交本身核验的数**：「5 of 267 never traded」是窗口相关的（四个窗口读到 5/5/6/9，5 恰是交集即下界）；「vanished with no trace」过了（改动前那行在 `candidates` 里带 `sharpe: null`，缺的是计数与 stdout）；P14 那份 committed 报告里 never-traded 是 0，所以正文对照的那个现象在仓库证据里不存在。**这三条不应被当作已确立的事实引用。**

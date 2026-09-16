@@ -1,10 +1,10 @@
 # 优化执行方案：北斗 V5 质量体检报告的剩余问题（2026-09-06）
 
-> 深度分析 V3.3 · **Checkpoint Resume**。本文件是 `docs/analysis/2026-09-05-system-quality-deep-analysis.md`（下称"报告"）的续篇：报告的 Phase 1–7 已 COMPLETE（含六角色独立复核，附录 C），Final Decision 为 GO（受控执行，操作者裁定，报告 §12.6）。本文件不重跑已完成的 Phase，只做三件事：(1) 复验已过期的 Evidence；(2) 对本方案引入的**新决策**做压缩的对抗审查；(3) 产出 Phase 8–10——Scope、Delivery Contract、Test/Acceptance、Learning Plan。**只生成方案，不执行**：本文件不改代码、不重启循环、不写账本、不推远端。
+> 深度分析 V3.3 · **Checkpoint Resume**。本文件是 `docs/analysis/2026-09-05-system-quality-deep-analysis.md`（下称"报告"）的续篇：报告的 Phase 1–7 已 COMPLETE（含六角色独立复核，附录 C），Final Decision 为 GO（受控执行，操作者裁定，报告 §12.6）。本文件不重跑已完成的 Phase，只做三件事：(1) 复验已过期的 Evidence；(2) 对本方案引入的**新决策**做压缩的对抗审查；(3) 产出 Phase 8–10——Scope、Delivery Contract、Test/Acceptance、Learning Plan。**只生成方案，不执行**：本文件不改代码、不重启循环、不写 ledger、不推远端。
 >
 > - **Reading Check**：本次理解为「把报告复审后仍未处理的 8 条 Kill、§7.4 生产链路清单、Phase A 第 4 步、KILL-Q2/Q3 的五项欠账与 Phase B/C，编成一份可按批次交付、可测试、可验收、可回滚的执行方案；交付对象是单一操作者」。最高风险预设为 Pre-P1「剩余项应当全部做」——若不成立（操作者的 alpha 90% 目标与生产链路的非 alpha 行数冲突），方案从"全做"变为"Must 只保留无人值守最小集 + 尺子欠账 + 扩空间，其余按操作者裁定推迟"。本文件按后者写。
 > - **Interaction Mode**：**Yellow**。事实全部可由仓库取证（E1）；三个未知项不改变框架方向：远端租约的介质、demo-fapi 对 `forceOrders` 的支持、B1 批次的 ratchet 处置。§8 的提问表一次问完。
-> - **S/M/L**：**L**。命中：≥3 模块（live / cli / alpha / exchange / data）；触及资金链路（下单进程互斥、kill switch、平仓路径）；AI/策略/自动化维度为"自主决策 + 生产影响"（扩空间后的候选进入账本即改变 DSR 分母）。
+> - **S/M/L**：**L**。命中：≥3 模块（live / cli / alpha / exchange / data）；触及资金链路（下单进程互斥、kill switch、平仓路径）；AI/策略/自动化维度为"自主决策 + 生产影响"（扩空间后的候选进入 ledger 即改变 DSR 分母）。
 > - **当前 Gate 决策上限**：报告层 GO（受控执行）不变；**本方案自身**：B0/B1/B2 批次 GO（本地、可逆、无外部动作），B4 批次 **Weak GO**（远端介质与残余风险需操作者裁定），B5 的 KILL-Q11 部分 **Need Evidence**（三项核查先行）。
 > - **外部动作授权**：**无**。执行时的两次实盘重启、任何 `trials.jsonl` 写入、任何远端介质的创建，都是执行阶段单独确认的动作，不由本文件授权。
 
@@ -14,7 +14,7 @@
 
 | 项目 | 结论 |
 | --- | --- |
-| Final Decision（本方案） | **GO（受控执行）**，分批：B0 尺子欠账 → B1 无人值守最小集（重启 #1）→ B2 扩空间 → B3 账本机械化 → B4 失联与强平可观测（重启 #2）→ B5 数据宽度。B0–B2 为 Must，B3–B4 为 Should，B5 为 Could；Phase C 不在本方案内契约化，等 §7.1.6 裁决。 |
+| Final Decision（本方案） | **GO（受控执行）**，分批：B0 尺子欠账 → B1 无人值守最小集（重启 #1）→ B2 扩空间 → B3 ledger 机械化 → B4 失联与强平可观测（重启 #2）→ B5 数据宽度。B0–B2 为 Must，B3–B4 为 Should，B5 为 Could；Phase C 不在本方案内契约化，等 §7.1.6 裁决。 |
 | 最大价值 | B1 堵的是**当下**最真实的实盘风险：本机 7 个 worktree 里任一处 `beidou live run` 就是第二个交易同一账户的进程（KILL-R20，E-41 复验仍无锁）；B4 回答报告 §4.2 留给作者的第三个问题「循环失联后谁在多久内平仓」——今天的答案是**没有人**。 |
 | 最大风险 | 两个：(a) 非 alpha 行数——B1 净增约 +210 行落在 live/cli，超过报告自己定的"≥100 行非 alpha 必须指名同量级删除"的规则（KILL-R12），同量级的删除不存在，只能由操作者裁定抬 ceiling 或砍项；(b) 熔断改为 exit 0 之后，书会静默停在那里直到操作者 reload——**告警去重与第二通道必须先于它落地**（KILL-P1）。 |
 | Relative Value | 对每一项都比过 No-Build：B1 的替代是"继续靠运气"（重启后实测单进程是运气不是保证，报告 §12.1）；B4 的替代是"同机 `run_check.sh` + 第二告警通道、不做远端租约"——若操作者没有可用的远端介质，这就是 B4 的降级形态（Q1）。 |
@@ -47,7 +47,7 @@
 | --- | --- | --- | --- | --- |
 | E-41 | CODE | `grep` 于 beidou_live / beidou_cli / beidou_exchange / beidou_data | 无 `flock` / `--armed`；无 `late_seconds`；`config.py:81` kill switch 默认相对路径 `.beidou/live/KILL_SWITCH`；`reconciler.py:104` 撤销**全部**陈旧挂单、不按前缀；无告警去重；无 SIGTERM；无 `liquidationPrice` / `forceOrders` / `INSURANCE_CLEAR`；无 `tradable` 掩码；无远端租约。**报告 §7.4 清单一项未做。** | E1 |
 | E-42 | CODE | `beidou_alpha/validation/verdict.py:28-40,83`；`beidou_cli/research_cmd.py:735`；`tests/alpha/test_fwer_selection_gate.py` | `pass_oos_t 2.0 / weak_oos_t 1.5` 仍是 `strong` 的必要条件；`p_family` 只在 CLI 打印；7 个门测试全部用独立零假设，无块自举 | E1 |
-| E-43 | DATA+CODE | `reports/research/trials.jsonl`（145 行，tsmom 89 行 / 去重 63）；`ledger.py:100` | `n_trials = 去重账本行 + 本次网格点 + 申报先验`；093705Z = 63 + 2 + 60 = 125，**其中 60 = 30 + 14（D-039 带格）+ 16（E-36 的网格）——+16 已申报**（registry 证据块注释；报告 §12.7 更正了初稿的 N=141）。下次同区间重放约 127 | E1 |
+| E-43 | DATA+CODE | `reports/research/trials.jsonl`（145 行，tsmom 89 行 / 去重 63）；`ledger.py:100` | `n_trials = 去重 ledger 行 + 本次网格点 + 申报先验`；093705Z = 63 + 2 + 60 = 125，**其中 60 = 30 + 14（D-039 带格）+ 16（E-36 的网格）——+16 已申报**（registry 证据块注释；报告 §12.7 更正了初稿的 N=141）。下次同区间重放约 127 | E1 |
 | E-44 | CODE | `deploy/com.beidou.live.plist:24-32`；`deploy/run_live.sh:17,24-25` | `KeepAlive.SuccessfulExit=false`、`ThrottleInterval 60`、`ExitTimeOut 30`；退出码 0 不再拉起（脚本注释自述）；凭据仍由 `~/.zshrc` 的 `eval` 取得；`--immediate` 无条件 | E1 |
 | E-45 | CODE | `beidou_alpha/mining/expr.py`（16 个类，只读 `close` ×4 / `low` ×1 / `funding` ×1）；`beidou_alpha/panel.py:114-124`（`open / high / low / close / volume / quote_volume / trades / taker_buy_base / taker_buy_quote / funding / reference`） | be963ad 的 `Funding` 叶已在；Abs / Moment / Semi / Beta-Residual / Trades 五个节点未做；`trades`、`taker_buy_base` 等列在 Panel 里、无节点读它 | E1 |
 | E-46 | CODE | `git worktree list` = 7；`tests/architecture/test_source_budget.py:536-543` | 并发来源仍在（KILL-R20）；CEILING 现为 alpha 5,321 / live 4,378 / cli 2,924 / data 1,375 / exchange 539 / shared 280 | E1 |
@@ -64,7 +64,7 @@
 | C-P3 | 把 NW t 门降为 reported 不改变任何一份既有报告的判定（tsmom t 3.3–4.0 远高于 2.0；mined 死在 Sharpe 门上） | P1 | A2 | 对 11 份带 `oos_selection` 的报告重算，任一判定翻转 → 重开 D-P2 | E-42 + 报告 E-39 | **UNKNOWN**（B0 第一件事就是算它） |
 | C-P4 | 只读 Panel 现有列的五个节点可按 ≈45 行/节点交付，不新增"研究面板 ⊃ 实盘面板"义务 | P1 | A5 | 若任一节点需要 Panel 新字段或实盘取数 → 该节点移到 Phase B | E-45, 报告 KILL-R28 | SUPPORTED |
 | C-P5 | 本方案按新增行数的 alpha 占比 ≈ 32%（全做）/ ≈ 55%（B0–B2），低于操作者的 90% 目标，且无法靠口径挽回 | P1 | A4 | 若操作者接受"非 alpha 但前置"的显式记账 → 可执行；否则砍 B4/B5 | §5.3 | PARTIAL |
-| C-P6 | KILL-Q5 的签名扩展只对**未来**的运行计费，不会追溯改变 093705Z 的 N=125 | P2 | A2 | 若实现时把历史 scratch 扫描也回填进账本 → tsmom 阈值再抬，须重新裁定 | E-43 | SUPPORTED（设计约束，见 DL-K1） |
+| C-P6 | KILL-Q5 的签名扩展只对**未来**的运行计费，不会追溯改变 093705Z 的 N=125 | P2 | A2 | 若实现时把历史 scratch 扫描也回填进 ledger → tsmom 阈值再抬，须重新裁定 | E-43 | SUPPORTED（设计约束，见 DL-K1） |
 
 ### 2.3 Assumption Register
 
@@ -82,9 +82,9 @@
 | RISK-P1 | 熔断 exit 0 后无人知道书停了 | DL-L2 | 中 | 高（仓位无人管理数小时） | 心跳缺失 | **DL-L3 先于 DL-L2 合并**；exit 前告警必须成功送达至少一个通道 | 回退到非零退出 + 退避 | 重启 #1 前操作者确认第二通道已收到演练告警 |
 | RISK-P2 | 每次部署重启都是 `--immediate` 整本书重建 | 全部 live 改动 | 高 | 中（迟到成交、7 bps × gross） | `late_seconds` | DL-L4 与重启 #1 同批；两次重启之外不再为部署重启 | 计入 M-Q03，不重开 M-010 | 每次重启由操作者执行并记 RESEARCH_LOG |
 | RISK-P3 | 远端租约取不到即 reduce-only，把远端故障变成交易停摆 | DL-X2 | 中 | 中 | 连续 N 周期 lease miss 计数 | N=3 周期宽限；演练含"封远端出口不得触发" | 调 N 或改为只告警 | 演练结果由操作者签字 |
-| RISK-P4 | KILL-Q5 钩子把 scratch 扫描计入账本，tsmom 的 N 再抬 | DL-K1 | 中 | 中（裁定的余量更负） | 下次 validate 的 `ledger_trials` | 只对钩子落地**之后**的运行计费；历史手工 `--prior-trials` 不变 | 出现追溯计费 → 回退钩子 | — |
+| RISK-P4 | KILL-Q5 钩子把 scratch 扫描计入 ledger，tsmom 的 N 再抬 | DL-K1 | 中 | 中（裁定的 headroom 更负） | 下次 validate 的 `ledger_trials` | 只对钩子落地**之后**的运行计费；历史手工 `--prior-trials` 不变 | 出现追溯计费 → 回退钩子 | — |
 | RISK-P5 | B1 抬 live ceiling 约 +200 行而无同量级删除 | KILL-P2 | 确定 | 治理成本 | ratchet 测试 | Q2 由操作者选：抬升并写理由 / 砍 DL-L6 与第二通道 | 移出 Must | Q2 |
-| RISK-P6 | 并行会话同时改 `verdict.py` / `ledger.py` / `engine.py` | 全部 | 中 | 合并冲突、静默覆盖 | `git worktree list` | 每批一个 worktree，合并列车按批；共享文件（账本、`cycles.jsonl`）只追加 | 冲突以 main 为准重做 | — |
+| RISK-P6 | 并行会话同时改 `verdict.py` / `ledger.py` / `engine.py` | 全部 | 中 | 合并冲突、静默覆盖 | `git worktree list` | 每批一个 worktree，合并列车按批；共享文件（ledger、`cycles.jsonl`）只追加 | 冲突以 main 为准重做 | — |
 
 ---
 
@@ -103,13 +103,13 @@
 
 ### 3.2 KILL-Q8 的"7 天一次晋级"规则
 
-报告 §7.1.4 第 5 条要求"账本层强制，否则从协议删除并把 Q8 记回 OPEN"。复验（E-43/E-47）：**validate 不写 registry 指针**，指针是人手改 YAML——这条规则没有可以拒绝写入的主体。
+报告 §7.1.4 第 5 条要求"ledger 层强制，否则从协议删除并把 Q8 记回 OPEN"。复验（E-43/E-47）：**validate 不写 registry 指针**，指针是人手改 YAML——这条规则没有可以拒绝写入的主体。
 
 | Option | 结论 |
 | --- | --- |
 | 在 `live` 启动门比对两次 evidence 变更间隔 < 7 天则拒绝启动 | 否：会拒绝 P1-01 这类合法重出，且把研究纪律塞进实盘启动路径 |
 | 架构测试读 `git log` 检查 registry evidence 变更间隔 | 否：同上，且测试依赖 git 历史 |
-| **按规则自己的 else 分支：删除该条，Q8 靠第 1、2、7 条（时间戳校验 + 一本账本 + 到达 validate 必计费）机械化，落地后记 MITIGATED** | **推荐**（D-P3），需操作者确认 |
+| **按规则自己的 else 分支：删除该条，Q8 靠第 1、2、7 条（时间戳校验 + 一本 ledger + 到达 validate 必计费）机械化，落地后记 MITIGATED** | **推荐**（D-P3），需操作者确认 |
 
 ### 3.3 B1 的 ratchet 处置
 
@@ -117,7 +117,7 @@
 | --- | --- |
 | 找 ≈200 行 live/cli 删除 | 不存在不削能力的候选：`paper.py` 与 `FakeVenue` 合并（≈100 行）会动 10 个测试文件，风险大于收益 |
 | 砍 DL-L6（SIGTERM/原子写 −30）与第二通道（−15）把净增压到 ≈ +160 | 仍超 100；且 L6 是 L1-14 的既有发现 |
-| **抬 ceiling 并在同一提交写理由，把"无人值守最小集"记为一次性的治理豁免** | **推荐**（D-P5），需操作者裁定（Q2）。ratchet 的机制本来允许这样做；报告的"同量级删除"规则是复核角色加的，对这一批不可满足 |
+| **抬 ceiling 并在同一提交写理由，把"无人值守最小集"记为一次性的治理豁免** | **推荐**（D-P5），需操作者裁定（Q2）。 ratchet 的机制本来允许这样做；报告的"同量级删除"规则是复核角色加的，对这一批不可满足 |
 
 ---
 
@@ -135,7 +135,7 @@
 | KILL-P6 | DS | 五个节点的预登记漏掉 validate 默认值与 `--grids`——P19 在同一件事上绊了五次 | DL-A1 | P2 | MITIGATED | 预登记模板强制列出 `min_train / purge / grids / prior-trials` 四项（§6.3） |
 | KILL-P7 | CA | 方案把 Phase C 留白等于默认它会发生；GP/组合器/LLM 助理各 +数百行 alpha | D-P6 | P2 | ACCEPTED | Phase C 只在 §7.1.6 裁决后另开方案；本文件不为它写契约 |
 
-Pre-Mortem（若 8 周后失败）：最可能的原因是**B1 之后再没有第二次重启**——B4 的介质决定悬而未决，失联问题继续靠运气；反向控制 = Q1 在 B1 合并前答复。第二可能是 B2 的五个族跑出一个 Sharpe 1.2 的候选，而 B3 的一本账本还没落地，它的搜索费又靠手抄。反向控制 = DL-K2 与 DL-A1 同一周。
+Pre-Mortem（若 8 周后失败）：最可能的原因是**B1 之后再没有第二次重启**——B4 的介质决定悬而未决，失联问题继续靠运气；反向控制 = Q1 在 B1 合并前答复。第二可能是 B2 的五个族跑出一个 Sharpe 1.2 的候选，而 B3 的一本 ledger 还没落地，它的搜索费又靠手抄。反向控制 = DL-K2 与 DL-A1 同一周。
 
 Final Kill Decision：最强反方 = KILL-P2（治理规则与最小集冲突）；未关闭 P0 = 0，P1 = 2（P1 有排序约束、P2 待 Q2）；无 P0 Claim 被推翻；必须改变的 Scope = Phase C 出契约。**本方案：GO（受控执行）**，B4 Weak GO。
 
@@ -148,9 +148,9 @@ Final Kill Decision：最强反方 = KILL-P2（治理规则与最小集冲突）
 | 分类 | 批次 / 项 | 理由 |
 | --- | --- | --- |
 | **Must** | **B0** 尺子欠账（DL-R1..R4）· **B1** 无人值守最小集（DL-L1..L6，重启 #1）· **B2** 扩空间（DL-A1） | B0 是报告 §12.5 承认的欠账；B1 是 C-P1；B2 是操作者的 alpha 目标本身 |
-| **Should** | **B3** 账本机械化（DL-K1..K3）· **B4** 失联与强平可观测（DL-X1..X2，重启 #2） | B3 让 B2 的候选被诚实计费；B4 回答 §4.2 第三问，但依赖 Q1/Q3 |
+| **Should** | **B3** ledger 机械化（DL-K1..K3）· **B4** 失联与强平可观测（DL-X1..X2，重启 #2） | B3 让 B2 的候选被诚实计费；B4 回答 §4.2 第三问，但依赖 Q1/Q3 |
 | **Could** | **B5** 数据宽度（DL-D1 退市、DL-D2 metrics 三核查→吞吐实验→摄入、DL-D3 新叶节点）· mined 持久身份 | 只在 B2 阴性且需要新数据、或某 mined 候选 PASS 时启动 |
-| **Won't** | 与报告 §9 一致：LLM 提案者、RL、逐仓、原生止盈/移动止损/原生灾难止损、用户数据流、第二本账本、随机表达式对照、TRIPPED 标记、多交易所、mainnet、留出；**新增**：Phase C 在本方案内契约化、KILL-Q8 的 7 天晋级上限（D-P3） | — |
+| **Won't** | 与报告 §9 一致：LLM 提案者、RL、逐仓、原生止盈/移动止损/原生灾难止损、用户数据流、第二本 ledger、随机表达式对照、TRIPPED 标记、多交易所、mainnet、 holdout；**新增**：Phase C 在本方案内契约化、KILL-Q8 的 7 天晋级上限（D-P3） | — |
 
 ### 5.2 顺序与两次重启
 
@@ -158,7 +158,7 @@ Final Kill Decision：最强反方 = KILL-P2（治理规则与最小集冲突）
 B0 尺子欠账 ──┐（worktree，2 天，无重启）
 B1 最小集   ──┴─► 合并列车 ─► 重启 #1（构造不变，M-010 窗口不清零；记 RESEARCH_LOG）
 B2 扩空间（预登记提交 → 跑 → §7.1.6 裁决，1 周，无重启）
-B3 账本机械化（3 天，无重启；DL-K2 与 B2 同周）
+B3 ledger 机械化（3 天，无重启；DL-K2 与 B2 同周）
 B4 失联 + 强平可观测 ──► 重启 #2（前提：Q1、Q3、A-P2 已答）
 B5 数据（Phase B，2–3 周；KILL-Q11 三核查先于一切摄入代码）
 Phase C：另开方案，前提是 §7.1.6 有裁决
@@ -200,7 +200,7 @@ Phase C：另开方案，前提是 §7.1.6 有裁决
 | --- | --- | --- | --- | --- | --- |
 | D-P1 | 批次顺序 B0→B1→B2→B3→B4→B5，两次重启 | 按 Kill 优先级逐项、随做随重启 | 每次重启都是整本书重建（E-18）；批次化把重启压到两次 | 高 | 出现 P0 事故 |
 | D-P2 | NW t 门降为 reported-not-enforced（改 D-020 语义） | 保留；或改阈值 | docstring 与操作者记忆都写明它 ≈ Sharpe×√年、不构成第二条件（KILL-R17）；**预登记：11 份报告零翻转（C-P3）** | 高（一行） | 任一翻转 |
-| D-P3 | 删除 Q8 的"7 天一次晋级"条，Q8/Q9 靠时间戳校验 + 一本账本 + 必计费机械化 | 启动门 / 架构测试强制 | 没有写指针的主体（§3.2） | 高 | 出现自动写指针的路径 |
+| D-P3 | 删除 Q8 的"7 天一次晋级"条，Q8/Q9 靠时间戳校验 + 一本 ledger + 必计费机械化 | 启动门 / 架构测试强制 | 没有写指针的主体（§3.2） | 高 | 出现自动写指针的路径 |
 | D-P4 | ~~远端停机取 O-X2~~ → **Q1 答 B，取 O-X1**：同机 + 第二通道 + 只告警；主机死后**不**自动平仓，残余风险由操作者 ACCEPTED（Q3 答 A，2026-09-06） | O-X2 / O-X3 | §3.1、§8 | 高 | 出现远端介质 → 重开 O-X2 |
 | D-P5 | B1 抬 live/cli ceiling 并写理由，记为一次性治理豁免（**Q2 答 A，2026-09-06 生效**） | 砍项 | §3.3 | 中 | — |
 | D-P6 | Phase C 不在本方案契约化 | 一并写 | KILL-P7 | 高 | §7.1.6 裁决 |
@@ -210,7 +210,7 @@ Phase C：另开方案，前提是 §7.1.6 有裁决
 
 ## 6. Phase 9 · Delivery Contracts
 
-责任模型：Business/Product、Engineering、Test、Runtime、Learning Owner 均为操作者；**Approval Owner** 为操作者本人，涉及的人类确认点：两次实盘重启、任何账本写入、远端介质的创建与凭据。Agent 不能替代 Approval Owner。
+责任模型：Business/Product、Engineering、Test、Runtime、Learning Owner 均为操作者；**Approval Owner** 为操作者本人，涉及的人类确认点：两次实盘重启、任何 ledger 写入、远端介质的创建与凭据。Agent 不能替代 Approval Owner。
 
 ### 6.1 DL 表（来源链 → 实现 → 测试 → 验收 → 指标 → ratchet）
 
@@ -242,12 +242,12 @@ B1 合计 live ≈ +190 / cli ≈ +30，删除 ≈ −8。**KILL-P2 / Q2。**
 | --- | --- | --- | --- | --- | --- | --- |
 | DL-A1 五个节点 + 预登记 + 运行 | C-3 ← §7.1.2/§7.1.6 ← KILL-R28 ← C-P4 | `expr.py`：`Abs(x)`、`Moment(x, k∈{3,4}, w)`、`Semi(x, w)`（下半方差）、`Residual(x, w)`（对等权市场收益回归的残差动量）、`Trades(w)`（读 `panel.trades`，成交笔数 / 均单大小）；量纲规则各自声明；`search.py` 各加一族；**预登记提交**（§6.3 模板）早于第一份报告；在 0.30 口径跑 267 + 五族，幸存者按 DL-K2 计费后 validate | T-A1-1 量纲规则拒绝跨量纲；T-A1-2 因果性（cutoff 后数据变、之前不变）；T-A1-3 规范化哈希稳定（新增节点不改旧候选 id——若不稳定则 KILL-R16 的"搜索空间版本"进签名）；T-A1-4 `Trades` 在 `panel.trades is None` 时拒绝而非填 0 | AC-A1 | M-Q02 / M-P3 | alpha +≈225 |
 
-**B3 · 账本机械化**（worktree `feat/one-ledger`）
+**B3 · ledger 机械化**（worktree `feat/one-ledger`）
 
 | DL | 来源链 | 实现 | 测试 | 验收 | Metric | 行数 |
 | --- | --- | --- | --- | --- | --- | --- |
-| DL-K1 签名扩展 + `record_trial` 钩子 | KILL-Q5 ← E-15 ← C-P6 | `ledger.py` `TrialRecord` 加 `construction_digest / overlay_digest / symbol_set_hash / search_space_version`（可选字段，旧行为空串）；`signature` 含新字段；`research backtest / overlay / book` 与 scratch 入口经 `_record_trial` 追加；账本路径固定（`--out` 只改报告目录，不改账本） | T-K1-1 旧行与新行不互相折叠；T-K1-2 backtest 扫描 band 一次 → 账本 +1；T-K1-3 `--out` 不能换出空账本；**T-K1-4 钩子落地前的历史不回填**（C-P6） | AC-K1 | M-Q05 | alpha +≈40 |
-| DL-K2 mine → 一本账本 | KILL-Q8/Q9 ← KILL-R16 | `mine` 每轮把 `declared_trials` 作为 TrialRecord（strategy = 族名，param_key = 候选 hash，sharpe = 全样本）经 `_record_trial` 追加；validate 对 `mined_*` 的先验从同一账本按族聚合，`--prior-trials` 只补账本外的手工坑 | T-K2-1 mine 一轮 238 候选 → 账本 +238；T-K2-2 validate mined 候选的 `n_trials` 不再依赖手抄 | AC-K2 | M-Q05 | cli +≈50 |
+| DL-K1 签名扩展 + `record_trial` 钩子 | KILL-Q5 ← E-15 ← C-P6 | `ledger.py` `TrialRecord` 加 `construction_digest / overlay_digest / symbol_set_hash / search_space_version`（可选字段，旧行为空串）；`signature` 含新字段；`research backtest / overlay / book` 与 scratch 入口经 `_record_trial` 追加；ledger 路径固定（`--out` 只改报告目录，不改 ledger） | T-K1-1 旧行与新行不互相折叠；T-K1-2 backtest 扫描 band 一次 → ledger +1；T-K1-3 `--out` 不能换出空 ledger；**T-K1-4 钩子落地前的历史不回填**（C-P6） | AC-K1 | M-Q05 | alpha +≈40 |
+| DL-K2 mine → 一本 ledger | KILL-Q8/Q9 ← KILL-R16 | `mine` 每轮把 `declared_trials` 作为 TrialRecord（strategy = 族名，param_key = 候选 hash，sharpe = 全样本）经 `_record_trial` 追加；validate 对 `mined_*` 的先验从同一 ledger 按族聚合，`--prior-trials` 只补 ledger 外的手工坑 | T-K2-1 mine 一轮 238 候选 → ledger +238；T-K2-2 validate mined 候选的 `n_trials` 不再依赖手抄 | AC-K2 | M-Q05 | cli +≈50 |
 | DL-K3 预登记时间戳校验 | KILL-Q8/Q9 第 1 条 ← KILL-R9 | `report weekly`：对每份新 validation 报告，在 `docs/RESEARCH_LOG.md` 的 git 历史里找到提及该 strategy/族的最早提交，其时间戳须早于报告时间戳；否则日报 FAIL 一行 | T-K3-1 报告早于预登记提交 → FAIL；T-K3-2 正常顺序 → PASS | AC-K3 | — | cli +≈30 |
 
 **B4 · 失联与强平可观测**（worktree `feat/remote-lease`，重启 #2；前提 Q1/Q3/A-P2）
@@ -280,9 +280,9 @@ B1 合计 live ≈ +190 / cli ≈ +30，删除 ≈ −8。**KILL-P2 / Q2。**
 | T-L6-1 | DL-L6 | 集成 | 降级 | 周期中途 | 发 SIGTERM | 归因文件行数完整、可 JSON 解析 | pytest |
 | T-A1-2 | DL-A1 | 因果 | 数据泄漏 | 合成面板 | cutoff 后数据置换 | cutoff 前输出逐位不变 | pytest |
 | T-A1-3 | DL-A1 | 回归 | 历史兼容 | P17/P19 shortlist | 新增节点后重枚举 | 旧候选 id 不变（否则签名加版本） | pytest |
-| T-K1-1 | DL-K1 | 单元 | 迁移 / 兼容 | 旧格式账本行 | 读入 + 去重 | 旧行不与新行折叠，`n_trials` 不变 | pytest |
-| T-K1-4 | DL-K1 | 单元 | 迁移 | 钩子落地 | 跑一次 backtest | 账本只 +1，无回填 | pytest + 账本 diff |
-| T-K2-1 | DL-K2 | 集成 | 数据正确性 | mine 一轮 | 完成 | 账本 + `evaluated` 行，族名正确 | 账本 diff |
+| T-K1-1 | DL-K1 | 单元 | 迁移 / 兼容 | 旧格式 ledger 行 | 读入 + 去重 | 旧行不与新行折叠，`n_trials` 不变 | pytest |
+| T-K1-4 | DL-K1 | 单元 | 迁移 | 钩子落地 | 跑一次 backtest | ledger 只 +1，无回填 | pytest + ledger diff |
+| T-K2-1 | DL-K2 | 集成 | 数据正确性 | mine 一轮 | 完成 | ledger + `evaluated` 行，族名正确 | ledger diff |
 | T-K3-1 | DL-K3 | 单元 | 流程 | 报告时间戳早于预登记提交 | `report weekly` | FAIL 行 | pytest |
 | T-X1-2 | DL-X1 | 单元 | 安全 | fake venue 返回 ISOLATED | 启动 | 拒绝启动，不改模式 | pytest |
 | T-X2-2 | DL-X2 | 单元 | 依赖失败 | 远端不可达 | 2 周期 / 3 周期 | 不触发 / 触发 reduce-only + 告警 | pytest |
@@ -297,7 +297,7 @@ B1 合计 live ≈ +190 / cli ≈ +30，删除 ≈ −8。**KILL-P2 / Q2。**
 族：<名>  节点：<Expr>  参数网格：<…>  基线：tsmom-1h（registry 当前参数）
 口径：vol_target 0.30 / --universe pit / 成本 ×2 / interval 1h
 判定工具默认值（显式写出，不依赖默认）：--min-train 4000 --purge 50 --folds 5 --cpcv-groups 6 --grids <与 mine 相同的网格串>
-计费：mine 的 evaluated 经 DL-K2 入账本；validate 时 --prior-trials 只补账本外的手工坑（当前 tsmom 为 60 + 16）
+计费：mine 的 evaluated 经 DL-K2 入 ledger；validate 时 --prior-trials 只补 ledger 外的手工坑（当前 tsmom 为 60 + 16）
 预期：<阴性 / 阳性>；falsifier：边际 Sharpe ≥ +0.05 且相关 < 0.5 且过分位数门（p_family 报出）
 ```
 
@@ -305,7 +305,7 @@ B1 合计 live ≈ +190 / cli ≈ +30，删除 ≈ −8。**KILL-P2 / Q2。**
 
 | AC | DL | 层级 | 前置 | 操作 / 观察 | 客观预期 | 失败动作 |
 | --- | --- | --- | --- | --- | --- | --- |
-| AC-R1 | R1/R2 | Functional | B0 合并 | 对 093705Z 与 P19 三份重跑 verdict（不写账本，`--out` scratch） | 判定不变；reasons 含 `oos_t_stat`（reported）与 `p_family` | 回退 D-P2 |
+| AC-R1 | R1/R2 | Functional | B0 合并 | 对 093705Z 与 P19 三份重跑 verdict（不写 ledger，`--out` scratch） | 判定不变；reasons 含 `oos_t_stat`（reported）与 `p_family` | 回退 D-P2 |
 | AC-R3 | R3 | Hypothesis | 面板可用 | 跑 slow 测试 | 通过率 ≤ 5%；N_eff 报出且 < N | 重查公式 |
 | AC-R4 | R4 | Functional | 注释提交 | `live status --check` | `registry: matches the running loop` | 重出 sha |
 | AC-L1 | L1 | Scenario | 重启 #1 后 | 从另一 worktree `beidou live run --allow-unvalidated --armed` | 被拒 + 一条告警 + exit 0；主循环无异常 | 修锁 |
@@ -315,7 +315,7 @@ B1 合计 live ≈ +190 / cli ≈ +30，删除 ≈ −8。**KILL-P2 / Q2。**
 | AC-L5 | L5 | Functional | 重启 #1 | 手工挂一张非 `bd-` 单再重启 | 该单仍在；日志告警 foreign | 修过滤 |
 | AC-L6 | L6 | Functional | 重启 #1 | `launchctl unload`（SIGTERM） | 归因与水位线完整 | 修 handler |
 | AC-A1 | A1 | Hypothesis | 预登记提交在先 | 跑 267 + 五族 | §7.1.6 裁决写入 RESEARCH_LOG（正负都算成功） | 转数据宽度 |
-| AC-K1/K2 | K1/K2 | Functional | B3 合并 | 各跑一次 backtest 扫描与 mine | 账本行数按预期增加；无回填 | 回退钩子 |
+| AC-K1/K2 | K1/K2 | Functional | B3 合并 | 各跑一次 backtest 扫描与 mine | ledger 行数按预期增加；无回填 | 回退钩子 |
 | AC-X1 | X1 | Functional | 重启 #2 | 看 `cycles.jsonl` | 每周期有 `min_liq_distance`；启动断言通过 | 修 |
 | AC-X2 | X2 | Scenario | 远端介质就绪 | DRILL-A / DRILL-B | A：≤ 2 bar 告警；B：不触发 | 调 N / 回退 O-X1 |
 
@@ -345,7 +345,7 @@ B1 合计 live ≈ +190 / cli ≈ +30，删除 ≈ −8。**KILL-P2 / Q2。**
 | M-P4 | C-P2 | 租约演练：路径 A 告警时延 / 路径 B 误触发 | 无 | ≤ 2 bar / 0 次 | 重启 #2 后 + 每月 | 调 N / 回退 O-X1 |
 | M-Q03 | KILL-Q4 | 迟到入场仓位的 bar 小时占比 + `missed_rebalances` | 稳态 0/8 | ≤ 5% / 0 | 重启 #1 后 7 天 | 查重启原因 |
 | M-Q04 | C-2 | 相关噪声（块自举）下门的通过率 | 未测 | ≤ 5% | B0 | 重查公式 |
-| M-Q05 | KILL-Q5 | 评分入口写账本覆盖率 | ~50% | 100% | B3 | 补钩子 |
+| M-Q05 | KILL-Q5 | 评分入口写 ledger 覆盖率 | ~50% | 100% | B3 | 补钩子 |
 | M-Q06 | C-6 | `min_liq_distance`（日波动单位） | 未测 | ≥ 10 | 每周期 | 告警 |
 | M-Q08 | Pre-5 | 执行保真四项 | — | 换手 ±25%、滑点 ≤ 2× 模型、迟到 ≤ 5%、digest 一致 100% | 冻结后 30 天（自 09-06 10:19Z） | 复审执行层 |
 | M-Q09 | Pre-5 | 连续无人干预天数、未处理失联次数 | 12 次重启 / 2 天 | ≥ 30 天 / 0 | 同上 | 复审运维 |
@@ -374,7 +374,7 @@ Post-Launch Review 触发点：重启 #1 + 7 天、B2 裁决、重启 #2 + 演�
 
 ## 9. Final Decision 与 Quality Score
 
-**Final Decision（本方案）：GO（受控执行）。** B0–B2 可直接开工（本地、可逆、无外部动作，每批一个 worktree）；B3 随 B2；B4 **Weak GO**，前提 Q1/Q3/A-P2；B5 的 DL-D2 **Need Evidence**（三核查）。两次实盘重启与任何账本写入是执行阶段的操作者动作。**本方案的产出到此为止，不执行。**
+**Final Decision（本方案）：GO（受控执行）。** B0–B2 可直接开工（本地、可逆、无外部动作，每批一个 worktree）；B3 随 B2；B4 **Weak GO**，前提 Q1/Q3/A-P2；B5 的 DL-D2 **Need Evidence**（三核查）。两次实盘重启与任何 ledger 写入是执行阶段的操作者动作。**本方案的产出到此为止，不执行。**
 
 Quality Score（1–5）：问题真实性 5 · 证据充分度 5（全部 E1 复验）· 根因清晰度 4 · 战略一致性 3（alpha 占比）· 相对价值与经济 4 · 方案可行性 4 · 范围收敛度 4 · 执行可交付性 4（测试矩阵已写，B4 待介质）· 上线可验证性 4 · 对抗生存 4 = **41/50**（映射 GO，与硬门禁一致：未关闭 P0 = 0）。
 
@@ -388,15 +388,15 @@ Quality Score（1–5）：问题真实性 5 · 证据充分度 5（全部 E1 �
 | 待决 | ~~Q1、Q2、Q3~~ 已答（B / A / A）；~~A-P2~~ 已探（`liquidationPrice` 0 = 不可达，14/14 多头为 0、4/4 空头非 0）；~~A-P4~~ 已测（DL-L4 窗口 71.8 s）；**B2 合并 main 待操作者**；**DL-X1 余下四件待裁（见下）** |
 | 开放 Kill | KILL-P2（P1）已由 Q2 裁定（抬 ceiling 并写理由，随 B1 提交）；报告层 KILL-Q4/Q5/Q6/Q7/Q8/Q9/Q11/Q16 状态不变，各自绑定到本文件的 DL |
 | 证据缺口 | 远端介质（Q1=B，DL-X2 取消）；demo `forceOrders`（未探，DL-X1 余项）；实盘真实成交成本（P20 阳性候选的 ×2 压力靠它才从假设变测量） |
-| **P21 裁决** | **REJECT**，只卡 `oos_mdd_worsening`：整本书 OOS Sharpe 1.77 → 2.01（+0.2366）、OOS 回撤 −23.7% → −28.7%（+4.98pp，阈值 1pp，超标 5 倍）。其余五项全过，含 `fold_win_rate` 0.80 与 static 上 +0.27。候选留在册子外。`n_trials` 575 = 账本 514 + 申报 60 + 网格 1，**算出来的，不是抄的** |
+| **P21 裁决** | **REJECT**，只卡 `oos_mdd_worsening`：整本书 OOS Sharpe 1.77 → 2.01（+0.2366）、OOS 回撤 −23.7% → −28.7%（+4.98pp，阈值 1pp，超标 5 倍）。其余五项全过，含 `fold_win_rate` 0.80 与 static 上 +0.27。候选留在册子外。`n_trials` 575 = ledger 514 + 申报 60 + 网格 1，**算出来的，不是抄的** |
 | **DL-D2 摄入 ✔（研究侧，2026-09-07）** | 按证据定的顺序：先 `beidou_data/metrics.py` 的对齐契约（一个规范戳 `open_time`；`create_time` 不许活着离开解析器；**一根 bar 能读哪些桶由桶的「收」决定**，没有桶收在 bar 之前时给 NaN 不给最近值）。补测了「哪个戳是哪个」：六分钟内两次读 REST，三个重叠桶逐字节相同 → **REST 是已完成的桶、戳是收**，无半成品桶隐患。再是 `MetricsStore` + 可续传、带 checksum 的下载器（端到端实测 BTCUSDT 一天 288 行、1.0 秒），`beidou data metrics` CLI。**吞吐实验**：0.69 s/符号-日 → 20 币×1 年 1.4 h、45 币×完整 5.6 年 **17.7 h**，**远在「> 3 天就缩到 45 币」的门槛内，缩不需要**。**门**：`metrics_refusal` 让声明 `needs_metrics` 的策略在实盘源覆盖足够 bar 前拒绝启动——否则摄入本身就是 KILL-027 最纯粹的形态。~~**未做且明写**：5 分钟 REST 快照流~~ → **已做（同日 `e825c1d`，重启 #4 上线）**，但**不是**当初设想的形态：常驻 5 分钟守护进程被否掉了。需要的粒度属于**桶**（5m）而不属于**轮询**——REST 窗口 30 天深，每小时一轮就能无遗漏取回过去一小时全部 12 个桶；而在 bar 收盘轮询还多做一件守护进程做不到的事：它记录的正是循环做决策时**已收盘**的那批桶，也正是 `align_to_bars` 会选中的那批。守护进程换来的是同样数据的超集，记录在没有任何决策发生的时刻，代价是第二个进程、第二种失败模式、第二样要重启的东西 |
 | **B5 入口证据** | **DL-D1 入口条件不成立**：B2 阳性，且候选不依赖退市数据——冻结 bar 上的净收益 −0.08%，「持有穿过」的诚实代价 −0.021 Sharpe（1.7301 → 1.7094）。pit 成员期只有 0.70% 的 bar 冻结（全 panel 6.92%），集中在 FTT 83% / ALPACA 91%。**DL-D2 三项核查全部可核**（归档 T+1 约 06:45–07:00 UTC；REST 时延约 2 分钟；同桶数值一致但**时间戳差整整一个 5m 桶**，−5min 偏移下 166/166 精确、其余偏移 0/165）——停止条件不触发，但对齐规则必须写成带测试的契约：写错它不报错，只让每份 metrics 证据带 5 分钟前视 |
 | **验收清扫（§6.4）** | 13 条逐条跑过：**✔ 9**（R1/R3/R4/L1/L4/L6/A1/K1K2/X1）、**未跑 1**（AC-L2 需注入 12 次连续失败）、**不可跑 1**（AC-L5 需手工下非 `bd-` 单，未获授权）、**阻塞 1**（AC-L3）、N/A 1（X2）。跑的过程中撞出两个缺陷并已修：**L1-07 从未修好**（急停开关按 cwd 解析，从 worktree 挂等于没挂；已改为按账户寻址，engage 写两个、release 清两个、守卫读并集）；**AC-L4 只做了一半**（两个数落进 `cycles.jsonl`，日报从来没读；已补 Restart cost 一节） |
 | **AC-L3 ✔（实跑，2026-09-07）** | 操作者裁定只做飞书一条通道。这条裁定把 `send()` 的返回值从 RISK-P1 的一半变成全部，于是查了——**实测：这条通道从配置那天起就是哑的**。旧的扁平 `{"text":...}` 得到 HTTP **200** + `{"code":19002,"msg":"params error, msg_type need"}`；连无效 token 也回 200。旧判定 `status_code<300` 之下 payload 写错是成功、token 写错也是成功，于是熔断会拿到 `True`、exit 0、launchd 不拉起——**书停了、仓位在场、没人被告知**（KILL-P1/RISK-P1 的原型，一直是活的）。同一个 bug 有两份拷贝，第二份在 `run_check.sh` 的 `notify()`，而那才是「循环死了」时唯一的通知路径（`curl -f` 在 200 下成功，连它自己的失败提示都不打）。三处已修（`payload_for` / `accepted` / `beidou live alert-test`），`run_check.sh` 改为复用同一份实现。**验收实跑**：`alert-test --repeat 10` → 1 送达 / 9 去重 / exit 0。人类确认点带证据补上 |
 | **AC-L2 / AC-L5 ✔（实跑，2026-09-07）** | 操作者分别授权后补完。**AC-L2**：熔断的计数器真的数到 12、CLI 退出码 0、**成功一次清零**（第三条不在方案原文里，而一个只会往上数的熔断迟早会无理由触发）。**AC-L5**：09:59:35Z 手工挂 `manual-acl5-…` 非 `bd-` 限价单，10:00:03Z 重启（落在窗口内，未漏再平衡）——单子**挺过重启**，日志 `open orders this loop did not place are left alone`，随后撤净。过滤本来就对；「告诉操作者」那一半是这次补的。**顺带**：共享去重文件从 `(none)` 变成 `{"foreign-orders": …}`，而它只在**送达**时才记——这是这套系统上线以来第一条因真实事件触发并真的到达操作者的告警 |
 | **DL 表逐条核对（2026-09-07）** | 19 条 DL + 4 条 A-P 假设逐条对着代码读，**三处对不上，均已补**：**DL-L3 的「`run_check.sh` 同源去重」**（B1 的去重是进程内的，而 KILL-R7 那 36 条重复恰恰来自每小时新起进程的检查任务——去重瞄准的方向正好避开了产生该发现的场景；现有一份共用去重状态文件）；**DL-L5 最后一句「`foreign_positions` 非空 → 告警而非静默」**（只 log 不告警）；**A-P3 从未验证**，而 DL-L2 整个压在它上面——用带对照的一次性 LaunchAgent 实验：`exit 0` 55 秒内跑 **1** 次、`exit 3` 跑 **6** 次，同机同配置只差退出码，**机制成立**。其余 16 条 DL 与 A-P1/P2/P4 全部对得上 |
-| **B3 实际交付** | ✔ DL-K1（签名 +4 字段、旧行不折叠、账本地址固定并锚定 checkout、`backtest`/`overlay` 开始计费）、DL-K2（mine 每轮把保留候选记进同一本账本，`--prior-trials` 不再手抄）、DL-K3（预登记顺序检查，带 C-P6 边界）。**代价明写**：N 从此涨得更快，下次 tsmom 复验更接近 WEAK_PASS（RISK-P4 预登记过）。历史 146 行未动 |
+| **B3 实际交付** | ✔ DL-K1（签名 +4 字段、旧行不折叠、 ledger 地址固定并锚定 checkout、`backtest`/`overlay` 开始计费）、DL-K2（mine 每轮把保留候选记进同一本 ledger，`--prior-trials` 不再手抄）、DL-K3（预登记顺序检查，带 C-P6 边界）。**代价明写**：N 从此涨得更快，下次 tsmom 复验更接近 WEAK_PASS（RISK-P4 预登记过）。历史 146 行未动 |
 | **DL-X1 实际交付** | ✔ **已补齐（2026-09-07）**。B1 只交付了算法（三个函数 + 单测），生产代码里**零调用点**。本次补上四个调用点：引擎每周期落盘 `min_liq_distance`（含 foreign 持仓）、`startup()` 里紧挨 hedge-mode 的保证金模式拒绝、`force_orders()`、`attribution.py` 的 `INSURANCE_CLEAR` 桶；另加 M-Q06 的告警。接线过程发现三件算法测不出来的事：`marginType` 是小写 `cross`（`== "CROSSED"` 会一个都不匹配）、「没有波动率估计」曾被算成「没有可达强平价」（新增 `unmeasurable` 桶）、positionRisk 回 736 行而universe 只有 18（拒绝须按可交易符号收窄）。构造 digest 未变（`0dcd044d0158`），**重启 #2 不会清零 M-010 窗口** |
 | P20 / DL-A1 裁决 | **阳性**（预登记预期为阴性）。`cs_rank(ret(336)/semi(ret(1),168))` OOS 1.7862 vs 门槛 1.6453 @ N=575，`p_family` 0.0135，VERDICT PASS。五个新族里三个干净阴性。**建议记阳性、不晋级**：成本 ×2 时跌到 1.011（tsmom 1.682）。详见 `docs/RESEARCH_LOG.md` 2026-09-06 P20 裁决节 |
 | 下一动作 | (a) ~~重启 #2~~ ✔ 已执行（2026-09-07 12:00 本地 = **04:00Z**，PID 90505）：`min_liq_distance` 已落盘（4 可测 / 14 不可达 / 0 无估计），构造 digest 未变，落在窗口内未漏再平衡，旧进程 SIGTERM 优雅停机；(b) ~~P20 阳性候选跑 `research book`~~ 已跑，P21 裁决 REJECT（回撤，见 RESEARCH_LOG）；(c) ~~B5 入口证据~~ 已量：DL-D1 不开工（入口不成立）、DL-D2 三核查通过；真要做 DL-Q6 时第一步改为「先写 metrics 对齐契约与测试」，不是吞吐实验；(d) ~~快照流上线~~ ✔ **重启 #4**（2026-09-07 **12:00Z**，PID 19006；kickstart 排在 12:00:03Z、旧进程 SIGTERM 12:00:05Z、新进程起 12:00:08Z、本周期落盘 12:00:39Z——整个重启走完 8 秒，71.8 s 窗口未漏再平衡；构造 digest `0dcd044d0158` 未变 → M-010 窗口未清零）：`metrics_snapshot` 每周期 18 符号 × 12 桶落盘，`live_coverage_bars` 从 1 起算、门要求 720，即任何声明 `needs_metrics` 的策略要等约 30 天才够启动条件——**这道门今天是活的，不是摆设** |
-| **明写的两件缓办**（非遗漏，各有理由） | (1) **`metrics_parity` 接进日报**：函数与测试都在，接线是一行，但快照现在只有 12 个桶、尚未跨过一个归档日，此刻接上日报只会报 `rate: None`，而没人分得清那是「还没开始」还是「坏了」——**等它跑够一天再接**。(2) **D-018 的回撤条款是否改为同波动率比较**：被它收掉的回撤里约一半只是「总书更大」而非「更差」，这是真发现，但**要按它自身的道理裁定、且只适用于此后的候选**；它救不了 P20 那个候选（同波动率下仍 +1.87pp 超标），拿改后的规则重测是一次**新试验**，照付账本 |
+| **明写的两件缓办**（非遗漏，各有理由） | (1) **`metrics_parity` 接进日报**：函数与测试都在，接线是一行，但快照现在只有 12 个桶、尚未跨过一个归档日，此刻接上日报只会报 `rate: None`，而没人分得清那是「还没开始」还是「坏了」——**等它跑够一天再接**。(2) **D-018 的回撤条款是否改为同波动率比较**：被它收掉的回撤里约一半只是「总书更大」而非「更差」，这是真发现，但**要按它自身的道理裁定、且只适用于此后的候选**；它救不了 P20 那个候选（同波动率下仍 +1.87pp 超标），拿改后的规则重测是一次**新试验**，照付 ledger |

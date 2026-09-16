@@ -19,9 +19,9 @@
 - **不要在命令行再加 `-q`**：`pyproject.toml` 的 `addopts` 里已经有一个 `-q`，再加一个变成 `-qq`，会吞掉 `N passed` 那一行。
 - **不要把 pytest 管进 `| tail` / `| head`**：报出来的 exit code 是管道末端那个命令的，不是 pytest 的。
 - **不碰这些文件**：`.beidou/live/state.json`、`.beidou/live/cycles.jsonl`、`.beidou/data/universe.json`——它们是运行中的循环持有/追加的共享文件。
-- **行数棘轮零余量**：七个包全部卡在天花板上。任何 `beidou_*/**.py` 的净增行都会让 `tests/architecture/test_source_budget.py` 变红，必须在**同一提交**抬 `CEILING` 并写理由。测试文件不计入。
+- **source budget ratchet 零 headroom**：七个包全部卡在 ceiling 上。任何 `beidou_*/**.py` 的净增行都会让 `tests/architecture/test_source_budget.py` 变红，必须在**同一提交**抬 `CEILING` 并写理由。测试文件不计入。
 - **只对显式 `pit` 放行**：报告没有声明 `universe_mode` 时，闸的行为必须与今天**逐字节一致**。这是本次改动唯一的安全性质，Task 1 的第三条测试就是钉它的。
-- **不动的参数**：`enter_rank: 15` / `exit_rank: 20` / `top_n: 15` / `min_age_days: 30` / `min_history_bars: 720` / `quarantine_after: 3` / `refresh: daily` / `no_trade_band: 0.005` / `no_trade_rel_band: 0.40` / `vol_target: 0.60`，以及退出层全部参数。
+- **不动的参数**：`enter_rank: 15` / `exit_rank: 20` / `top_n: 15` / `min_age_days: 30` / `min_history_bars: 720` / `quarantine_after: 3` / `refresh: daily` / `no_trade_band: 0.005` / `no_trade_rel_band: 0.40` / `vol_target: 0.60`，以及 exit overlay 全部参数。
 
 ---
 
@@ -349,7 +349,7 @@ EOF
 
 ---
 
-### Task 3: 抬行数棘轮
+### Task 3: 抬 source budget ratchet
 
 **Files:**
 - Modify: `tests/architecture/test_source_budget.py` 的 `CEILING` 字典（约 `:1954`）
@@ -358,7 +358,7 @@ EOF
 - Consumes: Task 1、Task 2 落地后的 `beidou_data` / `beidou_live` 实际行数
 - Produces: 无
 
-- [ ] **Step 1: 跑棘轮，看它红在哪**
+- [ ] **Step 1: 跑 ratchet，看它红在哪**
 
 ```bash
 PYTHONPATH=/Users/maguannan/beidou/.claude/worktrees/unpin-universe /Users/maguannan/beidou/.venv/bin/python -m pytest tests/architecture/test_source_budget.py::test_no_package_grows_past_its_measured_ceiling -v
@@ -401,9 +401,9 @@ PY
     # Design: docs/analysis/2026-09-15-universe-unpin-and-dataset-gate-design.md
 ```
 
-然后把 `CEILING` 里 `beidou_data` 与 `beidou_live` 的值改成 Step 2 量到的实测行数。**只改这两个**——其余五个包本次未动，改它们等于白送余量。
+然后把 `CEILING` 里 `beidou_data` 与 `beidou_live` 的值改成 Step 2 量到的实测行数。**只改这两个**——其余五个包本次未动，改它们等于白送 headroom。
 
-- [ ] **Step 4: 跑棘轮确认转绿**
+- [ ] **Step 4: 跑 ratchet 确认转绿**
 
 ```bash
 PYTHONPATH=/Users/maguannan/beidou/.claude/worktrees/unpin-universe /Users/maguannan/beidou/.venv/bin/python -m pytest tests/architecture/test_source_budget.py -v

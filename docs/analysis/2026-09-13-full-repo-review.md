@@ -15,7 +15,7 @@
 
 **本轮实测**：环境为 `.venv`（Python 3.12.14、pandas 3.0.5、numpy 2.5.2、mypy 2.3.1）。
 `ruff check` 全过、`ruff format --check` 305 个文件全过、`pytest -m "not network"` **1,650 项全绿，98.9s**、
-`mypy` **30 个错误、退出码 1**。量化结论由本会话临时脚本产出，不写账本、不写报告。
+`mypy` **30 个错误、退出码 1**。量化结论由本会话临时脚本产出，不写 ledger、不写报告。
 
 **总评**：🔴 致命 0 项 · 🟠 高危 3 项 · 🟡 中 9 项 · 🔵 低 10 项（含逻辑项 3 项）
 
@@ -186,7 +186,7 @@ CPCV 不是这个形状。它的训练集**按组合取，可以包含测试块�
 1. `embargo` 与 `purge` 拆成两个 CLI 选项，`embargo` 默认取模型的最大回看窗
    （`model.warmup_bars`，当前 registry 下 1,442；至少 `max(horizons)` = 720）。
 2. 重跑一次现行 registry 的 `validate`，只动 embargo，看 `cpcv.fraction_negative` / `q05` 是否移动。
-   这是**一次预登记的重测**，账本 +1；若不动，本条降为 🔵 并记为「已核」。
+   这是**一次预登记的重测**，ledger +1；若不动，本条降为 🔵 并记为「已核」。
 3. `walk_forward_folds` 的 `purge=50` 保持不变有它自己的论证（`walk_forward.py:55-58`），
    但同样值得记一句：它挡的是标签重叠，而这条管线没有前视标签，所以 50 这个数字今天不承载任何东西。
 
@@ -632,7 +632,7 @@ chanlun 今天未启用。若启用并与 4h 图表对照，结构会对不上�
 
 **维度**：Ⅴ.2 对账 / Ⅴ.4 复盘
 
-**依据**：KILL-006 决定不做历史留出，全部理由是「实盘归因是唯一干净的样本外」；M-010 的 30 天窗口
+**依据**：KILL-006 决定不做历史 holdout，全部理由是「实盘归因是唯一干净的样本外」；M-010 的 30 天窗口
 是整条治理线在等的时钟（`config/alpha_registry.yaml:10-11`）。那条序列的连续性完全由
 `state.json.last_income_ms` 决定，而 `state.py:73-76` 在解析失败时静默返回空对象，
 `engine.py:1124` 于是从「现在」重新起算。
@@ -673,7 +673,7 @@ chanlun 今天未启用。若启用并与 4h 图表对照，结构会对不上�
 
 **依据**：D-039 明写「构造参数不进 `param_key`，按『手工补的坑』申报：时点新格子 14 个，
 下次 `validate` 的 `--prior-trials` 30 → 44」。而 `beidou_governance/family_gate.py:110-137`
-在重算 N 时只能移动**账本那一项**——`grid` 与 `declared` 是那次运行的属性，事后不可动。
+在重算 N 时只能移动**ledger 那一项**——`grid` 与 `declared` 是那次运行的属性，事后不可动。
 也就是说：一次忘记申报的构造扫描，会让 N 永久偏小，而没有任何机器检查能发现。
 `SignalSpec.selection` / `selection_bucket`（`signals/base.py:74-81`）已经为**信号自己的搜索**
 解决了同一个问题（pairs 那次 `n_trials: 4` 对 19,578 个候选）。
@@ -682,7 +682,7 @@ chanlun 今天未启用。若启用并与 4h 图表对照，结构会对不上�
 D-028 的阈值就在一个偏小的 N 上计算，PASS 会比应有的容易——而这恰恰是 D-039 自己举报的
 那种「证据分层」问题的量化版本。
 
-**缓解 / 待答**：构造扫描能不能像 `SearchCensus` 一样落进账本（哪怕只是一个
+**缓解 / 待答**：构造扫描能不能像 `SearchCensus` 一样落进 ledger（哪怕只是一个
 `construction` 桶）？如果答案是「不行，因为构造扫描不产生 `param_key`」，
 那么至少让 `validate` 在报告里记一个 `declared_construction_trials` 字段，
 使「申报了多少」与「实际扫了多少」能被后来的人对上。
@@ -757,7 +757,7 @@ D-028 的阈值就在一个偏小的 N 上计算，PASS 会比应有的容易—
 第 1 步   加 lockfile  —— 否则下一次工具升级会以同样的方式再来一次
 第 2 步   state.json 的三件事：load 区分损坏/不存在、_atomic_write 补 fsync、
           水位线丢失时告警
-第 3 步   CPCV embargo 重测（预登记、账本 +1）—— 唯一可能改变已发表判定的一条
+第 3 步   CPCV embargo 重测（预登记、 ledger +1）—— 唯一可能改变已发表判定的一条
 第 4 步   exit_step 的 NaN 保护 + 属性测试；inputs.dropped 的读者；_paged 的翻页
 第 5 步   参与率上限改 not reduce_only —— 这是行为变更，按 K-EX14 走窗口
 第 6 步   P1（apply_exits 向量化）—— 单条收益最大的性能项

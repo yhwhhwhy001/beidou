@@ -43,7 +43,7 @@ Early Kill：无 FATAL。K2（结论只有低等级推理）不成立：所有�
 | E-046 | CODE | `beidou_live/reconciler.py:56-66`、`beidou_exchange/binance_usdm/venue.py:122-134`、`beidou_live/exits.py` | 启动时取消全部挂单；只发 MARKET 单；代码库里没有 STOP_MARKET / TAKE_PROFIT_MARKET。止盈在 bar 收盘由软件评估（D-012）。**交易所"当前委托"里按设计永远没有止盈止损单**；代价是最多 1 根 bar 的额外暴露 |
 | E-047 | CODE | `beidou_live/exits.py:72-90` vs `beidou_alpha/overlays/exits.py:8, 147-148` | 实盘 `_reconcile` 每周期把 `entry_price` 重锚到交易所 VWAP（同向加减仓会改变），回测保留首次入场价。**止盈参考价在实盘会漂移**，D-012"回测与实盘同构"对加减仓后的仓位不成立 |
 | E-048 | REPORT | `reports/research/overlay-20260903T1324Z.md`、`1258Z` | 止盈启用证据是在 **tsmom+flow 集成**上算的；flow 已停用，实盘只跑 tsmom。所有效应 Sharpe Δ ≤ 0.06、MDD Δ ≤ 0.4pp（噪声量级） |
-| E-049 | REPORT | `tsmom-validation-20260903T133239Z.json`、`0619Z.json` | 时点报告 `sharpe_variance_period 0.0000`、`expected_max_sharpe 0.17`（账本里 5 个近乎相同的配置 + 43 个申报先验）→ DSR 方差被低估（日志已自述：按第二轮 16 配置的离散度 E[max] ≈ 0.8，候选 1.64 仍过）。时点报告 `grid_trials 1`：所谓 OOS 是固定配置在样本后 84% 上的表现，而该配置是第二轮在**同一时段**（静态 universe）选出的。**当前配置的真实样本外证据 = 0**；第二轮的真实逐折选择（16 网格）OOS 1.38，5 折全部选中 168/336/720 |
+| E-049 | REPORT | `tsmom-validation-20260903T133239Z.json`、`0619Z.json` | 时点报告 `sharpe_variance_period 0.0000`、`expected_max_sharpe 0.17`（ledger 里 5 个近乎相同的配置 + 43 个申报先验）→ DSR 方差被低估（日志已自述：按第二轮 16 配置的离散度 E[max] ≈ 0.8，候选 1.64 仍过）。时点报告 `grid_trials 1`：所谓 OOS 是固定配置在样本后 84% 上的表现，而该配置是第二轮在**同一时段**（静态 universe）选出的。**当前配置的真实样本外证据 = 0**；第二轮的真实逐 fold 选择（16 网格）OOS 1.38，5 fold 全部选中 168/336/720 |
 | E-050 | CODE | `beidou_live/attribution.py:29-42` | 策略份额按贡献的**带符号和**归一化；两策略对冲时份额爆炸（11:00Z SUI：flow +7.06、tsmom −7.56，合计 −0.49）。单策略下无影响，重开第二策略时会失真 |
 | E-051 | CODE/CONFIG | `beidou_cli/data_cmd.py:188-192`、`config/universe.yaml` | 研究时点表钉住 BTC/ETH、按月刷新；实盘钉住 BTC/ETH/BNB/SOL、按日刷新。池子准入只有"上市 ≥ 30 天 + 30 日成交量"：AKE σ_1d 29%、CYS 15.8% 进池后权重只有 0.16～0.8%，仍消耗订单与手续费；6σ 止盈对它们意味着 +174% 才触发 |
 | E-052 | DATA | E-044 的余额 | 实盘权益 = totalMarginBalance，含 BTC 0.01（≈ 7% 权益）与 USDC 的折算 → **空仓时权益也随 BTC 波动**；drift 检查与日亏软停都在消费这个权益。基于 income 行的归因不受影响 |
@@ -65,11 +65,11 @@ Early Kill：无 FATAL。K2（结论只有低等级推理）不成立：所有�
 
 ## 3. Phase 3–5 · 问题、相对价值、系统影响（COMPRESSED）
 
-Problem Statement：对于在 demo 上无人值守运行周级 tsmom 的单一操作者，当他想用实盘归因去裁决"策略是否有效、退出层/拥挤度修正是否值得"时，由于实盘路径与验证路径有两处静默偏差（E-040/E-042）、实盘权益又被账户重置与抵押品估值污染（E-044/E-052），得到的实盘证据既不对应被验证的配置、也不是干净的 P&L；不解决则 14～30 天后的"策略有效性报告"会得出错误结论。
+Problem Statement：对于在 demo 上无人值守运行周级 tsmom 的单一操作者，当他想用实盘归因去裁决"策略是否有效、 exit overlay/拥挤度修正是否值得"时，由于实盘路径与验证路径有两处静默偏差（E-040/E-042）、实盘权益又被账户重置与抵押品估值污染（E-044/E-052），得到的实盘证据既不对应被验证的配置、也不是干净的 P&L；不解决则 14～30 天后的"策略有效性报告"会得出错误结论。
 
 Causal Chain：表层 = 拥挤度修正无效果 / 换手偏高 / 权益跳变；直接原因 = `targets()` 不传 funding、`warmup_bars` 取默认参数、无 TRANSFER 检测；深层原因 = 第四轮加拥挤度修正与第五轮加 hold/pool 时，没有一条"实盘 == 回测"的同构测试覆盖 registry 参数（现有 live 测试用 5/20/50 默认参数，E-042 因此不可见）；可干预杠杆 = 一条参数同构测试 + 一条实盘/回测 target 复现测试。
 
-相对价值（G3/G4）：P1～P4 是纠错，不存在"不做"的选项；P9～P12 是有先验的假设，每个都需要预登记、计入账本；"加新信号"的相对价值最低（已否定 6/7）。系统影响（G5）：全部改动落在 `beidou_live`（≤ 120 LOC）与 `beidou_alpha/model.py`（≤ 20 LOC）；不触及交易所写路径。**G3/G4/G5 PASS。**
+相对价值（G3/G4）：P1～P4 是纠错，不存在"不做"的选项；P9～P12 是有先验的假设，每个都需要预登记、计入 ledger；"加新信号"的相对价值最低（已否定 6/7）。系统影响（G5）：全部改动落在 `beidou_live`（≤ 120 LOC）与 `beidou_alpha/model.py`（≤ 20 LOC）；不触及交易所写路径。**G3/G4/G5 PASS。**
 
 ---
 
@@ -94,7 +94,7 @@ Causal Chain：表层 = 拥挤度修正无效果 / 换手偏高 / 权益跳变�
 | P8 | 止盈参考价：`exit_states` 已存首次入场价，`_reconcile` 只在方向改变时才从交易所重锚，同向加减仓不改 `entry_price` | E-047 |
 | P8b | 归因份额改为按 \|贡献\| 归一化（或按各策略独立回测的边际），避免对冲时爆炸 | E-050 |
 
-### Tier 2 · Alpha 提升假设（预登记、计入账本、时点 universe 上带对照）
+### Tier 2 · Alpha 提升假设（预登记、计入 ledger、时点 universe 上带对照）
 
 | ID | 假设 | 先验 / 证据 | 估计 | Falsifier |
 | --- | --- | --- | --- | --- |
@@ -107,7 +107,7 @@ Causal Chain：表层 = 拥挤度修正无效果 / 换手偏高 / 权益跳变�
 
 ### Won't（Scope Firewall，沿用 D-012/D-017）
 
-交易所原生止盈止损（只在 mainnet + 日内信号时重开）；止损/移动止损（证据为负）；回撤节流（边界案例，复苏折转负）；Kelly / ML sizing；5 维打分池。
+交易所原生止盈止损（只在 mainnet + 日内信号时重开）；止损/移动止损（证据为负）；回撤节流（边界案例，复苏 fold 转负）；Kelly / ML sizing；5 维打分池。
 
 ---
 
@@ -177,12 +177,12 @@ Inversion：要让这次复查白做，只需"把两处偏差当作噪声不修�
 | 项 | 状态 | 证据 / 位置 |
 | --- | --- | --- |
 | P1 请求窗口按 registry 参数 | **完成** | `SignalSpec.warmup_for`、`LiveEngine.history_bars`（无上限截断，超 1,500 启动拒绝）；测试 `test_history_bars_derive_from_registry_params_and_refuse_overflow` |
-| P2 拥挤度修正 | **部分**：registry 已置 `crowding_window: 0`（随提交 383ad60 入库）；证据指针未能更新 | 并行会话在时点 universe 跑 16 网格后 DSR p 0.40（FAIL），账本诚实化之后 tsmom 拿不到 PASS 指针；(a)/(b) 二选一由操作者决定（见 RESEARCH_LOG 第六轮） |
+| P2 拥挤度修正 | **部分**：registry 已置 `crowding_window: 0`（随提交 383ad60 入库）；证据指针未能更新 | 并行会话在时点 universe 跑 16 网格后 DSR p 0.40（FAIL），ledger 诚实化之后 tsmom 拿不到 PASS 指针；(a)/(b) 二选一由操作者决定（见 RESEARCH_LOG 第六轮） |
 | P3 TRANSFER 检测与重置 | **完成** | `LiveEngine._ingest_income`、`attribution.external_flows`、`reports.drift_check` 跳过；测试 `test_external_transfer_rebaselines_and_is_recorded`、`test_drift_check_skips_rebaselined_bars_and_daily_report_lists_flows` |
 | P4 hold 跨周期持久 | **完成** | `scores_to_targets(initial=…)`、`AlphaModel.targets(previous=…)`、`_finish_cycle` 合并；测试 `test_previous_targets_seed_the_hold_across_cycles`、`test_live_targets_hold_previous_strategy_targets` |
 | 同构测试（KILL-027 的防复发） | **完成** | `test_shipped_registry_live_path_matches_research_path`：实盘路径（无 funding）与研究路径（带 funding）在 shipped registry 上 targets / weights 逐位相等 |
 | P5 止盈证据重跑 | **推迟** | 实盘书构成随探针书（D-019）变化，重启决定后再跑 |
-| P6 账本补录 | **完成** | run `tsmom-validation-20260903T175314Z`（16 行）；并行会话另有时点 16 网格（`174552Z`） |
+| P6 ledger 补录 | **完成** | run `tsmom-validation-20260903T175314Z`（16 行）；并行会话另有时点 16 网格（`174552Z`） |
 | P7 池子口径对齐 | **完成（钉住集合）/ 推迟（刷新频率）** | `universe.yaml` 钉住 BTC/ETH；日 vs 月换手 11.8 vs 7.3 次/月；共享 membership 表未重建 |
 | P8 止盈参考价 | **完成** | `ExitOverlay._reconcile`；测试 `test_live_exit_reference_keeps_first_entry_across_same_direction_resizes` |
 | P8b 归因份额 | **完成** | `strategy_shares` 按 \|贡献\| 归一化；测试 `test_attribution_shares_are_magnitudes_and_flows_are_separated` |
@@ -207,4 +207,4 @@ KILL 状态更新：KILL-027 仍 OPEN（证据指针），但"实盘 ≠ 验证"
 | P10(波动率估计/相对带)掉在两个会话之间,无人认领 | 本会话认领,见下 |
 | §10 指标编号与并行会话撞号、§12 执行记录过期 | 本节修订;M-011 = 复现检查,M-012 = 现金流/时钟 |
 
-**P5 的一次教训(如实记录)。** 首次重跑(02:08–02:10Z)结论是"按 D-017 双通过规则关闭止盈 6σ",静态 universe 上差 0.01 Sharpe 未过。随后发现并行会话在 02:25:58Z 合入了 `conviction_mode: sign`,而该次重跑用的是改动前的 score 模式账本——**证据比结论早了 15 分钟就过期了**。该结论已作废,未据此改动任何实盘配置;正在用当前 registry 重跑。方法论上的收获:overlay 这类"在集成上做决策"的证据必须记录它所依据的 registry 摘要,否则无法判断是否过期。
+**P5 的一次教训(如实记录)。** 首次重跑(02:08–02:10Z)结论是"按 D-017 双通过规则关闭止盈 6σ",静态 universe 上差 0.01 Sharpe 未过。随后发现并行会话在 02:25:58Z 合入了 `conviction_mode: sign`,而该次重跑用的是改动前的 score 模式 ledger——**证据比结论早了 15 分钟就过期了**。该结论已作废,未据此改动任何实盘配置;正在用当前 registry 重跑。方法论上的收获:overlay 这类"在集成上做决策"的证据必须记录它所依据的 registry 摘要,否则无法判断是否过期。

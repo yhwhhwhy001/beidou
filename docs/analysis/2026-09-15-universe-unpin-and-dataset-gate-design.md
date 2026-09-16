@@ -148,7 +148,7 @@ def _universe_drift_blocks(previous, current, universe_mode=None) -> bool:
    no-op，`registry_digest` 也不再随隔离移动——后者在本文件副作用第 1 条里已被当作"不再声称
    所以不是假话"接受，但两件事合起来意味着隔离此后**既不告警也不动 digest**。剩下的可观测
    路径是 `cycles.jsonl` 的 `quarantined` 字段与 `beidou report daily` 的 `pool_quarantined`。
-   不在本次一并修：把告警提出 `if` 之外要新增中文文案行，会再动零余量的 `beidou_live` 天花板，
+   不在本次一并修：把告警提出 `if` 之外要新增中文文案行，会再动零 headroom 的 `beidou_live` ceiling，
    且要过 `test_alerts_are_chinese`，不该搭这趟车。
 3. 中途进池的币要等下次重启才过启动过滤（`docs/RESEARCH_LOG.md:2359` 记的既有残余，本次不
    引入也不修复）。
@@ -196,7 +196,7 @@ def _universe_drift_blocks(previous, current, universe_mode=None) -> bool:
 | 刷新节奏 | `refresh: daily` | 不动 |
 | `membership` 闸 | 无条件阻塞 | 不动 |
 | static 报告的 universe 闸 | 阻塞 | 不动 |
-| 退出层 / 带宽 / `vol_target` | —— | 不动 |
+| exit overlay / 带宽 / `vol_target` | —— | 不动 |
 | `.beidou/live/state.json` | —— | **不碰**（共享文件，循环在内存里持有它） |
 
 新币进场仍有两道过滤把着：池子侧 `min_age_days: 30`（30 根日线才可排名），模型侧
@@ -223,9 +223,9 @@ def _universe_drift_blocks(previous, current, universe_mode=None) -> bool:
 
 ---
 
-## 5. 行数棘轮
+## 5. source budget ratchet
 
-实测（2026-09-15，`tests/architecture/test_source_budget.py`）**七个包全部零余量**：
+实测（2026-09-15，`tests/architecture/test_source_budget.py`）**七个包全部零 headroom**：
 
 ```
 beidou_alpha        9011 / 9011    beidou_live        9438 / 9438

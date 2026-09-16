@@ -2,7 +2,7 @@
 
 **受检对象**：`main @ 71863e9e`，工作树干净。
 **四道门本地实测**（`.venv`，Python 3.12）：`ruff check` 全过；`ruff format --check` 366 个文件全过；
-`mypy` 119 个源文件 0 错误；`pytest -m "not network"` **2,073 项全绿，117.8 s**（棘轮上限 400 s）。
+`mypy` 119 个源文件 0 错误；`pytest -m "not network"` **2,073 项全绿，117.8 s**（ratchet 上限 400 s）。
 所以下面说的「错误」不是编译或测试意义上的：是说明与代码不符、配置的自述与内容不符、
 脚本不可复现、引用指向仓库里不存在的东西。
 
@@ -45,11 +45,11 @@
 | E2 | `README.md:6` | 「新系统只有五个包」，`pyproject.toml` 列了 7 个（多 `beidou_shared`、`beidou_governance`），架构图也只画了 5 个。 | `pyproject.toml:6-14` |
 | E3 | `README.md:26-28` | 说 `.claude/skills/backtest-guard/` 在仓库里且「是审查这个仓库时用的那把尺子」。该目录在 **`7a950806`（09-08，一个 research(P24) 提交）里被整个删掉**（1,941 行，提交信息一字未提），`git ls-files .claude` 现在是空的。 | `git show --stat 7a950806` |
 | E4 | `.gitignore:39`、`pyproject.toml:67-70,82` | `!.claude/skills/` 的再包含与 ruff 的 `.claude/skills` 排除项，都指向 E3 那个已不存在的目录。死配置。 | 同上 |
-| E5 | `docs/ARCHITECTURE.md` | ① 「唯一的架构测试：`test_import_rules.py`」——`tests/architecture/` 现有 8 个测试文件（行数棘轮、时长棘轮、可达性、plist XML、告警中文、不碰真实 App Support）。② `beidou_cli` 职责表少了**整个 `governance` 组（17 个子命令）**、`data metrics/spot/onchain/index/macro`、`research mine/book/decompose/list`、`live soak/verify/alert-test`、`report weekly`。③ D-035 写「产物：`scratchpad/p32d-pit.json`、`scratchpad/p32d-static.json`」——这两份被 `.gitignore` 的 `scratchpad/*.json` 忽略，**仓库里没有**；唯一副本在 `.claude/worktrees/deepen-live-loop/scratchpad/`，那是一个已合入、随时会被清掉的 worktree。 | `beidou <group> --help`；`find` |
+| E5 | `docs/ARCHITECTURE.md` | ① 「唯一的架构测试：`test_import_rules.py`」——`tests/architecture/` 现有 8 个测试文件（source budget ratchet、时长 ratchet、可达性、plist XML、告警中文、不碰真实 App Support）。② `beidou_cli` 职责表少了**整个 `governance` 组（17 个子命令）**、`data metrics/spot/onchain/index/macro`、`research mine/book/decompose/list`、`live soak/verify/alert-test`、`report weekly`。③ D-035 写「产物：`scratchpad/p32d-pit.json`、`scratchpad/p32d-static.json`」——这两份被 `.gitignore` 的 `scratchpad/*.json` 忽略，**仓库里没有**；唯一副本在 `.claude/worktrees/deepen-live-loop/scratchpad/`，那是一个已合入、随时会被清掉的 worktree。 | `beidou <group> --help`；`find` |
 | E6 | `docs/RUNBOOK.md` | 0 次提到 `governance`、shadow soak、paper-l3、proxy-probe、`live soak`、`research mine`、`report weekly`、`data spot`。6 个 launchd 任务只写了 3 个（live / data / check）；`run_data.sh` 已含 `data spot` 而表里写的仍是「klines + 资金费率 + 池刷新」。 | `grep -c` |
 | E7 | `scripts/p12_stage1_compare.py` | 写死 `/private/tmp/p12/reports/...` 与 `/private/tmp/p12`（会话临时目录），无人引用，跑不了第二次。与 `.gitignore` 里「脚本入库是为了可复现采纳决定」的理由矛盾——而且 P12 在 stage 1 量出 inert，根本没被采纳。 | 文件第 13–16 行 |
-| E8 | `scratchpad/p24_record.py` | 一次性往**真实账本** `reports/research/trials.jsonl` 追加 8 行的脚本（`LEDGER` 写死），已经跑过（账本里 `P24-arm1` / `P24-arm2` 各 4 行）。无人引用。再跑一次就是重复计费，而账本按设计不可撤回。要么删，要么加「这两个 run_id 已在账本则拒绝」的守卫。 | 第 43 行；`trials.jsonl` |
-| E9 | `reports/research/trials.jsonl` | `run_id = mine-shortlist-20260907T043712Z` 的 **514 行（全账本 22%）** 指向一份仓库里从未存在过的报告（`git log --all` 无此文件）。RESEARCH_LOG:2505 解释了它是 DL-K2 之后「只记账不重搜」的补记账重跑，所以不是错账；但它是账本里唯一一个机器核不到证据的 run，`replay` 与家族门都在数它。 | `git log --all -- 'reports/research/mine-shortlist-20260907T043712Z*'` 为空 |
+| E8 | `scratchpad/p24_record.py` | 一次性往**真实 ledger** `reports/research/trials.jsonl` 追加 8 行的脚本（`LEDGER` 写死），已经跑过（ledger 里 `P24-arm1` / `P24-arm2` 各 4 行）。无人引用。再跑一次就是重复计费，而 ledger 按设计不可撤回。要么删，要么加「这两个 run_id 已在 ledger 则拒绝」的守卫。 | 第 43 行；`trials.jsonl` |
+| E9 | `reports/research/trials.jsonl` | `run_id = mine-shortlist-20260907T043712Z` 的 **514 行（全 ledger 22%）** 指向一份仓库里从未存在过的报告（`git log --all` 无此文件）。RESEARCH_LOG:2505 解释了它是 DL-K2 之后「只记账不重搜」的补记账重跑，所以不是错账；但它是 ledger 里唯一一个机器核不到证据的 run，`replay` 与 family gate 都在数它。 | `git log --all -- 'reports/research/mine-shortlist-20260907T043712Z*'` 为空 |
 
 ---
 
@@ -57,7 +57,7 @@
 
 ### A. 已判定不可用仍留在树里：liquidation 数据层（1,237 行 + 1 fixture）
 
-可达性守卫里具名豁免（「#19 判定不可用：Binance 不发布 USDⓈ-M 强平历史，唯一的币本位档案早于实盘期 23 个月停更」）。留下的理由是「作为查过什么的记录」——那份记录在 RESEARCH_LOG 与 git 历史里都有，代码本身占的是非 alpha 行数（棘轮已零余量）。
+可达性守卫里具名豁免（「#19 判定不可用：Binance 不发布 USDⓈ-M 强平历史，唯一的币本位档案早于实盘期 23 个月停更」）。留下的理由是「作为查过什么的记录」——那份记录在 RESEARCH_LOG 与 git 历史里都有，代码本身占的是非 alpha 行数（ratchet 已零 headroom）。
 
 | 文件 | 行 |
 |---|---|
@@ -71,7 +71,7 @@
 
 ### B. 建成但没有任何读者的三条数据源（源码 1,757 行 + 测试 2,092 行）
 
-三者都能从 `beidou data onchain|index|macro` 到达，但：`research_cmd._load` 只 join `metrics` 与 `spot`；`beidou_alpha` 没有任何叶子或信号读它们的列；`deploy/run_data.sh` 明确把三者排除在日程外并写了理由（index：「NOTHING reads the store」；onchain：「exactly one column can reach live even on a PASS」；macro：「NO store by its author's scope call」）。09-10 由三个分支带入。这不是 bug，是搁置的功能；但在「alpha 投入 90%」与「行数棘轮零余量」两条约束下，它是仓库里最大的一块**今天没用**的非 alpha 源码。
+三者都能从 `beidou data onchain|index|macro` 到达，但：`research_cmd._load` 只 join `metrics` 与 `spot`；`beidou_alpha` 没有任何叶子或信号读它们的列；`deploy/run_data.sh` 明确把三者排除在日程外并写了理由（index：「NOTHING reads the store」；onchain：「exactly one column can reach live even on a PASS」；macro：「NO store by its author's scope call」）。09-10 由三个分支带入。这不是 bug，是搁置的功能；但在「alpha 投入 90%」与「source budget ratchet 零 headroom」两条约束下，它是仓库里最大的一块**今天没用**的非 alpha 源码。
 
 | 源码 | 行 | 对应测试 | 行 |
 |---|---|---|---|
@@ -117,9 +117,9 @@ AST 扫描 + grep 双重确认（含 `getattr(..., "name")` 字符串派发；`l
 不被 `config/alpha_registry*.yaml`、`config/live.demo.yaml`、`docs/`、`tests/`、`governance/`、任何源码或脚本引用。
 分两组，处置不同：
 
-**第 1 组：连账本行都没有的纯输出（27 个 stem，54 个文件）。** 这些运行没有计费，删掉不动任何 N。
-其中 7 份 `tsmom-backtest-*`：`research backtest` 不过退出层，仓库现行口径下不是证据（`b30a9c3d`）。
-`research decompose` 按 D-024 明确不计账本。4 份 `correlate-tsmom-flow-20260903T*` 是同一天同一小时反复跑的。
+**第 1 组：连 ledger 行都没有的纯输出（27 个 stem，54 个文件）。** 这些运行没有计费，删掉不动任何 N。
+其中 7 份 `tsmom-backtest-*`：`research backtest` 不过 exit overlay，仓库现行口径下不是证据（`b30a9c3d`）。
+`research decompose` 按 D-024 明确不计 ledger。4 份 `correlate-tsmom-flow-20260903T*` 是同一天同一小时反复跑的。
 
 ```
 book-tsmom-mined_594a12f9307a15d9-20260912T181708Z
@@ -152,8 +152,8 @@ tsmom-validation-20260903T0839Z
 ```
 （每个 stem 各有 `.json` 与 `.md`。）
 
-**第 2 组：有账本行但无人引用（13 个 stem，26 个文件）。** 它们是账本行的证据，全部是 FAIL / REJECT 或已被后续指针取代。
-建议**归档到子目录**（如 `reports/research/archive/`）而不是删：治理回放只扫顶层 `*.json` 且不递归（`diagnostics/README.md` 写明），移走不影响 AC-G0，账本行照旧。
+**第 2 组：有 ledger 行但无人引用（13 个 stem，26 个文件）。** 它们是 ledger 行的证据，全部是 FAIL / REJECT 或已被后续指针取代。
+建议**归档到子目录**（如 `reports/research/archive/`）而不是删：治理回放只扫顶层 `*.json` 且不递归（`diagnostics/README.md` 写明），移走不影响 AC-G0，ledger 行照旧。
 
 ```
 book-tsmom-flow-20260904T052533Z                        ACCEPT（被 20260908T105322Z 取代）
@@ -266,7 +266,7 @@ tsmom-validation-20260909T055023Z                       PASS（被 055957Z 及�
 
 `assemble()` 判断一个候选「已经验过」靠扫 `reports/research/*.json`，被移走的三份
 `mined_*-validation-*.json` 正是那三个候选的验证证据。**照这一版做下去，下一轮挖掘会在已经做完
-的工作上重新花账本行**，而账本只追加、拿不回来。
+的工作上重新花 ledger 行**，而 ledger 只追加、拿不回来。
 
 据此清点了全仓五处 glob 读报告目录的代码（见 `reports/research/archive/README.md` 的表），
 把可归档的名字收窄到不匹配任何 glob 模式的四种：`overlay-*`(10 组) / `tsmom-backtest-*`(7) /
@@ -295,8 +295,8 @@ tsmom-validation-20260909T055023Z                       PASS（被 055957Z 及�
 同形，单独删它没有一致的理由。`scratchpad/` 是记录目录，53 个脚本每个带一段说明自己测了什么的
 docstring，删 134 行换不来什么，而误删一份记录换不回来。
 
-**唯一在 `scratchpad/` 做的改动是给 `p24_record.py` 加守卫**（E8）：它是唯一写真实账本且已经
-跑过的入库脚本，守卫在回测之前拒绝，实测 0.33s 退出、账本 sha256 不变。
+**唯一在 `scratchpad/` 做的改动是给 `p24_record.py` 加守卫**（E8）：它是唯一写真实 ledger 且已经
+跑过的入库脚本，守卫在回测之前拒绝，实测 0.33s 退出、 ledger sha256 不变。
 
 ---
 
@@ -309,8 +309,8 @@ docstring，删 134 行换不来什么，而误删一份记录换不回来。
 | `79fc16c3` | 23 组报告归档、5 个死 fixture 删除、`reports/weekly/` 进 .gitignore |
 | `dfe24f0d` | E8 守卫 + E7 的出处注记 |
 
-**E9 未动账本，且不应动**：那 514 行按 `docs/RESEARCH_LOG.md:2505` 是 DL-K2 之后「只记账不重搜」
-的补记账重跑，不是错账；账本只追加是 DSR 分母可信的前提，删行需要一次带署名的裁定（Q7 先例）。
+**E9 未动 ledger，且不应动**：那 514 行按 `docs/RESEARCH_LOG.md:2505` 是 DL-K2 之后「只记账不重搜」
+的补记账重跑，不是错账；ledger 只追加是 DSR 分母可信的前提，删行需要一次带署名的裁定（Q7 先例）。
 本轮只把它记在这里。
 
 **审查期间顺带发现并修掉的一条**（不在正文里）：`beidou report weekly` 写
@@ -326,8 +326,8 @@ docstring，删 134 行换不来什么，而误删一份记录换不回来。
 文件与 `scratchpad/verify_live.py`，**1,757 行源码 + 2,092 行测试**。判据是五条命令的输出撤出前后
 **逐字节相同**（`governance reopen|replay|next`、`report weekly`、`live run --dry-run --cycles 0`），
 外加两条独立证据：`research_cmd._load` 只 join `metrics` 与 `spot`，`.beidou/data/` 里从来没有过
-这三条的 store。行数棘轮同步降表（`beidou_data` 5,472 → 3,718、`beidou_cli` 6,178 → 5,943），
-七个包回到零余量。细节见 `docs/RESEARCH_LOG.md` 同日第二条。
+这三条的 store。 source budget ratchet 同步降表（`beidou_data` 5,472 → 3,718、`beidou_cli` 6,178 → 5,943），
+七个包回到零 headroom。细节见 `docs/RESEARCH_LOG.md` 同日第二条。
 
 那一轮还补上了正文没说的一条：这三条之所以能活六天没被任何守卫拦住，是因为
 `test_every_module_is_reachable_from_an_entry_point` 问的是「模块**能不能**被跑到」而不是
@@ -340,7 +340,7 @@ docstring，删 134 行换不来什么，而误删一份记录换不回来。
 | A. liquidation 数据层 | 596 行 | 641 行 + 1 fixture | 可达性守卫里**具名豁免**：Binance 不发布 USDⓈ-M 强平历史，唯一的币本位档案早于实盘期 23 个月停更。判定不可用，留作「查过什么」的记录 |
 | B. macro / onchain / index | 1,757 行 | 2,092 行 | 能从 CLI 到达，但 `research_cmd._load` 只 join `metrics` 与 `spot`，`beidou_alpha` 没有任何叶子读它们的列，`run_data.sh` 明确把三者排除在日程外并写了理由 |
 
-两块都**不影响**四道门，也不影响实盘。它们的成本是占非 alpha 行数（棘轮零余量）与占读代码的人的
+两块都**不影响**四道门，也不影响实盘。它们的成本是占非 alpha 行数（ratchet 零 headroom）与占读代码的人的
 注意力。三种处置都成立：留作储备直到有叶子要读；撤出直到那一天（git 里随时拉回）；或只撤 A 留 B。
 
 删之前要注意的一条：`beidou_live/liquidation.py`（强平距离观测，DL-X1）与

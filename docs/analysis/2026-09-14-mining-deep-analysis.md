@@ -2,7 +2,7 @@
 
 > 分析头部（deep-analysis V3.7）
 > - Interaction Mode: **Yellow**。关键事实全部来自代码与已提交的研究报告；无外部来源。
-> - S/M/L: **L**。命中三维：风险（资金／实盘 registry／append-only 账本不可撤回）、AI/策略（DL-G8 自主循环会自行排 MINE）、功能模块（mining + validation + governance + cli ≥3 模块）。
+> - S/M/L: **L**。命中三维：风险（资金／实盘 registry／append-only ledger 不可撤回）、AI/策略（DL-G8 自主循环会自行排 MINE）、功能模块（mining + validation + governance + cli ≥3 模块）。
 > - 当前 Gate 决策上限：**Need Evidence**（H3：C-001 由 REFUTED 降为 UNKNOWN；同时命中 H2 / H1 / H5 / H7 / H9，取最低者）。
 > - 外部动作授权：**无**。本轮只读代码与既有报告，未跑 `mine` / `validate` / `book`，未写 `trials.jsonl`，未改 registry 与实盘配置。
 > - 缘起：操作者提问「策略对应的因子是固定的吗？是写死的还是能挖掘生成的？」。查证之后，真正需要决定的是挖掘这条路径的存废。
@@ -32,7 +32,7 @@
 | 策略共用一套固定因子吗 | **否。** 共享的只有底层原语——`beidou_alpha/features.py` 约 20 个因果函数（returns / realized_vol / atr / donchian / robust_zscore / cross_sectional_rank / taker_buy_ratio / funding…） | E-003 |
 | 每个策略对应不同因子吗 | **是。** 9 个信号模块各自在代码里算自己的因子：tsmom 读多周期收益+斜率+vol；flow 读 taker-buy 失衡×成交量扩张；breakout 读 ATR-归一 Donchian；carry 读资金费；residual 读对 BTC 的 beta 残差；chanlun 读分型/笔/段/中枢；pairs 在打分前先做配对搜索 | E-001 |
 | 因子写死吗 | **组合方式写死在代码里，只有数值参数在 YAML。** `alpha_registry.yaml` 能配的是 `horizons` / `vol_window` / `entry_threshold` 这类数字；换因子＝改代码＋重走一遍验证。`signals.register()` 明确拒绝任何非 `mined_*` 前缀的运行时注册 | E-001, E-002 |
-| 能挖掘生成吗 | **能，路已修好。** `beidou_alpha/mining` 是一套带量纲类型的表达式语言（20 个节点），`enumerate_candidates()` 默认枚举 676 个候选，`to_signal()` 把表达式编译成普通 `SignalSpec`，之后被**同一套** walk-forward / CPCV / 试验账本 / D-020 判决审判 | E-005, E-013 |
+| 能挖掘生成吗 | **能，路已修好。** `beidou_alpha/mining` 是一套带量纲类型的表达式语言（20 个节点），`enumerate_candidates()` 默认枚举 676 个候选，`to_signal()` 把表达式编译成普通 `SignalSpec`，之后被**同一套** walk-forward / CPCV / trials ledger / D-020 判决审判 | E-005, E-013 |
 | 挖出来的用上了吗 | **一个都没上。** 8 份 shortlist、914 个表达式（1h 676 + 1d 238）、7 个进 validate（1 PASS / 6 FAIL），唯一的 PASS 在 `research book` 被回撤条款挡了四次。实盘跑的仍是 tsmom（main）+ flow（flow_short sleeve） | E-002, E-006, E-011 |
 
 registry 现状：7 条策略，2 条 enabled。`chanlun` 与 `pairs` 在 `SIGNALS` 里但不在 registry。
@@ -126,12 +126,12 @@ run_id 时间              行数   新增表达式   累计表达式   累计�
 
 **E-016 · 抬门速率（K-23 修正）** 无任何一轮产生过 676 行；实际是 514 / 658 / 658 / 658 / 243，对应抬门 +0.0174 / +0.0217 / +0.0217 / +0.0217 / +0.0086。增量在 N 上**单调衰减**：2731→3407 为 +0.0222，4083→4759 为 +0.0151。满负荷（R1 允许 4 轮/窗口）12 个月合计约 **+0.24**。
 
-**E-017 · 账本可被环境变量整体重定向** `ledger.py:27,52`：`BEIDOU_TRIALS_LEDGER` 非空即返回该路径。`resolve_ledger_path` 的 docstring 自述 `out` 被「accepted and ignored」——CLI 的口被堵死了，环境变量没有。`research mine` 的选项全集只有 `--reauthorize --top --max-complexity --max-lookback --baseline --baseline-params`，无 `--no-ledger` / `--dry-run`。
+**E-017 · ledger 可被环境变量整体重定向** `ledger.py:27,52`：`BEIDOU_TRIALS_LEDGER` 非空即返回该路径。`resolve_ledger_path` 的 docstring 自述 `out` 被「accepted and ignored」——CLI 的口被堵死了，环境变量没有。`research mine` 的选项全集只有 `--reauthorize --top --max-complexity --max-lookback --baseline --baseline-params`，无 `--no-ledger` / `--dry-run`。
 
 **E-018 · N_eff 的禁止令是既有裁定，不是空白** `effective_trials` 的唯一非测试调用点是 `grid_effective_trials`（候选自己的网格）。其 docstring：「Reported, never substituted into the gate … Lowering a bar on an estimator that has never been validated against this ledger is the failure this round exists to prevent.」`oos_selection_threshold` docstring：「deliberately NOT reduced … recorded as owed rather than guessed.」`policy.py` R0 同述。`tests/alpha/test_the_other_caliber_is_reported_not_applied.py` 整个文件的存在理由就是把「未被选用的那把口径」钉成 provably inert。
 **但方向已知**：`TrialRecord` 不存收益序列，Li–Ji 的 N_eff 算不出**量级**；而 `param_key` 已在盘上，给出 N_eff 的硬上界 **676**（降 75.2%），远低于让 1.7862 通过所需的 2170（降 20.6%）。
 
-**E-019 · 工程事实（实测）** `research_cmd.py:2966-3000` 的打分循环里 `net = result.portfolio_net` 已是完整收益序列，算完 4 个汇总统计后丢弃；账本写入是循环之后的**单点** `_record_trials`（:3141）；`_record_trials` 只追加账本里尚不存在的签名。
+**E-019 · 工程事实（实测）** `research_cmd.py:2966-3000` 的打分循环里 `net = result.portfolio_net` 已是完整收益序列，算完 4 个汇总统计后丢弃；ledger 写入是循环之后的**单点** `_record_trials`（:3141）；`_record_trials` 只追加 ledger 里尚不存在的签名。
 
 **E-020 · `basis` 族的第一次观测已完成** 09-10 轮新增的 18 个形状全部含 `basis`：正边际 **0/18**，best standalone **0.3150** 对基线 1.6900，best marginal −0.0871。同轮非 basis 225 个里正边际 5。
 
@@ -160,7 +160,7 @@ run_id 时间              行数   新增表达式   累计表达式   累计�
 ## 4. 问题框定与 Success Definition
 
 三个候选框定：F1 供给问题（被 E-021 + E-010 **证据**排除）、F2 记账问题、F3 书门问题。
-本轮初选 F2，**Phase 7 指出 F3 是被推理而非证据排除的**：在已发生的历史上，账本门从未杀死过任何候选，唯一过了 D-028 的候选死于书门（E-011）。且 C-003 若成立，F2 描述的冲突在定义上只对"还要继续加叶节点族"时成立。
+本轮初选 F2，**Phase 7 指出 F3 是被推理而非证据排除的**：在已发生的历史上，ledger 门从未杀死过任何候选，唯一过了 D-028 的候选死于书门（E-011）。且 C-003 若成立，F2 描述的冲突在定义上只对"还要继续加叶节点族"时成立。
 **裁定：框定悬置，等 §7 的口径裁定。** 口径若落在 2731，F2 成立；若落在 676 或 1415，则 F3 才是历史上真正在咬人的那道门。
 
 **Success Definition**（Q1=C ⇒ 两套；M-A2 已按 K-09 更正）
@@ -176,17 +176,17 @@ run_id 时间              行数   新增表达式   累计表达式   累计�
 
 ## 5. Option Set
 
-| 选项 | 账本 / Δ门 | 预期产出（D-018 逐折边际） | 可逆性 |
+| 选项 | ledger / Δ门 | 预期产出（D-018 逐 fold 边际） | 可逆性 |
 | --- | --- | --- | --- |
 | **O-A 口径裁定**（本轮推荐的前置） | 0 行；可能使门由 1.8096 落到 1.7420 或 1.6631 | 让 54 个正边际候选与 `594a12f9` 重新可判 | 裁定可改，但**一旦锁死 2731 就不可逆** |
 | O-0 冻结挖掘 | 0 行，门锁 1.8096 | 0 | 可逆——**但锁的是一个口径未裁定的 N** |
 | O-1 维持现状 | +514~658 行/轮，抬门递减（12 个月约 +0.24） | 1h 先验 0/676 ⇒ ≈0 | 不可逆 |
 | O-2 照常收费＋留收益矩阵报 N_eff | 同 O-1 | C-006 的量级；A 线仍 ≈0 | 不可逆 |
-| O-3 不写账本的测量模式 | 0 行，Δ门 0 | 同上，且能免费读出 M-A2 | 可逆——**但 E-017 显示能力已存在，缺的是治理；且它打开的是一条"不计数地看"的通道** |
+| O-3 不写 ledger 的测量模式 | 0 行，Δ门 0 | 同上，且能免费读出 M-A2 | 可逆——**但 E-017 显示能力已存在，缺的是治理；且它打开的是一条"不计数地看"的通道** |
 | O-4 D-018 改等风险比较 | 0 行（重测旧候选另计） | 对 `594a12f9`：0；缺口真值 2.55pp 而非 1.30pp | 可逆 |
 | O-5 `mined` 桶按族分桶 | 0 新行，结构性降 N | 最大，但它就是降门 | 难回滚 |
 
-**O-3 的价差在 Phase 7 被打掉**：它相对 O-0 的增量（B 线读数 + C-006）没有按给 O-1 用的那把先验折现尺折过，而这些答案的消费者先验就是 O-1 的 ≈0。O-3 唯一不可替代的作用是**免费读出 M-A2**——但在 O-A 未裁定之前，M-A2 该不该是解冻门本身就未定。
+**O-3 的价差在 Phase 7 被打掉**：它相对 O-0 的增量（B 线读数 + C-006）没有按给 O-1 用的那把先验折现尺 fold 过，而这些答案的消费者先验就是 O-1 的 ≈0。O-3 唯一不可替代的作用是**免费读出 M-A2**——但在 O-A 未裁定之前，M-A2 该不该是解冻门本身就未定。
 
 ---
 
@@ -199,7 +199,7 @@ run_id 时间              行数   新增表达式   累计表达式   累计�
 | 「2731 个候选」「A-005：2731 个**不同**表达式」 | 2731 **行**，676 个不同表达式，4.04×；1316 行零新增 | K-01 |
 | E-011「fraction 0.209 … 0.0130 对 0.0100」 | 0.209 那一格是 **0.025509**；0.0130 是 fraction 0.20 那一格 | K-11 |
 | C-005b SUPPORTED | static 面同候选回撤**改善** −0.0174，符号跨 universe 翻转 | K-13 |
-| E-015「没有 no-ledger 模式」 | `BEIDOU_TRIALS_LEDGER` 可整体重定向账本 | K-06 |
+| E-015「没有 no-ledger 模式」 | `BEIDOU_TRIALS_LEDGER` 可整体重定向 ledger | K-06 |
 | Falsifier「前后读数之差 = 0」 | 被该环境变量平凡满足，分不出测量模式与被重定向的真 mine | K-07 |
 | E-021「不会让后续少收」 | 答错方向：危害是"免费看让你挑哪一轮付钱" | K-08 |
 | M-A2 用 standalone | 会把管线唯一一次成功判为 0 分 | K-09 |
@@ -302,7 +302,7 @@ Gate 终态：G0 PARTIAL｜G1 PARTIAL｜**G2 FAIL**｜**G3 FAIL**｜G4 PASS｜G5
 **同时收回 §5 表格里「四种口径三种通过」的语气。** 口径 ②（1415，剔两轮）与 ④（676，不同假设数）
 都与项目自己写下的保守计费原则相抵触——`policy.py` 0.2.0/0.3.1 与 `research_cmd.py:3160` 明说
 「replay after the range has moved charges every candidate again — conservative by design (KILL-Q5)」。
-真正开着的口子只有一个：**一轮援引了未生效修复、因而逐位重现前一轮的搜索，该不该留在账本里。**
+真正开着的口子只有一个：**一轮援引了未生效修复、因而逐位重现前一轮的搜索，该不该留在 ledger 里。**
 
 **已修的可观测性缺口（提交 `b8bf8238`，分支 `fix/mining-denominator-visible`）。** 上面这张表
 在本轮之前只能靠手工 diff 两份报告得到，这本身是缺陷：
@@ -341,7 +341,7 @@ tsmom 最新报告 `tsmom-validation-20260913T182325Z.json`：
 1. **`whole_library` 不是一道门。** `verdict.decide` 只读 `report["oos_selection"]`，从不读它
    （`verdict.py:75`）。`all_trials` 的 docstring 写明了为什么：「Deriving the gate from it would
    FAIL the incumbent on an honest grid, which is the measurement that settled R0 (KILL-AR-01)」——
-   它失败于在位者，正是 R0 当初**不**采用它的记录在案的理由。所以「tsmom 唯一没过的那道门」这个
+   它失败于 incumbent，正是 R0 当初**不**采用它的记录在案的理由。所以「tsmom 唯一没过的那道门」这个
    说法不成立：它没过的不是门，是那把被公布、被刻意不施用的对照尺。
 2. **即便按最激进的口径去重，它也不过。** N=859 时阈值 1.6911，tsmom 的 1.5919 仍差 **−0.0992**。
    裁定会把缺口从 −0.2265 收窄到 −0.0992，**不会把它抹平**。
@@ -350,9 +350,9 @@ tsmom 最新报告 `tsmom-validation-20260913T182325Z.json`：
 它同时移动 R0 那份决定所依据的公开对照数。** 受检对象因此不是中性的——做这次裁定的人，也会改变
 一份关于在位策略的公开读数。这一点进 §7，作为裁定 1 的一条附带影响。
 
-（附带更正一处 beidou-2b 的读数：它测到「2741 行 / 683 个 param_key」，并推断账本又长了。不是——
+（附带更正一处 beidou-2b 的读数：它测到「2741 行 / 683 个 param_key」，并推断 ledger 又长了。不是——
 2741 = `mined` 桶 2731 + 7 个 `mined_<hash>` 自己键下的 10 行去重后，683 = 676 + 7。那正是
-`ledger_scope("mined_X")` 的并集口径，是范围差，不是账本增长。本文其余各处用的是 `mined` 桶本身。）
+`ledger_scope("mined_X")` 的并集口径，是范围差，不是 ledger 增长。本文其余各处用的是 `mined` 桶本身。）
 
 ### 12.2 第二次更正：N 的口径我用错了，而裁定 5 的前提不存在
 
@@ -362,7 +362,7 @@ tsmom 最新报告 `tsmom-validation-20260913T182325Z.json`：
 
 E-023 写「`registry.py` 不校验签发时的 N 与今天的桶」。这句话作为对 `registry.py` 的陈述是对的，
 作为对系统的陈述是错的：`beidou_governance/family_gate.py` 正是「R0 recomputed against today's
-ledger」，由 `governance gate` 调用、把 PASS/FAIL 写进 verdict 账本、经 `Facts.family_gate_still_passes`
+ledger」，由 `governance gate` 调用、把 PASS/FAIL 写进 verdict ledger、经 `Facts.family_gate_still_passes`
 喂给状态机（`FAMILY_GATE_FAILED` → retired）。它的 docstring 里就有我当成新发现写的那句话：
 **"searching more retires your own incumbents"**，还附了 tsmom 自己的数（N=148 门 1.4884 → N=183
 门 1.5136）。
@@ -406,7 +406,7 @@ made it」。tsmom 的报告有这个键，flow 的没有。
 `max_sharpe_quantile`），但治理装置按一条有案可查的规则拒绝接受它。
 
 所以裁定 1/2 多了一个前置条件，它比两条裁定本身更靠前：**现有装置无法在这七份证据上执行任何口径
-裁定**，除非先重发它们（带 `gate` 字段重跑 `validate`，本身又是新的账本行），或者先裁定「阈值恒等式
+裁定**，除非先重发它们（带 `gate` 字段重跑 `validate`，本身又是新的 ledger 行），或者先裁定「阈值恒等式
 在 15 位上复现」是否足以认定那条规则。这是第三个裁定，我没有做。
 
 #### (d) 已落地的 R2b，以及它今天为什么不说话
@@ -415,5 +415,5 @@ made it」。tsmom 的报告有这个键，flow 的没有。
 候选，`next_action` 返回 WAIT 而不是 MINE。它**只拒绝花钱**，不动任何判决。实现委托
 `family_gate.read_gate`，所以 (b) 的错误不会在它身上重演。
 
-代价是：由于 (c)，它在今天的账本上读到的是「无意见」，对那七份不追溯，从下一次 `research validate`
+代价是：由于 (c)，它在今天的 ledger 上读到的是「无意见」，对那七份不追溯，从下一次 `research validate`
 起才会说话。这是正确行为而不是接线失败——它与生产装置对同一批报告的判断一致。

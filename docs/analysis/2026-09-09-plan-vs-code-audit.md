@@ -44,10 +44,10 @@
 
 - 新增 `beidou_governance/admission.py`：两层闸。
   - **registry 层**——probe 位数与预算份额，只读**提议的字节**，不看状态。因为 `state.load` 把缺失
-    的状态文件读成**空 book**，而空 book 是余量不是安全（那个 docstring 自己记着 09-09 的实测：无状态
+    的状态文件读成**空 book**，而空 book 是 headroom 不是安全（那个 docstring 自己记着 09-09 的实测：无状态
     文件时第二本 1/3 的 probe 在 flow 之上被放行，2/3 对 1/3 的上限）。
   - **lifecycle 层**——对每个**暴露增加**的策略跑 `evaluate(..., PROMOTE, ...)`。只减仓的改动永不被拦，
-    因为 §3 的快通道（stop、家族门）必须不等窗口。
+    因为 §3 的快通道（stop、 family gate）必须不等窗口。
 - `governance plan` / `governance apply` 都过这道闸；`apply` 不过就拒绝写。
 - 算不出来的事实一律 False 并说出**缺哪个事实**，不是缺哪条规则。
 - 新增 `beidou governance canary`：让 `canary.evaluate()` 第一次有生产调用者。
@@ -139,7 +139,7 @@ R3/R4/R5/R7/K-EX14 的九个字段同理，唯一读者是 `lifecycle.evaluate`�
 | --- | --- |
 | **AC-G4** | DRILL-G1 今天是单元测试（用真闸+实盘 registry 副本），`transactions.jsonl` **4 行全 APPLY、零 ROLLBACK**。要跑：造一份 sha256 改坏一位的候选 → `plan` → `apply` → 期望多一行 ROLLBACK。会往共享事务日志追加。 |
 | **AC-G5** | 三样都缺：`config/alpha_registry.candidate.yaml` 不存在、`.beidou/live-shadow` 不存在、判定链此前不存在（今天补了 `governance canary`）。浸泡本身要 168 小时且**需要交易凭据**（`--dry-run` 也走 `build_venue`）。失败分支的「回队列 + R5 计数」仍无 writer。 |
-| **AC-G8** | 缺的是**命令**，不是 plist。要先写一个从账本+shortlist 报告拼 `scheduler.Context` 的入口。 |
+| **AC-G8** | 缺的是**命令**，不是 plist。要先写一个从 ledger+shortlist 报告拼 `scheduler.Context` 的入口。 |
 | **AC-L5** | 依赖 4a→4b，且链上还有四处断口（见 §9）。判据里的 `actor = machine` 今天已可证伪（加了 `--actor`）。 |
 
 另：**AC-G1 引的「146 / 677」这一对数字磁盘上不存在**。tsmom 的真实双口径是 148/683 与 183/681；
@@ -158,10 +158,10 @@ R3/R4/R5/R7/K-EX14 的九个字段同理，唯一读者是 `lifecycle.evaluate`�
 | v→b | 换手 ≤ 3× | **0/6**，硬编码 0.0 |
 | b→q | M-011 平价 | 判据函数在，**无生产调用者** |
 | q→p | Canary / M-010 30 天 / 窗口 / 队首 | 今天接上前三个；**队列这个数据结构不存在** |
-| **p→m** | **家族门重算仍过** | **代码里没有这个条件分支。** `Event.FAMILY_GATE_FAILED` 有定义有处理，**零生产者**——没有任何东西会重算家族门 |
+| **p→m** | **family gate 重算仍过** | **代码里没有这个条件分支。** `Event.FAMILY_GATE_FAILED` 有定义有处理，**零生产者**——没有任何东西会重算 family gate |
 | main→probe | — | 那条「不可达的边」**确已修**：main 声明 stop 后进 `probes_from_registry`，实盘记录里可见 |
 
-`probe → main` 的三个条件里，「连续 9 窗口」与「从未 stop」有实现，**「家族门重算」完全没有**。
+`probe → main` 的三个条件里，「连续 9 窗口」与「从未 stop」有实现，**「family gate 重算」完全没有**。
 这条要么实现，要么按选项 b 的诚实标注从 §3 删掉——不能像现在这样文档有、代码没有。
 
 ---
@@ -182,7 +182,7 @@ R3/R4/R5/R7/K-EX14 的九个字段同理，唯一读者是 `lifecycle.evaluate`�
    RESEARCH_LOG 两处状态表都写「已跑（未采纳）」。真实状态是**已跑、未采纳**。
 4. **「OI/LS 叶 ✔」缺一半**——90 个候选（54 OI + 36 LSR）在今天两轮 mine 里**一次都没被打过分**
    （两份 shortlist 均 `errored=90`）。这正是 `metrics=True` 那个修复要解的，**还欠一次运行**。
-5. **「xsmom 重测完毕 FAIL」措辞不准**——它是被零账本前置闸拦下的，`validate` 从未跑。
+5. **「xsmom 重测完毕 FAIL」措辞不准**——它是被零 ledger 前置闸拦下的，`validate` 从未跑。
 6. **#17 多空比「✔」缺实盘闸这一句**——四列在实盘 snapshot 全 NaN，按列被拒。研究可用、实盘不可用。
 7. **#29 指数「✔」缺一半**——有契约有验证，无 store、无 sync、无 CLI。
 8. **预算格已过时**——实测本窗口 **181/1700 行、mine 3/4 轮**，全库 unique **2011**（Checkpoint 写 169 / 1,999）。
@@ -243,7 +243,7 @@ collateral_repricing +38.89   repricing_share 1.0682   collateral_share 0.5179
 1. **让一次成功晋级被记下来**：`lifecycle.apply` + `state.write` 的生产调用者。今天闸能拒绝，不能记录。
 2. **`governance next`**：给 `scheduler` 一个装配器，AC-G8 才有可能跑。顺带让 R1 第一次有人问。
 3. **book 报告补三个字段**（`slippage_stress` / corr / 换手），否则 `validated→booked` 四条里三条永远是硬编码 True。
-4. **家族门重算**：实现，或从 §3 删掉。
+4. **family gate 重算**：实现，或从 §3 删掉。
 5. **现货 store 接进 `_load` + 一次现货 `Verification`**：DL-D5 与 basis 叶两端都靠它。
 6. **`beidou data onchain` / `beidou data index`**：#31 与 #29 的 ingest 命令。
 7. **`collateral_drift` 进日报渲染**，并把那条 `assert 0.72 < share < 0.74` 从钉死历史值改成钉方向。
@@ -264,7 +264,7 @@ collateral_repricing +38.89   repricing_share 1.0682   collateral_share 0.5179
    决定」。armed 循环 6.25 天里 2 个 ERROR，**最长无 ERROR 段 4.92 天，从未到 7**；按 0.32/天的率，
    连续 7 天干净约 11% 的机会。**环境保证会出 ERROR，判据要求一个都没有——两句互斥。**
 2. **上一轮浪费掉的 658 行怎么记**（KILL-Q5 严格折叠 vs K-EX07 先例）。两条路都写出来了，没替你选。
-3. **§3「家族门重算」是实现还是删除。**
+3. **§3「family gate 重算」是实现还是删除。**
 4. 一批文档更正（命令名 `live verify` → `live status --check`；§4 R1 与 §11 M-G04 的数值已被
    policy 0.3.0 放开；§13 C-G2′ 的 OPEN 与 §10/§16 的 ✔ 矛盾；§16 AR-15 已可改 CLOSED；
    六项 vs 七项；「R0–R10 零违反」实为六条）。
@@ -280,7 +280,7 @@ collateral_repricing +38.89   repricing_share 1.0682   collateral_share 0.5179
 | `tests/governance/test_the_registry_write_asks_the_rules_first.py` | 新增 11 条，含反向控制 |
 | `tests/architecture/test_every_module_is_reachable_from_an_entry_point.py` | 新增第三道通用护栏 |
 | `tests/alpha/test_signal_suite.py` | 因果/warmup/有界三测**加跑 registry 实参** |
-| `tests/architecture/test_source_budget.py` | 棘轮 cli 4,492→4,588、governance 2,092→2,373，附理由 |
+| `tests/architecture/test_source_budget.py` | ratchet cli 4,492→4,588、governance 2,092→2,373，附理由 |
 
 **`test_signal_suite.py` 那一条单独说**：KILL-AR-15 的修复把合成面板改成随 warmup 伸缩，是对的，
 但它读的是 `spec.default_params` 的 warmup。实测 tsmom 默认 warmup **101**、registry 实参 **721**；
@@ -300,7 +300,7 @@ flow 是 **49** 对 **721**。**因果性、有界性、非空转三条检查一
 | 1 | `lifecycle.apply` + `state.write` 的生产调用者 | `governance advance`：从 `cycles.jsonl` 派生事件、过 `lifecycle.apply`、落 `governance_state.json`，带水位线幂等 | `governance advance --dry-run` |
 | 2 | `governance next` 的装配器 | 已装 | `governance next` → `scheduler VALIDATE  8 shortlisted candidates are unvalidated` |
 | 3 | book 报告补三个字段 | `slippage_stress` / `baseline_correlation` / `turnover_ratio_to_main`（门 3.0×）都进了报告 | 门一有字段就抓到了 `book-tsmom-mined_594a12f9307a15d9` 的 **4.35× 换手** |
-| 4 | 家族门重算 | `beidou_governance/family_gate.py`，`Facts.family_gate_still_passes` 进状态机，`advance` 喂给它 | `governance gate` → tsmom PASS 1.8087 vs 1.5149 at N=185 |
+| 4 | family gate 重算 | `beidou_governance/family_gate.py`，`Facts.family_gate_still_passes` 进状态机，`advance` 喂给它 | `governance gate` → tsmom PASS 1.8087 vs 1.5149 at N=185 |
 | 5 | 现货 store 接进 `_load` + 现货 `Verification` | `_load(..., metrics=True, spot=True)`；`beidou data spot` 进 `run_data.sh` | 153 个 spot parquet；`spot_alignment.json` **PASS**（744/744，±1 小时各 0/744） |
 | 6 | `data onchain` / `data index` | 连同 `data macro`、`data spot` 一起落地 | `beidou data --help` |
 | 7 | `collateral_drift` 进日报 + assert 改钉方向 | 日报有 RISK-G11 段；断言钉的是 `direction`，不是那个一天内漂 0.24 的水平值 | 今日 `repricing_share 26.3% / direction same_direction` |
@@ -322,7 +322,7 @@ flow 是 **49** 对 **721**。**因果性、有界性、非空转三条检查一
 | # | 事项 | 状态 |
 | --- | --- | --- |
 | 2 | 那 658 行怎么记 | **已裁：留**（K-EX07 先例；理由记在 RESEARCH_LOG） |
-| 3 | 家族门实现还是删 | **已裁：实现**（见 A4） |
+| 3 | family gate 实现还是删 | **已裁：实现**（见 A4） |
 | 4 | 一批文档更正 | **已改**，每条带「2026-09-10 更正」标注，含 AR-15 → CLOSED、C-G2′ → MITIGATED |
 | 1 | **L3 的 ERROR 口径** | **已裁（同日稍晚，`6a79f2e4`）：no-decision 读法 + ERROR 连段设门，字面读法照报不作门。** 连段的门不是新挑的——`STUCK_IN_ERROR_STREAK = 3`，与 `live status --check` 同一个常量，移进 `beidou_live/health.py` 供两个读者取。理由与今天的读数见 RESEARCH_LOG「2026-09-10 · 操作者裁定四条」。<br>**2026-09-12 更正**：本行原写「仍未裁」，是本表定稿早于裁定落地的时序错位；四条裁定当天晚些时候一并交回并落成判据。 |
 

@@ -45,7 +45,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | `promote.py` | registry 事务：写 YAML + evidence sha256 → 请求重启 → 启动闸不过 → 回滚到上一 digest | 事务日志 `governance/transactions.jsonl` |
 | `canary.py` | 影子循环：`live run --dry-run --state-dir .beidou/live-shadow`（**`--state-dir` 是新 flag**），浸泡 168 周期，健康检查 | 通过 → `promote.apply()`；否则回队列 + R5 计数 |
 | `tenure.py` | probe → main 的时间规则（窗口存活计数、stop 事件读 `stopped_books` 与归因）；main 的回流 | 输入批次窗口日历 + 归因 |
-| `replay.py` | 策略回放：对历史账本 + 报告 + RESEARCH_LOG 裁定重放规则，输出结论 + 例外清单 + 差异归因 | Phase 0 与每次规则版本变更的验收 |
+| `replay.py` | 策略回放：对历史 ledger + 报告 + RESEARCH_LOG 裁定重放规则，输出结论 + 例外清单 + 差异归因 | Phase 0 与每次规则版本变更的验收 |
 | `budget.py` | R1 预算、R3 并发、R4 每窗口上限、R5 连败冻结、R7 重入上限 | 被 scheduler / promote 调用 |
 
 对既有包的改动（每处都在上限，需在同一提交抬上限并写理由）：
@@ -67,8 +67,8 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | validated → booked | book 六项 ∧ `slippage_stress` 5.5 档过 ∧ 与每本在跑的书 corr < 0.5 ∧ 换手 ≤ 3× tsmom | 同上 | 研究机 |
 | booked → queued | 面板平价义务满足（M-011；缺则卡在 `metrics_refusal` 同形闸） | 同上 | 研究机 |
 | queued → probe | 批次窗口 ∧ R3/R4 未满 ∧ 队首 ∧ Canary 健康检查过 ∧ **M-010 在当前构造下已满 30 天**（K-EX14，见下） | **月度** | 慢：事务 + 重启，**机器执行（含第一次）**；失败由 R6 自动回滚 |
-| **probe → main（时间规则）** | 连续 **9 个批次窗口**（= 9 个月）存活 ∧ 期间从未触发 P&L stop ∧ 家族门重算仍过。**main 保留 P&L stop 与 fraction 不变**——晋级只解除 R7 的重入计数，不加预算 | 窗口末 | 慢 |
-| probe → retired | P&L stop（已有）∨ 家族门重算不过 | 即时 | 快：`stopped_books` |
+| **probe → main（时间规则）** | 连续 **9 个批次窗口**（= 9 个月）存活 ∧ 期间从未触发 P&L stop ∧ family gate 重算仍过。**main 保留 P&L stop 与 fraction 不变**——晋级只解除 R7 的重入计数，不加预算 | 窗口末 | 慢 |
+| probe → retired | P&L stop（已有）∨ family gate 重算不过 | 即时 | 快：`stopped_books` |
 | main → probe | 触发 P&L stop 一次 → 回 probe 重新计 3 窗口（不 retired） | 即时 | 快 |
 | 任何 → retired | **第 3 次离开 probe 后**（R7：终身进 probe 上限 3 次） | — | — |
 
@@ -76,7 +76,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 
 **窗口 = 一个月（Q3，2026-09-08 操作者裁定），三条连带后果**：
 
-1. **K-EX14 与窗口长度正好相等，所以它是准入条件而不是背景约束。** `construction_fingerprint` 含 `strategy_weights`（`engine.py:1386` ← `config.py:102` 从 `registry.enabled` 构建），所以**每次晋级都改构造指纹、清零 M-010 的 30 天窗口**。月度窗口下这条零余量：晋级发生在第 0 天，下一次要等第 30 天。故 §3 把"M-010 已满 30 天"写进 queued→probe 的条件——**每月是一次晋级机会，不是每月必晋级**；时钟没到，窗口空过。
+1. **K-EX14 与窗口长度正好相等，所以它是准入条件而不是背景约束。** `construction_fingerprint` 含 `strategy_weights`（`engine.py:1386` ← `config.py:102` 从 `registry.enabled` 构建），所以**每次晋级都改构造指纹、清零 M-010 的 30 天窗口**。月度窗口下这条零 headroom：晋级发生在第 0 天，下一次要等第 30 天。故 §3 把"M-010 已满 30 天"写进 queued→probe 的条件——**每月是一次晋级机会，不是每月必晋级**；时钟没到，窗口空过。
 2. **时间规则的窗口数从 3 改为 9，为的是保持原强度不变。** 预登记"3 个窗口"是在窗口 = 季度时写的（= 9 个月）。按 D-019 的 −2σ 校准，单窗口 stop 概率对 Sharpe-0 的 sleeve ≈ 2.3%、对 Sharpe-1.7 ≈ 0.64%（E5，正态近似、窗口独立）：
 
    | 窗口数 | Sharpe-0 到 main | Sharpe-1.7 到 main | 鉴别比 |
@@ -85,7 +85,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
    | **9（= 9 个月）** | **81.0%** | **94.4%** | **1.17** |
 
    保持 9 个窗口 = 保持预登记时的鉴别力；改成 3 个窗口是**把晋级速度换成更弱的过滤**，一行可改，但要作为规则版本变更记一笔。两个数都很弱——这正是"区分的是炸没炸，不是有没有 alpha"那句话的量化形态。
-3. **R1、R5 按窗口重新表述**：预算从"每季 500"改为"每窗口 170"（账本增速不变）；冻结从"2 窗口"改为"6 窗口"（仍是 6 个月，惩罚力度不变）。R3/R4/R7 不动——实际约束是 R3 的 2 个 probe 位，而 flow 已占 1。
+3. **R1、R5 按窗口重新表述**：预算从"每季 500"改为"每窗口 170"（ledger 增速不变）；冻结从"2 窗口"改为"6 窗口"（仍是 6 个月，惩罚力度不变）。R3/R4/R7 不动——实际约束是 R3 的 2 个 probe 位，而 flow 已占 1。
 
 **时间规则的诚实标注**：按 D-019 校准（−2% ≈ 探针 30 天 P&L 的 −2σ），Sharpe-0 的 sleeve 9 个月存活概率约 0.8，Sharpe-1.7 约 0.95（E5 估算，独立窗口近似）。**它区分的是"炸没炸"，不是"有没有 alpha"**；假阳性的代价由 fraction ≤ 1/3 与 stop 兜底。
 
@@ -95,10 +95,10 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 
 | # | 规则 | 数值 | 来源 |
 | --- | --- | --- | --- |
-| **R0** | 分位数门的 N 口径：**保持按策略桶**（`ledger_scope`），mined 候选加共享 `mined` 桶；全库 N 与 N_eff **只报告**。理由：全库 N 会让诚实网格的在位者 FAIL（KILL-AR-01），N_eff 只降门（`multiple_testing.py:207`）。家族级风险改由 R3/R4/R5 在暴露侧控制 | — | 推导 |
-| R1 | **每窗口**新增账本行 ≤ B，**不含共享 `mined` 桶**；mine 轮次单独计，每窗口 ≤ 1 | **B = 1,700；mine 4 轮/窗口（policy 0.3.0，操作者 2026-09-09 放开）**；原写 170 / 1 轮 | **E5**。**policy 0.2.0（2026-09-08）改**：原口径 170 行 = 一次 mine 的 1/3，而 `refusals` 整体拒绝不截断，于是 R1+R2+调度器让 mine **在任何窗口都跑不了**。R1 约束的是「这个窗口做了多少次**选择**」，而一次 mine 是**一次**选择（枚举全空间取边际前 k），这正是 `ledger_scope` 把它们归到一个共享桶的原因。**DSR 分母不变**——仍按全部 514 计 |
+| **R0** | 分位数门的 N 口径：**保持按策略桶**（`ledger_scope`），mined 候选加共享 `mined` 桶；全库 N 与 N_eff **只报告**。理由：全库 N 会让诚实网格的 incumbent FAIL（KILL-AR-01），N_eff 只降门（`multiple_testing.py:207`）。家族级风险改由 R3/R4/R5 在暴露侧控制 | — | 推导 |
+| R1 | **每窗口**新增 ledger 行 ≤ B，**不含共享 `mined` 桶**；mine 轮次单独计，每窗口 ≤ 1 | **B = 1,700；mine 4 轮/窗口（policy 0.3.0，操作者 2026-09-09 放开）**；原写 170 / 1 轮 | **E5**。**policy 0.2.0（2026-09-08）改**：原口径 170 行 = 一次 mine 的 1/3，而 `refusals` 整体拒绝不截断，于是 R1+R2+调度器让 mine **在任何窗口都跑不了**。R1 约束的是「这个窗口做了多少次**选择**」，而一次 mine 是**一次**选择（枚举全空间取边际前 k），这正是 `ledger_scope` 把它们归到一个共享桶的原因。**DSR 分母不变**——仍按全部 514 计 |
 | R2 | mine 只在搜索空间变化时跑；同空间重跑拒绝；重开路径：`--reauthorize '<D-决策与理由>'`，理由写进 shortlist 报告 | 版本 = `SearchResult.space_digest`（**规范表达式哈希的集合**）。**修正**：v2.1 写的"`search_space_version` 由空串改为必填"是错的——那个字段在 `mined` 桶的行上刻意留空，改必填会为一个 514 的家族收 267 + 514（见 09-08 日志） | 先例（K-EX07 / Q7） |
-| R3 | probe 并发 ≤ 2；probe 总分数 ≤ 1/3 主账本 | — | 先例（D-018；flow 已占 1） |
+| R3 | probe 并发 ≤ 2；probe 总分数 ≤ 1/3 主 ledger | — | 先例（D-018；flow 已占 1） |
 | R4 | 每窗口 ≤ 1 queued→probe、≤ 1 probe→main | — | **E5** |
 | R5 | 连续 2 个 probe 被 stop → 冻结 **6 窗口**（= 6 个月，与季度口径下的 2 季等长）；no-decision：stop 发生在 TRANSFER 重基或 ERROR 相的周期不计 | k=2, n=6 | **E5**（假停率进 EXP-G6′） |
 | R6 | registry 事务 + 回滚 | — | 推导（KILL-Q15） |
@@ -112,7 +112,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | 层 | 环境 | 验什么 | 通过条件 |
 | --- | --- | --- | --- |
 | L1 代码层 | pytest（240 s 上限） | 每个 signal 自动三测（因果 / warmup / 有界，**面板随 warmup 伸缩**，KILL-AR-15）；治理属性测试（R0–R10 任意序列不可违反；事务回滚后 digest 相等）；状态机合法转移 | 全绿 + ratchet |
-| L2 回放层 | 历史账本 702 行 + 199 份报告 + RESEARCH_LOG 裁定 | 规则对每个人工裁定的重放，**输出 = 规则结论 + 例外清单 + 差异归因**（KILL-AR-03） | 差异清单无"未归因"项 |
+| L2 回放层 | 历史 ledger 702 行 + 199 份报告 + RESEARCH_LOG 裁定 | 规则对每个人工裁定的重放，**输出 = 规则结论 + 例外清单 + 差异归因**（KILL-AR-03） | 差异清单无"未归因"项 |
 | L3 paper | `live run --paper`（进程内撮合、mainnet 标记、无凭证） | 状态机 + 调度器 + 事务在无场所下跑完整周期 | 7 天无 ERROR 相；事务日志闭合 |
 | L4 Canary | `live run --dry-run --state-dir .beidou/live-shadow`，读候选 registry | **部署健康**：0 启动闸拒绝；digest 稳定；`guard_reasons` 率 ≤ 基线；无 ERROR 连败；计划订单 ⊆ participation cap；`targets ⊆ universe`。**不拦假阳性**（KILL-AR-04） | 六项全过（**更正**：`canary.py` 实建 **7** 项 Check，多一个 `soak`；`healthy` 要求全 7） |
 | L5 Testnet armed | demo-fapi，`--armed`，probe 受 R3 限制 | 真实撮合下的执行保真 + 六项演练 | M-Q03 / M-Q08（≥30 笔）/ M-Q09 / M-Q10 = 100% / M-015 在界内；DRILL-G1..G6 全过 |
@@ -135,12 +135,12 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 
 | 块 | 条目 | 进入 Phase | 备注 |
 | --- | --- | --- | --- |
-| 块 5 验证/账本扩展 | R0 报告口径、`search_space_version` 必填、时间规则、事件时间对齐契约、配对选择计费 | **Phase 1** | 没它们，后面做了也不算数 |
+| 块 5 验证/ledger 扩展 | R0 报告口径、`search_space_version` 必填、时间规则、事件时间对齐契约、配对选择计费 | **Phase 1** | 没它们，后面做了也不算数 |
 | 块 1 数据管线（**12 条**，13 是重复计数） | #16 OI ✔ / #17 多空比 ✔（**实盘闸对它关着**：四列在 snapshot 全 NaN）、现货 ingest（解锁的**只有 #11 基差**——~~#14 资金费套利~~ ~~#39 期现~~ **2026-09-10 判「不可执行」**：两者都要现货腿，而 `guard.py` 的 `ORDER_PATHS` 只有 `/fapi/v1/order` 与 `batchOrders`）、~~#19 公共清算流~~ **不可用**、~~#28 解锁~~ **不可得**、#29 指数 ✔（无 store/sync/CLI）、~~#30 社交~~ **不可得**、#31 链上 ✔、#32 宏观 ✔（2026-09-09 落地） | Phase 3 | 每列进实盘前过平价义务；外部 API 每个一份对齐契约 |
 | 块 2 挖掘节点（6 条） | hod #8 ✔（54 个，已打分）、**OI/LS 叶 ✔ 但 90 个候选从未打过分**（`metrics=True` 缺失，`f4ea9de` 已修，见 2026-09-10 预登记）、basis 叶 ✔（18 形状，`_load` 不建现货 store 故枚举 0）、~~liquidation 叶~~ **永久阻塞（无数据）**、regime 叶 ✔（边际全负） | Phase 3 | 每节点：量纲 + 因果 + 哈希稳定 + 预登记提交早于第一份报告 |
 | 块 3 手写信号（6 条） | 配对/协整（#6）、上新（#27）、~~缠论（#51）~~ **REFUTED 2026-09-08（corr 0.64、边际 −0.63）→ retired**、regime（#47）、岭回归（#22，≥3 因子后）、meta-label（#24，与 P24 结项冲突，Won't） | Phase 3 | 各自预登记网格先提交 |
-| 块 4 构造/执行层（7 条） | **冲击模型（#43）移到 Phase 1（DL-C1，Q-CRITICAL 裁定）**；~~GARCH（#35）~~ **REFUTED 2026-09-09（P29：预报更准但配对 −0.27 / t −7.09，零成本下仍 −0.20）→ retired**、~~HRP（#48）~~ **REFUTED 2026-09-09（P29：−0.23；控制行显示损失来自 inverse-variance 分配而非聚类）→ retired**、~~VWAP（#42）~~ **REFUTED 2026-09-09**、回撤节流（#20，已判否）、动态杠杆（#49，已有）、抵押品分母 | 其余仍在批次窗口 #1（Phase 4a） | 每条 = 重启 + 清零 M-010。**成本模型是例外**：它不在 `construction_fingerprint` 里，所以建它不清零 M-010——但采纳它要按 D-033/D-034 先例重出证据（加账本行，计入 R1） |
-| 块 6 已判否 7 条 | **✔ 已收口（2026-09-09）**：xsmom（零账本前置闸，`validate` 未跑）/ carry FAIL / residual FAIL（差 0.0135）/ meanrev、breakout 按「改变的条件动不了死因」不跑 / 节流 09-07 已重测 / regime 已结项。**七条无一进 probe，共花 12 行账本**（按字面跑七条要 56 行换 0 个新结论） | 已完成 | 写明产生旧否决的网格（校准记录的教训） |
+| 块 4 构造/执行层（7 条） | **冲击模型（#43）移到 Phase 1（DL-C1，Q-CRITICAL 裁定）**；~~GARCH（#35）~~ **REFUTED 2026-09-09（P29：预报更准但配对 −0.27 / t −7.09，零成本下仍 −0.20）→ retired**、~~HRP（#48）~~ **REFUTED 2026-09-09（P29：−0.23；控制行显示损失来自 inverse-variance 分配而非聚类）→ retired**、~~VWAP（#42）~~ **REFUTED 2026-09-09**、回撤节流（#20，已判否）、动态杠杆（#49，已有）、抵押品分母 | 其余仍在批次窗口 #1（Phase 4a） | 每条 = 重启 + 清零 M-010。**成本模型是例外**：它不在 `construction_fingerprint` 里，所以建它不清零 M-010——但采纳它要按 D-033/D-034 先例重出证据（加 ledger 行，计入 R1） |
+| 块 6 已判否 7 条 | **✔ 已收口（2026-09-09）**：xsmom（零 ledger 前置闸，`validate` 未跑）/ carry FAIL / residual FAIL（差 0.0135）/ meanrev、breakout 按「改变的条件动不了死因」不跑 / 节流 09-07 已重测 / regime 已结项。**七条无一进 probe，共花 12 行 ledger**（按字面跑七条要 56 行换 0 个新结论） | 已完成 | 写明产生旧否决的网格（校准记录的教训） |
 | 块 0 换系统级 12 条 | 做市 / 盘口 / 清算-盘口侧 / 路由 / 跨所 / 三角 / 跨期 / ETF / 期权 ×3 / LSTM / RL | Out | 另立项目 |
 
 ## 7. 第 51 条：缠论（`chanlun`）规格
@@ -163,7 +163,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 - **与 tsmom 的 corr < 0.5**，否则判"tsmom 换了写法"（预期这是最可能的死因：缠论在 1h 加密永续上本质是带结构的趋势跟随）；
 - `decompose` 的 `sign_only` 臂不劣于 `full` 臂 0.05 以上（幅度无信息则改 sign 模式）；
 - 换手 ≤ 3× tsmom；
-- 三类买点触发数：最低可判定样本 = 走前 5 折每折 ≥ 60 次事件 ≈ 5 年 × 205 币 × 4h 级别下每币每年 ≥ 0.3 次 ≈ **≥ 300 次**（E5 推导）。
+- 三类买点触发数：最低可判定样本 = 走前 5 fold 每 fold ≥ 60 次事件 ≈ 5 年 × 205 币 × 4h 级别下每币每年 ≥ 0.3 次 ≈ **≥ 300 次**（E5 推导）。
 
 **预期**：阴性或"与 tsmom 高相关"为基准预期；阳性需在 Canary 后按 §3 走 probe，不例外。
 
@@ -185,10 +185,10 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 
 | DL | 来源链 | 实现 | 测试 | 验收 | 指标 | ratchet |
 | --- | --- | --- | --- | --- | --- | --- |
-| **DL-G0 回放 ✔** | Pre-A′ ← Phase 7 AR-03/AR-10 | `replay.py`：读账本 / 报告 / 日志裁定，重放 §3/§4，输出结论 + 例外清单 + 差异归因 | T-G0-1 例外清单含 D-019 / D-029 / K-EX07 / Q7 / P10 cell B / P11 / P13；T-G0-2 每条差异带规则 ID | AC-G0 | M-G02 | gov +≈300 |
+| **DL-G0 回放 ✔** | Pre-A′ ← Phase 7 AR-03/AR-10 | `replay.py`：读 ledger / 报告 / 日志裁定，重放 §3/§4，输出结论 + 例外清单 + 差异归因 | T-G0-1 例外清单含 D-019 / D-029 / K-EX07 / Q7 / P10 cell B / P11 / P13；T-G0-2 每条差异带规则 ID | AC-G0 | M-G02 | gov +≈300 |
 | **DL-G1 报告口径 ✔** | R0 ← KILL-AR-01 | `multiple_testing.py` 报告全库 N 与 N_eff（不作门） | T-G1-1 现有报告重算判定不变；T-G1-2 报告含两个口径 | AC-G1 | M-Q04 | alpha +≈40 |
-| **DL-G2 同空间不重跑 ✔** | R2 ← 09-08 账本事故 | `SearchResult.space_digest` 进 shortlist 报告；`research mine` 在打分前拒绝已枚举过的空间；`--reauthorize` 记进报告 | T-G2-1 同空间被拒 ✔；T-G2-2 更宽的空间放行 ✔；T-G2-3 早于字段的报告按 `evaluated` 退化并标注 ✔ | AC-G2 | M-G04 | alpha +≈15，cli +≈64 |
-| **DL-G3 状态机 + 预算 ✔** | §3 / §4 | `lifecycle.py`（Phase 0）、`budget.py`（R1 从账本读）、`state.py`/`governance_state.json` | T-G3-1 非法转移拒绝；T-G3-2 R1/R3/R4/R5/R7 属性测试（hypothesis）；T-G3-3 重启后状态持久 | AC-G3 | M-G01 | gov +≈500 |
+| **DL-G2 同空间不重跑 ✔** | R2 ← 09-08 ledger 事故 | `SearchResult.space_digest` 进 shortlist 报告；`research mine` 在打分前拒绝已枚举过的空间；`--reauthorize` 记进报告 | T-G2-1 同空间被拒 ✔；T-G2-2 更宽的空间放行 ✔；T-G2-3 早于字段的报告按 `evaluated` 退化并标注 ✔ | AC-G2 | M-G04 | alpha +≈15，cli +≈64 |
+| **DL-G3 状态机 + 预算 ✔** | §3 / §4 | `lifecycle.py`（Phase 0）、`budget.py`（R1 从 ledger 读）、`state.py`/`governance_state.json` | T-G3-1 非法转移拒绝；T-G3-2 R1/R3/R4/R5/R7 属性测试（hypothesis）；T-G3-3 重启后状态持久 | AC-G3 | M-G01 | gov +≈500 |
 | **DL-G4 事务 + 回滚 ✔** | R6 | `promote.py` | T-G4-1 闸拒绝 → 回滚 → digest 等于回滚前；T-G4-2 幂等 | AC-G4 / DRILL-G1 | M-Q10 | gov +≈250 |
 | **DL-G5 Canary ✔** | §5 L4 | `canary.py` + `run_shadow.sh` + `.beidou/live-shadow` + `live run --state-dir` | T-G5-1 健康指标计算；T-G5-2 失败 → 回队列 + R5 计数 | AC-G5 / DRILL-G4 | M-G03 | gov +≈300，cli +≈20，deploy |
 | **DL-G6′ 时间规则 ✔** | §3 ← 选项 b | `tenure.py`（从 `cycles.jsonl` 推出事件）+ `governance tenure`；判定仍全在 `lifecycle.py`。**未关的那条边：`probes_from_registry` 排除 main book，所以 main→probe 从记录里不可达**，命令自己会说 | T-G6′-1 ✔；T-G6′-2 ✔；T-G6′-3 ✔（跳过丢不掉真 stop，有测试）；另加两条：窗口内无周期不算存活、中途进场不拿那个窗口 | AC-G6′ | M-G01 | gov +≈150 |
@@ -204,7 +204,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 
 | AC | DL | 层级 | 前置 | 操作 / 观察 | 客观预期 | 失败动作 |
 | --- | --- | --- | --- | --- | --- | --- |
-| AC-G0 ✔（2026-09-09 重新为真） | G0 | Hypothesis | 账本 / 报告在案 | `governance replay --since 2026-09-03` | 输出规则结论 + 例外清单 + 差异归因；**无"未归因"项** | 规则第一版不定稿 |
+| AC-G0 ✔（2026-09-09 重新为真） | G0 | Hypothesis | ledger / 报告在案 | `governance replay --since 2026-09-03` | 输出规则结论 + 例外清单 + 差异归因；**无"未归因"项** | 规则第一版不定稿 |
 | **AC-C1 ✔（2026-09-09）** | C1 | Functional | Phase 1 | 用新成本模型重跑 tsmom validate | 报告落 `impact_model` 块；10 万 USDT 的参与率与容量曲线可算；判定变化（若有）写进 RESEARCH_LOG | 模型不采纳，平 7 bps 维持并记为已知债 |
 | **AC-G9 ✔（能满足的唯一形式）** | G9 | Functional | Phase 1 | 重跑 `governance replay` | ~~两条消失~~ **改判（2026-09-09）：两条各有 1 份指针「已可判定」，14 份早于 DL-G9 的仍挂起。字面写法不可能满足——预登记指针没法事后补进旧报告；能满足的形式是「DL-G9 之后的报告按 artefact 判定」，回放已如此输出** | 状态机仍不可通电 |
 | **AC-G1 ✔** | G1 | Functional | Phase 1 | 重算历史报告 | 判定不变；tsmom 的两个口径（146 / 677）都写进报告 | 口径重查 |
@@ -231,7 +231,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | **M-G05** | 机器裁决与事后人工复核的分歧率（方向分开记） | — | 季度复核 ≥ 10 条；分歧 > 20% 或系统性偏一侧 → 规则版本复审 | 每季 | 这是 Pre-A′ 的 falsifier |
 | **M-G06** | 构造不变 ≥ **18 个月**的实盘归因年化 Sharpe（**按策略**，与 M-010 同口径） | — | **点估计 ≥ 0**；NW t 只报告不作门（与 D-P2 对 t 的处置同形） | 18 个月，按 `canonical_construction` 计时 | 该策略退出 main |
 
-**Experiment**：EXP-G0 策略回放（零账本）；EXP-G6′ 时间规则的假停率模拟（R5 的 k=2 是否会被噪声触发）；EXP-S51 缠论预登记验证。
+**Experiment**：EXP-G0 策略回放（零 ledger）；EXP-G6′ 时间规则的假停率模拟（R5 的 k=2 是否会被噪声触发）；EXP-S51 缠论预登记验证。
 
 ## 12. Risk Register
 
@@ -269,7 +269,7 @@ Phase 5 稳态：月度窗口（每月一次晋级机会，非每月必晋级）
 | ~~Q4~~ | 新数据源进范围 | **已裁（2026-09-09）：按默认「进」** |
 | ~~Q5~~ | 研究机 | **已裁定（2026-09-12）：只用本机，不增加能下单的机器。** 于是 §21 的第 3 条代价消失——canary 的交易凭据就在本机，L4 不再无处安放，浸泡已于 13:21Z 启动（`com.beidou.shadow`）。`com.beidou.research.plist` / `run_research.sh` 随之判**明写不做**。原文：默认单机。**跨机契约已写（§21）**，并核出了它的代价：canary 走 `--dry-run` → `build_venue`，**需要交易凭据**，所以研究机跑不了 §5 的 L4。要拆机，先裁「多一台能下单的机器」 |
 | ~~Q6~~ | 缠论形式化 | 按 §7，不改 |
-| ~~Q7~~ | 09-08 重跑的 514 行账本 | 已裁定回退（K-EX07 先例） |
+| ~~Q7~~ | 09-08 重跑的 514 行 ledger | 已裁定回退（K-EX07 先例） |
 | ~~Q8~~ | 治理代码 vs 90% alpha 目标 | 已裁定：授权通过，90% 是希望不是硬要求（AR-11 ACCEPTED） |
 | ~~Q9~~ | Phase 4b 前两次事务是否由人 `apply` | **已裁定（2026-09-08）：不用人 apply，第一次就机器执行**；AR-18 转 ACCEPTED |
 
@@ -285,7 +285,7 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
 
 | 制品 | 写 | 读 | 传递 | 并发 |
 | --- | --- | --- | --- | --- |
-| `reports/research/*`、验证账本 | 研究机 | 两边 | git | 只追加，文件名带时间戳，天然不冲突 |
+| `reports/research/*`、验证 ledger | 研究机 | 两边 | git | 只追加，文件名带时间戳，天然不冲突 |
 | `config/alpha_registry.yaml` | **只有交易机**（事务） | 两边 | git | 单写者 |
 | `governance/transactions.jsonl` | **只有交易机** | 两边 | git | 只追加；`closed()` 验链，断链即"有人绕过事务改了 registry" |
 | `governance/governance_state.json` | **只有交易机** | 两边 | git | **必须单写者**：`probe_entries` 是 R7 的终身计数，两边各加一次就等于白送一条命 |
@@ -323,7 +323,7 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
 | Kill | 处置 | 落点 |
 | --- | --- | --- |
 | AR-01 P0 | **CLOSED**：R0 保持按策略桶；证据已在现行门下重出（PASS 1.81 / 门 1.49） | §4 R0、§17 |
-| AR-02 P0 | **CLOSED（2026-09-09）**：选项 b 改写为时间规则并标注非证据；AC-G6′ 已跑——三条序列都由**真引擎写记录、真 tenure 读回来**，两半此前各自有测试而从不相接，而这条缝正是本项目缺陷所在（`probes_from_registry` 漏掉主账本、记录按账本名而状态按策略 id、stop 阈值不进 digest）| §3、§10 |
+| AR-02 P0 | **CLOSED（2026-09-09）**：选项 b 改写为时间规则并标注非证据；AC-G6′ 已跑——三条序列都由**真引擎写记录、真 tenure 读回来**，两半此前各自有测试而从不相接，而这条缝正是本项目缺陷所在（`probes_from_registry` 漏掉主 ledger、记录按 ledger 名而状态按策略 id、stop 阈值不进 digest）| §3、§10 |
 | AR-03 | CLOSED：AC-G0 改例外清单 | §9–10 |
 | AR-04 | CLOSED：Canary 改标签；补 `--state-dir` | §5 |
 | AR-05 | MITIGATED：R8 改归因口径 + 告警 + 宽限 | §4 |
@@ -347,10 +347,10 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
 
 | 项 | tsmom | flow |
 | --- | --- | --- |
-| 协议 | 两臂 {crowding_window:[0,72]}、pit、5 折、4000/50/6、`--prior-trials 60`，**guards + exits 默认开** | `--main tsmom --sleeve flow`、1/3、pit + static、5 折、4000/50/6、`--prior-trials 39` |
+| 协议 | 两臂 {crowding_window:[0,72]}、pit、5 fold、4000/50/6、`--prior-trials 60`，**guards + exits 默认开** | `--main tsmom --sleeve flow`、1/3、pit + static、5 fold、4000/50/6、`--prior-trials 39` |
 | 结果 | **PASS**：OOS 1.81（093705Z 1.77）、门 1.49 @ N=146、p_family 0.00、CPCV 1.86/q05 1.36、成本×2 1.69、DSR p 0.31（只报）、PBO 0.09；DL-R4 标注仍在 | **REJECT**（同四项）：delta 0.00（原 +0.0046）、sleeve WEAK_PASS 0.59、static −0.08 |
 | 报告 | `tsmom-validation-20260908T105259Z` sha256 `11f91787…` | `book-tsmom-flow-20260908T105322Z` sha256 `385b2239…` |
-| 账本 | +2 | +2（pit / static 各一）；全库 unique 试验 673 → **677** |
+| ledger | +2 | +2（pit / static 各一）；全库 unique 试验 673 → **677** |
 | registry | 指针已换；`registry_evidence_problems` = []；`registry_digest` 不变（16671c63a12e）→ 无分叉、M-010 窗口不清零 | 同左 |
 | 重启 #6 | 11:00:02Z kickstart；PID 66596 → 83421；首周期 11:00:31Z（收盘后 29 s，DL-L4 窗口内）；18 币全 NO_TRADE_BAND；`live status --check` 通过 | — |
 
@@ -370,7 +370,7 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
 | 被挂起的判据 | 共 6 条（上述 2 条 + book 报告无 `slippage_stress`、corr/换手无字段链回 book、M-011 随 DL-D4、Canary 尚不存在），每条带修法与所属 Phase |
 | 例外清单 | 七条（D-019 / D-029 / K-EX07 / Q7 / P10 cell B / P11 / P13），每条记「为什么不该写成规则」。D-029 是唯一已部分成为规则的一条 |
 | 未能归因的形状 | 6.2 天内构造改了 **4** 次（首版数成 6 次——它按原始 digest 数，漏了 `CONSTRUCTION_ALIASES`：`unit_mode` 与四个 `regime_*` 改了指纹但行为一字未变，已在别名表里声明。已修并加回归测试）。规则允许每 30 天一次；归 `evidence_gap`：digest 不可反解，改了什么读不出来。其中 2 次可读为**回滚**（digest 回到旧值），正是 R6 要处理的形状 |
-| 实盘影响 | 无：零重启、零 registry 改动、零账本行 |
+| 实盘影响 | 无：零重启、零 registry 改动、零 ledger 行 |
 
 ## 19. Q-CRITICAL 与 Q2 裁定（2026-09-08）
 
@@ -399,7 +399,7 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
    guards / leverage / strategy_weights，不含成本。DL-C1 可以在 10-04 的 M-010 窗口内并行推进而不花掉它。
 2. **但采纳它要重出证据。** `verdict.decide` 读 `cost_stress.x2`，换成本模型等于不动阈值地移动一道门——
    这正是 D-033/D-034（资金费修正）走过的路，先例是**重跑而不是加注释**。所以 DL-C1 的落地包含一次
-   tsmom 重出，加账本行、计入 R1 的每窗口 170 行预算。
+   tsmom 重出，加 ledger 行、计入 R1 的每窗口 170 行预算。
 3. **审计三问③已关。** 这一段原本写着"仍然开着，且不是本次裁定的一部分"，与同节第 381 行的表格
    直接矛盾——表格记的是操作者当天的裁定，正文是裁定之前的稿子留下的。**操作者 2026-09-09 复裁：
    以表格为准，③ 已关。** 它要的本来就是"权重的分母该不该是含抵押品的权益"这一次构造裁定而不是更多
@@ -451,8 +451,8 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
 `live.demo.yaml` 早就把 **10 万 USDT** 写成"k 需在冲击模型下重推"的触发点；曲线证实那个点没选错。
 **读拐点不读水平**——整条曲线随系数只按 √ 移动。
 
-**DL-C1 明写未做**：`vol_target` 的重推。那是一次产生证据、消耗账本行的研究运行，采纳它还是一次构造改动、
-属批次窗口（Phase 4a）。DL-C1 交付的是让那次重推**可以做**。另一条近似：书级护栏回放用平费率给自己的权益
+**DL-C1 明写未做**：`vol_target` 的重推。那是一次产生证据、消耗 ledger 行的研究运行，采纳它还是一次构造改动、
+属批次窗口（Phase 4a）。DL-C1 交付的是让那次重推**可以做**。另一条近似：组合层护栏回放用平费率给自己的权益
 路径定价，冲击下日内止损档会比重放的略早触发；移进回放会让它路径依赖于自己正在产生的量，故记录不修。
 
 ## Checkpoint（2026-09-09 三次更新）
@@ -461,16 +461,16 @@ Q5 默认单机。这一节写的是**如果**拆成两台，什么东西跨过�
 | --- | --- |
 | Phase | Phase 0 ✔ · Phase 1 **✔（2026-09-09 收口）**——DL 表六项全交付，块 5 的五条全部落地（`事件时间对齐契约` `6f6f21a`、`配对选择计费` `8ca081f`）· Phase 2 ✔ · **Phase 3 走了大半** · **Phase 4a / 4b / 5 未开始**。重启 #6/#7/#8/#9 ✔ |
 | 块 5 收口的连带后果 | 「没它们，后面做了也不算数」这句解除了：**块 6 的 7 条重测不再被卡**（按 pit·0.30·D-034 重测，是下一个可开工的整块） |
-| 32 条候选的实际进度 | **块 1（13 条）**：metrics→Panel 的 #16/#17 ✔、现货 ingest ✔（362/528 有现货腿，解锁 #11 基差 / #14 资金费套利 / #39 期现）、公共清算流 #19 **判定不可用**（币安 USDⓈ-M 无清算历史，唯一存在的币本位归档在实盘期前 23 个月停更 → 平价**不可能满足** → RISK-G3 该列不进实盘）；外部 API 五条中**两条已处置（2026-09-09）**——**#28 解锁判「不可得」**（唯一免费源是一份持续覆写的单版本文档，无 as-of；Wayback 仅存的两份带日期快照上，`aave` **已过去**的 14,140 个点有 409 个变了、最大 5.75 倍 → 时点表无法重建 → RISK-G3 该列不进实盘，**未写下载器**）、**#31 链上 ✔**（Coin Metrics Community 免费无 key，覆盖 **49/528 = 9.3%**；流量两列因逐格 `-status-time` 最长晚写 **769 天**被拒，计数三列收；契约由 blockchain.info 独立见证证伪，**355/355 vs 97/354、97/355**）、**#29 指数 ✔**（归档对 REST 偏移 **0** 时 24/24、前后各一桶 0/23——与 metrics 的 −1 桶正相反，这条对照就是「每源各自声明偏移」的理由）、**#30 社交判「不可得」**（付费源要 key；唯一免费的 Fear & Greed 有 3,139 条日频但**是全市场标量不是每币一列**、且无 vintage 接口所以 PIT 不可核）、**#32 宏观挂起**等一次操作者动作（ALFRED 是唯一能给修订史的，需一个免费注册的 key，本会话不注册账户）。**五条全部有裁定：两条落地、两条不可得、一条挂起。**<br>**块 2（6 条）**：hod #8 ✔、OI/LS 叶 ✔、regime 叶 ✔、**basis 叶 ✔（2026-09-09）**——18 个形状，与 `_funding_family` 的横截面相关**实测 +0.048、R² 0.064，不共线**（与预期相反）；**但今天不可挖也不可交易**：`_load` 不建现货 store 所以 mine 枚举 0 个，且现货没有 `Verification` 对象所以实盘闸关着。liquidation 叶**永久阻塞**（无数据可喂）。<br>**块 3（6 条）：6/6 已处置**——缠论 REFUTED、配对 #6 REFUTED、regime #47 结项不实现、上新 #27 阻塞（两道门，且样本 24 次）、岭回归 #22 阻塞（需 ≥3 因子）、meta-label #24 Won't。<br>**块 4（7 条）：7/7 已处置**——冲击模型 #43 ✔（`vol_target` 重推属 Phase 4a）、动态杠杆 #49 已有、回撤节流 #20 判否、**GARCH #35 / HRP #48 / VWAP #42 三条 REFUTED**、抵押品分母已裁定。<br>**块 6（7 条）：✔ 收口（2026-09-09）**——xsmom / carry / residual 三条重测完毕**全部 FAIL**；meanrev（gross Sharpe −1.73，成本出现之前就是错的）与 breakout（成本是毛利的 1606%、换手 17× tsmom）按「改变的条件动不了死因」**不跑**；节流 09-07 已重测（0.30 下两个 universe 都不过，代价是 D-017 限额的 4–5 倍）；regime 已结项。**七条无一进 probe，全部维持 REFUTED**，共花 **12 行**账本（按字面跑七条要 56 行换 0 个新结论） |
+| 32 条候选的实际进度 | **块 1（13 条）**：metrics→Panel 的 #16/#17 ✔、现货 ingest ✔（362/528 有现货腿，解锁 #11 基差 / #14 资金费套利 / #39 期现）、公共清算流 #19 **判定不可用**（币安 USDⓈ-M 无清算历史，唯一存在的币本位归档在实盘期前 23 个月停更 → 平价**不可能满足** → RISK-G3 该列不进实盘）；外部 API 五条中**两条已处置（2026-09-09）**——**#28 解锁判「不可得」**（唯一免费源是一份持续覆写的单版本文档，无 as-of；Wayback 仅存的两份带日期快照上，`aave` **已过去**的 14,140 个点有 409 个变了、最大 5.75 倍 → 时点表无法重建 → RISK-G3 该列不进实盘，**未写下载器**）、**#31 链上 ✔**（Coin Metrics Community 免费无 key，覆盖 **49/528 = 9.3%**；流量两列因逐格 `-status-time` 最长晚写 **769 天**被拒，计数三列收；契约由 blockchain.info 独立见证证伪，**355/355 vs 97/354、97/355**）、**#29 指数 ✔**（归档对 REST 偏移 **0** 时 24/24、前后各一桶 0/23——与 metrics 的 −1 桶正相反，这条对照就是「每源各自声明偏移」的理由）、**#30 社交判「不可得」**（付费源要 key；唯一免费的 Fear & Greed 有 3,139 条日频但**是全市场标量不是每币一列**、且无 vintage 接口所以 PIT 不可核）、**#32 宏观挂起**等一次操作者动作（ALFRED 是唯一能给修订史的，需一个免费注册的 key，本会话不注册账户）。**五条全部有裁定：两条落地、两条不可得、一条挂起。**<br>**块 2（6 条）**：hod #8 ✔、OI/LS 叶 ✔、regime 叶 ✔、**basis 叶 ✔（2026-09-09）**——18 个形状，与 `_funding_family` 的横截面相关**实测 +0.048、R² 0.064，不共线**（与预期相反）；**但今天不可挖也不可交易**：`_load` 不建现货 store 所以 mine 枚举 0 个，且现货没有 `Verification` 对象所以实盘闸关着。liquidation 叶**永久阻塞**（无数据可喂）。<br>**块 3（6 条）：6/6 已处置**——缠论 REFUTED、配对 #6 REFUTED、regime #47 结项不实现、上新 #27 阻塞（两道门，且样本 24 次）、岭回归 #22 阻塞（需 ≥3 因子）、meta-label #24 Won't。<br>**块 4（7 条）：7/7 已处置**——冲击模型 #43 ✔（`vol_target` 重推属 Phase 4a）、动态杠杆 #49 已有、回撤节流 #20 判否、**GARCH #35 / HRP #48 / VWAP #42 三条 REFUTED**、抵押品分母已裁定。<br>**块 6（7 条）：✔ 收口（2026-09-09）**——xsmom / carry / residual 三条重测完毕**全部 FAIL**；meanrev（gross Sharpe −1.73，成本出现之前就是错的）与 breakout（成本是毛利的 1606%、换手 17× tsmom）按「改变的条件动不了死因」**不跑**；节流 09-07 已重测（0.30 下两个 universe 都不过，代价是 D-017 限额的 4–5 倍）；regime 已结项。**七条无一进 probe，全部维持 REFUTED**，共花 **12 行**ledger（按字面跑七条要 56 行换 0 个新结论） |
 | 前一版 Checkpoint 说错的两处 | ① 写「Phase 1 全部 DL 交付完」——对 DL 表是真的，但读起来像 Phase 1 完成了，而块 5 还差两条。② 写「Phase 3 块 3 结项」——块 3 只有 2/6 有结论，另外 3 条**根本没建**，「结项」是错词 |
-| 操作者裁定（2026-09-09） | ① 主账本必须有 stop → 已装并**在运行记录里可见**（06:00:14Z `probes={'main','flow_short'}`）；② probe→main 维持 9 个月；③ 维持单机；R1 预算放开（policy 0.3.0）；#8 现在写 → 已交付；Q4 按默认进 |
+| 操作者裁定（2026-09-09） | ① 主 ledger 必须有 stop → 已装并**在运行记录里可见**（06:00:14Z `probes={'main','flow_short'}`）；② probe→main 维持 9 个月；③ 维持单机；R1 预算放开（policy 0.3.0）；#8 现在写 → 已交付；Q4 按默认进 |
 | G0–G7 | G0 PASS · G1 PASS · G2 PASS · G3 ACCEPTED · G4 PASS · G5 PARTIAL（AC-G5 要一次真浸泡） · G6 PARTIAL（AR-17 OPEN） · G7 **PARTIAL**（AC-G7 已跑、DL-G7 已交付，但 §9 的 DL-D5 现货 ingest 仍无实现，AC-G5 的真浸泡与 AC-L5 的首个全自动窗口都没跑过——按 H9 的字面条件这三条各自足以让它不是 PASS） |
 | 治理线 | 自治 ENABLED；policy **0.3.0** digest `35e749f7fc0c`，**循环报的与磁盘一致**（新增比对）；事务 4 行、链闭合；`flow_short` 0/9 窗口 |
 | 预算（2026-09-09 实测更正） | R1 行预算 **169 / 1700**（此前这一格误填 683——那是**全库 unique 试验数**，与分母不是同一个量；分子换了量分母没换）。全库 unique 现为 **1,999**（今天两轮 mine 各 +658）。**mine 轮次 3/4——本窗口只剩一轮**（窗口 2026-10-03 关） |
 | 本轮找到并修的缺陷 | 共 **17** 条，同一形状：看起来在管事、实际什么都没管。<br>**不生效**：共享 universe、共享 metrics、钉住不生效、R8 梯子无调用者、`ensemble.turnover_penalty` 无实现。<br>**看不见**：DL-K3 比字符串、stop 阈值不进 digest、治理 digest 无读者、隔离在钉住背后缩小交易集、冲击模型不进试验签名、归因落在无定价 bar 上被丢。<br>**声明与实现脱节**：`gate_scope` / `report_whole_library_n` / `record_digest_every_cycle` / `no_decision_on_rebaseline` 无读者、`cost_stress` 未按标签计价、tenure 的「main→probe 不可达」已过期。 |
 | 两道通用护栏 | ① 每个 policy 字段必须有生产读者（`test_every_threshold_has_a_consumer.py`）；② 改一片 registry 叶子必须动某个 digest，例外按名字列（`test_the_digest_sees_every_live_knob.py`）。**它们会抓到 R8 那条梯子和 stop 阈值那个洞，也会抓到下一条**——这是本轮最值钱的产出，不是任何单条修复 |
 | 下一动作 | (a) metrics ingest 收尾（188/205，扫尾已挂）；(b) 用 OI/LS + hod 叶跑这一轮 mine（预算 169/1700、1/4 轮）；(c) L3 的 7 天软泡；(d) AC-G5 一次真候选浸泡 168 周期 |
-| 仍未定（操作者） | ① 主账本 stop 阈值 6% 是路线 B，`review_after_days: 30` 到期后按 30 天已实现归因重新按 −2σ 定；要变硬停是 `stop.halts: true` 一个字段。② **R8 梯子现在会自己缩仓**——这是全系统第一条不经人就改变仓位尺寸的控制。理由：它读的是归因不是权益（那两句「刻意不自动化」针对的是权益口径），补偿控制是 2 周期宽限 + 首次告警 + 两档都写在 `policy_digest()` 里。今天不改变任何行为（归因回撤 −0.23%，第一档 −35%）。要改成只告警不动作，是 `_risk_ladder` 里一处判断。③ DL-C1 的 `vol_target` 重推仍未做，属批次窗口（Phase 4a） |
+| 仍未定（操作者） | ① 主 ledger stop 阈值 6% 是路线 B，`review_after_days: 30` 到期后按 30 天已实现归因重新按 −2σ 定；要变硬停是 `stop.halts: true` 一个字段。② **R8 梯子现在会自己缩仓**——这是全系统第一条不经人就改变仓位尺寸的控制。理由：它读的是归因不是权益（那两句「刻意不自动化」针对的是权益口径），补偿控制是 2 周期宽限 + 首次告警 + 两档都写在 `policy_digest()` 里。今天不改变任何行为（归因回撤 −0.23%，第一档 −35%）。要改成只告警不动作，是 `_risk_ladder` 里一处判断。③ DL-C1 的 `vol_target` 重推仍未做，属批次窗口（Phase 4a） |
 | 时间约束，干不完的 | L3 7 天软泡；M-Q08 ≥30 笔；probe→main 9 个窗口（首个 2026-10-03 关）；M-G06 构造不变 18 个月（若不再改构造，2028-03-05） |
 
 
@@ -486,7 +486,7 @@ regime(#47) 与节流(#20) 各被数了两遍（一次在块 3/块 4，一次在
 
 ### 22.2 §3 新增一条已实现的判据，和一条不可计算的发现
 
-`probe → main` 的第三个条件「家族门重算仍过」现已实现（`beidou_governance/family_gate.py`，
+`probe → main` 的第三个条件「family gate 重算仍过」现已实现（`beidou_governance/family_gate.py`，
 `beidou governance gate`），并接进 `lifecycle.evaluate` 的 `WINDOW_SURVIVED` 分支。
 
 **新发现，需操作者在 2027-06 之前裁一次**：flow 的 registry 证据是一份 **book 报告**，book 报告不带

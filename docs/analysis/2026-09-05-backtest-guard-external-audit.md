@@ -73,11 +73,11 @@
         daily_loss_pause -0.05 远早于强平触发。按此估算, 触及强平需在满 gross 下
         损失约 6 成权益。机械套用"无强平即致命"在这里会是假阳性。
   但仍然是缺口: 上述是一段**论证**, 不是一个**测量**。系统没有任何报告字段统计
-        "强平触及次数 / 最小保证金余量", 因此"强平不可达"这个结论目前无法被
+        "强平触及次数 / 最小保证金 headroom", 因此"强平不可达"这个结论目前无法被
         任何仪表证伪。这恰好是本仓库自己写下的标准——
         RESEARCH_LOG.md:1280「正确但无人陈述的事实, 和未经证明的断言,
         在操作者那里长得一模一样」。
-  修复: 在 _replay_book_guards 的逐 bar 循环里加一行维持保证金余量, 报告里出
+  修复: 在 _replay_book_guards 的逐 bar 循环里加一行维持保证金 headroom, 报告里出
         `min_margin_buffer` 与 `liquidation_touches`(期望恒为 0)。成本极低,
         且把一段论证变成一个可回归的量。
 
@@ -104,12 +104,12 @@
   ✓ benchmark_returns:204 自我标注 "zero-cost comparator, not investable"。
   ✓ 全仓库无 bfill / interpolate / center=True / 全样本 scaler fit / shuffle 切分。
   ✓ walk_forward_evaluate:135 对每个参数都记录了 test_score —— 看似有事后
-    挑选 OOS 的风险, 但 ledger.py 的跨运行追加式试验账本(当前 91 次)充当 DSR
+    挑选 OOS 的风险, 但 ledger.py 的跨运行追加式 trials ledger(当前 91 次)充当 DSR
     分母、verdict.py:63 强制 OOS Sharpe 越过 deflated 阈值(D-028), 事后挑选
-    会被账本计价。判为诊断数据, 非缺陷。
+    会被 ledger 计价。判为诊断数据, 非缺陷。
 
 ────────── 超出本清单、值得记录的良好实践 ──────────
-  · ledger.py —— 追加式试验账本, 按 (参数, 数据区间, 标的数) 签名去重并直接
+  · ledger.py —— 追加式 trials ledger, 按 (参数, 数据区间, 标的数) 签名去重并直接
     作为 DSR 的 n_trials。本 skill ② 类只要求"披露试验次数", 这里做成了
     跨运行不可绕过的账。是我在三轮试跑里见过最硬的 p-hacking 防线。
   · verdict.py —— PASS/WEAK_PASS/FAIL 为纯规则函数, 阈值是显式入参;
@@ -148,13 +148,13 @@
 
   为什么这恰好作废两臂比较: crowding 修正的**唯一输入**是趋势资金费率的
   **横截面排名**(signals/tsmom.py:145)。181803Z 里它排的是一张缺了 43.7%、
-  且缺失比例逐年逐折漂移的面板。
+  且缺失比例逐年逐 fold 漂移的面板。
 
-  复算(scratchpad/verify_crowding_arms.py, 固定 146 标的 + 同截止, 不写账本):
+  复算(scratchpad/verify_crowding_arms.py, 固定 146 标的 + 同截止, 不写 ledger):
         crowding off  1.6450(记录) → 1.6745      关闭臂几乎不动
         crowding on   1.5291(记录) → **1.8027**   开启臂反转
   三个症状一次解释: 开启臂动(输入被污染)、关闭臂几乎不动(它付资金费但不读它做信号)、
-  逐折选择当时是 [72,0,72,72,0] 而今天全 72("缺失比例逐折不同")。
+  逐 fold 选择当时是 [72,0,72,72,0] 而今天全 72("缺失比例逐 fold 不同")。
   已排除的其他解释: 标的数(146 vs 205)、截止日、min_train(4000 与 8000 一致)。
 
   现状: config/alpha_registry.yaml:41 仍以
@@ -165,9 +165,9 @@
 
   【2026-09-05 已重做 · 操作者授权】`beidou research validate --strategy tsmom --universe pit
   --grid '{"crowding_window": [0, 72]}' --folds 5 --min-train 4000 --purge 50 --cpcv-groups 6
-  --prior-trials 30` → 报告 tsmom-validation-20260904T193707Z.json, 账本 +2 条(现 61 + 30 申报)。
+  --prior-trials 30` → 报告 tsmom-validation-20260904T193707Z.json, ledger +2 条(现 61 + 30 申报)。
 
-    逐折选择    [72, 72, 72, 72, 72]   —— 五折全选开启臂(181803Z 当时是 [72,0,72,72,0])
+    逐 fold 选择    [72, 72, 72, 72, 72]   —— 五 fold 全选开启臂(181803Z 当时是 [72,0,72,72,0])
     OOS Sharpe  1.7647   NW t 4.0266   consistency 1.00
     CPCV        mean 1.795  q05 1.338  负路径 0.00
     PBO         0.136                  (181803Z 为 0.5484 —— 按 D-020 硬门本会 FAIL)
@@ -176,7 +176,7 @@
     VERDICT     PASS,  best_params.crowding_window = 72
 
   与本报告 scratchpad 复算逐位一致(1.7647 / 4.0266), 互为交叉验证。
-  PBO 0.55 → 0.14 与"输入被污染"的解释一致: 被污染的臂使逐折选择不稳定, 而 PBO 正度量此。
+  PBO 0.55 → 0.14 与"输入被污染"的解释一致: 被污染的臂使逐 fold 选择不稳定, 而 PBO 正度量此。
 
   **仍未改动 registry**, 且有一处耦合必须先说清: alpha_registry.yaml 当前是
   `crowding_window: 0`, 而新证据的 best_params 是 72。KILL-027 的启动门比较 registry 参数
@@ -188,9 +188,9 @@
   行情走出后才加仓、反转时被迫出场; 性质 —— **行为性而非结构性**, 因此预期会随
   参与者适应而衰减, 由走前重验监控而不是假定其持久。
   连同两项证据一并写入: (a) 已测的**否定** —— carry rank 模式 5 年毛收益 −6%,
-  故不是伪装的资金费率套利; (b) crowding 修正的逐折表 —— 基线最弱的第 2 折
-  (2022-07→2023-07) 改善最大 +0.40, 基线最强的第 5 折反而 −0.10, 是**尾部缓解**
-  的形状而非收益增强。文中明确标注为假设而非发现(逐折规律是事后读出的, 5 折即
+  故不是伪装的资金费率套利; (b) crowding 修正的逐 fold 表 —— 基线最弱的第 2 fold
+  (2022-07→2023-07) 改善最大 +0.40, 基线最强的第 5 fold 反而 −0.10, 是**尾部缓解**
+  的形状而非收益增强。文中明确标注为假设而非发现(逐 fold 规律是事后读出的, 5 fold 即
   5 个观测), 实盘裁决交给 M-010 归因。
   本项关闭。
 
@@ -225,7 +225,7 @@
 上实盘资金前, 作者必须回答的三个问题:
   1. tsmom 的对手盘是谁? 它与 carry 是否同源(都在收杠杆需求的钱)?
   2. 参与率上限绑定时, 换手 225.6 里有多少实际做不掉? 对 OOS Sharpe 的影响?
-  3. 满 gross 下的最小保证金余量是多少? 用哪个仪表看?
+  3. 满 gross 下的最小保证金 headroom 是多少? 用哪个仪表看?
 
 ────────────── 建议优先级 ──────────────
 先把参与率上限纳入 _replay_book_guards(唯一影响 OOS 数字的一项)

@@ -25,12 +25,12 @@
 
 ## 第一遍 · 工程审查：问题清单
 
-> 每条定位到 `文件:行`。本轮所有量化结论由 6 个不写账本、不写报告的脚本产出，
+> 每条定位到 `文件:行`。本轮所有量化结论由 6 个不写 ledger、不写报告的脚本产出，
 > 已按本仓库的约定提交进 `scratchpad/`（`.gitignore` 的原话：「scratchpad scripts ARE committed」——
 > 而 P11 那次尾部检查正是因为脚本没提交才变得不可复现，`live.demo.yaml:149-156` 记着这一课）：
 > `audit20260908_guards_in_validate.py` / `_composed_book.py` / `_live_cost_rescore.py` /
 > `_gap_return.py` / `_nw_lag_sensitivity.py` / `_stress_windows.py`。
-> **交叉校验**：本报告的退出层控制行（pit，OOS 1.7737 → 1.8483）与仓库自己 09-07 跑的
+> **交叉校验**：本报告的 exit overlay 控制行（pit，OOS 1.7737 → 1.8483）与仓库自己 09-07 跑的
 > `overlay-20260907T085119Z.json` 逐位一致；tsmom 单独一臂的全样本 1.8204 对引用报告的 1.8177，
 > 差 0.0027，来源是本地面板比该报告多 24 根 bar（49,072 对 49,048）。两处对得上，下面的数才有资格被读。
 
@@ -49,23 +49,23 @@
 
 **问题**
 
-实盘这本书是四层叠出来的：tsmom 主书 → flow_short 小书（1/3 预算）→ 退出层 → 书级护栏。
+实盘这本书是四层叠出来的：tsmom 主书 → flow_short 小书（1/3 预算）→ exit overlay → 组合层护栏。
 `beidou live run` 启动门校验的那份 `evidence`，是 `research validate` 产出的，而 `validate`
-**既不重放护栏、也不施加退出层、也不含小书**。每一层都有自己的报告，各自在不同时点、
+**既不重放护栏、也不施加 exit overlay、也不含小书**。每一层都有自己的报告，各自在不同时点、
 不同构造下测过；没有任何一条命令把它们叠起来跑一次。
 
 已测（本轮，pit universe，205 币，49,072 bar，7 bps + 实际资金费）：
 
 | 组合 | 全样本 Sharpe | 走前 OOS | NW t | OOS MDD | 换手 |
 |---|---|---|---|---|---|
-| A 主书+小书，无退出层无护栏（= overlay 报告的基线） | 1.8248 | 1.7737 | 4.036 | −25.34% | 428.5 |
-| B A + 退出层 | 1.9160 | 1.8483 | 4.146 | −24.21% | 471.6 |
+| A 主书+小书，无 exit overlay 无护栏（= overlay 报告的基线） | 1.8248 | 1.7737 | 4.036 | −25.34% | 428.5 |
+| B A + exit overlay | 1.9160 | 1.8483 | 4.146 | −24.21% | 471.6 |
 | C A + 护栏 | 1.8280 | 1.7757 | 4.042 | −25.27% | 429.6 |
-| **D A + 退出层 + 护栏（≈ 循环持有的那本书）** | **1.9183** | **1.8492** | **4.149** | **−24.21%** | **472.9** |
+| **D A + exit overlay + 护栏（≈ 循环持有的那本书）** | **1.9183** | **1.8492** | **4.149** | **−24.21%** | **472.9** |
 | 引用证据 093705Z（tsmom 单独，三层都没有） | 1.8177 | 1.7662 | 4.05 | −23.68% | 375 |
 
 护栏在 D 里确实咬得动：`gross_capped_bars 412`、`daily_loss_pause_bars 51`。
-退出层在 5.6 年里触发 **561 次**（TAKE_PROFIT 541 / STOP_LOSS 20），换手 +10.3%。
+exit overlay 在 5.6 年里触发 **561 次**（TAKE_PROFIT 541 / STOP_LOSS 20），换手 +10.3%。
 
 **※ 作者已披露**：`docs/analysis/2026-09-05-system-quality-deep-analysis.md:191` 的 F5 已写下
 「validate/book 不重放 guards、不施加 exits，实盘两者都跑」。按规则严重度不降级，
@@ -74,7 +74,7 @@
 1. **披露的量级已经过期，而且在 pit 上变了号。** F5 把影响量化为「guards +0.005、stop −0.009」。
    `−0.009` 来自 P11 的 `overlay-20260904T063333Z`，那份报告的 `portfolio.vol_target` 是 **0.15**
    （已核对报告字段）；P13 把它改成 0.30 是同一天 14:53Z，在那之后。按今天的构造重测，
-   同一个退出层是 **pit +0.0746 / static −0.0551**（`overlay-20260907T085119Z/085209Z` 的控制行，
+   同一个 exit overlay 是 **pit +0.0746 / static −0.0551**（`overlay-20260907T085119Z/085209Z` 的控制行，
    本报告复算一致）。也就是说披露里那个数差了一个数量级，且在 pit 上符号是反的。
    仓库自己对 `drawdown_throttle` 下过完全相同的判断（`live.demo.yaml:185-190`：
    「calibrated at `vol_target 0.15` and their meaning moved」），对 P10 的带也下过
@@ -161,11 +161,11 @@ corr(缺口, 随后的 bar 内变动)  −0.0075
 
 **修复**：不建议改口径（改了就断掉与 2026-08 基线的可比性）。建议在 docstring 里把
 「conservative」拆成两句，并把 `close_to_close` 的数一并记在 validate 报告里作对照——
-它已经是现成的参数，跑一次不花账本。
+它已经是现成的参数，跑一次不花 ledger。
 
 ---
 
-### [🟡 中] 被引用的那份证据里，判定门是已废弃的 E[max]；而仓库自己称为「诚实数」的那个数，今天只剩 0.003 的余量
+### [🟡 中] 被引用的那份证据里，判定门是已废弃的 E[max]；而仓库自己称为「诚实数」的那个数，今天只剩 0.003 的 headroom
 
 **位置**
 - `reports/research/tsmom-validation-20260906T093705Z.json` → `oos_selection.threshold_annual = 1.1446301244780732`
@@ -188,25 +188,25 @@ max_sharpe_quantile(125, v) × √8760 = 1.4683560059   ← 今天的代码给�
 
 **※ 作者已披露且已决策**：`RESEARCH_LOG:2037` 明写「registry 里被引用的那份报告早于这次修改、
 存的是旧门槛，所以**不用重跑，一次试验额度也没花**：按新规则重算它那一块是 1.468 对 OOS 1.766」。
-这个决定本身是对的——1.766 以 0.298 的余量越过修正后的门。
+这个决定本身是对的——1.766 以 0.298 的 headroom 越过修正后的门。
 
 **披露没有盖住的一处，是二阶效应**：registry 自己（`alpha_registry.yaml`，DL-R4 段）指出
 真正的走前数是 16 格网格那次的 **1.4852**，并算过它在 N=125 时「clears by 0.003 to 0.017」。
-账本从那以后又长了。按今天的账本重算：
+ledger 从那以后又长了。按今天的 ledger 重算：
 
 | 口径 | N | 分位数门 | 1.7662 | 1.4852 |
 |---|---|---|---|---|
 | 引用报告里存的（E[max]，已废弃） | 125 | 1.1446 | 过 | 过 |
 | 同 N，修正后的分位数门 | 125 | 1.4684 | 过 | 过（+0.017） |
 | **今天：tsmom 去重后 80 条 + 60 申报** | **140** | **1.4821** | 过 | **过（+0.003）** |
-| 账本里全部 618 个不同配置 | 618 | 1.6527 | 过 | **不过** |
+| ledger 里全部 618 个不同配置 | 618 | 1.6527 | 过 | **不过** |
 
 （`trials.jsonl` 现 690 行 / 618 个不同配置：mined 514、tsmom 104、flow 28、meanrev 27、breakout 9。
 按 `ledger_scope` 的口径 tsmom 只承担自己那一支，这是**合法的**——见「已排除」。）
 
 **头条数 1.7662 在任何一列都过，这一条不动摇结论。** 它记录的是两件事：
 (a) 门的定义变了，artefact 不会跟着变，而 `sha256` 钉子恰恰让这份过期变得**牢固**；
-(b) 仓库自己称为「诚实」的那个数，余量已经薄到 0.003——比两个同样站得住的零假设 SD 之间的差还薄。
+(b) 仓库自己称为「诚实」的那个数，headroom 已经薄到 0.003——比两个同样站得住的零假设 SD 之间的差还薄。
 
 **修复**：给报告加一个 `gate_version`（或直接落 `expected_max_annual` 与 `threshold_annual` 两栏，
 函数已经返回了 `expected_max_annual`），并让 `decide()` 在读到旧版本时拒绝判定而不是照旧比较；
@@ -324,15 +324,15 @@ VWAP 是唯一可得的信息，采用它是正确的。
   而 `r[t] = close_t/close_{t-1}−1` 在 t 收盘时已知；`w[t]` 是同一时刻的决策。因果。
 - ✓ `beidou_alpha/panel.py:46-47` 年化因子 `365×86400/interval_seconds`，crypto 7×24，
   由 bar 间隔推导而非硬编码 252/365。`metrics.compound/max_drawdown` 均几何复利。
-- ✓ `beidou_alpha/overlays/exits.py:1-16` 退出层**只在收盘评估、从不用 bar 内 high/low**——
+- ✓ `beidou_alpha/overlays/exits.py:1-16` exit overlay**只在收盘评估、从不用 bar 内 high/low**——
   这是本清单 ③ 类「用 bar 内极值当成交价」的**反面**，且实盘走同一个 `exit_step`，两边不会漂。
 - ✓ `beidou_alpha/validation/walk_forward.py:43-75` —— purge 实现正确；`:55-58` 论证了
   walk-forward 里 embargo 无效（训练窗永在测试块之前），是论证不是遗漏。
   **本轮新查的「标签 horizon 跨切分边界」在此判合法**：这条流水线不训练监督模型，
-  每个参数集全样本回测一次、折只切净收益序列，不存在训练块尾部的标签。
+  每个参数集全样本回测一次、 fold 只切净收益序列，不存在训练块尾部的标签。
 - ✓ `beidou_alpha/validation/ledger.py:137-146` `ledger_scope` —— `mined_<hash>` 同时从自己和
   `MINED_SEARCH_STRATEGY` 取记录，所以一个候选**承担找到它的那 514 次搜索**。
-  账本里那 7 行 `mined_<hash>` 因此不是漏洞，DL-K2 已闭。
+  ledger 里那 7 行 `mined_<hash>` 因此不是漏洞，DL-K2 已闭。
 - ✓ **Newey-West 的滞后阶数：查过，不是缺陷，方向与直觉相反。** 自动规则给 15 个滞后（0.6 天），
   而平均持仓 **376 根 bar（15.6 天）**——看上去严重不足。实测把带宽推出去，t 反而**上升**：
 
@@ -375,14 +375,14 @@ VWAP 是唯一可得的信息，采用它是正确的。
 
 | 项 | OOS Sharpe 方向 | 幅度 |
 |---|---|---|
-| 引用证据缺三层（小书 / 退出层 / 护栏） | 低估 | −0.083（1.7662 对 1.8492） |
+| 引用证据缺三层（小书 / exit overlay / 护栏） | 低估 | −0.083（1.7662 对 1.8492） |
 | `open_to_close` 丢弃跨 bar 缺口 | 高估 | +0.029（比 `close_to_close`） |
 | 滑点模型 2.0 bps 对旧尺子实测 5.5 | 高估 | +0.090（点估计，见边界说明） |
 | 无风险利率记为 0 | 高估 | ≈ +0.13（4% rf / 30% 波动） |
 
 四项叠加后仍在 **1.6–1.7** 量级，仍越过 D-028 在任何试验口径下的门（最严 618 试验 → 1.6527），
 NW t 仍 ≥ 3.7。**当前 OOS 指标可以继续作为讨论基础。**
-具体幅度需按上面「修复」跑一次正式运行确认；本报告的数字全部不写账本，不构成证据。
+具体幅度需按上面「修复」跑一次正式运行确认；本报告的数字全部不写 ledger，不构成证据。
 
 ---
 
@@ -393,7 +393,7 @@ NW t 仍 ≥ 3.7。**当前 OOS 指标可以继续作为讨论基础。**
 
 上一份报告的两条逻辑项（Ⅰ edge 归属、Ⅱ 容量）**已闭环**：
 edge 陈述写进了 `signals/tsmom.py:1-38`（吃的是散户消化过慢的趋势风险，对手盘是后知后觉的杠杆多头，
-**行为性而非结构性**，并附了 carry 的否证与 crowding 的逐折表），
+**行为性而非结构性**，并附了 carry 的否证与 crowding 的逐 fold 表），
 容量曲线由 `ParticipationModel` 测出（拐点在 10 万–100 万 USDT 之间）。本轮不重复。
 
 ### [🟠 高危·逻辑] 实盘 52% 的权益是非 USDT 抵押品，而每一个权重都是这个权益的分数
@@ -459,27 +459,27 @@ edge 陈述写进了 `signals/tsmom.py:1-38`（吃的是散户消化过慢的趋
 
 **失效场景**：若出现一次 2020-03 形态的事件——所有资产同时被抛、交易所撮合与 API 同时降级——
 则本书的三层保护（`daily_loss_pause` 只在下一个周期生效、`max_participation` 在流动性抽干时
-把可执行量按同一条 volume 曲线一起压缩、退出层只在收盘评估）**都是逐 bar 的**，
+把可执行量按同一条 volume 曲线一起压缩、 exit overlay 只在收盘评估）**都是逐 bar 的**，
 而那类事件的时间尺度是分钟。回测无法回答这段，因为数据不存在。
 
 **缓解**：不建议为此补数据（2020 的永续合约品种与今天的 universe 几乎不重叠，补了也不可比）。
 建议把这句写进 registry 的 edge 段：**「本书的压力检验覆盖 2021-05 起的五段，不覆盖 2020-03」**，
 让它是一个已声明的空白而不是一个未被问过的问题。
 
-### [🟡 中·逻辑] 容量曲线是在退出层上线之前测的，而退出层把换手抬高了 10%
+### [🟡 中·逻辑] 容量曲线是在 exit overlay 上线之前测的，而 exit overlay 把换手抬高了 10%
 
 **维度**：Ⅱ.2 / Ⅱ.3 容量
 
 **依据**：上一份报告的参与率表（1,000 / 1万 / 10万 / 100万 / 1000万 USDT）跑的是
-`tsmom` 单独一臂、换手 225.6。今天这本书含小书与退出层，实测换手 **472.9**——
-是当时的 **2.1 倍**（其中 P13 的 vol_target 0.15→0.30 贡献大部分，退出层贡献 +10.3%）。
+`tsmom` 单独一臂、换手 225.6。今天这本书含小书与 exit overlay，实测换手 **472.9**——
+是当时的 **2.1 倍**（其中 P13 的 vol_target 0.15→0.30 贡献大部分，exit overlay 贡献 +10.3%）。
 参与率上限绑定的份额随目标换手近似线性上升，所以那张表的拐点（10 万–100 万之间）
 今天应当更靠左，可能靠左一倍。
 
 **这不是「表算错了」**——表是对它当时那本书算对的。是**它描述的书已经不在了**，
-和上面 F5 那条退出层的情况是同一个形状。
+和上面 F5 那条 exit overlay 的情况是同一个形状。
 
-**缓解**：用今天的构造（四层）重跑一次 `ParticipationModel` 的资金阶梯（不写账本，
+**缓解**：用今天的构造（四层）重跑一次 `ParticipationModel` 的资金阶梯（不写 ledger，
 `backtest.py:51-83` 的接口现成），并把 `live.demo.yaml:45` 那句
 「k must be re-derived under an impact-aware cost model」的**触发点**从散文改成一个数字
 （上一份报告建议 10 万 USDT 量级；按今天的换手大概要下调）。
@@ -501,7 +501,7 @@ edge 陈述写进了 `signals/tsmom.py:1-38`（吃的是散户消化过慢的趋
 
 **维度**：Ⅳ.4 组合内相关
 
-`alpha_registry.yaml` 的 flow 段已完整写下：书级判定 REJECT、小书自身 FAIL/WEAK_PASS 之间反复、
+`alpha_registry.yaml` 的 flow 段已完整写下：组合层判定 REJECT、小书自身 FAIL/WEAK_PASS 之间反复、
 91% 的仓位压在 tsmom 已经做空的名字上、P1-01 修正后表面 +0.126 的边际里约 0.048 是假象。
 控制是 `probe.stop`（30 天归因 P&L ≤ −2% 权益自动关书），最近读数
 `{"pnl": 2.71, "pnl_pct": 0.00025, "status": "OK"}`。**这一项披露得比多数系统的主书还完整**，
@@ -521,7 +521,7 @@ edge 陈述写进了 `signals/tsmom.py:1-38`（吃的是散户消化过慢的趋
 ## 上实盘资金前，作者必须回答的三个问题
 
 1. **循环持有的那本书（四层）的 OOS 数是多少，出自哪一份 artefact？**
-   今天的答案是 1.8492，出自会话 scratchpad 里一个不写账本的脚本——不是证据。
+   今天的答案是 1.8492，出自会话 scratchpad 里一个不写 ledger 的脚本——不是证据。
    在这个数有一份带 sha256 的报告之前，启动门校验的是第一层。
 2. **M-Q08 的新尺子会读出多少？** 旧尺子最后读 5.52 bps（判据 4.0）。
    新尺子从昨天 13:48Z 起 0 笔读数。在它积够 30 笔之前，demo 阶段两条判据之一没有读数，
@@ -553,9 +553,9 @@ demo/testnet 运行本身不受影响。
 - 「偏差影响」与「失效场景」只给**方向与条件**，不承诺、不量化任何具体收益或亏损数字；
   其中引用的历史事件仅作情景参照，不代表会重演。
 - 通过审查 ≠ 策略能赚钱；只代表未发现本清单覆盖的工程陷阱。
-- 本报告的一切数字由 `scratchpad/audit20260908_*.py` 产出，这些脚本不写账本、不写报告，
+- 本报告的一切数字由 `scratchpad/audit20260908_*.py` 产出，这些脚本不写 ledger、不写报告，
   因此**不是证据，不进 registry**。
-  要成为证据，必须按上面「建议优先级」跑一次正式运行并计入试验账本。
+  要成为证据，必须按上面「建议优先级」跑一次正式运行并计入 trials ledger。
 - 实盘滑点样本 n=101、来自 **demo/testnet**、跨 4.5 天，且参照价是已被 L1-04 退休的那一个；
   它是灵敏度的输入，不是主网的测量。
 - 第二遍质询的目的是逼出尚未回答的问题，不是替作者给出结论；
@@ -579,7 +579,7 @@ demo/testnet 运行本身不受影响。
 |---|---|---|
 | 🟠 四层从未合并计分 | **已修**：`research validate` 新增 `--guards/--no-guards`、`--exits/--no-exits`（默认开），报告落 `book_guards` / `exits` 两个块，`full_sample.guards` 带上 `min_margin_buffer` 与 `liquidation_touches`；`--no-guards --no-exits` 复现旧报告 | `research_cmd.py`、`tests/cli/test_validate_scores_the_book_the_loop_holds.py` |
 | ↳ 启动门 | **已修**：`construction_problems` 增加 `live_overlays`，逐键比对两个块；`null`（本次没跑这层）与「没有这个键」（早于字段）被区分对待；`live_overlay_blocks` 从 profile 供给实盘侧 | `registry.py`、`config.py`、`tests/alpha/test_overlay_gate.py`、`tests/live/test_overlay_gate_is_wired_to_the_profile.py` |
-| ↳ 账本 | **已修**：validate 的 `TrialRecord` 补 `overlay_digest`，同参数不同 overlay 栈是两次试验而不是一次重放；`current_context` 的 overlay 槽位从硬编码 `""` 改为真实摘要（否则排除集匹配不到自己写的行，会重复计费） | `research_cmd.py` |
+| ↳ ledger | **已修**：validate 的 `TrialRecord` 补 `overlay_digest`，同参数不同 overlay 栈是两次试验而不是一次重放；`current_context` 的 overlay 槽位从硬编码 `""` 改为真实摘要（否则排除集匹配不到自己写的行，会重复计费） | `research_cmd.py` |
 | 🟠 未按实测执行成本重算 | **已修**：新增 `slippage_stress`（费率固定、只动滑点），档位与出处写进 `config/costs.yaml` 的 `slippage_stress_bps: [2.0, 5.5, 9.2]`。`cost_stress` **一行未动**——`verdict.decide` 读它的 `x2`，改它的含义等于不动阈值地移动一道门 | `stability.py`、`costs.yaml`、`tests/alpha/test_slippage_stress_holds_the_fee_fixed.py` |
 | 🟡 `open_to_close` 的缺口 | **已修（口径不动，说明补上）**：docstring 把「conservative」拆成入场价（成立）与持有收益（不成立），带上实测的 2.36% 与 −0.029；validate 报告新增 `execution_comparison`，把另一口径作为对照一起记 | `backtest.py`、`research_cmd.py`、`tests/alpha/test_conventions_are_stated.py` |
 | 🟡 门的身份不随数走 | **已修**：`oos_selection` 落 `gate` 字段；`decide` 对叫不出名字的门拒绝判定（与既有的 `oos_t_stat` 完整性拒绝同形）。归档回归测试改为「补上门名后判定必须复现」，并新增一条把本次发现钉成回归：**每一份归档报告在原样判定下都因门被拒**。这样那道 pre-registered 保证不会退化成空断言 | `multiple_testing.py`、`verdict.py`、`tests/alpha/test_gate_identity_travels_with_the_report.py` |
@@ -587,8 +587,8 @@ demo/testnet 运行本身不受影响。
 | 🟡 夏普无无风险利率口径 | **已修（数不动，约定写下）**：`sharpe` docstring 声明分子是原始收益、无风险利率约定为 0，并写明为什么不动（动了要给所有归档报告与 `verdict.py` 的阈值重新定价） | `metrics.py` |
 | 🟠·逻辑 抵押品 | **已修（报告口径）**：`drawdown_state` 输出 `collateral_share`，放在**阶梯读数旁边**而不是日报另一处——L1-10 量了也印了，只是印在离「除以同一个权益」的阶梯四个块之外。分母**不动**：那是构造决策，不是 bug 修复（沿用 L1-10 自己的裁定） | `risk_budget.py` |
 | 🟡·逻辑 2020-03 不在样本 | **已修（声明而非填补）**：registry 的 tsmom 段写下压力覆盖——2021-05 / 2022-05 / 2022-06 / 2022-11 / 2024-08 五段（四正一负，均远好于基准），**不含 2020-03**，并说明为什么这个空格重要（三层保护都是逐 bar 的，而那类事件的尺度是分钟）。同时写下右偏 +1.08/+0.83 的实测，把「伪装的卖波动率」钉为已否证 | `alpha_registry.yaml` |
-| 🟡·逻辑 容量曲线过期 | **已修**：`scratchpad/participation_capacity_sweep.py` 改为按 registry + 小书 + 退出层构建，重跑得 **10万 5.41% / 100万 33.07%**（旧读数 4.25% / 28.60%，绑定 bar 数约翻倍）；`live.demo.yaml` 把「k 需在冲击模型下重推」的触发点从一句话改成 **10 万 USDT** 这个数字 | `live.demo.yaml`、scratchpad |
-| 🟡 退出层证据停在 0.15 | **已修（数不动，纠正写下）**：`live.demo.yaml` 的 exits 段补上 P13 之后的重测——pit **+0.0746** / static **−0.0551**（旧记录 −0.0092 / −0.0892，差一个数量级且 pit 上反号）。D-017 的规则仍然成立，所以设置不变，但「免费」是 0.15 时代的说法 | `live.demo.yaml` |
+| 🟡·逻辑 容量曲线过期 | **已修**：`scratchpad/participation_capacity_sweep.py` 改为按 registry + 小书 + exit overlay 构建，重跑得 **10万 5.41% / 100万 33.07%**（旧读数 4.25% / 28.60%，绑定 bar 数约翻倍）；`live.demo.yaml` 把「k 需在冲击模型下重推」的触发点从一句话改成 **10 万 USDT** 这个数字 | `live.demo.yaml`、scratchpad |
+| 🟡 exit overlay 证据停在 0.15 | **已修（数不动，纠正写下）**：`live.demo.yaml` 的 exits 段补上 P13 之后的重测——pit **+0.0746** / static **−0.0551**（旧记录 −0.0092 / −0.0892，差一个数量级且 pit 上反号）。D-017 的规则仍然成立，所以设置不变，但「免费」是 0.15 时代的说法 | `live.demo.yaml` |
 | 🔵 universe 用今日交易所规则 | **已修（记录，不改行为）**：`data_cmd.py` 写下这处残余前视的边界——已退市标的无条件通过（幸存者偏差是干净的），仍在架标的按今日 `contract_type` / `min_notional` 过滤整段历史；没有时点 exchangeInfo 存档可修 | `data_cmd.py` |
 | 🔵 重启后退出锚点 | **已撤回**：前提不成立，见上文该条 | — |
 
@@ -599,7 +599,7 @@ demo/testnet 运行本身不受影响。
 `research book` 与 `research overlay` **没有**加 guards/exits：overlay 的整个作用就是拿基线比叠加，
 在它上面预先叠一层是循环论证；book 命令值得同样处理，但那是另一次改动，且 flow 的 book 报告
 在启动门里因此仍走「早于字段则跳过」。**当前 registry 引用的两份证据都没有重跑**——
-重跑要花试验额度、要写账本，是操作者对实盘配置的决定，不在修复范围内。
+重跑要花试验额度、要写 ledger，是操作者对实盘配置的决定，不在修复范围内。
 所以本报告第一条高危的**门已经装上，但还没有一份证据穿过它**。
 
 ---
