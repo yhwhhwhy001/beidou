@@ -11283,20 +11283,39 @@ inherit it」——在 `test_metrics_reach_the_panel_without_the_five_minutes.py
 - **护栏三**：成本 ×2 下仍过 D-028 门。
 - 任一不过 → **REFUTED**，写进 `governance/reopen.yaml`，不加格子重跑。
 
-**网格（三格，事先定死，每格只动一条腿，其余保持线上值 6/0/6）**：
+**网格（两格，事先定死，每格只动一条腿，其余保持线上值 6/0/6）**：
 
 | 候选 | 值 | 为什么是这个数 |
 | --- | --- | --- |
 | `take_profit` | **2.0** | 已测最紧是 3.0（P22，static Sharpe −0.174），2.0 是它的下一格 |
 | `stop_loss` | **2.0** | 已测最紧是 2.5（不过 D-017），2.0 是它的下一格 |
-| `trailing_stop` | **2.0** | 只测过 {0, 4}；4 以下从未测过。取与上面同数，使三条腿在同一统计距离上可比 |
+
+**撤掉的第三格，以及为什么（同日自查，写在跑之前）。** 本节初稿有第三格 `trailing_stop` **2.0**，
+它违反本仓库一条已有的、有实证的禁令，撤回而不是删除，因为它错在哪里正是操作者这个问题的答案。
+
+`config/live.demo.yaml` 的 exits 注释（2026-09-08 写）逐字：**"A future trailing experiment must take
+k_tr > 6"**。机制在 `beidou_alpha/overlays/exits.py` 的 `exit_step`：
+
+```
+adverse = (entry_price - price) * held / unit_price
+retrace = (extreme   - price) * held / unit_price
+```
+
+`extreme` 由 `_enter` / `_reconcile` 初始化为**入场价**，且只朝有利方向更新，所以多头恒有
+`extreme >= entry_price`，因而 **`retrace >= adverse` 恒成立**。于是 `k_tr <= k_sl` 时 `retrace`
+总是先够着自己的阈值，仓位在 `adverse` 走到 `k_sl` 之前就被 TRAILING_STOP 平掉——**`stop_loss` 成为
+死代码**。实证在同一段注释里：pit `sl0/tr4/tp0` 与 `sl4/tr4/tp0` 给出**逐位相同**的 OOS Sharpe 1.6132
+与 904 次退出，只有 31 根 bar 换了标签。
+
+所以 `tr 2.0` 配线上的 `sl 6.0`，测的是**一本被静默关掉止损的书**，而不是「更早的移动止损」。
+这一格若不撤，EXP-AE1 会花 4 笔 ledger 去回答一个它自己没问的问题。ledger 因此由 12 笔降为 **8 笔**。
 
 **明写不进网格的**：`trailing_stop` **1.0σ**。它是 2026-09-15/16 两天 n=1 重放里最亮的数字
 （+288 U，17 次触发），而同一条规则在相邻窗口（09-13T21 → 09-15T08）是 **−55 U**——**相邻两个
 窗口符号相反**。正因为它最亮才不能进：用事件里最好的那一格选 k，就是 K-EX07 禁止的那件事。
 
 **ledger**：`research overlay` 按「每候选 × 每 registry entry」计费（`research_cmd.py:1588`），
-registry 有 tsmom 与 flow 两条 enabled，跑两个 universe，因此 **3 × 2 × 2 = 12 笔**。跑前先按
+registry 有 tsmom 与 flow 两条 enabled，跑两个 universe，因此 **2 × 2 × 2 = 8 笔**。跑前先按
 口径 ④ 重算 D-028 的门（2026-09-14 读数：N=259、门 1.5572、OOS 1.5919，headroom ≈ 92 次试验）。
 
 **数据**：`--to` 钉住与 `20260913T182325Z` 同一 range_end，避免数据集闸的 advisory 变 blocking。
@@ -11306,6 +11325,34 @@ registry 有 tsmom 与 flow 两条 enabled，跑两个 universe，因此 **3 × 
 **先验为负是操作者已经知道并接受的**——他选 D 时价钱就是这么标的。
 
 **最早可跑**：2026-10-13T19:00Z 之后。
+
+### 四之二、EXP-AE3：操作者问的那个东西叫 activation threshold，它**从未实现**
+
+撤掉 `tr 2.0` 之后要正面回答的是：**操作者说的「移动止盈止损」不是现有的 `trailing_stop`。**
+
+现有 `trailing_stop` 从**入场**就开始量回撤（`extreme` 初始化为入场价），所以它在仓位还亏着的时候
+也会触发——那一刻它就是个止损，而且比 `stop_loss` 更早。它保护不了利润，因为它根本不知道有没有利润。
+
+操作者要的是「涨上去、再回落就走」，那需要一个**武装阈值**：先赚到 +aσ 才武装，此后回撤 bσ 才退出。
+`docs/RESEARCH_LOG.md` 2026-09-08 已经明写过它的状态：**「盈利后启动的移动止损（activation
+threshold + trail）仍未实现、未测」**。今天仍然如此——`ExitParams` 里没有这个参数，`ExitState` 里
+没有 armed 标志。
+
+**所以它不是一次参数扫描，是一次代码改动**，这决定了它的价钱与时点：
+
+| 项 | 内容 |
+| --- | --- |
+| 代码 | `ExitParams` 加 `trailing_activate`（0 = 关，保持现行行为逐位不变）；`ExitState` 加 armed 标志并持久化；`exit_step` 在 armed 之后才用 `retrace`。研究与实盘两份实现要过既有的等价测试 |
+| 构造 | 新键进 `construction_fingerprint` → **是构造变更**，受冻结测试管到 2026-10-13T19:00Z；默认值必须使行为逐位不变（`unit_mode` 的先例） |
+| 已有的 n=1 读数 | 09-15 的 E-GB12 在那次事件上重放过三个形状：先到 +1σ 挂 1σ **−24 U**、先到 +1σ 挂 0.5σ **+7 U**、先到 +1.5σ 挂 1σ **−40 U**。**这三个数不得用来选 (a, b)**——它们是 n=1，且其中最好的那个正是「1–24h 反转区里每次来回付 14 bps」的规则 |
+| 网格怎么定 | (a, b) 必须来自本书已有的统计距离，不是那次事件：a 取 `take_profit` 已测最紧档的一半（3.0/2 = **1.5**），b 取 `stop_loss` 已测最紧档 2.5 与它的下一格 2.0 中的 **2.0**，即单格 **(a=1.5, b=2.0)**。单格不是省事，是因为 b 一旦 ≤ 6 就会与上面那条死代码算术相撞——**armed 之后 `stop_loss` 本来就该让位**，这正是 activation 要买的东西，但它必须被说成一个有意的设计而不是一次意外 |
+| ledger | 1 候选 × 2 universe × 2 策略 = **4 笔** |
+| 判据 | 与 EXP-AE1 同：主判据配对 ΔSharpe ≥ 0 两 universe；护栏 MDD ≤ 1pp、换手 ≤ +25%、成本 ×2 过 D-028 |
+| 先验 | **负**。理由同 EXP-AE1，外加一条：它买的是「用更早的退出换更小的回撤」，而 D-017 的历史读数一路说这本书为此付的是 Sharpe |
+| 时点 | 代码可在 10-13 之前写好并合入**默认关**的形态（逐位不变，不触发冻结测试）；跑与采纳都在 2026-10-13T19:00Z 之后 |
+
+**这一条是 Q-CRITICAL = D 的完整回答。** 操作者选 D 时想要的多半是这个，而不是 EXP-AE1 的两格——
+EXP-AE1 测的是「更早的固定止盈/止损」，EXP-AE3 测的才是「移动止盈」。两者都先验为负，都照跑。
 
 ### 五、EXP-AE2 预登记：D-018 门的独立推导（先于任何候选）
 
