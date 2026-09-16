@@ -2563,7 +2563,17 @@ CEILING = {
     # place nobody had looked - plus `flow`'s warmup-fill knob and its measurement; +33 for `cpcv_splits`'
     # docstring, which records that purge and embargo block opposite sides of a test block and that CPCV,
     # unlike walk-forward, has both live; +15 for the participation replay's `exempt_reductions`.
-    "beidou_alpha": 9_011,
+    #
+    # Tenth raise, 2026-09-16, +29 beidou_alpha, and the sentence the rule requires.  `_li_ji_count`:
+    # Li & Ji's `f(lambda) = I(lambda >= 1) + frac(lambda)` is discontinuous at every integer from 2 up,
+    # and a wall of identical columns puts an eigenvalue exactly on one - so `effective_trials` read
+    # 1.0000000000001767 on this laptop and 2.0000000000001084 on CI from the SAME commit and the same
+    # seed.  Twice the independence, decided by which way a BLAS rounded, on a number this gate publishes
+    # for a person to read.  Six lines are the snap onto the nearest integer inside `eigvalsh`'s own
+    # error bar; the rest is the docstring carrying the two measurements (40.000000000000014 here, a hair
+    # below 40 there) and why the tolerance is that error bar rather than a constant that happened to
+    # work.  The ninth raise's finding one screen up is why that docstring was not golfed instead.
+    "beidou_alpha": 9_040,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
