@@ -48,21 +48,42 @@ ENTRY_POINTS = (
 )
 
 #: Each name says what would make it reachable, so an exemption is an argument rather than a shrug.
-EXEMPT: dict[str, str] = {
-    "beidou_data.liquidations": (
-        "#19 判定不可用 (2026-09-09): Binance publishes no USDⓈ-M liquidation history, and the only "
-        "coin-margined archive stopped 23 months before the live period, so the parity obligation is "
-        "unmeetable and RISK-G3 keeps the column out of live.  The module stays as the record of what "
-        "was checked; a CLI for it would be a command that can only fail."
-    ),
-    "beidou_data.liquidation_archive": "The archive half of #19; same ruling, same reason.",
-}
-# Retired 2026-09-10: `beidou_data.onchain`, `beidou_data.index_price` and `beidou_data.macro` are
-# reachable through `beidou data onchain|index|macro`.  The entries are DELETED rather than annotated,
-# which `test_the_exemptions_are_named_rather_than_counted` enforces from the other side - an exemption
-# list nobody prunes stops being a list of decisions.  What each command had to do to earn the deletion
-# is in `data_cmd`: reaching a module is not the same as running it, so each one is driven by a test
-# through the CLI, and each prints its own RISK-G3 gate rather than letting an ingest read as consent.
+#: EMPTY since 2026-09-16, which is the strongest state this file has ever been able to report: every
+#: production module in the tree can be reached from a `beidou` command.  It held two entries until
+#: then, both for #19's liquidation ingest:
+#:
+#:     "beidou_data.liquidations"        #19 判定不可用 (2026-09-09): Binance publishes no USDⓈ-M
+#:                                       liquidation history, and the only coin-margined archive
+#:                                       stopped 23 months before the live period, so the parity
+#:                                       obligation is unmeetable and RISK-G3 keeps the column out of
+#:                                       live.  "The module stays as the record of what was checked;
+#:                                       a CLI for it would be a command that can only fail."
+#:     "beidou_data.liquidation_archive" "The archive half of #19; same ruling, same reason."
+#:
+#: The operator withdrew both.  The argument that retired them is the one their own exemption made:
+#: a module kept "as the record of what was checked" is a record, and a record belongs in the log and
+#: in git history, not in the import graph where it costs non-alpha lines against a ratchet at zero
+#: headroom.  `docs/RESEARCH_LOG.md` and `git show 0b306e5b` hold what they checked.
+#:
+#: An empty dict is deliberate rather than a tidy-up: `test_the_exemptions_are_named_rather_than_counted`
+#: refuses an entry naming a module that no longer exists, so these two had to go the moment the files
+#: did - the same pruning rule that deleted the three data-feed exemptions in 2026-09-10.  Do not
+#: replace this with a count; the whole file exists because a count lets the next one in silently.
+EXEMPT: dict[str, str] = {}
+# Retired 2026-09-10: `beidou_data.onchain`, `beidou_data.index_price` and `beidou_data.macro` became
+# reachable through `beidou data onchain|index|macro`, so their exemptions were DELETED rather than
+# annotated - `test_the_exemptions_are_named_rather_than_counted` enforces that from the other side,
+# because an exemption list nobody prunes stops being a list of decisions.
+#
+# WITHDRAWN 2026-09-16, and the distinction is the point of this file.  The operator withdrew all three
+# feeds: modules, commands and tests are gone from the tree, so there is nothing here to exempt and
+# nothing here to reach.  This guard answers "can every module in the tree be run", and a module that
+# is not in the tree is outside its question entirely - which is why the right edit was to delete the
+# three assertions in `test_the_guard_can_fail` below, not to add three exemptions back.  An exemption
+# would have said "unreachable and that is acceptable"; the truth is "absent".  They were built, they
+# were reachable the whole time, and nothing ever read a column from them - `research_cmd._load` joins
+# only `metrics` and `spot`, and `run_data.sh` had held all three out of the schedule since the day
+# they landed, with its reasons written out.  `git show 71863e9e` is where they are if they come back.
 
 
 def _modules() -> dict[str, Path]:
@@ -151,8 +172,10 @@ def test_the_guard_can_fail() -> None:
     assert "beidou_governance.budget" in seen, "R1 reaches a command through the scheduler's context"
     assert "beidou_alpha.signals.tsmom" in seen, "reached only via `from beidou_alpha.signals import tsmom`"
     assert "beidou_live.engine" in seen and "beidou_data.spot" in seen
-    for feed in ("beidou_data.onchain", "beidou_data.index_price", "beidou_data.macro"):
-        # Wired 2026-09-10 by `data onchain|index|macro`.  Named here as well as covered by the dead-code
-        # test above, because these three are the whole reason this file exists and a re-import that
-        # quietly dropped one would otherwise only show up as an exemption someone was tempted to re-add.
-        assert feed in seen, f"{feed} lost its command; it is an ingest, not an exemption"
+    # `beidou_data.onchain|index_price|macro` were asserted here from 2026-09-10 until they were
+    # withdrawn on 2026-09-16.  The assertions went with the modules rather than becoming exemptions;
+    # the note beside EXEMPT says why "absent" and "unreachable" are not the same answer.  Nothing is
+    # asserted in their place ON PURPOSE: a guard that fails when a module is ABSENT would block the
+    # re-add it is supposedly protecting, and the dead-code test above already covers a module that
+    # comes back without a command.  `beidou_data.spot`, asserted one line up, is the surviving member
+    # of that same 2026-09-10 batch - it stayed because something reads it.

@@ -28,7 +28,9 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 
-POLICY_VERSION = "0.3.4"
+from beidou_alpha.overlays.ladder import rung_target
+
+POLICY_VERSION = "0.3.5"
 """0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
 unrealised P&L.  One decision in two halves - see `drawdown_ladder` for why they cannot ship apart.
 The short version: measured over 2021-2026 at k=0.60 the ladder as it stood NEVER FIRED, because the
@@ -144,6 +146,14 @@ class Policy:
     # rule may sit in `scheduler` at all.  Switchable here because a rule with no off switch is one
     # nobody can price; turning it off resumes exactly the 2026-09-09 behaviour, which is the point.
     mine_requires_gate_below_best: bool = True
+    # R0, caliber ④ (operator ruling 2026-09-14, on Q4c): `range_end` folds to this many days before
+    # two rows are compared.  A signal reads only data up to bar t, so the same expression over the
+    # same start, symbols and construction gives an IDENTICAL stream on the shared index when the range
+    # ends a few days later - zero added independence, by arithmetic.  Not a reason to drop the field:
+    # the same holds for two years later, and that is a second look.  7 because it folds least among
+    # the granularities that fold the observed case at all - and the choice is not load-bearing here,
+    # 7 / 14 / 30 all give `mined` 1,559, `tsmom` 101, `flow` 43.  0 restores the pre-ruling rule.
+    trial_range_end_granularity_days: int = 7
 
     # R3: how much of the book unproven sleeves may move.  D-018/D-019's shape, unchanged.
     max_concurrent_probes: int = 2
@@ -227,12 +237,12 @@ class Policy:
     def throttle_scalar(self, drawdown: float) -> float | None:
         """The vol target the ladder asks for at this drawdown, or None above the first rung.
 
-        `drawdown` is negative.  Rungs are checked deepest-first so -0.60 gets 0.15, not 0.225.
+        The NUMBERS are this table's (R10: a threshold the machine can edit is not a threshold).  The
+        RULE is `beidou_alpha.overlays.ladder`'s, because the backtest has to be able to replay it and
+        cannot import this package - the same division D-036 already makes for `clamp_book`.  Four
+        hand-written replays in `scratchpad/` existed because there was nothing to call.
         """
-        for level, target in sorted(self.drawdown_ladder, key=lambda rung: rung[0]):
-            if drawdown <= level:
-                return target
-        return None
+        return rung_target(drawdown, self.drawdown_ladder)
 
 
 #: Where each rule comes from, so nobody reads the table above as measurement (KILL-AR-13).

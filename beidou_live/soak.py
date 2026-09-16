@@ -50,6 +50,17 @@ from beidou_live.health import STUCK_IN_ERROR_STREAK
 DECISION_KEYS = ("orders", "leaving", "quarantined", "universe_update", "risk_ladder")
 
 
+def no_decisions() -> dict[str, Any]:
+    """An ERROR row's decision keys, all empty.
+
+    The writer is `engine.guarded_cycle`, a thousand lines from `_decided`, and it used to build the
+    ERROR row from scratch with `orders` hardcoded to `[]` and the other four absent - so `_decided`
+    returned `()` on every engine-produced row and the gate could not fail.  Both halves now name this
+    one function, so a sixth key cannot be added to the reader without the writer gaining it too.
+    """
+    return {"orders": [], "leaving": [], "quarantined": [], "universe_update": None, "risk_ladder": {}}
+
+
 @dataclass(frozen=True)
 class SoakReading:
     cycles: int = 0
@@ -89,21 +100,35 @@ class SoakReading:
         return self.no_decision_pass and self.streak_pass
 
 
-def _decided(row: Mapping[str, Any]) -> tuple[str, ...]:
-    """What a cycle did that a no-decision cycle must not have done.
+def _acted(key: str, value: Any) -> bool:
+    """Did this key record an action, as opposed to a reading?
 
-    Emptiness is checked rather than presence: the loop writes `orders: []` and `risk_ladder: {}` on a
-    quiet cycle, so `key in row` would call every cycle a decision.
+    Presence is not the question - `key in row` calls every cycle a decision - but neither is emptiness
+    for two of the five, and that only became reachable when the ERROR path started carrying them.
+
+    `risk_ladder` is never `{}`: `_risk_ladder` returns ten keys on the quietest cycle, including
+    `acting: False`.  The ladder DECIDED when it acted; that it computed a reading is the loop
+    measuring itself, which is the thing KILL-AR-20 says must not retire a book.
+
+    `universe_update` is `None` on nearly every cycle, but under a pinned universe it writes
+    `adopted: False` once a UTC day - the proposal recorded deliberately and deliberately not taken -
+    and on a failed refresh it writes `error` while keeping the previous pool.  Neither changed what is
+    traded, so neither is a decision.
+
+    The other three are lists, and for them emptiness is exactly right.
     """
-    out = []
-    for key in DECISION_KEYS:
-        value = row.get(key)
-        if isinstance(value, list | dict | tuple):
-            if value:
-                out.append(key)
-        elif value:
-            out.append(key)
-    return tuple(out)
+    if not isinstance(value, Mapping):
+        return bool(value)
+    if key == "risk_ladder":
+        return bool(value.get("acting"))
+    if key == "universe_update":
+        return bool(value) and not value.get("error") and value.get("adopted", True)
+    return bool(value)
+
+
+def _decided(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """What a cycle did that a no-decision cycle must not have done."""
+    return tuple(key for key in DECISION_KEYS if _acted(key, row.get(key)))
 
 
 def score(

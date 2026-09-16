@@ -31,6 +31,19 @@ class RebalanceParams:
     # False = today's scope, where only a full close escapes the cap.  True = the scope the line above
     # has always claimed: every ``reduce_only`` order (full close AND pure reduction) escapes it.
     exempt_reductions: bool = False
+    # False = today's live book, where the absolute band is applied to every planned change.  True =
+    # the book `beidou_alpha.portfolio.apply_no_trade_band` has always scored, whose own docstring
+    # reads "Exits to exactly zero, entries from zero and sign flips are always executed; only
+    # same-direction resizing is suppressed."  `model.py`'s D-033 moved the band here on the stated
+    # ground that this function "applies the identical rule"; it does not, and False is the difference.
+    exempt_crossings: bool = False
+    # ``flat_inside_band`` must be flipped together with ``beidou_alpha.portfolio.PortfolioParams``.
+    # False = today, where a planned target may land strictly inside the absolute band and the position
+    # it leaves can never be closed again (the largest gap a zero target can ask for is then |current|).
+    # True = the invariant "never hold a position smaller than the absolute band": such a target is
+    # taken as flat.  It covers reductions, sign flips AND sub-band entries with one rule, which is why
+    # it is not called `snap_reductions` - the first live stub, 2026-09-10, was made by a flip.
+    flat_inside_band: bool = False
     tag: str = "bd"
 
 
@@ -111,6 +124,12 @@ def plan_rebalance(
             continue
         target_notional = target_weight * equity
         current_notional = current_qty * price
+        # D2, before any of the band arithmetic: a target the planner cannot subsequently close is not
+        # a target it is allowed to plan.  Taken as flat rather than clamped outward to the band edge -
+        # the band is not a position size the model asked for, and rounding a 0.05% conviction up to
+        # 0.5% would be the planner inventing exposure to keep its own arithmetic tidy.
+        if params.flat_inside_band and 0.0 < abs(target_notional) < params.no_trade_band * equity:
+            target_weight, target_notional = 0.0, 0.0
         delta = target_notional - current_notional
         same_direction_resize = (
             current_qty != 0.0 and target_notional != 0.0 and (target_notional > 0) == (current_qty > 0)
@@ -138,6 +157,13 @@ def plan_rebalance(
         shedding = deescalating and abs(target_notional) < abs(current_notional)
         if same_direction_resize and not shedding:
             threshold = max(threshold, params.no_trade_rel_band * abs(current_notional))
+        # `not same_direction_resize` is exactly the backtest's complement: flat and wanting a position,
+        # holding one and wanting flat, or a sign flip.  The band's own job - suppressing a small
+        # same-direction resize - is untouched, which is what keeps this from being "turn the band off".
+        # Flat and wanting flat has to stay inside the band, or every `leaving` name plans a zero-sized
+        # order every cycle and `QUANTITY_ROUNDS_TO_ZERO` floods the log the band was written to unclog.
+        if params.exempt_crossings and not same_direction_resize and (current_qty != 0.0 or target_notional != 0.0):
+            threshold = 0.0
         if abs(delta) < threshold:
             # The most common outcome of a cycle used to be the only one that left no trace: a bare
             # `continue`.  So a symbol the band can never let in read exactly like a symbol that did not
@@ -146,6 +172,17 @@ def plan_rebalance(
             # cases are separated from the ordinary suppressed resize because they are structural, not
             # transient: no price path clears the band while the target stays this small.  Flat and
             # wanting flat is neither, and stays silent so `leaving` symbols cannot flood the log.
+            #
+            # `BAND_BLOCKS_EXIT` asks about the POSITION, not about this bar's target.  It used to fire
+            # only on a target of exactly zero, and a decaying model target essentially never lands
+            # there: ENAUSDT sat at -79 contracts (-11.19 USDT against a 54.32 USDT band) from
+            # 2026-09-14T11:00Z with a target of -0.05% of equity, every cycle logged as an ordinary
+            # `NO_TRADE_BAND`, and `report daily` printed `blocked_exit: []` while the operator found
+            # the position by eye in the venue UI.  Unclosable is a property of `|current| < threshold`
+            # - the largest gap a zero target can ever ask for is `|current|` itself - so that is what
+            # the label tests.  `reports.plan_gaps` already documented it this way; only the predicate
+            # was narrower than its own docstring.  No order changes: all three outcomes are still
+            # "no order", and only which one is called what moves.
             if current_qty != 0.0 or target_notional != 0.0:
                 skipped.append(
                     {
@@ -154,10 +191,12 @@ def plan_rebalance(
                             "BAND_BLOCKS_ENTRY"
                             if current_qty == 0.0
                             else "BAND_BLOCKS_EXIT"
-                            if abs(target_notional) < 1e-9
+                            if abs(current_notional) < threshold
                             else "NO_TRADE_BAND"
                         ),
                         "delta_notional": delta,
+                        # The reader has to be able to re-derive the verdict rather than trust the label.
+                        "current_notional": current_notional,
                         "threshold": threshold,
                     }
                 )

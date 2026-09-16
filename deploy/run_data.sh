@@ -41,30 +41,26 @@ echo "[$(stamp)] pool refresh"
 echo "[$(stamp)] status"
 "$BEIDOU" data status || true
 #
-# 2026-09-10.  `beidou data onchain|index|macro` shipped today and were HELD OUT of this job.  The rule
-# used, so the next person decides rather than re-derives: a feed belongs here when something reads it
-# on a schedule, or when waiting makes its history unrecoverable or the catch-up disproportionate.
+# 2026-09-10.  `beidou data onchain|index|macro` shipped that day and were HELD OUT of this job, each
+# for a reason written out here: #29 index price because NOTHING read the store, #31 on-chain because a
+# year of waiting costs the same 49 requests as one day of it, #32 macro because it has no store at all.
+# The rule used was "a feed belongs here when something reads it on a schedule, or when waiting makes
+# its history unrecoverable or the catch-up disproportionate".
 #
-#   #29 index price   - the strongest claim of the three: 528/528 perpetuals covered, the same hourly
-#                       grid as the klines above, so a skipped day is a 24-bar hole of exactly the kind
-#                       `KlineStore.gaps` exists to catch.  Held out anyway because NOTHING reads the
-#                       store - `_load` does not join it, and the command itself prints "live gate: 0/4
-#                       columns" every run for want of an archive-vs-REST verification.  Its first run
-#                       is also a backfill from history_start (2021-01), not a tail.
-#                       Add it the day §9A item 5 lands (the index/spot join into the panel):
-#                         "$BEIDOU" data index || { echo "[$(stamp)] FAIL data index"; fail=1; }
-#   #31 on-chain      - one request per ASSET covers ANY window, so a year of waiting costs the same
-#                       49 requests as one day of it: scheduling buys nothing a backfill would not.
-#                       Coverage is 49/528 and exactly one column can reach live even on a PASS.
-#                       Add it when a leaf actually reads an on-chain column, with an overlapping
-#                       window so a missed day repairs itself:
-#                         "$BEIDOU" data onchain --from "$(date -u -v-7d +%F)" --to "$(date -u +%F)"
-#   #32 macro         - monthly releases, and NO store by its author's scope call, so a daily run would
-#                       leave nothing behind at all.  ALFRED re-serves every vintage on request, and
-#                       BLS v1's anonymous budget is sized for re-verifying a contract rather than for
-#                       a schedule.  It belongs in a re-verification, never in a daily ingest.
+# 2026-09-16: the operator WITHDREW all three.  Modules, commands and tests are out of the tree
+# (`git show 71863e9e` has them).  So this block no longer lists anything to add, and what is worth
+# keeping is the fact that it was RIGHT and that being right here was not enough:
 #
-# The precedent this follows rather than breaks: `data metrics` HAS a panel reader (`_load(metrics=…)`)
-# and `data spot` has half of one, and neither is scheduled here.  This job is the loop's own evidence -
-# klines, funding, pool - and putting a feed nobody reads into it turns a red data job into noise.
+#   This job was the only thing in the repository that had correctly judged those three feeds unread,
+#   and it recorded that judgement as a comment.  Six days later a review had to re-derive the same
+#   conclusion from scratch - `research_cmd._load` joins only metrics and spot, no leaf reads an
+#   on-chain/index/macro column, `.beidou/data/` holds no store for any of them - because a comment in
+#   a shell script is not something any guard consults.  `test_every_module_is_reachable_from_an_entry_point`
+#   passed the whole time: it asks whether a module CAN be run, and all three could.  Nothing anywhere
+#   asked whether anything DID.
+#
+# The precedent that survives them, and the reason this job stayed small: `data metrics` HAS a panel
+# reader (`_load(metrics=…)`) and `data spot` has half of one, and neither is scheduled here either.
+# This job is the loop's own evidence - klines, funding, spot, pool - and putting a feed nobody reads
+# into it turns a red data job into noise.
 exit "$fail"

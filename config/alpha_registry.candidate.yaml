@@ -18,6 +18,30 @@
 # instrument; neither half alone does.
 #
 # Replace this file with the first real promotion candidate when one exists.
+#
+# ----------------------------------------------------------------------------------------------------
+# 2026-09-16 CORRECTION.  The paragraph above was TRUE on 2026-09-12 and had stopped being true by
+# 2026-09-15, which is the one thing a positive control may not do quietly.  This file was last touched
+# at `6e87e7ed` (09-12); `alpha_registry.yaml` moved three times after it, and the two had drifted apart
+# on exactly the two fields that decide what a soak is soaking:
+#
+#   universe          18 pinned symbols here, `[]` in armed - the operator UNPINNED the population on
+#                     09-15 (`081f57da`) because a frozen list is not what any cited report traded.
+#                     So this candidate was soaking a population the armed loop had abandoned.
+#   evidence.report   `tsmom-validation-20260908T182204Z` here, `...20260913T182325Z` in armed.
+#
+# The soak running when this was found (PID 802, started 09-15T04:24Z, 90/168 cycles) was therefore not
+# the positive control this file's own first paragraph describes: "a registry that should pass" had
+# silently become "a registry nobody would deploy".  It was regenerated from the armed registry as of
+# `71863e9e` and the soak restarted; the 90-cycle record was moved to `.beidou/live-shadow-dry-run.20260916`
+# rather than appended to, because one `cycles.jsonl` may only describe one candidate.
+#
+# The GENERAL lesson, which is why this is recorded here rather than fixed silently: a file whose
+# correctness is "identical to that other file" has no instrument watching it.  Every other identity in
+# this repository is checked by something - the registry digest, the construction fingerprint, the
+# evidence sha256 - and this one was checked by a sentence.  `tests/cli/test_the_shadow_cannot_touch_the_armed_loop.py`
+# now holds the identity itself: the candidate must differ from the armed registry by comments alone.
+# ----------------------------------------------------------------------------------------------------
 # Strategies the live loop is allowed to run.  A strategy may only be enabled
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
@@ -34,25 +58,60 @@ version: 1
 # 这份名单读自 .beidou/live/state.json——armed 循环此刻真正持有的那套。第一版读的是
 # .beidou/data/universe.json，而 09-08 18:00Z 一次裸 --paper 重排把那个文件里的 CYSUSDT
 # 换成了 PUMPUSDT；照那份钉，钉的是循环从来没持有过的币。文件是观察，而且不止一个进程在写它。
-universe:
-  - BTCUSDT
-  - ETHUSDT
-  - SOLUSDT
-  - ZECUSDT
-  - XRPUSDT
-  - HYPEUSDT
-  - DOGEUSDT
-  - BNBUSDT
-  - TRUMPUSDT
-  - ENAUSDT
-  - TUTUSDT
-  - 1000PEPEUSDT
-  - SUIUSDT
-  - AKEUSDT
-  - UNIUSDT
-  - LINKUSDT
-  - ADAUSDT
-  - CYSUSDT
+# 2026-09-13T21:13Z（操作者指示）：TRUMPUSDT 移出。它的模型目标已缩到权益的 0.044%
+# （4.75 USDT），而 `no_trade_band: 0.005` 要求一笔调仓至少 0.5% 权益（当时 53.94 USDT），
+# 于是它从 2026-09-13T19:00Z 起每根周期都被记成 BAND_BLOCKS_ENTRY：占着一个名额、永远
+# 建不了仓。18:00Z 那根它自己把空头平掉之后就再没有过敞口，所以移除不平任何仓位。
+# 先测后改，三项都是量出来的而不是推的：
+#   构造指纹 46b8d731530a 删前删后一致 —— M-010 的 30 天窗口**不清零**（universe 名单
+#     不在 construction_fingerprint 里；在里面的是 min_history_bars）；
+#   启动证据门 registry_evidence_problems / registry_dataset_problems 删前删后都是 0；
+#   registry_digest e204447bef68 -> 9e1bf73c3691，重启后心跳应读到后者。
+# 池子每日仍照常重排、照常记进 cycles.jsonl 的 universe_update，但 universe_pinned 下它
+# 不决定任何事，所以 TRUMPUSDT 不会自己回来。
+# 2026-09-14T19:42Z（操作者指示）：ENAUSDT 移出，与上一条同形、同理由、同证据形状。
+# 它的模型目标已缩到权益的 0.016%（1.78 USDT），而 `no_trade_band: 0.005` 要求一笔调仓至少
+# 0.5% 权益（当时 54.76 USDT），于是它从 2026-09-14T17:00Z 起每根周期都被记成
+# BAND_BLOCKS_ENTRY：占着一个名额、永远建不了仓。
+# 到这一步的路径与 TRUMPUSDT 不同，值得记下来，因为它是带宽的另一侧：ENAUSDT 先被带宽
+# 困在**有仓位**的那一面——09-14T10:00Z 一笔 reduce-only 把它留在 −11.19 USDT（5x 下保证金
+# 2.24 USDT），而带宽 54.32 USDT，目标归零能要求的最大缺口就是 11.19，撞不动，止损也打不出
+# 订单（退出层只把权重改成 0，改完照样过带宽）。操作者 17:00Z 前手工平掉它之后，它才落到
+# BAND_BLOCKS_ENTRY 这一侧。判据与旋钮见 f44016a9 / ad70e81a，读数见 RESEARCH_LOG 同日条目。
+# 移除时无敞口：17:00Z 与 18:00Z 两根都记 BAND_BLOCKS_ENTRY，而该标签只在 current_qty == 0
+# 时发出，是循环自己从 positionRisk 读的——所以移除不平任何仓位。
+# 先测后改，四项都是量出来的而不是推的：
+#   构造指纹 ccd7bb9764b5（别名解析为 46b8d731530a）删前删后一致 —— M-010 的 30 天窗口
+#     **不清零**；`test_the_universe_list_is_not_what_this_pins` 正是把这件事钉住的那条；
+#   启动证据门 registry_evidence_problems 删前删后都是 0（dataset 那 2 条是当日已有的
+#     advisory，blocking 为 none，与本次无关）；
+#   registry_digest 9e1bf73c3691 -> 1db80a06f281，重启后心跳应读到后者。
+# 与 TRUMPUSDT 一样：池子每日仍重排、仍记 universe_update，但 universe_pinned 下不决定
+# 任何事，所以 ENAUSDT 不会自己回来。改 registry 不等于改循环——引擎只在启动时建模，
+# 这条移除要到下次重启才生效。
+# 2026-09-15（操作者裁定）：钉住取消，`universe: []`。上面整段保留不删——那是 TRUMPUSDT 与
+# ENAUSDT 两次移除的审计线，且它记录的机制仍然成立，只是不再被使用。
+#
+# 取消的理由不是"钉住太麻烦"，是钉住偏离了证据。循环引用的那份报告
+# （reports/research/tsmom-validation-20260913T182325Z.json，verdict PASS）记着
+# `universe_mode: "pit"`，其 dataset.membership 是 refreshes 2042 / median_gap_hours 24.0 /
+# mean_size 17.58 / union 211：**让这本书上线的回测交易的就是一个每 24 小时按同一条 15/20
+# 滞回重排的池子**，五年里进出过 211 个币，从来不是一份冻结的名单。所以冻结的 16 币池子才是
+# 证据没有描述过的那本书，而且漂移单调变大——2026-09-15T01:00Z 的重排提案与实持已差 7 个名字。
+#
+# 钉住当初要挡的那件事（每日重排改写 universe.json → 数据集闸阻塞 → 可干净重启每天到期）是
+# 真的，但处置选错了层：`research_cmd._resolve_symbols` 只在 static 下读 universe.json，pit
+# 报告的总体是 membership.parquet（那一项无条件阻塞）。该冻的是闸的判据，不是交易池。闸已在
+# 同一分支改对。
+#
+# TRUMPUSDT / ENAUSDT 会随第一次重排回来，操作者裁定不加排除：它们"永久占名额"的性质本身是
+# 钉住造成的，池子每天换手时低权重的币会随排名自然出池。可证伪判据：若任一标的连续 5 天记
+# BAND_BLOCKS_ENTRY 且没被重排踢出池子，这条说法即被证伪，届时重议。
+#
+# 生效同样要重启——引擎只在启动时建模。取消后 registry_digest 不再含 universe 键（条件化的），
+# 所以 digest 会变一次；重启后心跳应读到新值。
+# 设计：docs/analysis/2026-09-15-universe-unpin-and-dataset-gate-design.md
+universe: []
 ensemble:
   method: mean                 # weighted mean of per-strategy targets (alternative: rolling_zscore)
   turnover_penalty: 0.0
@@ -262,9 +321,33 @@ strategies:
     # 不重启：换证据指针不动 construction_fingerprint 也不动 registry_digest，所以 M-010 那段自
     # 2026-09-04T15:02Z 起未断的窗口不清零。
     # 这条指针的有效期到下一次 universe 日常重排（约每日 01:00Z）——见 RESEARCH_LOG 同日条目。
+    # 2026-09-14 (P32)：指针移到 182325Z。以上每一段都在描述 182204Z，它是在 `vol_target 0.30` 下
+    # 产出的；操作者把 k 裁定为 0.60，那份证据就不再描述被交易的构造，`registry_evidence_problems`
+    # 会说 `portfolio vol_target is 0.6 live but 0.3 in the cited evidence`，armed 启动被拒。上面那句
+    # 「不重启：换证据指针不动 construction_fingerprint」描述的是那一次换指针，**不适用于这一次**：
+    # 这一次同时改了 `vol_target`，是构造改动，M-010 与 M-G06 的窗口都清零。
+    #
+    # 新证据与旧证据逐项对照，把变差的也列出来，因为它们是这次加注的价钱：
+    #   OOS Sharpe      1.8087 -> 1.5919      门 1.5136 @183 -> 1.5493 @242
+    #   余量            +0.2951 -> +0.0426    <-- 薄了将近一个数量级，这是本次最该被记住的数
+    #   CPCV mean/q05   1.86/1.31 -> 1.61/1.19       PBO 0.0856 -> 0.2082
+    #   成本 x2         1.69 -> 1.56          全样本 MDD -21.5% -> -40.3%
+    #   平均毛敞口       0.849 -> 1.345        换手 415 -> 540
+    #   guards          封顶 bar 390 -> 4070、暂停 bar -> 491；liquidation_touches 仍是 0，
+    #                   min_margin_buffer 97.17 —— 限制的不是爆仓，只是回撤，这一条没有变。
+    # VERDICT PASS 成立，但它是**擦边过**：OOS 比门只高 0.0426。下一次任何抬高 N 的动作（申报新格子、
+    # 账本新增行）都可能把它推到门下，所以在 k=0.60 下再做 tsmom 的搜索之前必须先算门，不能先跑。
+    #
+    # 全库口径下这次**不过**：whole-library 门 1.8184 对 OOS 1.5919。按 R0 那是报告项不是门
+    # （`gate_scope: per_strategy_bucket`），而且同一口径今天也会否掉 k=0.30 的在位者（1.8087 对
+    # 1.8184）——这正是 R0 注记里 KILL-AR-01 说的那件事。记在这里，不是拿它当通过的理由。
+    #
+    # DL-R4 的标注同样仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴。
+    # 预登记物证：`--prereg 96d659ae`（commit 时间写进了报告的 preregistration 块）。但那条预登记
+    # 本身是**补记**的，日志同日条目第一句就写了这件事；下游不得援引「预登记的选择规则」。
     evidence:
-      report: reports/research/tsmom-validation-20260908T182204Z.json
-      sha256: da400f4d28ef0da9843417fdcbfe722657dc7902fa204a64ab86e24f60c083e0
+      report: reports/research/tsmom-validation-20260913T182325Z.json
+      sha256: cff07c6777295defce2acf7b045544f633c2f62c5ef766391eab4950236ef951
       verdict: PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，

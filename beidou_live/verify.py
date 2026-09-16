@@ -205,41 +205,72 @@ def last_recorded_as_of_ms(store: StateStore) -> int | None:
     return None
 
 
-def last_recorded_registry_digest(store: StateStore) -> str | None:
-    """Registry digest of the newest non-dry-run cycle: what the running PROCESS holds (DL-Q0).
+def _process_boundary(restarted_at: str | None) -> datetime | None:
+    """When the running process took over, or ``None`` when nothing marks a takeover.
 
-    ``None`` when no cycle has recorded one - cycles written before the field existed are not
-    a divergence, and must not be reported as one.
+    `LiveEngine.startup` persists `restarted_at` through `store.save` BEFORE it writes its first
+    heartbeat, so this boundary is already on disk during the whole window in which no cycle of this
+    process has completed yet - which is the only window where it is needed.
     """
-    for record in reversed(store.read_jsonl(store.cycles_path)):
-        if record.get("dry_run"):
-            continue
-        value = record.get("registry")
-        if isinstance(value, str) and value:
+    try:
+        return datetime.fromisoformat(restarted_at) if restarted_at else None
+    except ValueError:
+        return None
+
+
+def _this_process_wrote(row: Mapping[str, Any], boundary: datetime | None) -> bool:
+    """A live reading the RUNNING process wrote.  An unstamped or unparseable row is not proof, so it is not accepted."""
+    if row.get("dry_run"):
+        return False
+    if boundary is None:  # a first start, or a state file from before the field existed: no takeover to be after
+        return True
+    try:
+        return datetime.fromisoformat(str(row.get("at"))) >= boundary
+    except (TypeError, ValueError):
+        return False
+
+
+def _digest_this_process_recorded(store: StateStore, field: str, restarted_at: str | None) -> str | None:
+    """The digest the running PROCESS holds - from the heartbeat it overwrites, else the rows it appended.
+
+    `cycles.jsonl` is append-only and carries no process identity, so its newest digest row belongs to
+    whichever process last completed a cycle - after a restart, the dead one.  Reading that back as
+    "what the loop is running" compares the previous process's answer against the current file and
+    reports a divergence the restart just resolved.  Measured 2026-09-14: the loop came up at 19:10:55Z
+    already holding the `policy.py` edited at 17:50Z, the 19:11:19Z bar was SKIPPED and recorded no
+    digest, and for the rest of the hour the check quoted the dead process's 18:00:29Z `75764f646ca6`
+    against a file that said `d62ac59fa95c`.  `com.beidou.check` fires at :10, inside that window every
+    time, and `state.restarts` is past 43 - so this fired as often as the loop was restarted.
+
+    The heartbeat is consulted first because it is the one file the current process overwrites BEFORE
+    any cycle completes: bc986ec3 put the digests there for exactly this window and changed no reader,
+    so the write has been dead since it landed and the window it was meant to close stayed open.  The
+    ledger answers once a cycle of this process has landed.  ``None`` - this process has recorded
+    nothing yet, or the rows predate the field - is not a divergence and must not be reported as one.
+    """
+    boundary = _process_boundary(restarted_at)
+    for row in [store.read_heartbeat() or {}, *reversed(store.read_jsonl(store.cycles_path))]:
+        value = row.get(field)
+        if isinstance(value, str) and value and _this_process_wrote(row, boundary):
             return value
     return None
 
 
-def last_recorded_governance_digest(store: StateStore) -> str | None:
-    """Policy digest of the newest non-dry-run cycle: which RULES the running process holds (R9).
+def last_recorded_registry_digest(store: StateStore, restarted_at: str | None = None) -> str | None:
+    """Which registry the running process holds (DL-Q0), not which one is on disk (KILL-Q15)."""
+    return _digest_this_process_recorded(store, "registry", restarted_at)
 
-    Same shape as `last_recorded_registry_digest` and for the same reason.  A running process holds the
-    `beidou_governance.policy` module it imported at startup, so editing a threshold changes what the
-    repository says without changing what the loop would enforce.  R9 put the digest in every cycle row
-    to make that visible; until this function existed nothing read it back, so the record contained the
-    evidence and no instrument compared it.  Measured on 2026-09-09: policy 0.3.0 landed at 04:48Z, the
-    loop kept reporting 0.2.0's `753638a519ac`, and the 05:08Z restart that closed the gap was for an
-    unrelated reason.
 
-    ``None`` when no cycle recorded one - rows written before the field existed are not a divergence.
+def last_recorded_governance_digest(store: StateStore, restarted_at: str | None = None) -> str | None:
+    """Which governance RULES the running process holds (R9).
+
+    A running process holds the `beidou_governance.policy` module it imported at startup, so editing a
+    threshold changes what the repository says without changing what the loop would enforce.  R9 put the
+    digest in every cycle row to make that visible; until this reader existed nothing read it back.
+    Measured 2026-09-09: policy 0.3.0 landed at 04:48Z, the loop kept reporting 0.2.0's `753638a519ac`,
+    and the 05:08Z restart that closed the gap was for an unrelated reason.
     """
-    for record in reversed(store.read_jsonl(store.cycles_path)):
-        if record.get("dry_run"):
-            continue
-        value = record.get("governance")
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return _digest_this_process_recorded(store, "governance", restarted_at)
 
 
 def cycle_clock(record: Mapping[str, Any] | None) -> dict[str, Any]:

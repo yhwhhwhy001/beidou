@@ -24,7 +24,21 @@ from beidou_live.state import LiveState
 from beidou_shared.config import load_yaml
 
 PROFILE = load_yaml("config/live.demo.yaml")
-REGISTRY = parse_registry(load_yaml(PROFILE["registry"]))
+SHIPPED = load_yaml(PROFILE["registry"])
+
+# The population is this file's own, not the shipped registry's (2026-09-15).  It used to read
+# `SHIPPED["universe"]`, so emptying that key - an operator decision about which symbols to trade -
+# made two of these tests fail and the other two pass VACUOUSLY: `"CYSUSDT" not in engine.universe`
+# and `hit == []` are both trivially true against an empty pool, so they would have stayed green
+# while testing nothing.  The sibling file `test_the_universe_is_pinned_by_the_registry.py` already
+# records this lesson for its frozen digest ("a SYNTHETIC unpinned registry, not the shipped one");
+# this file had not caught up.  What is under test is D-031's behaviour under A pin, not WHICH
+# symbols the operator pins today.
+SYMBOLS = ("BTCUSDT", "ETHUSDT", "CYSUSDT")
+
+
+def _registry(*, pinned: bool) -> Any:
+    return parse_registry({**SHIPPED, "universe": list(SYMBOLS) if pinned else []})
 
 
 class _Alerts:
@@ -43,8 +57,8 @@ def _engine(*, pinned: bool, after: int = 1) -> LiveEngine:
     engine = LiveEngine.__new__(LiveEngine)
     engine.config = type("C", (), {"quarantine_after": after, "universe_pinned": pinned})()
     engine.state = LiveState()
-    engine.universe = list(REGISTRY.universe)
-    engine.model = build_model(REGISTRY, PROFILE)
+    engine.universe = list(SYMBOLS)
+    engine.model = build_model(_registry(pinned=pinned), PROFILE)
     engine.alerts = _Alerts()
     return engine
 
@@ -77,6 +91,7 @@ async def test_the_operator_is_told_that_a_pinned_symbol_does_not_come_back() ->
 async def test_an_unpinned_universe_keeps_the_old_shape() -> None:
     """Without a pin the daily re-rank can put the symbol back, so this is a normal rotation, not a divergence."""
     engine = _engine(pinned=False)
+    assert "CYSUSDT" in engine.universe, "an empty pool would make every assertion below vacuous"
     await LiveEngine._quarantine(engine, [_report("CYSUSDT", "REJECTED"), _report("BTCUSDT", "FILLED")])
     assert "CYSUSDT" not in engine.universe
     assert engine.alerts.sent == []
@@ -86,6 +101,7 @@ async def test_an_account_wide_rejection_still_cannot_empty_the_pool() -> None:
     """D-031's own guard, re-asserted here because this file now also decides what the digest says."""
     engine = _engine(pinned=True)
     before = registry_digest(engine.model)
+    assert "CYSUSDT" in engine.universe, "an empty pool would make `hit == []` vacuous"
     hit = await LiveEngine._quarantine(engine, [_report("CYSUSDT", "REJECTED"), _report("BTCUSDT", "REJECTED")])
     assert hit == [], "every order rejected proves nothing about any one symbol"
     assert registry_digest(engine.model) == before

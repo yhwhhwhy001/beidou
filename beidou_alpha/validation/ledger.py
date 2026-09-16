@@ -15,6 +15,7 @@ import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,33 @@ class TrialRecord:
         except (ValueError, KeyError, TypeError):
             return None
 
+    def fold_key(self, range_end_granularity_days: int) -> tuple[Any, ...]:
+        """`signature`, with `range_end` quantised - what actually decides "same trial" (caliber ④).
+
+        Operator ruling 2026-09-14, on Q4c.  A signal's value at bar t depends on data up to t, so the
+        same expression over the same start, symbols and construction produces an IDENTICAL stream on
+        the shared index when the range ends a few days later; the extra bars are the only difference
+        and the added independence is exactly zero.  That is arithmetic, not an estimate.
+
+        It is not a reason to drop the field.  The same argument holds for a range ending two years
+        later, and that really is a second look - the Sharpe it records is a different number.  So the
+        fold needs a granularity, and `range_end_granularity_days = 0` means "do not fold", which is
+        the rule as it stood before the ruling and has to stay reachable to be comparable against.
+
+        Bucket boundaries mean two runs a day apart can straddle one and not fold.  Known, and it errs
+        toward charging MORE - the direction a denominator is allowed to be wrong in.
+        """
+        return (
+            self.param_key,
+            self.range_start,
+            _range_end_bucket(self.range_end, range_end_granularity_days),
+            self.symbols,
+            self.construction_digest,
+            self.overlay_digest,
+            self.symbol_set_hash,
+            self.search_space_version,
+        )
+
     @property
     def signature(self) -> tuple[str, str, str, int, str, str, str, str]:
         """What makes two records the same trial.
@@ -147,6 +175,29 @@ class TrialRecord:
 # DL-K2: every candidate a `research mine` round evaluated lands here, under one key rather than one
 # key each.  The search IS the family - a mined candidate was selected by ranking the whole space on
 # the full sample - so its denominator has to be able to read the space back.
+
+#: Caliber ④'s buckets are anchored here, not at the first row seen, so the fold is deterministic and
+#: order-independent: an equivalence relation rather than a tolerance, which "within N days of each
+#: other" is not (A~B and B~C without A~C).
+_FOLD_EPOCH = date(1970, 1, 1)
+
+
+def _range_end_bucket(range_end: str, granularity_days: int) -> str | int:
+    """Which bucket a `range_end` falls in, or the raw string when it must not be folded.
+
+    Granularity 0 returns the string unchanged - the pre-ruling rule.  A date this cannot parse also
+    returns unchanged: a value the fold cannot read says nothing about whether two runs are one trial,
+    and a denominator resolves its doubt by charging more.
+    """
+    if granularity_days <= 0:
+        return range_end
+    try:
+        parsed = datetime.fromisoformat(range_end.replace(" ", "T")).date()
+    except ValueError:
+        return range_end
+    return (parsed - _FOLD_EPOCH).days // granularity_days
+
+
 MINED_SEARCH_STRATEGY = "mined"
 
 # The same rule for a search the SIGNAL runs rather than the operator: `pairs` picks which symbol pairs
@@ -208,16 +259,27 @@ def all_trials(lines: Iterable[str]) -> list[TrialRecord]:
     return records
 
 
-def unique_trials(records: Iterable[TrialRecord], *, exclude: Iterable[tuple[Any, ...]] = ()) -> list[TrialRecord]:
-    """First record per signature; signatures in ``exclude`` (the current run's own grid) are dropped."""
+def unique_trials(
+    records: Iterable[TrialRecord],
+    *,
+    exclude: Iterable[tuple[Any, ...]] = (),
+    range_end_granularity_days: int,
+) -> list[TrialRecord]:
+    """First record per fold key; keys in ``exclude`` (the current run's own grid) are dropped.
+
+    ``range_end_granularity_days`` has no default on purpose.  It is a governance threshold (R10 keeps
+    those in `Policy`, which this layer cannot import), so it is threaded through instead - and a
+    default here would let a caller quietly get the pre-ruling rule while believing it had the new one.
+    That is the invisible-default shape, which this repo has been bitten by twice in one day.
+    """
     skip = set(exclude)
     seen: set[tuple[Any, ...]] = set()
     out: list[TrialRecord] = []
     for record in records:
-        signature = record.signature
-        if signature in skip or signature in seen:
+        key = record.fold_key(range_end_granularity_days)
+        if key in skip or key in seen:
             continue
-        seen.add(signature)
+        seen.add(key)
         out.append(record)
     return out
 
@@ -230,6 +292,7 @@ def dsr_inputs(
     manual_prior_trials: int = 0,
     current_range: tuple[str, str, int] | None = None,
     current_context: tuple[str, str, str, str] = ("", "", "", ""),
+    range_end_granularity_days: int,
 ) -> dict[str, Any]:
     """n_trials and per-period Sharpe variance pooled over the ledger and the current grid.
 
@@ -242,16 +305,34 @@ def dsr_inputs(
     shorter than a signature matches nothing at all and silently charges every replay twice.
     """
     scale = float(np.sqrt(bars_per_year))
+    # Built through `fold_key` rather than assembled by hand in the shape of a signature.  The hand-made
+    # version was the trap caliber ④ could have shipped: quantise the fold and leave the exclusion
+    # literal, and every replay stops matching and is charged a second time - silently, and in the
+    # direction that looks rigorous.  One key, one implementation, no way for the two to disagree.
     exclude = (
         [
-            (key, current_range[0], current_range[1], current_range[2], *current_context)
+            TrialRecord(
+                strategy="",
+                param_key=key,
+                sharpe_annual=None,
+                bars_per_year=bars_per_year,
+                recorded_at="",
+                range_start=current_range[0],
+                range_end=current_range[1],
+                symbols=current_range[2],
+                run_id="",
+                construction_digest=current_context[0],
+                overlay_digest=current_context[1],
+                symbol_set_hash=current_context[2],
+                search_space_version=current_context[3],
+            ).fold_key(range_end_granularity_days)
             for key in current_sharpes_period
         ]
         if current_range is not None
         else []
     )
-    distinct = unique_trials(prior)
-    unique = unique_trials(distinct, exclude=exclude)
+    distinct = unique_trials(prior, range_end_granularity_days=range_end_granularity_days)
+    unique = unique_trials(distinct, exclude=exclude, range_end_granularity_days=range_end_granularity_days)
     pooled: list[float] = [r.sharpe_annual / scale for r in unique if r.sharpe_annual is not None]
     pooled.extend(v for v in current_sharpes_period.values() if v is not None)
     n_trials = len(unique) + len(current_sharpes_period) + max(0, int(manual_prior_trials))
@@ -269,5 +350,7 @@ def dsr_inputs(
         # never once say 676.  An analysis read the former as the latter and judged the miner on it;
         # nothing in any artefact could contradict the reading, which is the failure this closes.
         "distinct_hypotheses": len({record.param_key for record in prior}),
+        # Which fold produced the counts above.  A fold nobody can see is a fold nobody can argue with.
+        "range_end_granularity_days": int(range_end_granularity_days),
         "pooled_sharpes": len(pooled),
     }

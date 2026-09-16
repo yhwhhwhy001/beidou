@@ -93,6 +93,8 @@ class StateStore:
         self.attribution_path = self.directory / "attribution.jsonl"
         self.cycles_path = self.directory / "cycles.jsonl"
         self.heartbeat_path = self.directory / "heartbeat.json"
+        # path -> (size, mtime_ns, parsed rows).  See `read_jsonl`.
+        self._jsonl_cache: dict[Path, tuple[int, int, list[dict[str, Any]]]] = {}
 
     def load(self) -> LiveState:
         """A missing file is a first start; a file that will not parse is a refusal (see `StateUnreadable`).
@@ -150,11 +152,10 @@ class StateStore:
     def append_cycle(self, record: dict[str, Any]) -> None:
         self._append(self.cycles_path, record)
 
-    def read_jsonl(self, path: Path) -> list[dict[str, Any]]:
-        if not path.exists():
-            return []
+    @staticmethod
+    def _parse_jsonl(text: str) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in text.splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -163,6 +164,47 @@ class StateStore:
             except ValueError:
                 continue
         return rows
+
+    def read_jsonl(self, path: Path) -> list[dict[str, Any]]:
+        """Every row in an append-only ledger, parsing only what is new since the last call.
+
+        `run_cycle` reads `cycles.jsonl` and `attribution.jsonl` twice each - `_risk_ladder` and
+        `_check_probes` - and `report daily` reads `cycles.jsonl` eleven times for one report.  Each of
+        those used to re-read and re-parse the whole file: at 319 rows and 5.5 KB a row that is about
+        7 MB per cycle today, and at one bar an hour the ledger grows ~48 MB a year, so the same code
+        re-parses ~190 MB per cycle after a year.  Nothing about the work was necessary: `_append`
+        writes whole lines and never rewrites one.
+
+        So the parsed rows are kept and only the appended bytes are parsed.  The cache is keyed on the
+        file's size and mtime, and ANY disagreement with what was cached - a shrink, an mtime that went
+        backwards, a truncation and rewrite by another process - falls back to a full re-read rather
+        than trusting the tail.  The returned list is a copy: callers sort and mutate these rows, and a
+        cache a caller can edit is worse than no cache.
+        """
+        if not path.exists():
+            self._jsonl_cache.pop(path, None)
+            return []
+        stat = path.stat()
+        cached = self._jsonl_cache.get(path)
+        if cached is not None:
+            size, mtime, rows = cached
+            if size == stat.st_size and mtime == stat.st_mtime_ns:
+                return list(rows)
+            if stat.st_size > size and mtime <= stat.st_mtime_ns and size > 0:
+                # A seek lands on a byte offset, not a row boundary.  `_append` only ever writes whole
+                # lines, so the byte before the resume point is a newline whenever the cached size was
+                # taken at one - and when it is not (a torn write, an editor, a different writer), the
+                # tail would splice a half row onto a whole one.  Check rather than assume.
+                with path.open("rb") as handle:
+                    handle.seek(size - 1)
+                    if handle.read(1) == b"\n":
+                        tail = handle.read().decode("utf-8", errors="replace")
+                        grown = rows + self._parse_jsonl(tail)
+                        self._jsonl_cache[path] = (stat.st_size, stat.st_mtime_ns, grown)
+                        return list(grown)
+        rows = self._parse_jsonl(path.read_text(encoding="utf-8"))
+        self._jsonl_cache[path] = (stat.st_size, stat.st_mtime_ns, rows)
+        return list(rows)
 
     def _append(self, path: Path, record: dict[str, Any]) -> None:
         """One complete line, on the disk before we return (L1-14).

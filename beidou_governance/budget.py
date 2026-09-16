@@ -75,12 +75,12 @@ def window_spend(lines: Iterable[str], *, window_start: datetime, policy: Policy
     charged = [record for record in inside if record.strategy != MINED_SEARCH_STRATEGY]
     return LedgerBudget(
         window_start=window_start.isoformat(),
-        spent=len(unique_trials(charged)),
+        spent=len(unique_trials(charged, range_end_granularity_days=policy.trial_range_end_granularity_days)),
         allowed=policy.max_ledger_rows_per_window,
         # A round is a `run_id`: `research mine` writes every candidate of one enumeration under one.
         mine_rounds=len({record.run_id for record in mined}),
         allowed_mine_rounds=policy.max_mine_rounds_per_window,
-        mined_rows=len(unique_trials(mined)),
+        mined_rows=len(unique_trials(mined, range_end_granularity_days=policy.trial_range_end_granularity_days)),
     )
 
 

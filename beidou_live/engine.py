@@ -24,24 +24,24 @@ import pandas as pd
 
 from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
+from beidou_alpha.overlays.ladder import ladder_step
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.portfolio import PortfolioParams
 from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_governance.policy import Policy, policy_digest
+from beidou_live import soak
+from beidou_live.account_shape import margin_mode_problems
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows
+from beidou_live.construction import CONSTRUCTION_PAYLOAD_VERSION
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardDecision, GuardParams, describe_guard_reason, evaluate_guards
-from beidou_live.health import (
-    CONSTRUCTION_PAYLOAD_VERSION,
-    margin_mode_problems,
-    min_liquidation_distance,
-)
 from beidou_live.inputs import latest_closes, model_inputs, required_history
 from beidou_live.leverage import derive_leverage, scale_orders_to_margin
+from beidou_live.liquidation import min_liquidation_distance
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.rebalancer import PlannedOrder, RebalanceParams, flatten_orders, plan_rebalance
@@ -249,6 +249,8 @@ class LiveEngine:
         # A construction can only change at startup (the engine builds its model once - KILL-Q15), so
         # writing it on this process's first cycle records every change exactly once.
         self._construction_recorded = False
+        # The cycle currently in flight, for the ERROR path to read.  None between cycles.
+        self._cycle_record: dict[str, Any] | None = None
         # `state` is the way in for a caller that must run WITHOUT a readable state file.
         # `store.load()` refuses a corrupt one on purpose (it is the only copy of the income
         # watermark, the equity high-water mark and the exit anchors), and `beidou live run`
@@ -423,6 +425,10 @@ class LiveEngine:
         if not tradable:
             raise RuntimeError("no tradable symbols in the universe")
         self.universe = tradable
+        # Pair the lists, as the other three mutation sites do.  `live verify` reads only
+        # `state.universe`, so persisting the pre-filter list made the reproduction rank over a larger
+        # population than the cycle scored - D-042's contract, KILL-027's shape.
+        self.state.universe = list(self.universe)
         hedge_probe = getattr(self.venue, "hedge_mode", None)
         if callable(hedge_probe) and await hedge_probe():
             raise RuntimeError("account is in hedge (dual-side) position mode; switch to one-way mode first")
@@ -489,6 +495,10 @@ class LiveEngine:
                 "history_bars": self.history_bars,
                 "construction": construction_fingerprint(self.config),
                 "registry": registry_digest(self.model),
+                # R9 beside DL-Q0, on the same terms: until a cycle of this process lands, the heartbeat
+                # is the only place that says which RULES it imported.  Gated by the same switch as the
+                # cycle row, so the switch keeps meaning what it says.
+                **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
                 "dry_run": self.config.dry_run,
                 "foreign_positions": sorted(snapshot.foreign_positions),
             }
@@ -604,7 +614,12 @@ class LiveEngine:
                 # exists to say what the process is running; the one moment it could not answer was
                 # the moment right after that answer changed.
                 "registry": registry_digest(self.model),
+                **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
                 "construction": construction_fingerprint(self.config)["digest"][:12],
+                # Which process this reading belongs to.  The heartbeat is one file that whoever runs
+                # against this directory overwrites, and the readers of these digests refuse a dry run's
+                # answer for the same reason they skip its cycle rows.
+                "dry_run": self.config.dry_run,
             }
         )
         if reason == BACKOFF_REASON:
@@ -621,6 +636,7 @@ class LiveEngine:
             )
 
     async def guarded_cycle(self, bar_open_ms: int) -> dict[str, Any] | None:
+        self._cycle_record = None
         try:
             record = await self.run_cycle(bar_open_ms)
         except Exception as exc:
@@ -632,12 +648,29 @@ class LiveEngine:
                     "bar_open_ms": bar_open_ms,
                     "error": f"{type(exc).__name__}: {exc}",
                     "consecutive_errors": self.consecutive_errors,
+                    # This heartbeat OVERWRITES the one that carried the digests, so it has to carry them
+                    # itself or DL-Q0 / R9 lose their answer for the length of the outage.  Measured
+                    # 2026-09-15, twelve minutes after the restart that shipped their readers: the
+                    # 08:49:16Z restart wrote them correctly, the 09:00Z cycle died on a proxy 503, and
+                    # both checks fell to "还没有任何周期记录过 digest" - honest, and still blind, in the
+                    # one window these instruments exist for.  An outage is a reason to want the answer.
+                    "registry": registry_digest(self.model),
+                    **({"governance": policy_digest()} if Policy().record_digest_every_cycle else {}),
+                    "dry_run": self.config.dry_run,
                 }
             )
             # A failed cycle must leave a durable row: the heartbeat is overwritten by the next cycle, so
             # without this the only trace of an outage is a log line (that is how the -1023 on 2026-09-04
             # left no record).  No `equity` key, so the drift check keeps ignoring it; `bar_open_ms` puts it
             # in the right day, and the targets still in force are carried so the daily report stays readable.
+            # L3 / KILL-AR-20 reads five keys off this row to ask whether a failed cycle DECIDED
+            # anything.  They used to be absent (and `orders` a literal `[]`), so the answer was always
+            # "no" and the gate could not fail: `run_cycle` places orders and only then runs
+            # `_quarantine`, `_summarize` and `_finish_cycle`, so a raise in any of those three left
+            # fills on the venue and a row saying none were placed.  `no_decisions()` is the empty
+            # shape; the partial record overlays whatever this cycle got as far as doing.
+            partial: dict[str, Any] = self._cycle_record or {}
+            decided = soak.no_decisions() | {k: v for k, v in partial.items() if k in soak.DECISION_KEYS}
             self.store.append_cycle(
                 {
                     "bar_open_ms": bar_open_ms,
@@ -647,8 +680,8 @@ class LiveEngine:
                     "consecutive_errors": self.consecutive_errors,
                     "window_seconds": self.rebalance_window,
                     "targets": dict(self.state.last_targets),
-                    "orders": [],
                     "dry_run": self.config.dry_run,
+                    **decided,
                 }
             )
             logger.exception("cycle %s failed", bar_open_ms)
@@ -839,6 +872,9 @@ class LiveEngine:
             "orders": [],
             "skipped": [],
         }
+        # The same object the rest of this method mutates.  `guarded_cycle` reads it when a cycle
+        # raises, so an ERROR row can carry the decisions already taken instead of asserting none.
+        self._cycle_record = record
         self._construction_recorded = True
         await self._announce_guards(decision, bar_open_ms)
         # M-Q06.  Before the skip check on purpose: a book approaching liquidation while a guard has
@@ -1473,7 +1509,11 @@ class LiveEngine:
 
         The rungs and the grace live in `Policy`, so they are inside `policy_digest()` and the loop
         already records that every cycle (R9).  Changing one is visible in the record without anything
-        further being added here.
+        further being added here.  The RULE they parameterise lives in
+        `beidou_alpha.overlays.ladder.ladder_step`, pure and replayable; what is left in this method is
+        the I/O it needs - read the record, persist the standing rung, page the operator - and no
+        branch of its own.  Before that split the state machine could not be evaluated without an
+        engine, so four `scratchpad/` scripts rewrote it and D-035 cites numbers they produced.
 
         The grace is two cycles: the first crossing alerts and does nothing, because a single late
         income page or one outsized fill must not halve the risk budget by itself.  The record needs no
@@ -1483,98 +1523,26 @@ class LiveEngine:
         one, so a row that changes no registry digest would break the chain it is meant to prove.
         """
         policy = Policy()
-        base = float(self.config.portfolio.vol_target)
-        standing = dict(self.state.risk_ladder or {})
-        reading = attributed_drawdown_state(
-            self.store.read_jsonl(self.store.cycles_path),
-            self.store.read_jsonl(self.store.attribution_path),
-            RiskBudgetParams(),
+        step = ladder_step(
+            reading=attributed_drawdown_state(
+                self.store.read_jsonl(self.store.cycles_path),
+                self.store.read_jsonl(self.store.attribution_path),
+                RiskBudgetParams(),
+            ),
+            standing=dict(self.state.risk_ladder or {}),
+            base=float(self.config.portfolio.vol_target),
+            rungs=policy.drawdown_ladder,
+            grace_cycles=policy.drawdown_grace_cycles,
+            bar_open_ms=bar_open_ms,
+            now=utc_now_iso(),
         )
-        block: dict[str, Any] = {
-            # Read off the reading rather than asserted here: after 2026-09-14 the ruler carries the
-            # book's unrealised P&L whenever the cycles it reads recorded it, and a label this file
-            # hardcodes would keep saying `attributed_pnl` through the change.
-            "ruler": reading.get("ruler", "attributed_pnl"),
-            "marked_rows": reading.get("marked_rows"),
-            # The drift between this reading's pinned denominator and the equity the positions are
-            # sized off (see `attributed_drawdown_state`).  Carried per cycle rather than recomputed
-            # later, for the same reason `asset_vol` is: recomputing it from the archive answers a
-            # question about a different bar.
-            "equity_over_peak": reading.get("equity_over_peak"),
-            "enforced": bool(reading.get("enforced")),
-            "drawdown": reading.get("value"),
-            "attributed": reading.get("attributed"),
-            "base_vol_target": base,
-            "grace_cycles": policy.drawdown_grace_cycles,
-            "scalar": 1.0,
-            "acting": False,
-        }
-        if not reading.get("enforced"):
-            # A blind reading does not lift a breach that is already standing: "cannot compute" is not
-            # "recovered".  It also cannot start one.
-            block["why"] = reading.get("why")
-            if standing.get("acting"):
-                block.update(
-                    {
-                        "scalar": float(standing["scalar"]),
-                        "acting": True,
-                        "vol_target": float(standing["vol_target"]),
-                        "cycles": int(standing.get("cycles", 0)),
-                        "held_blind": True,
-                    }
-                )
-            return block
-
-        drawdown = float(reading["value"])
-        target = policy.throttle_scalar(drawdown)
-        if target is None:
-            if standing:
-                self.state.risk_ladder = {}
-                await self.alerts.send(
-                    f"北斗：归因回撤回到 {drawdown:.2%}，已在 R8 梯的第一档之上——vol_target 恢复 {base}"
-                )
-                logger.warning("risk ladder cleared at attributed drawdown %.4f", drawdown)
-            return block
-        cycles = int(standing.get("cycles", 0)) + 1
-        # A de-escalation ladder must never ADD size.  `throttle_scalar` returns an ABSOLUTE vol target
-        # and this divides by the running one, so rungs calibrated for a larger k return a scalar above
-        # 1 at a smaller one - an amplifier wearing a brake's name, and it would fire exactly when the
-        # book is already down.  Latent since R8 was wired (0.225 against k=0.15 is 1.5x) and surfaced
-        # on 2026-09-14, when re-deriving the rungs for k=0.60 made their dependence on a k explicit.
-        # Clamped rather than raised: a rung that asks for more than the book already runs is a
-        # mis-calibration to report, not a reason to stop the cycle.
-        raw = float(target) / base if base > 0 else 1.0
-        scalar = min(1.0, raw)
-        acting = cycles > policy.drawdown_grace_cycles
-        self.state.risk_ladder = {
-            "cycles": cycles,
-            "rung": target,
-            "vol_target": target,
-            "scalar": scalar,
-            # True means the rung sits ABOVE the running vol_target, so the ladder asked for no cut at
-            # all.  Reported so a mis-calibrated ladder reads as mis-calibrated instead of as quiet.
-            "rung_above_base": raw > 1.0,
-            "acting": acting,
-            "drawdown": drawdown,
-            "since_bar_ms": int(standing.get("since_bar_ms") or bar_open_ms),
-            "at": utc_now_iso(),
-        }
-        block.update({"cycles": cycles, "rung": target, "vol_target": target})
-        if acting:
-            block.update({"scalar": scalar, "acting": True})
-            if not standing.get("acting") or standing.get("rung") != target:
-                logger.warning("risk ladder acting: vol_target -> %s (scalar %.4f)", target, scalar)
-                await self.alerts.send(
-                    f"北斗：归因回撤 {drawdown:.2%} 连续 {cycles} 个周期在 R8 梯上，"
-                    f"vol_target {base} → {target}（scalar {scalar:.4f}）已生效"
-                )
-        elif cycles == 1:
-            logger.warning("risk ladder first crossing at attributed drawdown %.4f", drawdown)
-            await self.alerts.send(
-                f"北斗：归因回撤 {drawdown:.2%} 触及 R8 梯（vol_target → {target}）。"
-                f"按 {policy.drawdown_grace_cycles} 周期宽限，本周期**不缩仓**"
-            )
-        return block
+        if step.standing is not None:
+            self.state.risk_ladder = step.standing
+        for message in step.warnings:
+            logger.warning("%s", message)
+        for message in step.alerts:
+            await self.alerts.send(message)
+        return step.block
 
     async def _check_probes(self, bar_open_ms: int) -> list[dict[str, Any]]:
         """D-019: evaluate every probe book's stop rule on the attributed P&L; a stopped book leaves the model."""
@@ -2079,7 +2047,7 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # v5 (P30, 2026-09-12).  A per-bar gross cap on each non-main book, applied before its
             # fraction.  It is 0.0 - off - in the shipped profile and in every profile that does not
             # name it, so this field's arrival moves the digest without moving a weight; the alias in
-            # `health.CONSTRUCTION_ALIASES` is declared with that proof, same as v3 and v4.  It belongs
+            # `construction.CONSTRUCTION_ALIASES` is declared with that proof, same as v3 and v4.  It belongs
             # in the fingerprint rather than only in the research CLI because turning it on WOULD change
             # every weight of a book the loop holds, and D-036's other half was `LiveConfig` not
             # carrying `vol_target`: a knob the record cannot see is a knob that moves silently.
@@ -2103,6 +2071,21 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # on changes which orders the cap refuses, i.e. the book the loop holds - and a knob the
             # record cannot see is the other half of D-036.
             "exempt_reductions": config.rebalance.exempt_reductions,
+            # v7 (+ rebalance.exempt_crossings, + rebalance.flat_inside_band), 2026-09-14.  Declared
+            # before either is ever written, on the same proof as v3-v6: the shipped profile names
+            # neither key and False is off for both, so recomputed against it the values are False on
+            # both sides of the change and only the shape of what is hashed moved.  Without the alias
+            # the next restart would reset M-010's window - and, since 2026-09-14, would also trip
+            # `test_the_construction_is_frozen_until_the_holdout_matures` - for a byte-identical book.
+            #
+            # What False means for each is the literal previous expression, and both are asserted
+            # rather than left to this comment.  `exempt_crossings`: the absolute band applies to
+            # every planned change, including a close to zero - which is NOT what
+            # `beidou_alpha.portfolio.apply_no_trade_band` does, so False is a live/backtest
+            # divergence this knob names rather than creates.  `flat_inside_band`: a target may land
+            # strictly inside the band and leave a position that can never be closed again.
+            "exempt_crossings": config.rebalance.exempt_crossings,
+            "flat_inside_band": config.rebalance.flat_inside_band,
         },
         # v6's third field.  How many consecutive cycles a symbol may come back with no closed
         # bars before the loop treats it as delisted and flattens it.  1 is today's behaviour
@@ -2176,6 +2159,8 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
             "no_trade_band": config.rebalance.no_trade_band,
             "no_trade_rel_band": config.rebalance.no_trade_rel_band,
             "sleeve_max_gross": config.portfolio.sleeve_max_gross,
+            # D2's backtest-visible half, so DL-G9's intersection keeps matching `CONSTRUCTION_KEYS`.
+            "flat_inside_band": config.portfolio.flat_inside_band,
         },
         "book_guards": {
             "max_weight": config.guards.max_weight,

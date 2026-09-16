@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **本方案只生成不执行。** 每个任务都挂在 §1 的一个操作者决定（Q1–Q6）上；在对应的 Q 得到回答之前，不改配置、不跑计费实验、不写账本。方案位置沿用仓库惯例放在 `docs/analysis/`（操作者要求分析与方案都用纯 Markdown 放在这里），而不是 `docs/superpowers/plans/`。
+> **本方案只生成不执行。** 每个任务都挂在 §1 的一个操作者决定（Q1–Q6）上；在对应的 Q 得到回答之前，不改配置、不跑计费实验、不写 ledger。方案位置沿用仓库惯例放在 `docs/analysis/`（操作者要求分析与方案都用纯 Markdown 放在这里），而不是 `docs/superpowers/plans/`。
 
 **Goal:** 把深度分析报告的 PIVOT 结论变成可逐步执行的工作：先写后跑地测掉操作者的字面问题（止盈 3σ/4σ、当前波动单位），给日报一个噪声尺度和 M-005 监测，处置一次未入账的实盘重放，并把采纳与回滚写成流程。
 
-**Architecture:** 所有退出规则都留在 `beidou_alpha/overlays/exits.py` 的纯函数 `exit_step` 里，回测与实盘共用同一步函数（D-012）；研究证据由 `beidou research overlay` 产出并按 DL-K1 计入账本；实盘只在一个候选双 universe 通过预登记规则且操作者批准后，用一行配置 + 一次重启采纳。观测项（噪声尺度、反事实）只加在 `beidou_live/reports.py`，不碰下单路径。
+**Architecture:** 所有退出规则都留在 `beidou_alpha/overlays/exits.py` 的纯函数 `exit_step` 里，回测与实盘共用同一步函数（D-012）；研究证据由 `beidou research overlay` 产出并按 DL-K1 计入 ledger；实盘只在一个候选双 universe 通过预登记规则且操作者批准后，用一行配置 + 一次重启采纳。观测项（噪声尺度、反事实）只加在 `beidou_live/reports.py`，不碰下单路径。
 
 **Tech Stack:** Python 3.12（`.venv`，见记忆：必须 3.12），pandas / numpy，pytest，click CLI（`beidou research overlay` / `beidou report daily`），launchd（`com.beidou.live`）。
 
@@ -14,12 +14,12 @@
 
 ## Global Constraints
 
-- **先写后跑**：任何计费实验的网格、判定规则、账本预期必须以 git 提交的形式早于运行时间戳（DL-K3 顺序检查会核对）。
+- **先写后跑**：任何计费实验的网格、判定规则、 ledger 预期必须以 git 提交的形式早于运行时间戳（DL-K3 顺序检查会核对）。
 - **D-017 判定不变**：候选合格 = OOS MDD 改善 且 OOS Sharpe 损失 ≤ 0.10，时点与静态两个 universe 都要满足；`research overlay --max-sharpe-loss 0.10` 是默认值。
-- **账本**：`research overlay` 的每个候选计入书中每个策略（tsmom、flow）的账本（`beidou_cli/research_cmd.py:1101-1128`）；同一 (param_key, range, symbols, construction, overlay) 去重。本方案每一步都写明预期的账本增量，运行后与报告 `ledger.charged` 核对。
+- **ledger**：`research overlay` 的每个候选计入书中每个策略（tsmom、flow）的 ledger（`beidou_cli/research_cmd.py:1101-1128`）；同一 (param_key, range, symbols, construction, overlay) 去重。本方案每一步都写明预期的 ledger 增量，运行后与报告 `ledger.charged` 核对。
 - **非 alpha 行数**：六个包都顶在 `tests/architecture/test_source_budget.py` 的 `CEILING` 上（alpha 5,808 / live 5,065 / cli 3,291）。任何净增行数都要在 `CEILING` 处加一条"带理由句子"的抬升记录；≥100 行非 alpha 的捆绑改动需要操作者裁定（KILL-R12，Q5）。
 - **实盘改动 = 构造变更**：`construction_fingerprint`（`beidou_live/engine.py:1177`）包含 `exits` 块；改 `config/live.demo.yaml` 的 `exits` 会重置 M-010 证据窗口。采纳前用 scratch `state_dir` 演练 `--dry-run`（`live run --dry-run` 会写 LIVE 状态目录，记忆 P13 教训 3）。
-- **不做**：更紧的止损与移动止损、滚动入场锚、书级 regime 敞口标量、部分止盈、交易所原生条件单、按 3 天实盘重放调参、在批准前跑任何计费实验。
+- **不做**：更紧的止损与移动止损、滚动入场锚、组合层 regime 敞口标量、部分止盈、交易所原生条件单、按 3 天实盘重放调参、在批准前跑任何计费实验。
 - **多会话**：主 checkout 由 launchd 使用；代码改动在 `git worktree add ../beidou-exits -b feat/exits-p22 HEAD` 里做，`PYTHONPATH=<worktree>` 运行；shell 里 `cat`/`ls` 有别名，用 `/bin/cat`、`/bin/ls`。
 
 ---
@@ -28,9 +28,9 @@
 
 | Q（报告 §12） | 若答 A | 若答 B | 解锁的任务 |
 | --- | --- | --- | --- |
-| Q1 退出层角色 | 主动 P&L 机制 → Task 3 必做，Task 7 排队 | 灾难后备 → Task 3 可选，Task 7 不做 | Task 3 / Task 7 |
+| Q1 exit overlay 角色 | 主动 P&L 机制 → Task 3 必做，Task 7 排队 | 灾难后备 → Task 3 可选，Task 7 不做 | Task 3 / Task 7 |
 | Q2 权益日波动 | ≈170 U → 本方案成立 | 更小 → 另开 P13 预算重议，本方案不变 | 无（决定的是 `vol_target`） |
-| Q3 账本名额 | 是 → Task 1 + 2 + 3 | 否 → 只做 Task 4/5/6 中被批准的 | Task 1、2、3 |
+| Q3 ledger 名额 | 是 → Task 1 + 2 + 3 | 否 → 只做 Task 4/5/6 中被批准的 | Task 1、2、3 |
 | Q4 E-EX14 处置 | 补记 → Task 5A | 豁免 → Task 5B | Task 5 |
 | Q5 KILL-R12 | 抬上限或指名删除 → Task 4 | 不做 → Task 4 跳过 | Task 4 |
 | Q6 30 天规则 | 接受 → Task 6 写入 RUNBOOK；Task 9 受其约束 | 不接受 → Task 9 每次单独裁定 | Task 6、9 |
@@ -50,15 +50,15 @@
 | `beidou_alpha/signals/base.py` | （条件）`scores_to_targets(exit_threshold, exit_dwell_bars)` 与 `_consecutive_true` | 8 |
 | `beidou_alpha/signals/tsmom.py`、`beidou_alpha/registry.py`、`beidou_alpha/model.py` | （条件）tsmom 的两个退出参数、registry 读取、模型传递 | 8 |
 | `scratchpad/p22_verdict.py` | 读四份 overlay 报告，按预登记规则打印裁决表 | 3 |
-| `scratchpad/e_ex14_ledger.py` | （Q4=A）把实盘重放的 7 个配置补记进账本 | 5 |
+| `scratchpad/e_ex14_ledger.py` | （Q4=A）把实盘重放的 7 个配置补记进 ledger | 5 |
 | `scratchpad/p23_subthreshold_forward.py` | （条件）O-EX1 的描述统计，计 1 个 trial | 8 |
 | `tests/alpha/test_overlays.py`、`tests/live/test_round6b_funding_and_verify.py`、`tests/live/test_report_metrics.py`、`tests/alpha/test_conviction_mode.py`（或新建 `tests/alpha/test_exit_threshold.py`） | 上述改动的测试 | 2、4、7、8 |
 | `tests/architecture/test_source_budget.py` | `CEILING` 抬升记录 | 2、4、7、8 |
 | `docs/RUNBOOK.md` | Q6 规则；采纳与回滚步骤 | 6、9 |
 
-## 3. 账本与行数账（运行后逐项核对）
+## 3. ledger 与行数账（运行后逐项核对）
 
-| 任务 | tsmom 账本 | flow 账本 | alpha 行 | live 行 | cli 行 |
+| 任务 | tsmom ledger | flow ledger | alpha 行 | live 行 | cli 行 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Task 2 `unit_mode` | 0 | 0 | +12 | +1 | 0 |
 | Task 3 第一个实验（两 universe × 两次调用） | +10（退出 4×2 + 节流 1×2） | +10 | 0 | 0 | 0 |
@@ -67,7 +67,7 @@
 | Task 7（条件）regime 2×2 | +4 | +4 | +45 | +12 | 0 |
 | Task 8（条件）描述统计 + validate | +1 +2 | 0 | +35 | 0 | 0 |
 
-当前账本：tsmom 89、flow 14。Task 3 之后 tsmom 99（RISK-P4：下次复验的 FWER 阈值随 N 上移，余量目前 0.02–0.04）。
+当前 ledger：tsmom 89、flow 14。Task 3 之后 tsmom 99（RISK-P4：下次复验的 FWER 阈值随 N 上移，headroom 目前 0.02–0.04）。
 
 ---
 
@@ -88,7 +88,7 @@
 
 来源：`docs/analysis/2026-09-07-exits-adaptive-tp-sl-deep-analysis.md` §11.2（EXP-EX1b + EXP-EX3），对抗审查 K-EX01 / K-EX03 的关闭条件。操作者对 Q3 的回答：是。
 
-**问题。** D-017 预登记网格里 `take_profit ∈ {0, 6}`，6σ 以内的止盈从未测过；所有退出层证据都在 `vol_target 0.15` 构造上算。
+**问题。** D-017 预登记网格里 `take_profit ∈ {0, 6}`，6σ 以内的止盈从未测过；所有 exit overlay 证据都在 `vol_target 0.15` 构造上算。
 
 **网格（两个 universe 各两次调用，四份报告）：**
 1. `stop_loss [6.0] × trailing_stop [0.0] × take_profit [3.0, 4.0, 6.0] × unit_mode ["entry"]`——TP6-entry 是现行设置，在 0.30 构造上重跑作为对照；
@@ -101,11 +101,11 @@
 - 任一条件不满足 → 对应 Claim（C-EX02a-TP / C-EX02c）REFUTED，记负结果，不扩网格。
 - 两档止盈都通过时取 OOS MDD 更优者；止盈与 current 同时通过时**不合并**，各自记录，合并版本需另行预登记。
 
-**账本预期：** tsmom +10、flow +10（退出候选 4 × 2 universe + 节流 1 × 2 universe）。运行后核对每份报告的 `ledger.charged`。
+**ledger 预期：** tsmom +10、flow +10（退出候选 4 × 2 universe + 节流 1 × 2 universe）。运行后核对每份报告的 `ledger.charged`。
 
 **先验（写在结果之前）：** 止盈 3σ/4σ 为负（趋势系统利润在右尾；E-EX14 的 3 天重放不算证据）；current 方向不确定。
 
-**不做：** 不加 TP3-current / TP4-current（省 8 行账本；若 current 单独通过再另行预登记）。
+**不做：** 不加 TP3-current / TP4-current（省 8 行 ledger；若 current 单独通过再另行预登记）。
 ```
 
 - [ ] **Step 2: 提交**
@@ -387,7 +387,7 @@ Expected: 三个候选各一行 `ADOPT-CANDIDATE` 或 `REFUTED`，节流两行 i
 ```markdown
 ## 2026-09-0X · P22 裁决：<一句话结论>
 
-预登记：<commit sha>（<时间戳>）；运行：<四个报告 stamp>；`portfolio.vol_target 0.30`；账本 tsmom +N / flow +N（预期 10/10）。
+预登记：<commit sha>（<时间戳>）；运行：<四个报告 stamp>；`portfolio.vol_target 0.30`；ledger tsmom +N / flow +N（预期 10/10）。
 
 | 候选 | 时点 OOS / MDD | 静态 OOS / MDD | D-017 双通过 | 对 TP6-entry | 退出次数比 | 判定 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -728,7 +728,7 @@ git commit -m "feat(live): 日报噪声尺度段 + M-005 反事实监测（DL-EX
 
 ---
 
-## Task 5：E-EX14 的账本处置（Q4）
+## Task 5：E-EX14 的 ledger 处置（Q4）
 
 **前置：** Q4 已回答。
 
@@ -823,14 +823,14 @@ Expected: `charged 14 rows`；grep 输出 `14`。第二次运行应打印 `charg
 - [ ] **Step 3: 在 RESEARCH_LOG 记一段并提交**
 
 ```markdown
-## 2026-09-0X · E-EX14 补记账本（K-EX07）
+## 2026-09-0X · E-EX14 补记 ledger（K-EX07）
 
-止盈止损分析里的 60 bar 实盘重放跑了 7 个退出配置，按"每个诊断配置计入 prior-trials"补记：tsmom +7、flow +7，`run_id E-EX14`，Sharpe 为重放自身的年化值（n=60 bar，仅作账本占位，不作证据）。此后任何 `--prior-trials` 申报都以账本行数为准。
+止盈止损分析里的 60 bar 实盘重放跑了 7 个退出配置，按"每个诊断配置计入 prior-trials"补记：tsmom +7、flow +7，`run_id E-EX14`，Sharpe 为重放自身的年化值（n=60 bar，仅作 ledger 占位，不作证据）。此后任何 `--prior-trials` 申报都以 ledger 行数为准。
 ```
 
 ```bash
 git add scratchpad/e_ex14_ledger.py reports/research/trials.jsonl docs/RESEARCH_LOG.md
-git commit -m "research: E-EX14 的 7 个实盘重放配置补记账本（K-EX07）"
+git commit -m "research: E-EX14 的 7 个实盘重放配置补记 ledger（K-EX07）"
 ```
 
 ### 5B（Q4 = 豁免）
@@ -860,23 +860,23 @@ git commit -m "docs: 短窗描述性实盘重放不计费的规则（K-EX07，�
 - [ ] **Step 1: 追加段落**
 
 ```markdown
-### 采纳退出层 / 信号改动的最短干净窗口（K-EX14，2026-09-0X 操作者裁定）
+### 采纳 exit overlay / 信号改动的最短干净窗口（K-EX14，2026-09-0X 操作者裁定）
 
-M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何退出层或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：P13 阶梯触发（回撤 −35% / −50%），那是预登记的降档，不是采纳。当前窗口起点：2026-09-06T10:19Z（P18 重启），最早采纳日 2026-10-06。每次采纳都是构造变更，窗口重新计数。
+M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何 exit overlay 或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：P13 阶梯触发（回撤 −35% / −50%），那是预登记的降档，不是采纳。当前窗口起点：2026-09-06T10:19Z（P18 重启），最早采纳日 2026-10-06。每次采纳都是构造变更，窗口重新计数。
 ```
 
 - [ ] **Step 2: 提交**
 
 ```bash
 git add docs/RUNBOOK.md
-git commit -m "docs(runbook): 采纳退出层/信号改动的最短干净窗口（K-EX14）"
+git commit -m "docs(runbook): 采纳 exit overlay/信号改动的最短干净窗口（K-EX14）"
 ```
 
 ---
 
 ## Task 7（条件）：O-EX2 行情效率比切档的 2×2（`tp_scale` + ER）
 
-**前置：** Task 3 已裁决；Q1 = A；操作者明确要测行情切档并接受 tsmom + flow 各 +4 账本。先在 RESEARCH_LOG 追加 P22b 预登记（网格与规则见 Step 6），提交后再跑。
+**前置：** Task 3 已裁决；Q1 = A；操作者明确要测行情切档并接受 tsmom + flow 各 +4 ledger。先在 RESEARCH_LOG 追加 P22b 预登记（网格与规则见 Step 6），提交后再跑。
 
 **Files:**
 - Modify: `beidou_alpha/overlays/exits.py`（`ExitParams` 四个字段；`efficiency_ratio`、`regime_tp_scale`；`exit_step(..., tp_scale=1.0)`；`apply_exits` 传 `tp_scale`）
@@ -1024,7 +1024,7 @@ def regime_tp_scale(close: pd.DataFrame, params: ExitParams) -> pd.DataFrame | N
 ```bash
 .venv/bin/pytest tests/alpha/test_overlays.py tests/live -q
 git add beidou_alpha/overlays/exits.py beidou_live/exits.py beidou_live/engine.py tests/alpha/test_overlays.py tests/architecture/test_source_budget.py
-git commit -m "feat(alpha): 退出层按效率比 regime 缩放止盈（EXP-EX2 的 2×2，固定阈值）"
+git commit -m "feat(alpha): exit overlay 按效率比 regime 缩放止盈（EXP-EX2 的 2×2，固定阈值）"
 ```
 
 - [ ] **Step 5: 预登记 P22b（追加 RESEARCH_LOG，提交后才能跑）**
@@ -1032,7 +1032,7 @@ git commit -m "feat(alpha): 退出层按效率比 regime 缩放止盈（EXP-EX2 
 ```markdown
 ## 2026-09-0X · P22b 预登记：行情效率比切档止盈的 2×2（先写后跑）
 
-网格（两 universe 各一次调用）：`stop_loss [6.0] × trailing_stop [0.0] × take_profit [6.0] × regime_window [168] × regime_er_cut [0.05] × regime_tp_scale [0.5] × regime_side ["low","high"]` → 低 ER 臂、镜像臂各一。固定 TP3 臂 = P22 的 TP3-entry，不重跑。账本预期 tsmom +4、flow +4（节流去重为 0）。
+网格（两 universe 各一次调用）：`stop_loss [6.0] × trailing_stop [0.0] × take_profit [6.0] × regime_window [168] × regime_er_cut [0.05] × regime_tp_scale [0.5] × regime_side ["low","high"]` → 低 ER 臂、镜像臂各一。固定 TP3 臂 = P22 的 TP3-entry，不重跑。 ledger 预期 tsmom +4、flow +4（节流去重为 0）。
 判定：低 ER 臂双 universe 通过 D-017 **且** 双 universe OOS Sharpe 都高于 TP3-entry **且** 镜像臂至少一个 universe 不通过 → C-EX02b SUPPORTED（候选进入 Task 9）。低 ER 臂与镜像臂都通过且都不优于 TP3-entry → "TP3 处处有效"，属 C-EX02a-TP，C-EX02b 不成立。其余 → C-EX02b REFUTED。ER 常数 168 / 0.05 只允许这一组。
 ```
 
@@ -1042,13 +1042,13 @@ git commit -m "feat(alpha): 退出层按效率比 regime 缩放止盈（EXP-EX2 
 .venv/bin/python -m beidou_cli research overlay --universe pit    --exits-grid '{"stop_loss":[6.0],"trailing_stop":[0.0],"take_profit":[6.0],"regime_window":[168],"regime_er_cut":[0.05],"regime_tp_scale":[0.5],"regime_side":["low","high"]}'
 .venv/bin/python -m beidou_cli research overlay --universe static --exits-grid '{"stop_loss":[6.0],"trailing_stop":[0.0],"take_profit":[6.0],"regime_window":[168],"regime_er_cut":[0.05],"regime_tp_scale":[0.5],"regime_side":["low","high"]}'
 ```
-裁决表手工按上面的规则填入 RESEARCH_LOG "P22b 裁决"段（四列：低 ER 臂、镜像臂、TP3-entry、baseline），提交报告 + 账本 + 日志。
+裁决表手工按上面的规则填入 RESEARCH_LOG "P22b 裁决"段（四列：低 ER 臂、镜像臂、TP3-entry、baseline），提交报告 + ledger + 日志。
 
 ---
 
 ## Task 8（条件）：O-EX1 信号侧退出滞回——先描述统计，再实现与验证
 
-**前置：** Q1 = A 且操作者同意先花 1 个 tsmom 账本名额做描述统计。
+**前置：** Q1 = A 且操作者同意先花 1 个 tsmom ledger 名额做描述统计。
 
 ### 8.1 描述统计（计 1 个 trial）
 

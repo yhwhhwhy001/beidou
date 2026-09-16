@@ -20,6 +20,8 @@ from typing import Any
 from beidou_alpha.validation.ledger import TrialRecord, all_trials, ledger_scope, parse_ledger, unique_trials
 from beidou_alpha.validation.verdict import decide
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -47,8 +49,8 @@ def test_the_whole_library_block_cannot_change_a_verdict() -> None:
 def test_the_two_calibers_answer_different_questions() -> None:
     """The strategy bucket is a subset of the library, so its N is never the larger of the two."""
     lines = (ROOT / "reports" / "research" / "trials.jsonl").read_text(encoding="utf-8").splitlines()
-    bucket = len(unique_trials(parse_ledger(lines, ledger_scope("tsmom"))))
-    library = len(unique_trials(all_trials(lines)))
+    bucket = len(unique_trials(parse_ledger(lines, ledger_scope("tsmom")), range_end_granularity_days=FOLD_DAYS))
+    library = len(unique_trials(all_trials(lines), range_end_granularity_days=FOLD_DAYS))
     assert 0 < bucket <= library
     # Not merely "<=": if these were equal the whole R0 argument would be about nothing.
     assert bucket < library

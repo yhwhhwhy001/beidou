@@ -22,6 +22,8 @@ from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, 
 from beidou_cli import main
 from beidou_data.store import KlineStore
 
+FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
+
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
 
 
@@ -208,7 +210,7 @@ def test_a_mine_says_what_the_family_now_costs(tmp_path: Path, august_dir: Path,
     first = runner.invoke(main, _mine_args(root, tmp_path / "r1"))
     assert first.exit_code == 0, first.output
     rows = isolated_trials_ledger.read_text(encoding="utf-8").splitlines()
-    family = len(unique_trials(parse_ledger(rows, MINED_SEARCH_STRATEGY)))
+    family = len(unique_trials(parse_ledger(rows, MINED_SEARCH_STRATEGY), range_end_granularity_days=FOLD_DAYS))
     assert family > 0
     assert f"mined family prior: {family} distinct trials in the ledger (0 before this run, +{family} charged now)" in (
         first.output
@@ -243,7 +245,7 @@ def test_the_report_records_what_the_family_costs(
 
     assert runner.invoke(main, _mine_args(root, tmp_path / "r1")).exit_code == 0
     rows = isolated_trials_ledger.read_text(encoding="utf-8").splitlines()
-    family = len(unique_trials(parse_ledger(rows, MINED_SEARCH_STRATEGY)))
+    family = len(unique_trials(parse_ledger(rows, MINED_SEARCH_STRATEGY), range_end_granularity_days=FOLD_DAYS))
     first = json.loads(sorted((tmp_path / "r1").glob("mine-shortlist-*.json"))[-1].read_text())
     assert first["ledger"].get("family_prior") == {
         "strategy": "mined",

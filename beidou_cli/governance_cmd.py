@@ -57,7 +57,7 @@ from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
 from beidou_live.config import registry_evidence_problems, store_directory
-from beidou_live.health import CONSTRUCTION_ALIASES
+from beidou_live.construction import CONSTRUCTION_ALIASES
 from beidou_shared.config import load_yaml
 
 REGISTRY = "config/alpha_registry.yaml"
@@ -457,9 +457,9 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
             ("oi", "metrics"),
             ("lsr", "metrics"),
             ("basis", "spot_klines"),
-            ("index", "index_klines"),
-            ("onchain", "onchain"),
-            ("macro", "macro"),
+            # `index` / `onchain` / `macro` rows dropped 2026-09-16 with those feeds; no condition asked
+            # for them.  `liquidations` stays though its ingest went too: this probe asks the DISK, and
+            # regime-47's question is whether the data exists, not whether we can fetch it.
             ("liquidations", "liquidations"),
         )
         if (store / probe).is_dir() and any((store / probe).iterdir())
@@ -546,7 +546,9 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
         payload: dict[str, Any] = json.loads((checkout / path).read_text(encoding="utf-8"))
         return payload
 
-    readings = recheck_gate(registry, read_report, lines)
+    readings = recheck_gate(
+        registry, read_report, lines, range_end_granularity_days=Policy().trial_range_end_granularity_days
+    )
     for reading in readings:
         click.echo(f"{reading.status:10s} {reading.strategy:22s} {reading.why}")
     for reading in readings:
@@ -918,6 +920,7 @@ def advance_cmd(
             parse_registry(load_yaml(registry_path)),
             lambda path: json.loads((checkout / path).read_text(encoding="utf-8")),
             lines,
+            range_end_granularity_days=Policy().trial_range_end_granularity_days,
         )
     }
     for reading in readings.values():

@@ -174,8 +174,10 @@ def build_manifest(root: str | Path, interval: str = "1h") -> DatasetManifest:
     )
 
 
-def _universe_drift_blocks(previous: dict[str, Any] | None, current: dict[str, Any] | None) -> bool:
-    """A changed symbol set blocks; a changed *selection mechanism* does not.
+def _universe_drift_blocks(
+    previous: dict[str, Any] | None, current: dict[str, Any] | None, universe_mode: str | None = None
+) -> bool:
+    """A changed symbol set blocks; a changed *selection mechanism* does not; a pit result is exempt.
 
     ``.beidou/data/universe.json`` is rewritten by the live loop's own universe refresh, so a
     ``pool-refresh -> live-refresh`` transition is the loop's bookkeeping and not evidence going stale.
@@ -183,7 +185,32 @@ def _universe_drift_blocks(previous: dict[str, Any] | None, current: dict[str, A
     disk, so treating every universe move as drift would have the loop refuse to start because of
     something it did itself.  A symbol set that moves while the source holds still is the real thing -
     the book being traded is no longer the book the evidence describes.
+
+    2026-09-15: ``universe_mode == "pit"`` exempts the field outright.  ``_resolve_symbols`` calls
+    ``read_universe`` only under ``static``, so a pit VALIDATION or MINE result's population is the
+    union of ``membership.parquet``, which blocks unconditionally one field over.  Blocking such a
+    result here refuses a start over a file it never opened - and the fix shipped for that on
+    2026-09-09 was to freeze the TRADED pool instead, which held the live universe at 16 names while
+    the cited evidence re-ranked every 24 hours.  Only an EXPLICIT ``pit`` is exempt: a report that
+    declares no mode keeps its block.
+
+    Narrowed from "a pit result" to those two commands on 2026-09-15, because the first wording was
+    not true of every pit report and this repository reads these paragraphs as fact.  ``research book
+    --universe pit --robustness static`` DOES read ``universe.json`` (``research_cmd.py:2470``) to
+    build its sensitivity arm, and the shipped registry cites exactly such a report -
+    ``book-tsmom-flow-20260908T105322Z.json``, ``universe_mode: "pit"`` with
+    ``robustness_universe: "static"``.  It is harmless today only because ``book`` writes no
+    ``dataset`` block (only ``validate`` and ``mine`` write one into a report), so that
+    report reaches ``manifest_check`` as ``None`` and never reaches this predicate at all.  Give
+    ``book`` a manifest and this exemption starts waving through a report that did read the file.
+
+    Corrected 2026-09-15: the parenthetical above read "``build_manifest`` is called by ``validate``
+    and ``mine`` alone", and a review found that false - ``beidou_live.config.registry_dataset_problems``
+    calls it too, to build the CURRENT manifest it compares cited reports against.  The conclusion it
+    supported held, but the false half is the half a reader chasing this warning would grep for.
     """
+    if universe_mode == "pit":
+        return False
     if previous is None or current is None:
         return True  # only reached when the two disagree, i.e. the block appeared or vanished
     if previous.get("source") != current.get("source"):
@@ -220,7 +247,9 @@ def _unrecorded_fields(recorded: dict[str, Any]) -> tuple[str, ...]:
     return ("funding",) if recorded.get("funding") == _BLIND_FUNDING else ()
 
 
-def manifest_check(recorded: dict[str, Any] | None, current: DatasetManifest) -> ManifestCheck:
+def manifest_check(
+    recorded: dict[str, Any] | None, current: DatasetManifest, *, universe_mode: str | None = None
+) -> ManifestCheck:
     """Compare a report's recorded manifest against the data on disk, split by severity.
 
     A report written before manifests existed has none; that is reported as unknown provenance rather
@@ -240,7 +269,9 @@ def manifest_check(recorded: dict[str, Any] | None, current: DatasetManifest) ->
         funding=recorded.get("funding"),
     )
     blocks: tuple[str, ...] = ("membership",)
-    if previous.universe != current.universe and _universe_drift_blocks(previous.universe, current.universe):
+    if previous.universe != current.universe and _universe_drift_blocks(
+        previous.universe, current.universe, universe_mode
+    ):
         blocks = (*blocks, "universe")
     advises = tuple(field for field in MANIFEST_FIELDS if field not in blocks)
 
@@ -262,6 +293,8 @@ def manifest_check(recorded: dict[str, Any] | None, current: DatasetManifest) ->
     return ManifestCheck(blocking, advisory)
 
 
-def manifest_problems(recorded: dict[str, Any] | None, current: DatasetManifest) -> list[str]:
+def manifest_problems(
+    recorded: dict[str, Any] | None, current: DatasetManifest, *, universe_mode: str | None = None
+) -> list[str]:
     """Every problem, blocking first.  Callers that act on severity want :func:`manifest_check`."""
-    return manifest_check(recorded, current).problems
+    return manifest_check(recorded, current, universe_mode=universe_mode).problems

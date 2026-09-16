@@ -101,6 +101,10 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
             # was drying up.  Off by default, which is today's behaviour bit for bit; the backtest
             # replay carries the same field and the two have to be flipped together (KILL-027).
             exempt_reductions=bool(portfolio.get("exempt_reductions", False)),
+            # Both read the same `portfolio` block the backtest's `PortfolioParams.from_mapping` reads,
+            # so `flat_inside_band` reaches the two halves from one key and cannot be half-flipped.
+            exempt_crossings=bool(portfolio.get("exempt_crossings", False)),
+            flat_inside_band=bool(portfolio.get("flat_inside_band", False)),
         ),
         guards=GuardParams(
             daily_loss_pause=float(guards.get("daily_loss_pause", -0.05)),
@@ -259,7 +263,15 @@ def registry_dataset_problems(
         except ValueError:
             continue
         recorded = payload.get("dataset") if isinstance(payload, dict) else None
-        check = manifest_check(recorded if isinstance(recorded, dict) else None, current)
+        mode = payload.get("universe_mode") if isinstance(payload, dict) else None
+        check = manifest_check(
+            recorded if isinstance(recorded, dict) else None,
+            current,
+            # D-041 + 2026-09-15: the report says which population it ran on, and only a `pit` one is
+            # exempt from the universe field.  Read here rather than inside `manifest_check` because
+            # this is the only caller that holds the whole report payload.
+            universe_mode=mode if isinstance(mode, str) else None,
+        )
         blocking.extend(f"{entry.id}: {message}" for message in check.blocking)
         advisory.extend(f"{entry.id}: {message}" for message in check.advisory)
     return ManifestCheck(blocking, advisory)

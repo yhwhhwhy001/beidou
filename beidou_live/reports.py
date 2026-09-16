@@ -25,10 +25,12 @@ from beidou_alpha.validation.metrics import (
 )
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
-from beidou_live.health import canonical_construction
+from beidou_live.construction import canonical_construction
+from beidou_live.cycle_record import latest
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
+from beidou_live.soak import _decided
 from beidou_live.state import LiveState, StateStore, StateUnreadable
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
@@ -831,6 +833,52 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     so far in the current construction, and ``exits_so_far`` counts the exits that actually happened over
     that same evidence window - not over ``realised``'s 30 days, which is a different span, and not counting
     COOLDOWN, which records a cycle an earlier exit blocked rather than an exit of its own.
+
+    DL-GB0: ``peak_giveback`` resets at midnight and the giveback an operator sees does not.  On 2026-09-15
+    the day-inside ruler read 145.2 U / 0.43 sigma while the number being asked about was the 430 U back
+    from the 09-14T21:00Z high - 1.28 design daily sigma.  So ``giveback_since_hwm_u`` measures from the
+    high-water mark the LOOP wrote (``throttle.equity_hwm``, the one D-015's throttle acts on) and not from
+    a high this function recomputes off the equity path: the instrument reads the loop's reading.
+    ``giveback_since_hwm_hours`` dates that mark to the EARLIEST cycle row still carrying it, which is when
+    the mark became visible and not when it happened - the 2026-09-14 high was set inside the 20:24Z restart
+    gap, whose two cycles wrote heartbeat rows with no equity at all, so the first row to carry it is the
+    21:00Z bar and the true age can be a bar older.  ``giveback_since_hwm_in_horizon_sigma`` divides by the
+    design sigma scaled to those hours, because a fall of ten hours measured against a 24-hour sigma reads
+    small by construction: the same 430 U is 1.28 sigma_d and 1.98 sigma_10h.
+
+    The last three keys are a reconciliation, not new measurements.  One page carried three drawdowns and
+    the operator read the largest: ``drawdown_vs_hwm_pct`` is equity against the loop's own high (it
+    reproduces ``throttle.drawdown`` exactly, which is the check), ``ladder_drawdown_pct`` is R8's ruler -
+    attributed P&L against the ladder's own anchor, a different book on a different window - and
+    ``giveback_in_design_sigma`` above is the day-inside one.  The two percentages point the same way with
+    OPPOSITE signs: the ladder's is copied as the loop writes it, negative, because changing a sign to make
+    a table tidy would make the field stop matching the record it came from.
+
+    A-GB01, answered 2026-09-15: the percentage the operator reads is the venue's USDT equity.  Checked
+    against the account - USDT equity 4,932.05 at 09-13T22:00Z to 5,311.89 at 09-14T19:00Z is +7.70%, the
+    "涨了 8 个点" the equity line scored as +3.78% - so the last three keys CONVERT numbers already computed
+    above into that reader's unit.  They are conversions, not measurements.  Both numerators stay on total
+    equity: ``giveback_since_hwm_u`` is measured from ``throttle.equity_hwm`` and stays that way, because a
+    high-water mark recomputed on the USDT series would be a FOURTH ruler on a page whose problem is that it
+    already carries three.  Only the denominator moves, to ``collateral.usdt_equity`` off the day's last
+    cycle.  That denominator is about 47% of equity (``collateral.share`` 0.5256 on 2026-09-15, the rest BTC
+    and other collateral), so the same money reads about 2.1x larger as a share of USDT equity than as a
+    share of equity - which is the whole of "8 points against 3.8 points".  Two adjacent lines on the page
+    are NOT in that ratio and the difference is not a bug: ``drawdown_vs_hwm_pct`` divides by the HIGH-WATER
+    MARK, so it sits against ``giveback_since_hwm_in_usdt_pct`` at hwm/usdt_equity - 2.18 on 2026-09-15,
+    against 2.11 for the collateral share alone.  Same numerator, three denominators, all of them named.
+
+    Worth stating plainly, because the cheap reading is that the operator is simply on the wrong ruler: USDT
+    equity is CLOSER to the book's own P&L than total equity is.  Trades settle in USDT, while collateral
+    repricing moves total equity without touching it.  Measured on this event: low to peak was +400.80
+    equity against +379.84 USDT, and the 20.96 difference is BTC being remarked; peak to now is -207.35
+    against -187.41, difference -19.94.  ``## Collateral repricing (RISK-G11)`` is the section that measures
+    exactly that, and it has reported repricing at 41% of an equity move.  So this ruler is not wrong - it
+    has a smaller denominator and it leaves collateral noise out.  It is also not the book: deposits,
+    withdrawals, commissions and funding all change USDT equity directly, and the book-level ruler is still
+    ``risk_ladder.drawdown`` (attributed P&L plus unrealized).  Three instruments, three jobs, none of them
+    a substitute for another.  ROE stays out on purpose: it is a fourth percentage the operator does not
+    read, and printing it would re-open the question these keys close.
     """
     trailing = _cycles(store, window_days=30)
     today = [row for row in trailing if _day_of(row) == day]
@@ -847,6 +895,32 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     for value in equities:
         peak = value if peak is None else max(peak, value)
         giveback = (peak - value) if giveback is None else max(giveback, peak - value)
+
+    def stamp(row: Mapping[str, Any]) -> int:
+        """`_day_of`'s preference order in milliseconds: the data's clock before the host's (D-025)."""
+        return int(row.get("as_of_ms") or row.get("bar_open_ms") or 0)
+
+    last_row = today[-1] if today else None
+    recorded_hwm = (last_row.get("throttle") or {}).get("equity_hwm") if last_row else None
+    hwm = float(recorded_hwm) if recorded_hwm is not None else None
+    since_hwm = max(0.0, hwm - last) if (hwm is not None and last is not None) else None
+    # A-GB01's denominator, off the SAME row `hwm` and `last` came from, so the three readings share a
+    # cycle.  Rows written before the engine recorded the split carry no `collateral` at all, and a
+    # missing USDT balance reads as absent rather than as zero - `collateral_share`'s own rule.
+    recorded_usdt = (last_row.get("collateral") or {}).get("usdt_equity") if last_row else None
+    usdt = float(recorded_usdt) if recorded_usdt is not None else None
+    # Walk back from the day's last cycle while the loop kept writing the same mark, and stop at the row
+    # that carried a lower one.  Bounded by that cycle rather than by the end of `trailing`, so asking for
+    # a past `--date` cannot date the mark from rows written after the day being reported on.
+    anchor = stamp(last_row) if last_row else None
+    oldest_at_hwm = None
+    for row in reversed([row for row in trailing if anchor and stamp(row) <= anchor]):
+        mark = (row.get("throttle") or {}).get("equity_hwm")
+        if hwm is None or mark is None or float(mark) != hwm:
+            break
+        oldest_at_hwm = row
+    hours = (anchor - stamp(oldest_at_hwm)) / (DAY_MS / 24.0) if (oldest_at_hwm and anchor) else None
+    horizon = design * math.sqrt(hours / 24.0) if (design and hours and hours > 0) else None
     window = evidence_window(store)
     bars = int(window.get("bars") or 0)
     since = int(window.get("since_ms") or 0)
@@ -867,6 +941,19 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         "giveback_in_design_sigma": (giveback / design) if (giveback is not None and design) else None,
         "expected_exits_so_far": BACKTEST_EXITS_PER_WEEK / 7.0 * (bars / 24.0),
         "exits_so_far": exits,
+        "giveback_since_hwm_u": since_hwm,
+        "giveback_since_hwm_in_design_sigma": (since_hwm / design) if (since_hwm is not None and design) else None,
+        "giveback_since_hwm_hours": hours,
+        "giveback_since_hwm_in_horizon_sigma": (since_hwm / horizon) if (since_hwm is not None and horizon) else None,
+        "equity_hwm_u": hwm,
+        "drawdown_vs_hwm_pct": (since_hwm / hwm) if (since_hwm is not None and hwm) else None,
+        "ladder_drawdown_pct": (last_row.get("risk_ladder") or {}).get("drawdown") if last_row else None,
+        # A-GB01: the two numbers above, over the denominator the operator's screen divides by.  `usdt`
+        # is truth-tested rather than compared to None because a zero USDT balance divides no better
+        # than a missing one.
+        "usdt_equity_u": usdt,
+        "design_daily_sigma_in_usdt_pct": (design / usdt) if (design and usdt) else None,
+        "giveback_since_hwm_in_usdt_pct": (since_hwm / usdt) if (since_hwm is not None and usdt) else None,
     }
 
 
@@ -1145,6 +1232,10 @@ def _restart_cost_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "status": block.get("status"),
         "missed_rebalances": f"{block.get('missed_rebalances')} (M-Q03 阈值 {limits.get('missed_rebalances')})",
+        # Split out from 2026-09-16, because the two halves send a reader to different places: a skip is
+        # a restart or a backoff and is read in the deploy log, a failed bar is a request that did not
+        # come back and is read on the path to the venue.
+        "of_which_cycles_failed": block.get("failed_bars", 0),
         "late_cycle_share": (
             "无可判周期（没有周期记下它当时的窗口）"
             if share is None
@@ -1515,7 +1606,17 @@ def restart_cost(
     held.  KILL-R6 named the per-cycle share as the acceptable reading and that is what is judged.
     """
     params = params or RiskBudgetParams()
-    missed = restarts = unreadable = 0
+    skips = restarts = unreadable = 0
+    # The bar a cycle FAILED on, charged here from 2026-09-16.  The 2026-09-13 work charged the bars
+    # the backoff SLEPT THROUGH and left this one open in its own docstring; four bars since
+    # 2026-09-08 have no successful cycle and M-Q03 read zero on every one of those days.  Charged by
+    # BAR rather than by row, because a bar is what a rebalance belongs to: `lost` collects the bars
+    # that failed deciding nothing, `accounted` the bars that need no second charge - they got there
+    # anyway (a later retry, or a restart that found the book already set), or a skip row above has
+    # already charged them - and the difference is what is owed.
+    lost: set[int] = set()
+    accounted: set[int] = set()
+    failures: list[str] = []
     windows: list[float] = []
     # How late each SCHEDULED cycle woke, from its own row, paired with the bar that row allowed it.
     # The annotation is the fix for a contradiction, not decoration: this was `list[float]` while the
@@ -1540,7 +1641,9 @@ def restart_cost(
             # carries the window the engine allowed, so `widest_window_seconds` keeps it; only the miss
             # COUNT declines to charge it.
             if reason != ALREADY_REBALANCED_REASON:
-                missed += 1
+                skips += 1
+            if isinstance(bar := row.get("bar_open_ms"), int):
+                accounted.add(bar)
             if isinstance(window := row.get("window_seconds"), int | float):
                 windows.append(float(window))
             if reason != BACKOFF_REASON and isinstance(value := row.get("late_seconds"), int | float):
@@ -1550,6 +1653,17 @@ def restart_cost(
         # falls back to the widest the engine allowed that day, for rows written before it did.
         if isinstance(window := row.get("window_seconds"), int | float):
             windows.append(float(window))
+        # A cycle can fail AFTER placing orders - `run_cycle` places them and only then quarantines,
+        # summarizes and finishes - and that bar WAS rebalanced.  The five keys that answer it are
+        # already written onto the ERROR row for L3, and are read here through the same function, so a
+        # sixth cannot be added to one side alone.  Failed rows go on to the lateness accounting below
+        # unchanged: the cycle did wake, and it is only the rebalance that was lost.
+        if isinstance(bar := row.get("bar_open_ms"), int):
+            if row.get("phase") == "ERROR" and not _decided(row):
+                lost.add(bar)
+                failures.append(str(row.get("error") or "未记录"))
+            else:
+                accounted.add(bar)
         woke = _woke_seconds_after_close(row, interval_ms)
         if woke is None:
             unreadable += 1
@@ -1565,13 +1679,20 @@ def restart_cost(
     late = [value for value, bar in judged if bar is not None and value > bar]
     measurable = [value for value, bar in judged if bar is not None]
     share = (len(late) / len(measurable)) if measurable else None
+    failed_bars = len(lost - accounted)
+    missed = skips + failed_bars
     reasons: list[str] = []
     if missed > params.max_missed_rebalances:
+        # The failure action names what actually happened.  "查重启原因" was the only one offered, and
+        # on the four bars this reporter could not see until 2026-09-16 there was no restart to read:
+        # the loop stayed up and a request to the venue failed.
         worst_restart = max(restart_late) if restart_late else 0.0
-        reasons.append(
-            f"漏掉 {missed} 次再平衡（M-Q03 阈值 {params.max_missed_rebalances}）；"
-            f"最迟的一次在 bar 收盘后 {worst_restart:.0f} 秒；失败动作：查重启原因"
+        where = (
+            f"其中 {failed_bars} 根是周期失败（{failures[-1]}）；失败动作：查这条路径，不是重启"
+            if failed_bars
+            else f"最迟的一次在 bar 收盘后 {worst_restart:.0f} 秒；失败动作：查重启原因"
         )
+        reasons.append(f"漏掉 {missed} 次再平衡（M-Q03 阈值 {params.max_missed_rebalances}）；{where}")
     if share is not None and share > params.max_late_cycle_share:
         reasons.append(
             f"迟到周期占比 {share:.1%} 高于 M-Q03 的 {params.max_late_cycle_share:.0%}"
@@ -1580,7 +1701,13 @@ def restart_cost(
     return {
         "cycles": len(rows),
         "missed_rebalances": missed,
-        "skipped_bars": missed,
+        # Kept apart from 2026-09-16.  These were the same rows and the docstring above said a future
+        # engine could separate them; a failed bar is a miss and is not a skip, so they now differ.
+        "skipped_bars": skips,
+        "failed_bars": failed_bars,
+        # Named separately from the reason line because `daily_alerts` pages on this half and an alert
+        # that says only "1 根 bar" sends the reader to open the report to find out what broke.
+        "failed_bar_error": failures[-1] if failures else None,
         # Restarts are counted and named rather than folded into the lateness they used to inflate.
         "restarts": restarts,
         "worst_restart_late_seconds": max(restart_late) if restart_late else None,
@@ -1669,10 +1796,7 @@ def daily_payload(
         "equity_change_pct": (equities[-1] / equities[0] - 1.0) if len(equities) >= 2 and equities[0] else None,
         # L1-10: the last cycle's split of that equity into USDT and collateral.  Rows written before the
         # engine recorded it carry nothing, and nothing is what gets reported - not a zero.
-        "collateral": next(
-            (row["collateral"] for row in reversed(cycles) if isinstance(row.get("collateral"), dict)),
-            None,
-        ),
+        "collateral": latest(cycles, "collateral"),
         "orders": statuses,
         "traded_notional": traded,
         "realized_pnl": realized,
@@ -1834,12 +1958,26 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             "本窗口权益方向与书的盈亏方向相反（RISK-G11，只报告不相减）"
         )
     restarts = payload.get("restarts") or {}
+    if failed_bars := int(restarts.get("failed_bars") or 0):
+        # The half of M-Q03 that pages, split out on the operator's decision 2026-09-16.  The argument
+        # below is about a restart: it cannot be un-restarted, so the miss is already past and belongs
+        # at review.  A bar whose CYCLE FAILED is a different animal.  The exit overlay rests no order
+        # at the venue - stops are computed inside the cycle and sent as MARKET reduceOnly - so the
+        # hour it lost had no stop check at all, and what to do about it is on the path to the venue
+        # while that path is still broken.  `failed_bars` is absent from every report written before
+        # this split, and reads as zero, which is the right answer for days nothing counted.
+        notices_first = "；".join(str(r) for r in restarts.get("reasons") or [])
+        alerts.append(
+            f"M-Q03 周期失败丢掉 {failed_bars} 根 bar（这些小时没有再平衡，也没有退出检查）："
+            f"{restarts.get('failed_bar_error') or notices_first}；失败动作：查到交易所的这条路径"
+        )
     if str(restarts.get("status")) == "ALERT":
         # M-Q03.  A notice for the reason the plan itself gives: its registered failure action is
         # "查重启原因", an investigation at review.  The miss is already past by the time this renders,
         # `live status --check` already pages when the loop is actually down, and a single planned
-        # deployment restart would otherwise hold the hourly check red until UTC midnight.  Making it
-        # loud is moving this one append into the list above.
+        # deployment restart would otherwise hold the hourly check red until UTC midnight.  Kept as the
+        # COMPLETE record even when the half above already paged: the alert is the actionable subset,
+        # this is what a reader at review needs, and the two go to different places.
         notices.append("M-Q03 迟到成交：" + "；".join(str(r) for r in restarts.get("reasons") or []))
     lagging = payload.get("long_run_sharpe") or {}
     if str(lagging.get("status")) == "FAIL":
@@ -2285,21 +2423,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "pool_quarantined": json_dumps((payload.get("events") or {}).get("pool_quarantined") or []),
                 },
             ),
-            (
-                "Noise scale (DL-EX0)",
-                {
-                    "design_daily_sigma_u": _fmt_num((payload.get("noise_scale") or {}).get("design_daily_sigma_u")),
-                    "realised_daily_sigma_u": _fmt_num(
-                        (payload.get("noise_scale") or {}).get("realised_daily_sigma_u")
-                    ),
-                    "peak_giveback_u": _fmt_num((payload.get("noise_scale") or {}).get("peak_giveback_u")),
-                    "giveback_in_design_sigma": _fmt_num(
-                        (payload.get("noise_scale") or {}).get("giveback_in_design_sigma")
-                    ),
-                    "expected_exits_so_far": _fmt_num((payload.get("noise_scale") or {}).get("expected_exits_so_far")),
-                    "exits_so_far": (payload.get("noise_scale") or {}).get("exits_so_far"),
-                },
-            ),
+            ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
             (
                 "Exit counterfactuals (M-005, monitoring only)",
                 {
@@ -2359,6 +2483,40 @@ def daily_markdown(payload: dict[str, Any]) -> str:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
+
+
+def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """DL-EX0's day-inside ruler, then DL-GB0's cross-day one, then the three drawdowns side by side.
+
+    The order is the argument.  Two labels carry "(today)" because the day-inside reading is the one that
+    silently disagreed with the account, `hours` is printed so the horizon sigma can be checked by hand, and
+    the two percentages are adjacent so the page answers "which drawdown is the drawdown" instead of leaving
+    a reader to pick the worst of three.  What each number measures is in `noise_scale`'s docstring.
+
+    The last three lines are A-GB01's conversion and are placed last for that reason: the rulers come
+    first, then the same fall restated in the unit the operator's screen uses.  The denominator is printed
+    rather than left implicit so each percentage can be divided back by hand - which is the only way to see
+    that `giveback_since_hwm_in_usdt_pct` and `drawdown_vs_hwm_pct (equity)` share a numerator and differ
+    by hwm/usdt_equity, not by the collateral share.  No ROE line - `noise_scale`'s docstring says why.
+    """
+    return {
+        "design_daily_sigma_u": _fmt_num(block.get("design_daily_sigma_u")),
+        "realised_daily_sigma_u": _fmt_num(block.get("realised_daily_sigma_u")),
+        "peak_giveback_u (today, UTC)": _fmt_num(block.get("peak_giveback_u")),
+        "giveback_in_design_sigma (today)": _fmt_num(block.get("giveback_in_design_sigma")),
+        "equity_hwm_u": _fmt_num(block.get("equity_hwm_u")),
+        "giveback_since_hwm_u": _fmt_num(block.get("giveback_since_hwm_u")),
+        "giveback_since_hwm_hours": _fmt_num(block.get("giveback_since_hwm_hours")),
+        "giveback_since_hwm_in_design_sigma": _fmt_num(block.get("giveback_since_hwm_in_design_sigma")),
+        "giveback_since_hwm_in_horizon_sigma": _fmt_num(block.get("giveback_since_hwm_in_horizon_sigma")),
+        "drawdown_vs_hwm_pct (equity)": _fmt_pct(block.get("drawdown_vs_hwm_pct")),
+        "ladder_drawdown_pct (R8, attributed)": _fmt_pct(block.get("ladder_drawdown_pct")),
+        "usdt_equity_u (A-GB01 denominator)": _fmt_num(block.get("usdt_equity_u")),
+        "design_daily_sigma_in_usdt_pct": _fmt_pct(block.get("design_daily_sigma_in_usdt_pct")),
+        "giveback_since_hwm_in_usdt_pct": _fmt_pct(block.get("giveback_since_hwm_in_usdt_pct")),
+        "expected_exits_so_far": _fmt_num(block.get("expected_exits_so_far")),
+        "exits_so_far": block.get("exits_so_far"),
+    }
 
 
 def _fmt_num(value: Any) -> str:

@@ -169,7 +169,7 @@ def test_a_renamed_fingerprint_field_does_not_restart_the_countdown(tmp_path: Pa
     Reading raw digests here would hand the operator a fresh 18-month wait for a field rename, which is
     the failure `CONSTRUCTION_ALIASES` was written to close for M-010's 30 days.
     """
-    from beidou_live.health import CONSTRUCTION_ALIASES
+    from beidou_live.construction import CONSTRUCTION_ALIASES
 
     alias = next(key for key, target in CONSTRUCTION_ALIASES.items() if target == DIGEST)
     store = StateStore(tmp_path)

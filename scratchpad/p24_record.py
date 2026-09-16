@@ -77,6 +77,28 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    # Added 2026-09-16, after a repository review found this was the one committed script that writes
+    # the REAL ledger and had already run.  Its 8 rows are in `trials.jsonl` under the two run_ids in
+    # ARMS; a second run charges them twice, and the ledger is append-only by design, so a bad row
+    # cannot be taken back out - it would raise the DSR denominator for tsmom and flow permanently.
+    # `_record_trials` deduplicates on (param_key, range, symbols), NOT on run_id, and `recorded_at`
+    # is stamped fresh every run, so nothing downstream was going to stop this.
+    #
+    # Checked BEFORE the backtests rather than beside the write: the measurement takes minutes, and a
+    # refusal that arrives after them teaches people to reach for the flag that skips it.  Refuse
+    # rather than silently write nothing - a script that no-ops is how someone concludes the charge
+    # never happened.  Re-measuring stays free: that is what --dry-run is for, and it is why
+    # `exit_paired_ruler.py` is a separate file.
+    if not args.dry_run:
+        charged_ids = {json.loads(line).get("run_id") for line in LEDGER.read_text().splitlines() if line.strip()}
+        clash = sorted(set(ARMS) & charged_ids)
+        if clash:
+            raise SystemExit(
+                f"refusing to write: {LEDGER} already carries rows for {clash}.  P24 was charged once "
+                "(tsmom +4 / flow +4, 2026-09-08); charging it again would inflate the DSR denominator "
+                "for good.  Re-measure with --dry-run."
+            )
+
     stamp = datetime.now(UTC).isoformat()
     records: list[TrialRecord] = []
     for mode in ("pit", "static"):

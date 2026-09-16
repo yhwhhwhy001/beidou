@@ -21,7 +21,7 @@ Two mechanisms, decided by the operator on 2026-09-07:
 
 from __future__ import annotations
 
-from beidou_live.health import (
+from beidou_live.construction import (
     CONSTRUCTION_ALIASES,
     CONSTRUCTION_PAYLOAD_VERSION,
     canonical_construction,
@@ -96,6 +96,10 @@ EXPECTED_FIELDS = {
         "max_participation",
         "max_order_notional",
         "exempt_reductions",
+        # v7, 2026-09-14.  Both ship False, both are asserted to be bit-identical off, and
+        # CONSTRUCTION_ALIASES carries the declaration - the book did NOT change.
+        "exempt_crossings",
+        "flat_inside_band",
     },
     "exits": {
         "stop_loss",
