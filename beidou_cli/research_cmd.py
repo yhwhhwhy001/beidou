@@ -4,7 +4,7 @@
 
 **一、导入即注册。** 九个命令靠 `@research.command(...)` 在**导入时**挂到 click group 上，而
 `beidou_cli/__init__.py` 导入的是本模块。所以本模块必须导入那九个模块，否则 `beidou research --help`
-会少命令——这条由 `tests/cli/test_nine_commands_nine_modules.py` 守着。
+会少命令——这条由 `tests/cli/test_each_research_command_has_its_own_module.py` 守着。
 
 **二、地址不变。** `scratchpad/` 下 29 个复现脚本与二十余处测试写的是
 `from beidou_cli.research_cmd import _load, _membership, _resolve_symbols, ...`。D-035 的档位自助、
@@ -52,6 +52,11 @@ from beidou_cli.research_decompose_cmd import (
 )
 from beidou_cli.research_diagnose_cmd import (
     research_diagnose,
+)
+from beidou_cli.research_forward_cmd import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
+    forward_add,
+    forward_status,
+    research_forward,
 )
 from beidou_cli.research_grids import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     DEFAULT_EXIT_GRID,
@@ -135,6 +140,7 @@ __all__ = [
     "research_correlate",
     "research_decompose",
     "research_diagnose",
+    "research_forward",
     "research_list",
     "research_mine",
     "research_overlay",

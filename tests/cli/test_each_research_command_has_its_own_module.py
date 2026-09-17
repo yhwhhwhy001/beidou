@@ -1,4 +1,8 @@
-"""M6 step 2：九个子命令各自一个模块，而 `research_cmd` 只剩注册与地址。
+"""每条 `research` 子命令住自己的模块，而 `research_cmd` 只剩注册与地址。
+
+本来叫「九个命令九个模块」。2026-09-17 加 `research forward`（Q-C 前向板）时这条测试红了——
+它抓到的正是它该抓的，但「九」本来就不是不变量，住自己的模块才是。所以改了名：下一条命令
+加进来时，该红的是「有没有自己的模块」，不是「是不是还九条」。
 
 第一步（`test_the_panel_layer_kept_its_addresses.py`）搬的是 panel 层，接缝是量出来的：29 个
 `scratchpad/` 脚本从 `research_cmd` 导入三个私有函数。这一步搬的是命令本身，接缝同样是量出来的——
@@ -45,6 +49,9 @@ COMMANDS = {
     "research_book": "research_book_cmd",
     "research_decompose": "research_decompose_cmd",
     "research_mine": "research_mine_cmd",
+    # `forward` 是一个 group 不是命令：`add` 花钱、`status` 不花钱，做成同一条命令的两个开关
+    # 迟早会有人读一次板就花掉一笔（见 `research_forward_cmd` 的模块 docstring）。
+    "research_forward": "research_forward_cmd",
 }
 
 #: 共用件按概念分的五层（panel 层由第一步的测试守着）。
@@ -73,10 +80,21 @@ def _imported_from_research_cmd() -> dict[str, list[str]]:
     return wanted
 
 
-def test_all_nine_commands_are_registered() -> None:
-    """导入 `research_cmd` 必须让九条命令都挂到 group 上——少一条没有别的测试会发现。"""
+def test_every_command_is_registered() -> None:
+    """导入 `research_cmd` 必须让每条命令都挂到 group 上——少一条没有别的测试会发现。"""
     registered = set(research.commands)
-    expected = {"list", "backtest", "validate", "diagnose", "correlate", "overlay", "book", "decompose", "mine"}
+    expected = {
+        "list",
+        "backtest",
+        "validate",
+        "diagnose",
+        "correlate",
+        "overlay",
+        "book",
+        "decompose",
+        "mine",
+        "forward",
+    }
     assert registered == expected, f"注册的命令与预期不符：多 {registered - expected}，少 {expected - registered}"
 
 
