@@ -3173,7 +3173,10 @@ CEILING = {
     # 为什么原来的测试没抓到：那一轮对 shell 只做了 `bash -n` 语法检查，而语法检查看不见「这个命令
     # 认不认识这个选项」。新加的那条测试从脚本里**读出真正那行**的参数，喂给命令本身——脚本与命令
     # 定义从此对得上，再漂就是红的。
-    "beidou_cli": 7_329,
+    # +25 beidou_cli，2026-09-17（7_329 -> 7_354）：`research forward add` 的全样本尾巴守卫与
+    # `--accept-full-sample-tail`，理由见上面 beidou_alpha 那条。大部分行是拒绝消息本身——它要说清
+    # 「为什么这会让板判得太早」，否则下一个人只会照着提示加那个开关。
+    "beidou_cli": 7_354,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3312,7 +3315,22 @@ CEILING = {
     # 读数本身就是那个检验，没有别人负责。所以 `board_threshold` 取「选择门」与「单边 95% 临界值」
     # 的较大者。**没有动 `max_sharpe_quantile`**：它是 `validate` 在用的门，改它是一次 R10 规则
     # 变更，会移动每一条历史裁决的阈值。
-    "beidou_alpha": 9_981,
+    # +31 beidou_alpha，2026-09-17（9_981 -> 10_012）：前向板照**真实归档报告**改读取路径，外加
+    # D-043 的全样本尾巴判定。
+    #
+    # 这一笔是修一个第一次真用就撞上的错。`CLAIMED_SHARPE_PATHS` 原来写的是
+    # `oos.annualized_sharpe`——那是我写测试时**编出来的**形状，而这个仓库的 `validate` 写的是
+    # `walk_forward.oos_sharpe`。所有 CLI 测试都用自己编的 payload，于是它们一致地测了一个不存在
+    # 的契约，直到拿在架的 `tsmom-validation-20260913T182325Z.json` 上板才读出 `None`。
+    # 新测试不造数据，扫 `reports/research/` 里的真报告（今天 78 份，每一份都读得出）。
+    #
+    # `full_sample_tail` 是同一次发现带出来的、更要紧的一条。在架 tsmom 的「样本外」1.5919 其实是
+    # 全样本尾巴（`oos_is_full_sample_tail` 为真，D-043 因此给它封顶 WEAK_PASS）。板的判定年限是
+    # `(z / claimed_sharpe)²`——**声称越高年限越短**，所以拿尾巴当基准会让板判得**太早**，而那时
+    # 估计量的噪声还大。误差的方向是要紧的：高估 claimed 只会太早、不会太晚，所以默认拒绝，要用
+    # 就显式承认，承认写进板条目跟着板位走完一生。真选择网格下 tsmom 的样本外是 1.27——按尾巴算
+    # 1.07 年，按 1.27 算 1.66 年，差 0.6 年。
+    "beidou_alpha": 10_012,
 }
 
 

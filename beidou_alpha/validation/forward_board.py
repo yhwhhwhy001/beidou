@@ -73,6 +73,9 @@ class BoardEntry:
     #: `years_to_decide` 就短一点，板位就能早点「到期」。从报告读并钉住摘要，这条路就堵上了。
     evidence: str = ""
     evidence_sha256: str = ""
+    #: 这个 `claimed_sharpe` 是不是一条全样本尾巴（D-043），以及上板时操作者显式承认了它。
+    #: 跟着板位走完一生：几年后读这块板的人要能看出这一条的年限是建在乐观读数上的。
+    claimed_is_full_sample_tail: bool = False
     note: str = ""
 
     def to_json(self) -> str:
@@ -98,6 +101,7 @@ class BoardEntry:
                 claimed_sharpe=float(payload.get("claimed_sharpe", 0.0)),
                 evidence=str(payload.get("evidence", "")),
                 evidence_sha256=str(payload.get("evidence_sha256", "")),
+                claimed_is_full_sample_tail=bool(payload.get("claimed_is_full_sample_tail", False)),
                 note=str(payload.get("note", "")),
             )
         except (KeyError, TypeError, ValueError):
@@ -134,13 +138,31 @@ def board_param_key(candidate: str, params: Mapping[str, Any]) -> str:
     return hashlib.sha256(f"{candidate}|{canonical_json(_normalised(dict(params)))}".encode()).hexdigest()[:16]
 
 
-#: 一份报告里「年化 Sharpe」可能待的地方，按优先级。`validate` 与 `backtest` 的形状不同，
-#: 而板要能从两者任一上板，所以这个顺序本身是契约的一部分：**样本外优先于全样本**。
+#: 一份报告里「年化 Sharpe」可能待的地方，按优先级。**样本外优先于全样本**，这个顺序是契约的一部分。
+#:
+#: 这几条路径是 2026-09-17 照**真实归档报告**改过的。第一版按一份手写 fixture 的形状写成
+#: `oos.annualized_sharpe`，而这个仓库的 `validate` 根本不产生那个键——第一次拿在架的
+#: `tsmom-validation-20260913T182325Z.json` 上板就读出 `None`。
+#: `tests/alpha/test_the_board_reads_the_reports_this_repo_actually_writes.py` 现在拿归档里的真报告
+#: 钉住它，所以报告形状再变就是红的，不是安静地读不到。
 CLAIMED_SHARPE_PATHS: tuple[tuple[str, ...], ...] = (
-    ("oos", "annualized_sharpe"),
-    ("walk_forward", "oos", "annualized_sharpe"),
-    ("summary", "annualized_sharpe"),
+    ("walk_forward", "oos_sharpe"),  # validate：走 walk-forward 的样本外
+    ("best_key_oos_sharpe",),  # 同上，顶层的那份
+    ("oos", "annualized_sharpe"),  # 留着：别处产生的报告有用这个形状的
+    ("summary", "annualized_sharpe"),  # backtest：只有全样本，所以排在最后
 )
+
+#: `walk_forward` 里那个自述字段：这份报告的「样本外」其实是全样本的尾巴。
+FULL_SAMPLE_TAIL_FIELD = ("walk_forward", "oos_is_full_sample_tail")
+
+
+def _dig(report: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    node: Any = report
+    for key in path:
+        if not isinstance(node, Mapping) or key not in node:
+            return None
+        node = node[key]
+    return node
 
 
 def claimed_sharpe_from(report: Mapping[str, Any]) -> tuple[float | None, str]:
@@ -150,15 +172,24 @@ def claimed_sharpe_from(report: Mapping[str, Any]) -> tuple[float | None, str]:
     「这个候选没希望」，而真相是「没读到那个数」。两件事混在一起，板会安静地记下一个错的年限。
     """
     for path in CLAIMED_SHARPE_PATHS:
-        node: Any = report
-        for key in path:
-            if not isinstance(node, Mapping) or key not in node:
-                node = None
-                break
-            node = node[key]
+        node = _dig(report, path)
         if isinstance(node, (int, float)) and not isinstance(node, bool) and math.isfinite(float(node)):
             return float(node), ".".join(path)
     return None, ""
+
+
+def full_sample_tail(report: Mapping[str, Any]) -> bool:
+    """这份报告自己说它的「样本外」是全样本尾巴吗（D-043）。
+
+    **为什么板要管这件事。** `years_to_decide` 是 `(z / claimed_sharpe)²`——**声称的 Sharpe 越高，
+    年限越短**。一条全样本尾巴给出的是这个候选的乐观读数（在架 tsmom：尾巴 1.5919，而真选择网格下
+    的样本外是 1.27–1.28），拿它当基准，板会在一个被高估的数上提早宣布「够久了」，而那时估计量的
+    噪声还大，一段走运的行情更容易把它推过门。
+
+    误差的方向是要紧的：高估 claimed 只会让板判得**太早**，不会让它判得太晚。所以默认拒绝，
+    要用就显式承认——承认本身会被写进板条目，跟着这个板位走完它的一生。
+    """
+    return _dig(report, FULL_SAMPLE_TAIL_FIELD) is True
 
 
 def read_board(lines: Iterable[str]) -> list[BoardEntry]:

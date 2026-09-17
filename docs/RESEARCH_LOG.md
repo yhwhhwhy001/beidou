@@ -12723,3 +12723,61 @@ C-AM08（「离线候选前向板能把可观察的候选数从 2 提到数十�
 没跑 `validate` / `mine` / `book` / `overlay` / `diagnose`；没往板上放候选，所以 `forward_board` 桶
 今天是空的；没改两份配置；没改 `beidou_governance/policy.py` 的任何常量（`max_concurrent_probes`
 仍是 2——板提高的是可观察数，不是实盘名额）；没重启任何进程；没下单。四道门全绿（2122 passed）。
+
+
+## 2026-09-17（续六）· tsmom 上板：板的第一个板位，而第一次真用就查出板读不了本仓库的报告
+
+操作者裁定「把 tsmom 放上板」。做下来查出两个缺陷，都是 #58 带进去的，都在同一个提交里修了。
+
+### 一、板读不出本仓库真写出来的报告
+
+`CLAIMED_SHARPE_PATHS` 原来写的是 `oos.annualized_sharpe`——那是我写测试时**编出来的**形状。本仓库的
+`validate` 写的是 `walk_forward.oos_sharpe`（顶层还有一份 `best_key_oos_sharpe`）。#58 的 CLI 测试
+全部用自己编的 payload，所以它们**一致地测了一个不存在的契约**，直到拿在架的
+`tsmom-validation-20260913T182325Z.json` 上板才读出 `None`。
+
+新测试不造数据：`tests/alpha/test_the_board_reads_the_reports_this_repo_actually_writes.py` 扫
+`reports/research/` 里的真报告（今天 78 份 validation，**每一份都读得出**）。报告形状再变就是红的。
+
+### 二、更要紧的：在架证据的样本外是一条全样本尾巴
+
+`walk_forward.oos_is_full_sample_tail` 为真，D-043 因此给它封顶 WEAK_PASS（registry 的 `evidence`
+记的正是 WEAK_PASS，而报告自己写 PASS）。板的判定年限是 `(z / claimed_sharpe)²`——**声称越高，年限
+越短**。拿尾巴当基准，板会在一个被高估的数上提早宣布「够久了」，而那时估计量的噪声还大，一段走运
+的行情更容易把它推过门。
+
+**误差的方向是要紧的**：高估 `claimed` 只会让板判得太早，不会太晚。所以 `forward add` 默认拒绝，
+要用就显式写 `--accept-full-sample-tail`，而这次承认写进了板条目
+（`claimed_is_full_sample_tail: true`），跟着这个板位走完一生。
+
+按尾巴 1.5919 算年限是 **1.07 年**；按真选择网格下的样本外 1.2757 算是 **1.66 年**。差 0.6 年。
+
+### 三、为什么仍用在架那份证据
+
+归档里有 27 份 tsmom 报告不是尾巴，oos 1.64–1.77。**没有用它们**：它们全是 09-04～09-06 的旧跑法，
+参数与网格都不是在架那套，拿来钉板位等于把板钉在一个不是「在架 tsmom」的东西上；而且它们的 oos
+更高，年限更短，问题更重不是更轻。
+
+另一条路是**跑一份新的 validate 拿真样本外**，但那是 tsmom 桶的计费，直接吃在位者的 headroom，
+而且方案明写：对在位者的任何重验要先写 FAIL 处置并显式传 `--grid`。那是另一个决定，本节没做。
+
+### 四、上板的读数与核对
+
+```
+tsmom 34df70ad0b014a48 pit  前向 0.00 年  S=—  门=—  要看 1.07 年  OBSERVING
+```
+
+| | 上板前 | 上板后 |
+| --- | --- | --- |
+| `trials.jsonl` 总行数 | 22,166 | **22,167**（恰好一行） |
+| `forward_board` 桶 | 0 | **1** |
+| **tsmom 桶 unique@7d** | **145** | **145**（一分没动） |
+
+最后一行是这块东西的全部要点：上板要花钱，但花的**不是在位者的名额**。另外连跑 `status` 之后
+ledger 仍是 22,167——读板不花钱。
+
+### 五、本节没做什么
+
+没跑 `validate` / `mine` / `book` / `overlay`；没动 tsmom 桶；没改两份配置；没重启；没下单。
+板上现在 1 个板位，`decidable: 0`。
+

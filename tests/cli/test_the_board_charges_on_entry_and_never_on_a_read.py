@@ -39,10 +39,15 @@ def _store(august_dir: Path, root: Path) -> None:
         store.append(symbol, "1h", frame)
 
 
-def _evidence(path: Path, sharpe: float | None = 1.59) -> Path:
+def _evidence(path: Path, sharpe: float | None = 1.59, *, tail: bool = False) -> Path:
+    """写一份形状与本仓库 `validate` 一致的证据报告。
+
+    `tail=True` 带上 `walk_forward.oos_is_full_sample_tail`——在架的 tsmom 证据就是这样，
+    而板默认拒绝拿一条全样本尾巴当 `claimed_sharpe`。
+    """
     payload: dict = {"kind": "validation", "strategy": "tsmom"}
     if sharpe is not None:
-        payload["oos"] = {"annualized_sharpe": sharpe}
+        payload["walk_forward"] = {"oos_sharpe": sharpe, "oos_is_full_sample_tail": tail}
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -151,6 +156,48 @@ def test_a_missing_evidence_file_refuses(tmp_path: Path) -> None:
     result = CliRunner().invoke(main, _add_args(tmp_path, empty, tmp_path / "nope.json", "--charge", "1"))
     assert result.exit_code != 0
     assert "证据报告不存在" in result.output
+
+
+# ---- D-043：全样本尾巴不许安静地变成 claimed_sharpe ---------------------------------------
+
+
+def test_a_full_sample_tail_is_refused_by_default(tmp_path: Path) -> None:
+    """判定年限是 (z / claimed_sharpe)²——声称越高年限越短，所以乐观读数只会让板判得**太早**。
+
+    在架的 tsmom 证据正是这种：`oos_sharpe` 1.5919 而 `oos_is_full_sample_tail` 为真，D-043 因此
+    给它封顶 WEAK_PASS。板看不见这件事，就会拿 1.5919 去算年限。
+    """
+    evidence = _evidence(tmp_path / "tail.json", sharpe=1.5919, tail=True)
+    empty = tmp_path / "empty-root"
+    empty.mkdir()
+    result = CliRunner().invoke(main, _add_args(tmp_path, empty, evidence, "--charge", "1"))
+    assert result.exit_code != 0
+    assert "全样本尾巴" in result.output and "--accept-full-sample-tail" in result.output
+    assert not _board_rows(tmp_path)
+
+
+@pytest.mark.usefixtures("isolated_trials_ledger")
+def test_accepting_it_is_recorded_on_the_slot_for_life(tmp_path: Path, august_dir: Path) -> None:
+    """承认了就上板，但承认本身写进条目——几年后读板的人要能看出这一条建在乐观读数上。"""
+    root = tmp_path / "data"
+    _store(august_dir, root)
+    evidence = _evidence(tmp_path / "tail.json", sharpe=1.5919, tail=True)
+    result = CliRunner().invoke(main, _add_args(tmp_path, root, evidence, "--charge", "1", "--accept-full-sample-tail"))
+    assert result.exit_code == 0, result.output
+    assert "全样本尾巴" in result.output, "上板成功也要把这件事说出来"
+    rows = _board_rows(tmp_path)
+    assert len(rows) == 1 and rows[0].claimed_is_full_sample_tail is True
+
+
+@pytest.mark.usefixtures("isolated_trials_ledger")
+def test_a_clean_report_needs_no_flag(tmp_path: Path, august_dir: Path) -> None:
+    """守卫只拦尾巴。一份样本外真的是样本外的报告，照常上板。"""
+    root = tmp_path / "data"
+    _store(august_dir, root)
+    evidence = _evidence(tmp_path / "clean.json", sharpe=1.27, tail=False)
+    result = CliRunner().invoke(main, _add_args(tmp_path, root, evidence, "--charge", "1"))
+    assert result.exit_code == 0, result.output
+    assert _board_rows(tmp_path)[0].claimed_is_full_sample_tail is False
 
 
 # ---- 上板：恰好一笔，且带着它的证据 -------------------------------------------------------
