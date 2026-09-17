@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import click
 import httpx
 
+from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, resolve_ledger_path
@@ -859,6 +860,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         # exist on the research dataclass.  Absent from a profile, M-007 falls back to the plan's 50%.
         margin_cap=float((payload.get("portfolio", {}) or {}).get("margin_cap", 0.0)) or None,
         data_root=data_root,
+        exits=ExitParams.from_mapping(payload.get("exits", {}) or {}),
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")

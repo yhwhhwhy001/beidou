@@ -56,6 +56,7 @@ KEYS: dict[str, str] = {
     "book_weights": "per-book weights, for the probe stop's mark-to-market caliber",
     "closes": "the closes the decision was taken on",
     "asset_vol": "M-015: the stage-1 sizing divisor per symbol",
+    "book_vol": "what the book asks for, what it leaves the model at, and what max_weight clipped off",
     "crowding": "M-018: what the crowding modifier DID this bar, not merely that its input arrived",
     "metrics_snapshot": "DL-Q6: what this loop could read at the instant it decided",
     "throttle": "D-015's drawdown throttle: scalar / drawdown / equity_hwm",

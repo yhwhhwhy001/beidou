@@ -55,6 +55,7 @@ from beidou_alpha.validation.ledger import (
     ledger_scope,
     parse_ledger,
     resolve_ledger_path,
+    undeclared_charge,
     unique_trials,
 )
 from beidou_alpha.validation.metrics import (
@@ -602,6 +603,105 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     return combos
 
 
+def _incumbent_grid(registry_path: str, strategy: str) -> tuple[bool, Mapping[str, Any] | None]:
+    """Is this strategy an ENABLED registry entry, and what grid did the evidence it cites use?
+
+    Read off the registry rather than off a flag, for the reason `_running_book_nets` reads it: the
+    registry is the governed decision about what runs, and "am I about to spend the incumbent's
+    margin" is a question about that decision and not about how the command was typed.
+
+    ``None`` for the grid is not "no grid": it is "this cannot be compared" - the pointer is missing,
+    unreadable, or predates the `grid` field (nine archived reports do).  The caller treats that as
+    undeclared, which is the conservative direction and the one the ledger is already resolved in
+    (`unique_trials` charges more when it cannot tell two runs apart).
+    """
+    path = Path(registry_path)
+    if not path.exists():
+        return False, None
+    for candidate in load_registry(path).enabled:
+        if candidate.id != strategy:
+            continue
+        report = Path(str((candidate.evidence or {}).get("report", "")))
+        if not report.is_file():
+            return True, None
+        try:
+            payload = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True, None
+        cited = payload.get("grid") if isinstance(payload, Mapping) else None
+        return True, cited if isinstance(cited, Mapping) else None
+    return False, None
+
+
+def _selected_key(select_json: str, params_by_key: Mapping[str, Mapping[str, Any]], prereg: str) -> str | None:
+    """The one grid cell a pre-registered rule named, or ``None`` when the run names none.
+
+    Round 7's副产品 1, made addressable.  `best_params` is the full-sample argmax and is what the
+    registry's startup gate compares against, so a candidate chosen by a rule that is not "highest
+    full-sample Sharpe" - H-001's was "OOS >= baseline - 0.05 AND drawdown improves AND turnover
+    falls" - could not be reported by the run that evaluated it.  The workaround was a second,
+    single-configuration report.
+
+    `--prereg` is required rather than encouraged, and that is the whole safeguard: naming a cell
+    after seeing the grid is the selection D-028 exists to deflate, while naming one from a commit
+    that predates the run is the pre-registration DL-K3 asks for - and `_preregistration` records the
+    commit's own timestamp, so the ordering stays checkable from the artefact afterwards.
+
+    Exactly one match, never the first of several: a selector that silently picked one of two cells
+    would be choosing, which is the thing being pre-registered away.
+    """
+    if not select_json:
+        return None
+    if not prereg.strip():
+        raise click.ClickException(
+            "--select names the cell a pre-registered rule chose, so it needs --prereg <commit> to say "
+            "WHICH rule and when it was written.  Without that it is just a different way of picking a "
+            "winner after seeing the grid, which is the selection D-028 deflates."
+        )
+    wanted = json.loads(select_json)
+    matches = [key for key, combo in params_by_key.items() if all(combo.get(k) == v for k, v in wanted.items())]
+    if len(matches) != 1:
+        raise click.ClickException(
+            f"--select {select_json} matches {len(matches)} of this run's {len(params_by_key)} cells; it "
+            "has to match exactly one, because picking one of several here would be the choice the "
+            "pre-registration is supposed to have already made."
+        )
+    return matches[0]
+
+
+def _refuse_an_undeclared_charge(
+    strategy: str, registry_path: str, grid_json: str, cells: int, declared: int | None
+) -> None:
+    """Say what this run will spend, and refuse an undeclared spend against an enabled entry.
+
+    Two halves, and only the second one can refuse.  The echo is unconditional because a price nobody
+    is told is a price nobody can decline, and it names where the rows are going: `ledger_redirection`
+    exists precisely so a redirected run cannot look like a charged one.
+
+    The refusal is scoped to the SHARED ledger.  A redirected run spends nothing that any gate reads,
+    so guarding it would be ceremony - and the autouse fixture in `tests/conftest.py` redirects every
+    test, which is what keeps this check off the suite's back without an exemption list.
+    """
+    where = ledger_redirection()
+    click.echo(
+        f"charge: {cells} row(s) to " + (f"the redirected ledger {where}" if where else "the shared trials ledger")
+    )
+    if where:
+        return
+    incumbent, cited = _incumbent_grid(registry_path, strategy)
+    if not incumbent:
+        return
+    problem = undeclared_charge(
+        strategy=strategy,
+        cells=cells,
+        grid=json.loads(grid_json) if grid_json else DEFAULT_GRIDS.get(strategy, {}),
+        cited_grid=cited,
+        declared=declared,
+    )
+    if problem:
+        raise click.ClickException(problem)
+
+
 # CPCV's embargo is not walk-forward's purge read backwards; `cpcv_splits`' docstring has the argument
 # and `docs/analysis/2026-09-13-full-repo-review.md` has the finding.  The knob is split out here so the
 # boundary CAN be closed; the default stays `--purge` so that this commit changes no published number.
@@ -757,6 +857,26 @@ def _stressed_oos_gate(net: pd.Series, folds: Sequence[Any], bars_per_year: floa
 @research.command("validate")
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
+@click.option(
+    "--select",
+    "select",
+    default="",
+    help=(
+        "JSON {param: value} naming the ONE grid cell a pre-registered rule chose, reported as "
+        "`best_params` instead of the full-sample argmax.  Requires --prereg; the argmax is recorded "
+        "beside it either way."
+    ),
+)
+@click.option(
+    "--charge",
+    default=None,
+    type=int,
+    help=(
+        "how many rows this run appends to the strategy's ledger bucket, stated out loud.  Required "
+        "when the strategy is an enabled registry entry and the grid is not the one its cited evidence "
+        "used; `undeclared_charge` carries the run that made this a check rather than a RUNBOOK line."
+    ),
+)
 @click.option("--folds", default=5, show_default=True)
 @click.option("--min-train", default=4000, show_default=True, help="bars before the first test fold")
 @click.option("--purge", default=50, show_default=True)
@@ -823,6 +943,8 @@ def research_validate(
     universe_mode: str,
     min_tenure: int,
     grid: str,
+    select: str,
+    charge: int | None,
     folds: int,
     min_train: int,
     purge: int,
@@ -837,6 +959,10 @@ def research_validate(
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
+    # Priced before the panel is loaded, because what a run costs is decided by the grid and the grid is
+    # already known here - afterwards the only thing left to do about it is to have not run it.
+    combos = _grid(strategy, grid, entry.params)
+    _refuse_an_undeclared_charge(strategy, registry_path, grid, len(combos), charge)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     # DL-D4 and DL-D5: carry the metrics or spot columns only when this strategy declares it reads
     # them, so a run that reads none does not pay for the alignment - and does not carry the one place
@@ -879,7 +1005,6 @@ def research_validate(
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     impact = impact_model(load_yaml(costs_path), capital=capital)
-    combos = _grid(strategy, grid, entry.params)
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
     _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
     bpy = panel.bars_per_year
@@ -918,7 +1043,8 @@ def research_validate(
     full_sharpes: dict[str, float] = {
         key: (value if value is not None else -np.inf) for key, value in full_sharpes_raw.items()
     }
-    best_key = max(full_sharpes, key=lambda k: full_sharpes[k])
+    argmax_key = max(full_sharpes, key=lambda k: full_sharpes[k])
+    best_key = _selected_key(select, params_by_key, prereg) or argmax_key
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
     # D-024: the construction the numbers were produced by, named once and used by both the report and
     # the ledger signature, so the two can never describe different books.
@@ -1120,6 +1246,16 @@ def research_validate(
         # "this signal ran no search" and "its search found nothing" are different facts (DL-K2).
         **({"signal_search": signal_search} if signal_search is not None else {}),
         "best_params": params_by_key[best_key],
+        # Which rule picked that, and what the other one would have picked.  `validate` has always
+        # chosen by full-sample Sharpe, and round 7 recorded the consequence: a candidate that wins on
+        # a PRE-REGISTERED rule but is a shade lower on the full sample can never be a grid report's
+        # `best_params`, so adopting one meant issuing a second, single-configuration report (H-001's
+        # `020459Z` is that report).  Naming the cell is the cheaper half; recording the argmax beside
+        # it is what keeps the naming honest, because a reader can see both and `--select` cannot
+        # quietly become "whichever cell looks best afterwards" - it needs a `--prereg` commit whose
+        # timestamp is in the artefact.
+        "best_params_selected_by": "pre-registered rule (--select)" if select else "full-sample argmax",
+        "full_sample_argmax_params": params_by_key[argmax_key],
         "full_sample": results[best_key].summary(),
         # F3 (KILL-Q2): `best_params` is the full-sample argmax and is what reaches the registry,
         # while `walk_forward.oos_sharpe` belongs to whatever each fold chose.  When the two differ

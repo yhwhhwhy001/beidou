@@ -113,6 +113,9 @@ EXPECTED_FIELDS = {
         "regime_tp_scale",
         "regime_side",
         "stale_carry_bars",
+        # v8, 2026-09-17 (EXP-AE3): ships 0.0, which is "arm from entry" - today's behaviour - and
+        # CONSTRUCTION_ALIASES carries the recomputation showing the book did NOT change.
+        "trailing_activate",
     },
     "throttle": {"enabled", "start", "stop", "floor"},
     "leverage": {"mode", "margin_cap", "max_leverage", "margin_buffer"},
@@ -142,6 +145,33 @@ def test_every_definitional_digest_so_far_resolves_to_the_one_book() -> None:
     """
     for digest in (BEFORE, AFTER, AFTER_P23, AFTER_MIN_HISTORY, AFTER_P30):
         assert canonical_construction(digest) == BEFORE
+
+
+#: v7, what the armed loop has recorded since `vol_target` went to 0.60, and v8, what it will record
+#: once `exits.trailing_activate` exists.  Both resolve to the FROZEN construction rather than to
+#: `BEFORE`: 2026-09-13's target change is a real one, and the freeze is pinned to what came after it.
+AFTER_V7 = "ccd7bb9764b5fe0cf170f4943fedeb67ca8ec39a790903ec649ef7705d1d82f2"
+AFTER_TRAILING_ACTIVATE = "d995e0cce6af69ddd839cdba4f44c4e895e37167f9fbc1235892c2e4b2786cca"
+FROZEN = "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
+
+
+def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:
+    """The freeze test compares the CANONICAL digest, so a field set that grows must not trip it.
+
+    Declared before either digest is ever written, which is the order every entry in the table uses:
+    the claim is about values that are already known not to have moved.
+    """
+    for digest in (AFTER_V7, AFTER_TRAILING_ACTIVATE):
+        assert canonical_construction(digest) == FROZEN
+
+
+def test_the_shipped_construction_is_one_of_the_digests_that_resolve_to_frozen() -> None:
+    """...and the one this tree computes today is among them, which is what makes the two agree."""
+    from beidou_live.engine import construction_fingerprint
+    from tests.live.helpers_construction import live_config_for_profile
+
+    digest = construction_fingerprint(live_config_for_profile())["digest"]
+    assert canonical_construction(digest) == FROZEN, digest
 
 
 # --- the readers.  A canonicaliser nothing calls leaves M-010 reset exactly as before ----------------
