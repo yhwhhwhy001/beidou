@@ -3125,7 +3125,7 @@ CEILING = {
     # 读它的代码在 `research_validate_cmd` 里——补丁不生效，测试却照样绿。三处测试
     # （`ledger_redirection` / `cpcv_splits` / `enumerate_candidates`）之所以是响亮的 AttributeError
     # 而不是静默通过，是因为 `research_cmd` 只再导出契约里的 35 个名字，其余库名一个不留。
-    # `tests/cli/test_nine_commands_nine_modules.py` 把这个性质本身钉成一条测试。
+    # `tests/cli/test_each_research_command_has_its_own_module.py` 把这个性质本身钉成一条测试。
     #
     # 地址契约：`scratchpad/` 与 tests 一共按 `from beidou_cli.research_cmd import ...` 写死 35 个
     # 名字（29 个复现脚本要的 `_load` / `_membership` / `_resolve_symbols` 在内）。搬家不改别人的
@@ -3150,7 +3150,19 @@ CEILING = {
     # `tests/cli/test_one_machine_applies_the_layers_everywhere.py` 断言包里再没有第二处调用、
     # 那个地址还在、以及两种写法逐位相等（并先证明退出层真触发了 144/480 个格子，否则那条等价
     # 断言会随 fixture 变化静默退化成「比两个原样的 frame」）。
-    "beidou_cli": 7_023,
+    # +292 beidou_cli，2026-09-17（7_023 -> 7_315）：候选前向板的命令层（操作者裁定 Q-C = 建）。
+    # 286 行是 `research_forward_cmd.py`，其余是 `research_cmd.py` 的再导出。
+    #
+    # 为什么是**两条**命令而不是一条带模式的，这是这 286 行里最该解释的一件事：`add` 花钱，
+    # `status` 不花钱。板的门按 `forward_board` 桶里的行数算，所以误计一笔不是记错一个数——是把
+    # **整块板**的判定年限一起往后推，而 `status` 要靠 launchd 每天跑，这种错会以一天一次的速度
+    # 累积。做成一条命令的两个开关，迟早有人读一次板就花掉一笔；做成两条，这件事没有办法顺手发生。
+    #
+    # `--claimed-sharpe` 不接受手输，只从让候选够格上板的那份报告里读（`--evidence`），并把报告的
+    # sha256 一起钉进板条目。理由与上面同源：手输的「声称 Sharpe」正是会被往低里写的那个数——写低
+    # 一点，`years_to_decide` 就短一点，板位就能早点「到期」。样本外优先于全样本，因为在架那个
+    # 1.59 就是一条全样本尾巴（D-043）。
+    "beidou_cli": 7_315,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3270,7 +3282,26 @@ CEILING = {
     # what inverse-vol sizing gives a name with 814% annualised vol, not a rounding error.  On the
     # 2026-09-17 book it moves exactly two names (LSKUSDT and TRUMPUSDT); the third smallest, LINKUSDT,
     # clears 2x the band by 3.65x.  The A/B pricing is in RESEARCH_LOG the same day.
-    "beidou_alpha": 9_656,
+    # +325 beidou_alpha，2026-09-17（9_656 -> 9_981）：候选前向板的纯规则
+    # （`validation/forward_board.py`，操作者裁定 Q-C = 建）。加上命令层的 292，Python 共 617 行，
+    # 外加 45 行 shell 与一份 plist——方案给这块估的是「≈ 650 行」，落到实处是 656 行 Python。
+    #
+    # 规则住在 `beidou_alpha` 而不是 `beidou_cli`，因为它们是判据不是取数：前向窗口从哪根 bar 起算、
+    # 板多大时门是多少、一个候选要观察多少年才谈得上判。CLI 那一层只负责取数、计费、落盘。
+    #
+    # 实现里有两处是写代码时才发现、而方案没写的，记在这里因为它们是这块东西能不能成立的关键：
+    #
+    # **一、判定年限不能用观察到的 Sharpe 算。** 第一版用了，测试立刻抓到：一个早期走运的候选会把
+    # 年限缩短到它已经观察到的长度，于是每个走运的候选都「刚好够久了」——板成了它本来要防的那个
+    # 东西。改成由上板时钉住的 `claimed_sharpe` 算，此后不随表现变。N 仍用今天的板大小，所以年限
+    # 只会随板变长，那是加板位的价钱，该由每个在板的候选一起付。
+    #
+    # **二、D-028 的选择门在 N=1 时按约定是 0，板不能照抄。** `max_sharpe_quantile` 那个约定在
+    # `validate` 里是对的——没有选择就没有选择门，显著性由别处的 OOS 门与 DSR 负责。板不同：板上的
+    # 读数本身就是那个检验，没有别人负责。所以 `board_threshold` 取「选择门」与「单边 95% 临界值」
+    # 的较大者。**没有动 `max_sharpe_quantile`**：它是 `validate` 在用的门，改它是一次 R10 规则
+    # 变更，会移动每一条历史裁决的阈值。
+    "beidou_alpha": 9_981,
 }
 
 

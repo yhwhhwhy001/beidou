@@ -8,7 +8,7 @@
 >
 > **本文的冻结稿在 Phase 7 被独立子代理推翻了一条 P0、九条 P1**（§8）：冻结稿把「候选进不了 registry」归因于判定与合成的机制，而唯一支撑它的案例（`594a12f9`）在仓库里有三处相反裁定；冻结稿把 O-2 的 ledger 成本写成 0（今天的 construction digest 已因 `flat_inside_band` 变了）；把退出层「全部已判负」（k<3 止盈等档位从未进网格）；把 D-045 的重启写成未发生（09-16T18:50Z 已重启）。被推翻的段落不删，标 **[R 修订]**。**并行会话同日合入的六个 PR（#32–#37）又把冻结稿的两个 Option 做完了**：O-2（embargo 720 两臂）已跑并结案，O-6（等风险书门的独立推导）已写成 EXP-AE2；操作者当日裁定 Q-CRITICAL = D、reopen 条件 (2) 授权、重启纪律入 `CLAUDE.md`。这些以 **[并行]** 标出。
 >
-> **[R2 修订，2026-09-17 当日]** 操作者裁定「**Q-A 全做，Q-B 先 M6 后下沉，Q-D 是**」。层 0 六项当日全部合入 `main`（#40 / #41 / #42 / #44 / #45 / #48），逐项落点、读数与两条对下一个人有用的更正见 `docs/RESEARCH_LOG.md` 2026-09-17（续二）与本文 §14。**Q-C（候选前向板）未答**，故 O-5 / DL-AM7 未做、C-AM08 保持 UNKNOWN。执行中查出本文自己错了一处：「六条命令三本书」不全是缺陷，其中 `overlay` 的裸 ensemble 是写在 RESEARCH_LOG 2026-09-08 的**协议**，动它会打断与每一条 D-017 裁决的可比性；受影响的句子保留原文并标 **[R2 修订]**。
+> **[R2 修订，2026-09-17 当日]** 操作者裁定「**Q-A 全做，Q-B 先 M6 后下沉，Q-D 是**」。层 0 六项当日全部合入 `main`（#40 / #41 / #42 / #44 / #45 / #48），逐项落点、读数与两条对下一个人有用的更正见 `docs/RESEARCH_LOG.md` 2026-09-17（续二）与本文 §14。**[R4 修订，当日]** 操作者随后裁定 **Q-C = 建**，前向板已实现并合入（§14.5）：C-AM08 仍是 UNKNOWN，但它第一次**可检验**了——那条 falsifier 的前半（「上板即计费的规则被绕过」）现在由测试守着，后半（「2 年后无一候选前向 z 过校正门」）要靠板自己攒年。执行中查出本文自己错了一处：「六条命令三本书」不全是缺陷，其中 `overlay` 的裸 ensemble 是写在 RESEARCH_LOG 2026-09-08 的**协议**，动它会打断与每一条 D-017 裁决的可比性；受影响的句子保留原文并标 **[R2 修订]**。
 >
 > ID 命名空间 `AM`（alpha module）。Constitution：仓库无 `deep-analysis-constitution.md`；硬约束取自 `tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py`（`FREEZE_ENDS 2026-10-13T19:00Z`、`FROZEN_CONSTRUCTION 46b8d731…`）、`docs/RUNBOOK.md` K-EX14、`CLAUDE.md`「重启实盘循环」、`governance/reopen.yaml`、`governance/window_changes.yaml`、`beidou_governance/policy.py`（0.3.5）、`tests/architecture/test_source_budget.py`（三个包全部零 headroom）。本文与同日的 `2026-09-17-alpha-efficiency-deep-analysis.md`（效率）、`2026-09-17-full-system-audit.md`（审计）并读：它们已裁定的证据不重跑，只引用并点名网格。
 
@@ -457,7 +457,7 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 
 ### 12.2 需要你决定的（一次问完，各带价钱；无默认）**[R 修订，KILL-AM-09]**
 
-**[R2 修订] 裁定已到（2026-09-17 当日）**：**Q-A = 全做**、**Q-B = 先 M6 后下沉**、**Q-D = 是**；**Q-C 未答**。下表保留提问时的原文，执行结果见 §14。
+**[R2 修订] 裁定已到（2026-09-17 当日）**：**Q-A = 全做**、**Q-B = 先 M6 后下沉**、**Q-D = 是**。**[R4 修订]** **Q-C = 建**（先答「不建」，同日改为「建」；以后一条为准）。四条全部闭合，下表保留提问时的原文，执行结果见 §14。
 
 | Q | 问题 | 选项与价钱 |
 | --- | --- | --- |
@@ -481,7 +481,7 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 - **对「更优的整体方案」**：当前证据分不出「机制在拦候选」与「没有 edge」（C-AM02 UNKNOWN）；在位者是一条全样本尾巴，真选择网格下 OOS 1.27–1.49、实测滑点下余量 −0.013——机器在按设计工作，它说的是 edge 证据薄。因此「更优」不在加机器，在：① 守住名额；② 统一尺子；③ 把操作者已选方向（Q-CRITICAL = D）需要的 `trailing_activate` 写出来，让 EXP-AE3 在 10-13 后能跑；④ 长期靠新信息与（若操作者要）年级别的前向板。
 - **10-13 之后**：EXP-AE1（8 笔）、EXP-AE2（规则事务，0.60 下更紧）、EXP-AE3（4 笔）、`flat_inside_band` 采纳裁定（已量无成本）。这四项是 alpha 侧真正的下一批可裁定项，全部已预登记，本文不增不减。
 
-**Checkpoint（2026-09-17）**：等级 L / Yellow；Phase 1–6 冻结稿被 §9 审查后修订，修订处标 [R 修订]，并行会话同日合入的事实标 [并行]；G6 PASS（P0 1 / P1 9 / P2 10 全 CLOSED）；开放 Claim C-AM02（UNKNOWN，P0，10-13 后 EXP-AE1/AE2 检验）、C-AM08（UNKNOWN，P1，Q-C）；Gap GAP-AM02 → GAP-AM03 → GAP-AM05；**[R2 修订]** 待决只剩 **Q-C**（Q-A/Q-B/Q-D 当日已裁定并执行完，§14）；下一动作 = 操作者答 Q-C，以及 ④ 的三个观测量要不要用一次重启换（价钱见 §14.3）。
+**Checkpoint（2026-09-17）**：等级 L / Yellow；Phase 1–6 冻结稿被 §9 审查后修订，修订处标 [R 修订]，并行会话同日合入的事实标 [并行]；G6 PASS（P0 1 / P1 9 / P2 10 全 CLOSED）；开放 Claim C-AM02（UNKNOWN，P0，10-13 后 EXP-AE1/AE2 检验）、C-AM08（UNKNOWN，P1，Q-C）；Gap GAP-AM02 → GAP-AM03 → GAP-AM05；**[R4 修订]** **四条裁定全部闭合、全部执行完**（§14）：Q-A 全做、Q-B 先 M6 后下沉、Q-D 是、Q-C 建。④ 的三个观测量已由重启 #52 放到循环上。下一动作不在本文里了，在 10-13 之后那四项（EXP-AE1 / AE2 / AE3 / `flat_inside_band` 采纳），以及前向板攒年——它按今天的板大小要 3.8 年。
 
 ---
 
@@ -500,7 +500,7 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 | ④ | DL-AM4 | #42 `0a281b1d` | `TargetWeights.portfolio_vol` / `clipped_risk_share`；`ModelInputs.symbols_settled`；`vol_targeted` 从 `build_weights` 里拆出来、逐位复现由测试钉住 | **未达成**。字段在代码里，但循环上还没有——见 §14.3 第三条 |
 | ⑤ | DL-AM5 | #44 `8f7decbe` | `validate --select`（必须配 `--prereg` 且命中且仅命中一格）；报告记 `best_params_selected_by` 与 `full_sample_argmax_params` | **达成**。「这一格是规则选的还是全样本 argmax 选的」可从报告本身读出 |
 | ⑥ | DL-AM6 | #44 `8f7decbe` | `AlphaModel.from_registry` 拒绝 enabled 策略多于一条的主书 | **达成** |
-| — | DL-AM7 | — | 候选前向板 | **未做**，Q-C 未答；O-5 与 C-AM08 状态不变（UNKNOWN） |
+| — | DL-AM7 | #58 | 候选前向板：`beidou_alpha/validation/forward_board.py`（规则）+ `beidou_cli/research_forward_cmd.py`（`research forward add` / `status`）+ `deploy/com.beidou.forward-board.plist`（日读数） | **[R4] 已交付**。契约四条全部落成会执行的检查：前向只从 `entered_at` 起算；上板即计费到 `forward_board` 独立桶；参数被换即作废；板读数单独成文。C-AM08 仍 UNKNOWN，但第一次可检验（§14.5） |
 
 ### 14.2 执行中查出本文错了一处
 
@@ -519,7 +519,7 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 
 ### 14.3 未闭合的三件
 
-1. **Q-C 未答。** 候选前向板要 ≈ 650 行 + 一条 launchd + 一个独立 ledger 桶（上板即计费），它是年级别
+1. **[R4] Q-C 已裁定为「建」，已交付，见 §14.5。** 下面这段保留提问时的原文。候选前向板要 ≈ 650 行 + 一条 launchd + 一个独立 ledger 桶（上板即计费），它是年级别
    仪器。不答就不建，C-AM08 保持 UNKNOWN。
 2. **M6 只做了第一步。** 九个子命令拆成模块没做，`research_cmd.py` 仍约 3,400 行。原因是 PR #36 正开着
    并改这个文件（`+39/-14`）：现在拆等于把冲突塞给另一个会话。选 panel 层做第一个接缝是因为
@@ -554,3 +554,60 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 `reports/research/trials.jsonl` 未被触碰；没跑 `validate` / `mine` / `book` / `overlay` / `diagnose`；
 `beidou_governance/policy.py` 的常量一个没改；没重启任何进程；没下单。Scope Firewall 的三条
 （不改构造字段、不在 reopen 条件外重测 `594a12f9`、不用近两周实盘数选参数）全程未破。
+
+### 14.5 Q-C = 建：前向板已交付 **[R4 新增]**
+
+裁定当日给过两次，先「不建，维持 2 个探针名额」，随即改为「**建**」。以后一条为准，本节记后一条的执行。
+
+**交付了什么。** 规则 `beidou_alpha/validation/forward_board.py`（325 行）、命令
+`beidou_cli/research_forward_cmd.py`（286 行，`research forward add` / `research forward status`）、
+日任务 `deploy/com.beidou.forward-board.plist` 与 `run_forward_board.sh`（45 行 shell）。Python 共
+617 行——方案估的是「≈ 650 行」，落到实处 656 行（含再导出），估得相当准。
+
+**DL-AM7 的四条契约，每条都成了会执行的检查：**
+
+| 契约 | 实现 | 守它的测试 |
+| --- | --- | --- |
+| 前向就是前向 | `forward_slice` 只取 `entered_at` 当根 bar 及其之后 | 上板前一路涨、上板后全平的序列，读数为 `None`——前一段没漏进来 |
+| 上板即计费到独立桶 | 一个板位一行，记在 `forward_board` 桶；`ledger_scope` 对任何真实策略都不返回它 | 把 tsmom 候选上板，tsmom 的 family gate N 不动；板自己的桶里确有那一行 |
+| 参数被换即作废 | `param_key` 对不上就是 `TAMPERED`，不给读数 | 换参数作废；而 `168` ↔ `168.0` 的 JSON 往返**不**误报 |
+| 板读数不进历史选择 | 报告单独成文，不带任何能喂给 `validate` / `book` 的字段 | — |
+
+**实现时发现两处方案没写、而这块东西能不能成立就取决于它们的事。**
+
+**一、判定年限不能用观察到的 Sharpe 算。** 第一版用了，测试当场抓到：一个早期走运的候选会把年限
+缩短到它已经观察到的长度，于是每个走运的候选都「刚好够久了」——**板成了它本来要防的那个东西**。
+改成由上板时钉住的 `claimed_sharpe` 算，此后不随表现变；而那个 `claimed_sharpe` 不接受手输，只从让
+候选够格上板的那份报告里读（`--evidence`，样本外优先于全样本），并把报告的 sha256 一起钉进条目。
+手输的「声称 Sharpe」正是会被往低里写的那个数：写低一点，年限就短一点，板位就能早点「到期」。
+
+**二、D-028 的选择门在 N=1 时按约定是 0，板不能照抄。** 那个约定在 `validate` 里是对的——没有选择
+就没有选择门，显著性由别处的 OOS 门与 DSR 负责。板不同：**板上的读数本身就是那个检验**，没有别人
+负责。所以 `board_threshold` 取「选择门」与「单边 95% 临界值」的较大者。**没有动
+`max_sharpe_quantile`**：它是 `validate` 在用的门，改它是一次 R10 规则变更，会移动每一条历史裁决的
+阈值。
+
+**门与年限，按今天的实现重算**（S = 1.5）：
+
+| 板上候选数 | 门（标准化 z） | 要观察多少年 |
+| --- | --- | --- |
+| 1 | 1.645 | 1.2 |
+| 2 | 1.955 | 1.7 |
+| 30 | **2.928** | **3.8** |
+| 100 | 3.283 | 4.8 |
+
+30 个候选那一行与方案里写的 3.8 年一致。单候选那一行与方案的「1.8 年」不同，因为方案用的是举例的
+z=2，本实现按 α=0.05 走（z=1.645）——差别写在 `years_to_decide` 的 docstring 里，不让它自己消化掉。
+
+**这张表本身就是加板位的价钱**：多看一个候选，是在抬高**所有**候选的门，包括已经在板上看了两年的
+那个。与 D-028 的「搜得越多越退休自己的 incumbent」是同一条性质换到前向上，`board_threshold` 的
+单调性由一条测试钉住。
+
+**C-AM08 的状态。** 仍是 **UNKNOWN**，而且这次是有意的：板不产生裁定，`status` 的正常输出是一整版
+`OBSERVING`、`decidable: 0`。变化在于它**第一次可检验**——falsifier 的前半（「上板即计费的规则被
+绕过」）现在由测试守着，后半（「2 年后无一候选前向 z 过校正门」）要靠板自己攒年。GAP-AM03
+（前向板的信噪比与滥用风险）因此从「建板前先算」变成「已算并写进代码」。
+
+**板上现在是空的。** 这一轮只建机器，没往上放任何候选——放第一个候选是一次计费动作，要有一份让它
+够格的报告，那是另一个决定。
+
