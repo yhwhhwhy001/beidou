@@ -3048,7 +3048,21 @@ CEILING = {
     # single-configuration report.  The safeguard is most of the price: `--select` requires `--prereg`,
     # matches exactly one cell or refuses, and the argmax is recorded beside it either way, so it
     # cannot become "whichever cell looks best afterwards".
-    "beidou_cli": 6_147,
+    # +80 beidou_cli, 2026-09-17 (6_147 -> 6_227), and this one buys no behaviour at all: it is M6
+    # step 1, the panel layer moving out of `research_cmd.py` into `research_panel.py`.  The 216 lines
+    # of definitions are a MOVE - the ratchet does not see them, because the package total is what it
+    # counts - so the +80 is the new module's header and imports plus the re-export block, i.e. the
+    # price of writing down why the seam is there.
+    #
+    # Why that seam and not the nine commands, measured: twenty-nine scripts under `scratchpad/` - the
+    # reproductions behind D-035's ladder bootstrap, P26, P29, P32, D-039's band sweep and the exit
+    # reachability tables - open with `from beidou_cli.research_cmd import _load, _membership,
+    # _resolve_symbols`.  The evidence base of this repository imports three private functions out of a
+    # command-line module; splitting the COMMANDS apart would not have touched that, and this layer is
+    # both what those scripts want and what the sink step moves again, out of `beidou_cli` for good.
+    # The re-export is therefore temporary and says so, and a test asserts the old addresses still
+    # resolve to the one definition rather than to a second copy.
+    "beidou_cli": 6_227,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
