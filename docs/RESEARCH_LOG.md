@@ -12430,3 +12430,97 @@ profile 都要还一次的债。这次的控制臂是 `sed 's/band_entry_multipl
    1%，而 2.0 要求一笔仓位跌掉一半才能碰到 band。
 3. **重启时刻要回填。** `FREEZE_ENDS` 写的是上界 10-18T00:00Z，不是「重启 +30 天」——本提交写下时
    重启还没发生。实际重启时刻按 RUNBOOK 记进本文件。
+
+
+## 2026-09-17（续三）· 重启 #52：把 ④ 的三个观测量放到循环上，代价是 0 根 bar
+
+**谁、为什么**：操作者 2026-09-17 裁定「重启一次，把那三个观测量放出来」，本会话执行 `launchctl
+kickstart -k gui/$(id -u)/com.beidou.live`。被放出来的是层 0 ④（PR #42 `0a281b1d`）加的
+`TargetWeights.portfolio_vol` / `clipped_risk_share` 与 `ModelInputs.symbols_settled`——它们是每周期
+写的字段，而上一个进程启动于这三个 PR 合并之前，所以在此之前的 `cycles.jsonl` 里没有它们，
+这是预期不是故障（见本日「续二」§五）。
+
+**纪律三条按顺序走完**（`CLAUDE.md`「重启实盘循环」）：
+
+| 步 | 读数 |
+| --- | --- |
+| 1 · 窗口 | kickstart 于 **15:11:31Z**，整点后 11 分，落在「整点后 5 分到下一个整点前 10 分」内 |
+| 2 · 构造测试 | 在 `1ebeb7f0` 上 `test_the_construction_is_frozen_until_the_holdout_matures.py` + `test_construction_identity.py` → **15 passed**，exit 0 |
+| 3 · 本节 | 就是它 |
+
+**可观测事实（重启前 → 重启后）**：
+
+| | 重启前 | 重启后 |
+| --- | --- | --- |
+| PID | 66666 | **79764** |
+| 进程启动 | 2026-09-16T18:50:38Z | **2026-09-17T15:12:01Z** |
+| `state.restarted_at` | 2026-09-16T18:50:38+00:00 | **2026-09-17T15:12:01+00:00** |
+| `state.restarts` | 51 | **52** |
+| `heartbeat.construction` | `ccd7bb9764b5` | **`d995e0cce6af`** |
+
+**构造摘要变了，构造没变。** `ccd7bb97…` 是 v7 payload 形状下的摘要，`d995e0cc…` 是 v8（`exits.trailing_activate`
+进指纹后）的。`beidou_live/construction.py` 的 `CONSTRUCTION_ALIASES` **两个都声明等于
+`46b8d731…`**，v8 那条是 PR #41 `61d9914c` 在同一提交里连证明一起加的。所以：M-010 的 30 天窗口、
+`realised_vol` 的单构造条件、L3 的 7 天条件都不清零，冻结测试仍绿。**这个摘要变化本身就是新代码已
+加载的证据**——旧进程写不出 `d995e0cc…`。
+
+**这次重启的价钱是 0 根 bar。** 重启的 immediate 周期 ts **15:12:09Z**、bar **2026-09-17T14:00:00Z**、
+`phase=SKIPPED`：那根 bar 已经由 15:00:26Z 的周期跑过，幂等判据（clientOrderId 按 bar 派生，先查后下）
+正确跳过了它。bar 序列没有缺口：
+
+```
+…  12:00  13:00  14:00  14:00(SKIPPED)
+```
+
+`CLAUDE.md` 记的约 1.16% 命中概率是「重启落在一根还没跑的 bar 上」的概率，这次没有落上——
+挑窗口买到的就是这个。
+
+**源文件 mtime 对进程启动时刻**（新进程加载的是哪份代码的旁证）：`beidou_alpha/model.py`
+2026-09-17T12:51:49Z、`beidou_live/inputs.py` 与 `beidou_live/cycle_record.py` 2026-09-17T09:42:47Z，
+三个都早于 15:12:01Z。主 checkout 在 `1ebeb7f0`、`git status` 干净。
+
+**三个观测量的首次现身**：`book_vol` 与 `inputs.symbols_settled` 只在完整周期里写，而重启后唯一那个
+周期是 SKIPPED（跳过的周期不写完整载荷，它的 `construction` 也是 `None`）。所以首次现身在 bar
+`2026-09-17T15:00:00Z` 的那个周期上。**已核验**，读数如下。
+
+### 三个观测量的第一个读数（bar `2026-09-17T15:00:00Z`，`at` 2026-09-17T16:00:27Z，construction `d995e0cce6af`）
+
+```json
+"book_vol": {"target": 0.6, "ex_ante": 0.5345623729864275, "clipped_risk_share": 0.0}
+"inputs": {"symbols": 17, "symbols_settled": 17, "bars": 1442, "dropped": []}
+```
+
+三条读法，都只到 n=1 为止：
+
+* **`ex_ante` 0.5346 对 `target` 0.60**：这个周期书的事前波动是目标的 **89%**。这是 GAP-AM02
+  第一次有数——在此之前「书实际跑在多少波动上」在实盘侧根本没有记录，`vol_target` 是输入不是读数。
+* **`clipped_risk_share` 0.0**：`max_weight` 这个周期一份风险都没截掉。按 #42 立的约定
+  「算不出来是 `None`，从不是 0.0」（`engine.py:880`），所以这个 0.0 是「确实没截」而不是「不知道」。
+* **`symbols_settled` 17 = `symbols` 17**：本周期喂进模型的 17 个币全部有已结算的 bar，没有缺口。
+
+**不拿这三个数选任何参数。** 它们是观测量，n=1，且落在冻结期内；Scope Firewall 第三条（不用近两周
+实盘数选参数）照旧。它们要攒到 10-13 之后才谈得上读趋势。
+
+**主 checkout**：重启时在 `1ebeb7f0`、`git status` 干净。此后并行会话把它快进到了 `2ae7bce7`（#50），
+那是纯文档/报告/yaml 改动，不含 Python；运行中的进程已经导入完模块，不受影响。
+
+**归因**：本节只记进程表、`state.json`、`heartbeat.json`、`cycles.jsonl` 与测试输出里读到的数，外加
+「本会话执行了 kickstart」这一件本会话自己做的事。**不按时间相关性给任何其它实盘动作归因**——
+2026-09-16（续三）与 09-17 各有一次教训。
+
+### 本节之后发生的（当成现状读会错）
+
+**16:07:34Z 循环再次重启**（`state.restarts` 53，PID 88298），`heartbeat.construction` 变为
+**`0c555e1c837e`**。那是上一节（D1+D2+D3，PR #53 `d93edd2f`）落地的构造，payload v9。按该提交自己的
+说明，操作者裁定选项 D，**2026-09-14 的构造冻结就此结束**：`FROZEN_CONSTRUCTION` 重钉为 `0c555e1c…`、
+`FREEZE_ENDS` 移到 2026-10-18T00:00Z，M-010 的 30 天窗口、`realised_vol` 的单构造条件与 L3 的 7 天
+条件都从那次重启重新起算。
+
+所以**本节写的「构造不变、三个时钟不清零」只适用于本节记的那次重启**（15:12:01Z–16:07:34Z 这 55
+分钟）。`46b8d731…` 不再是 shipped 的那套，但 `d995e0cc… → 46b8d731…` 的别名仍在表里——历史不重写。
+
+两件顺带量到的：**那次重启的代价也是 0 根 bar**（immediate 周期 `at` 16:07:40Z 落在已由 16:00:27Z
+跑过的 bar `15:00:00Z` 上，`phase=SKIPPED`）；**三个观测量在 `d93edd2f` 的代码里原样保留**
+（`cycle_record.KEYS`、`engine.py` 的 `book_vol` 块、`inputs.symbols_settled` 都在），下一个完整周期
+会在新构造下继续写它们。本节只记这些可观测数，**不认领也不归因那次重启**。
+

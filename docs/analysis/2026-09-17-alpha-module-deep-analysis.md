@@ -530,7 +530,18 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
    合并于 09-17T09:33:31Z / 12:39:55Z / 13:45:44Z——**都在该进程启动之后**。所以今天的 `cycles.jsonl`
    里没有 `book_vol`，这是预期不是故障。**价钱**：要它们出现需要一次重启，按 `CLAUDE.md`「重启实盘循环」
    约 1.16% 概率吃掉一根 bar 的退出检查；构造不变（冻结检查在 `1ebeb7f0` 上 15 passed），三个监控时钟
-   不清零。**交操作者裁定**。本节只记进程启动时刻与合并时刻这两个可观测数，不按时间相关性给实盘动作归因。
+   不清零。本节只记进程启动时刻与合并时刻这两个可观测数，不按时间相关性给实盘动作归因。
+   **[R3，当日]** 操作者裁定重启。已执行（重启 #52，`launchctl kickstart` 于 15:11:31Z）：新进程
+   PID 79764 起于 **2026-09-17T15:12:01Z**，`restarts` 51 → 52，`heartbeat.construction`
+   `ccd7bb9764b5` → `d995e0cce6af`（两者 `CONSTRUCTION_ALIASES` 都声明等于 `46b8d731…`，后者是 PR #41
+   连证明一起加的 v8 条目，它本身就是新代码已加载的证据）。**实际代价 0 根 bar**：immediate 周期落在
+   已跑过的 bar `14:00:00Z` 上，`phase=SKIPPED`，bar 序列无缺口。**三个观测量已在 bar
+   `2026-09-17T15:00:00Z` 的周期上现身**：`book_vol` = `{target 0.6, ex_ante 0.5346,
+   clipped_risk_share 0.0}`、`inputs.symbols_settled` = 17（= `symbols` 17）。**GAP-AM02 因此有了
+   第一个读数**——书的事前波动是目标的 89%，而 `max_weight` 这个周期没截掉任何风险。n=1，不拿它
+   选参数。读数与纪律三步见 `docs/RESEARCH_LOG.md` 2026-09-17（续三）。**同日 16:07:34Z 循环
+   再次重启到 `0c555e1c837e`（D1+D2+D3，PR #53）**，09-14 的构造冻结随之结束、`FREEZE_ENDS` 移到
+   10-18；本文 §14.4 与 Scope Firewall 里「不改构造字段」的那一条自那一刻起由那条新裁定取代。
 
 4. **套层还剩第二份表达。** `research_cmd._overlaid` 仍在，`validate` 的邻域探针
    （`evaluate_params`，`research_cmd.py:949`）走它而不是 `score_book`；`scratchpad/p32f_embargo_and_decay.py`
