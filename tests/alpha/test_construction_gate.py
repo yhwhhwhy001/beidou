@@ -23,6 +23,9 @@ LIVE = {
     # while perturbing nothing.  The loop negates bools instead.  The shipped value is False and gets
     # its own test underneath, the same way `sleeve_max_gross`'s shipped 0.0 does.
     "flat_inside_band": True,
+    # D3, 2026-09-17.  Carries the shipped value, unlike the two above: doubling 2.0 gives 4.0 and the
+    # gate sees it, so this key needs neither the non-zero dodge nor the bool negation.
+    "band_entry_multiple": 2.0,
 }
 ENTRY = StrategyEntry("tsmom", params={"horizons": [168, 336, 720]})
 

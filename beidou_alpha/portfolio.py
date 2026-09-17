@@ -60,6 +60,33 @@ class PortfolioParams:
     # |current|, which is inside the band by construction.  Off is bit-identical: `apply_no_trade_band`
     # is only reached at all when `no_trade_band > 0`, and False leaves its recursion untouched.
     flat_inside_band: bool = False
+    # D3 (2026-09-17, operator ruling: adopt now rather than at the freeze's end).  How much room a
+    # target must clear the absolute band by before `flat_inside_band` lets it stand.  1.0 - the value
+    # that shipped with D2 - is D2 exactly, so off is bit-identical by arithmetic rather than by branch.
+    #
+    # **D2 tests the TARGET; a position walks into the band on PRICE, and D2 never looks again.**  That
+    # is the hole LSKUSDT fell through, and it is a third path neither D2 nor `exempt_crossings` covers:
+    #     09-16T21:00Z  BUY 74 @0.7287, target 54.08 against a 53.66 band - it cleared by 0.42 USDT
+    #     09-16T22:00Z  price -8%, |current| 49.53 < band 53.74  ->  BAND_BLOCKS_EXIT, and permanently
+    # One hour from a target D2 approved to a position nothing can close.  The 09-14 section of
+    # `docs/RESEARCH_LOG.md` recorded two ways to make a stub - a reduction landing inside the band and
+    # a flip landing inside it - and both are about where the TARGET lands.  This one is about where the
+    # POSITION drifts, so D2 approves it on the way in and has no opinion afterwards.
+    #
+    # Why a multiple on the entry test and not a check on `|current|`.  A rule that closes whatever
+    # currently sits inside the band oscillates: LSKUSDT's target is 0.53% of equity against a 0.50%
+    # band, so the position would be closed, re-opened at the unchanged target, and closed again on the
+    # next 6% move - and its hourly sigma is 9.2%.  Testing the target instead is stable, because the
+    # target is what the model holds still: 58.66 USDT is below 2 x 55.33 every cycle, so the name
+    # stays flat rather than flickering.  It also closes the existing stub, because a target taken as
+    # flat is a target of exactly zero, which is the one case `exempt_crossings` waves through the band.
+    #
+    # What 2.0 buys, in the units that produced the failure: a position must lose HALF its notional
+    # before it can reach the band, where 1.0 allowed 0.8%.  Both LSKUSDT entries cleared the band by
+    # under 1% (52.40/52.12 and 54.08/53.66), and no other name in the 2026-09-17 book is within 3.5x
+    # of it - the next smallest is LINKUSDT at 202 USDT against 55.33.  So on today's book this is the
+    # difference between holding LSKUSDT and TRUMPUSDT or holding neither, and nothing else moves.
+    band_entry_multiple: float = 1.0
 
     def __post_init__(self) -> None:
         if self.vol_target <= 0 or self.min_asset_vol <= 0 or self.max_weight <= 0 or self.max_gross <= 0:
@@ -68,6 +95,10 @@ class PortfolioParams:
             raise ValueError("no-trade bands must be >= 0 and max_scalar > 0")
         if self.sleeve_max_gross < 0:
             raise ValueError("sleeve_max_gross must be >= 0 (0 disables it)")
+        # Below 1.0 the multiple would shrink the flat-inside test to a SUBSET of the band, which is a
+        # position the planner still cannot close - the opposite of what the field is for.
+        if self.band_entry_multiple < 1.0:
+            raise ValueError("band_entry_multiple must be >= 1.0 (1.0 is D2 exactly)")
         if self.vol_model not in VOL_MODELS or self.budget_mode not in BUDGET_MODES:
             raise ValueError(f"vol_model must be one of {VOL_MODELS} and budget_mode one of {BUDGET_MODES}")
         if min(self.garch_fit_bars, self.garch_refit_bars, self.hrp_refit_bars) < 1:
@@ -337,12 +368,22 @@ def build_weights(
     weights = stage2.mul(factor, axis=0)
     weights = weights.where(aligned.notna().any(axis=1).cummax(), other=np.nan)
     if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
-        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band, params.flat_inside_band)
+        weights = apply_no_trade_band(
+            weights,
+            params.no_trade_band,
+            params.no_trade_rel_band,
+            params.flat_inside_band,
+            params.band_entry_multiple,
+        )
     return weights
 
 
 def apply_no_trade_band(
-    weights: pd.DataFrame, band: float, relative: float = 0.0, flat_inside: bool = False
+    weights: pd.DataFrame,
+    band: float,
+    relative: float = 0.0,
+    flat_inside: bool = False,
+    entry_multiple: float = 1.0,
 ) -> pd.DataFrame:
     """Keep the previous weight when |Δw| < max(band, relative * |w_prev|).
 
@@ -356,6 +397,12 @@ def apply_no_trade_band(
     target can ask for is ``|current|``, which is inside the band by
     construction.  Applied to the raw row, before the band's own recursion,
     so the suppressed-resize rule still sees the target the model asked for.
+
+    ``entry_multiple`` is D3's backtest half, on the same joint-flip rule.  It
+    widens that same test to ``band * entry_multiple``, so a weight has to
+    clear the band by a margin before it is allowed to stand;
+    ``PortfolioParams.band_entry_multiple`` carries the derivation and the
+    LSKUSDT reading it was written from.  1.0 is D2 exactly.
     """
     values = weights.to_numpy(dtype=float)
     out = np.empty_like(values)
@@ -367,7 +414,7 @@ def apply_no_trade_band(
             continue
         current = np.where(np.isnan(row), 0.0, row)
         if flat_inside:
-            current = np.where(np.abs(current) < band, 0.0, current)
+            current = np.where(np.abs(current) < band * entry_multiple, 0.0, current)
         threshold = np.maximum(band, relative * np.abs(previous))
         same_direction = (np.sign(current) == np.sign(previous)) & (current != 0.0) & (previous != 0.0)
         small = (np.abs(current - previous) < threshold) & same_direction

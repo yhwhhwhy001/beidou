@@ -2976,7 +2976,22 @@ CEILING = {
     # `funding_history: true`, which says a frame was FETCHED and stayed true for 37 cycles while the
     # modifier was inert (D-042); research has recorded `symbols_settled` since `_funding_facts`, so
     # the two halves of one comparison were not comparable.
-    "beidou_live": 9_850,
+    #
+    # +48 more beidou_live, 2026-09-17 (9_850 -> 9_898): D3's live half.  The derivation and the cost
+    # are in the `beidou_alpha` entry one screen up - thirty-fifth raise OF THIS TABLE - and are not
+    # repeated here; what is spent on this side is the fingerprint field (v9, and the note saying why
+    # it is the first bump in that list with NO alias), the `evidence_construction` key that keeps
+    # DL-G9's intersection matching `CONSTRUCTION_KEYS`, and `snapped_flat`.
+    #
+    # `snapped_flat` is eight of the lines and it is not bookkeeping.  Below the band arithmetic, a
+    # symbol that is flat and wants to be flat records nothing - right for a `leaving` name, wrong for
+    # a name the model asked for and a rule refused.  Without it, turning D3 on makes LSKUSDT vanish
+    # from `skipped[]` and from `report daily`'s `blocked_entry` on the same cycle it stops being
+    # traded, which is CYSUSDT's bare `continue` again: "a symbol the band can never let in read
+    # exactly like a symbol that did not need trading".  The row also carries `snapped_from_notional`,
+    # because after the snap `delta` and `current` are both 0 and the number that explains the refusal
+    # is the one that was thrown away.
+    "beidou_live": 9_898,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3170,7 +3185,48 @@ CEILING = {
     # time in this file's history, same as the opening paragraph records for beidou_live.  The extra
     # line is mypy's: `np.sign` is typed as returning ndarray, so the DataFrame has to be rebuilt
     # explicitly instead of chaining `.fillna` onto it.
-    "beidou_alpha": 9_604,
+    #
+    # Thirty-fifth raise OF THIS TABLE, 2026-09-17: +52 beidou_alpha, +48 beidou_live (D3), so that a
+    # target the band APPROVED cannot become a position nothing can close one bar later.
+    #
+    # The number is 9_604 -> 9_656 and it was RE-MEASURED on the merged tree, not added to the branch's
+    # own reading.  This entry and the meanrev one above it were written concurrently: that session
+    # moved `beidou_alpha` to the end of this dict while this one was adding a paragraph where it used
+    # to be, which is what the merge conflicted on.  The two raises turn out to be additive here
+    # (9_532 + 72 + 52), because they touch different files - but that is a measurement, not a
+    # convention, and the opening note of this table says to re-measure every merge for exactly this
+    # reason.
+    #
+    # The code is four lines - a float on each half's params, one multiplication inside the existing
+    # `flat_inside_band` predicate, and a flag so the refusal still records a row.  The rest is the
+    # reading it came from, and the reading is the deliverable, because the shape is one this table
+    # already paid for twice and got wrong both times:
+    #
+    #     09-16T21:00Z  LSKUSDT BUY 74 @0.7287, target 54.08 against a 53.92 band - it cleared by 0.3%
+    #     09-16T22:00Z  price -8%, |current| 49.53 < band 53.74  ->  BAND_BLOCKS_EXIT, permanently
+    #     09-17T14:00Z  |current| 35.45, 14 of 14 cycles blocked, stop_loss 6.0 against a 2.21 ceiling
+    #
+    # D2 (2026-09-14) tests the TARGET on the way in and never looks again; the position walks into the
+    # band afterwards, on price.  So `docs/RESEARCH_LOG.md`'s two recorded paths to a stub - a reduction
+    # landing inside the band, a flip landing inside it - are both about where the target lands, and
+    # this is a third they do not cover.  Measured on the live cycle, `exempt_crossings` and
+    # `flat_inside_band` TOGETHER still plan no order for it: the target 58.66 is outside the band, so
+    # D2 has no opinion, and the 23.21 gap is under the 55.33 threshold.  That is the sentence worth
+    # the lines - the two knobs this repository has been holding for the 10-13 thaw do not fix the case
+    # that made the operator ask.
+    #
+    # Why the test is on the target and not on `|current|`.  "Close whatever now sits inside the band"
+    # oscillates: LSKUSDT's target is 0.53% of equity against a 0.50% band and its hourly sigma is 9.2%,
+    # so it would close, re-open at the unchanged target, and close again - measured on the same cycle.
+    # Testing the target is stable because the target is the thing that holds still, and it clears the
+    # EXISTING stub for free, since a target taken as flat is a target of exactly zero, which is the one
+    # case `exempt_crossings` waves through the band.
+    #
+    # What it costs, named rather than buried: D3 discards a conviction the model really has - 0.53% is
+    # what inverse-vol sizing gives a name with 814% annualised vol, not a rounding error.  On the
+    # 2026-09-17 book it moves exactly two names (LSKUSDT and TRUMPUSDT); the third smallest, LINKUSDT,
+    # clears 2x the band by 3.65x.  The A/B pricing is in RESEARCH_LOG the same day.
+    "beidou_alpha": 9_656,
 }
 
 

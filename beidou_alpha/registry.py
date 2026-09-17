@@ -209,6 +209,11 @@ CONSTRUCTION_KEYS: tuple[str, ...] = (
     # here on.  Its live twin `exempt_crossings` is deliberately NOT here: it has no backtest
     # counterpart, because the backtest has always behaved the way its True means.
     "flat_inside_band",
+    # D3, 2026-09-17, same rule again.  It is a FLOAT that changes weights only while `flat_inside_band`
+    # is true, so a report carrying 2.0 with the flag off describes the same book as one carrying 1.0 -
+    # the gate still compares it, because the alternative is a key whose meaning depends on another key
+    # and a reader who has to know that to trust the digest.
+    "band_entry_multiple",
 )
 
 

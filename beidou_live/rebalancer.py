@@ -44,6 +44,12 @@ class RebalanceParams:
     # taken as flat.  It covers reductions, sign flips AND sub-band entries with one rule, which is why
     # it is not called `snap_reductions` - the first live stub, 2026-09-10, was made by a flip.
     flat_inside_band: bool = False
+    # D3's live half; ``beidou_alpha.portfolio.PortfolioParams.band_entry_multiple`` carries the
+    # derivation, the LSKUSDT reading and why this tests the target rather than ``|current|``.  Read it
+    # before changing this number.  The short form: D2 tests the target on the way in and never looks
+    # again, so a position that clears the band by 0.8% and then falls 8% in one bar is a stub D2
+    # approved.  1.0 is D2 exactly.
+    band_entry_multiple: float = 1.0
     tag: str = "bd"
 
 
@@ -128,7 +134,25 @@ def plan_rebalance(
         # a target it is allowed to plan.  Taken as flat rather than clamped outward to the band edge -
         # the band is not a position size the model asked for, and rounding a 0.05% conviction up to
         # 0.5% would be the planner inventing exposure to keep its own arithmetic tidy.
-        if params.flat_inside_band and 0.0 < abs(target_notional) < params.no_trade_band * equity:
+        #
+        # D3 widens the same test by `band_entry_multiple`, because "cannot subsequently close" is not
+        # a property of the target alone: the position walks into the band on price afterwards, and
+        # this line never runs again on its behalf.  Both halves of the sentence are the same test, so
+        # they are the same line - a second predicate on `|current|` would oscillate against a target
+        # that does not move (LSKUSDT: 0.53% of equity against a 0.50% band, 9.2% hourly sigma).
+        #
+        # `snapped_flat` exists so this cannot go silent.  Below, a symbol that is flat and wants to be
+        # flat records nothing, which is right for a `leaving` name and wrong for this one: the model
+        # DID ask for it and a rule refused, so without the flag LSKUSDT stops appearing in `skipped[]`
+        # the moment D3 is turned on, and `report daily` loses the one row that names it.  That is the
+        # failure CYSUSDT's bare `continue` already cost once - "a symbol the band can never let in
+        # read exactly like a symbol that did not need trading".
+        snapped_flat = bool(
+            params.flat_inside_band
+            and 0.0 < abs(target_notional) < params.no_trade_band * equity * params.band_entry_multiple
+        )
+        asked_notional = target_notional
+        if snapped_flat:
             target_weight, target_notional = 0.0, 0.0
         delta = target_notional - current_notional
         same_direction_resize = (
@@ -183,7 +207,7 @@ def plan_rebalance(
             # the label tests.  `reports.plan_gaps` already documented it this way; only the predicate
             # was narrower than its own docstring.  No order changes: all three outcomes are still
             # "no order", and only which one is called what moves.
-            if current_qty != 0.0 or target_notional != 0.0:
+            if current_qty != 0.0 or target_notional != 0.0 or snapped_flat:
                 skipped.append(
                     {
                         "symbol": symbol,
@@ -198,6 +222,11 @@ def plan_rebalance(
                         # The reader has to be able to re-derive the verdict rather than trust the label.
                         "current_notional": current_notional,
                         "threshold": threshold,
+                        # D3 only.  Without it the row reads `delta 0, current 0` - arithmetically true
+                        # and useless, because the quantity that explains the refusal is the target the
+                        # model asked for BEFORE the snap.  Absent on every other path, so a reader
+                        # seeing the key knows D3 is what moved and by how much it missed.
+                        **({"snapped_from_notional": asked_notional} if snapped_flat else {}),
                     }
                 )
             continue
