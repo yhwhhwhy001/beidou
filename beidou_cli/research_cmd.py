@@ -633,6 +633,42 @@ def _incumbent_grid(registry_path: str, strategy: str) -> tuple[bool, Mapping[st
     return False, None
 
 
+def _selected_key(select_json: str, params_by_key: Mapping[str, Mapping[str, Any]], prereg: str) -> str | None:
+    """The one grid cell a pre-registered rule named, or ``None`` when the run names none.
+
+    Round 7's副产品 1, made addressable.  `best_params` is the full-sample argmax and is what the
+    registry's startup gate compares against, so a candidate chosen by a rule that is not "highest
+    full-sample Sharpe" - H-001's was "OOS >= baseline - 0.05 AND drawdown improves AND turnover
+    falls" - could not be reported by the run that evaluated it.  The workaround was a second,
+    single-configuration report.
+
+    `--prereg` is required rather than encouraged, and that is the whole safeguard: naming a cell
+    after seeing the grid is the selection D-028 exists to deflate, while naming one from a commit
+    that predates the run is the pre-registration DL-K3 asks for - and `_preregistration` records the
+    commit's own timestamp, so the ordering stays checkable from the artefact afterwards.
+
+    Exactly one match, never the first of several: a selector that silently picked one of two cells
+    would be choosing, which is the thing being pre-registered away.
+    """
+    if not select_json:
+        return None
+    if not prereg.strip():
+        raise click.ClickException(
+            "--select names the cell a pre-registered rule chose, so it needs --prereg <commit> to say "
+            "WHICH rule and when it was written.  Without that it is just a different way of picking a "
+            "winner after seeing the grid, which is the selection D-028 deflates."
+        )
+    wanted = json.loads(select_json)
+    matches = [key for key, combo in params_by_key.items() if all(combo.get(k) == v for k, v in wanted.items())]
+    if len(matches) != 1:
+        raise click.ClickException(
+            f"--select {select_json} matches {len(matches)} of this run's {len(params_by_key)} cells; it "
+            "has to match exactly one, because picking one of several here would be the choice the "
+            "pre-registration is supposed to have already made."
+        )
+    return matches[0]
+
+
 def _refuse_an_undeclared_charge(
     strategy: str, registry_path: str, grid_json: str, cells: int, declared: int | None
 ) -> None:
@@ -822,6 +858,16 @@ def _stressed_oos_gate(net: pd.Series, folds: Sequence[Any], bars_per_year: floa
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
 @click.option(
+    "--select",
+    "select",
+    default="",
+    help=(
+        "JSON {param: value} naming the ONE grid cell a pre-registered rule chose, reported as "
+        "`best_params` instead of the full-sample argmax.  Requires --prereg; the argmax is recorded "
+        "beside it either way."
+    ),
+)
+@click.option(
     "--charge",
     default=None,
     type=int,
@@ -897,6 +943,7 @@ def research_validate(
     universe_mode: str,
     min_tenure: int,
     grid: str,
+    select: str,
     charge: int | None,
     folds: int,
     min_train: int,
@@ -996,7 +1043,8 @@ def research_validate(
     full_sharpes: dict[str, float] = {
         key: (value if value is not None else -np.inf) for key, value in full_sharpes_raw.items()
     }
-    best_key = max(full_sharpes, key=lambda k: full_sharpes[k])
+    argmax_key = max(full_sharpes, key=lambda k: full_sharpes[k])
+    best_key = _selected_key(select, params_by_key, prereg) or argmax_key
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
     # D-024: the construction the numbers were produced by, named once and used by both the report and
     # the ledger signature, so the two can never describe different books.
@@ -1198,6 +1246,16 @@ def research_validate(
         # "this signal ran no search" and "its search found nothing" are different facts (DL-K2).
         **({"signal_search": signal_search} if signal_search is not None else {}),
         "best_params": params_by_key[best_key],
+        # Which rule picked that, and what the other one would have picked.  `validate` has always
+        # chosen by full-sample Sharpe, and round 7 recorded the consequence: a candidate that wins on
+        # a PRE-REGISTERED rule but is a shade lower on the full sample can never be a grid report's
+        # `best_params`, so adopting one meant issuing a second, single-configuration report (H-001's
+        # `020459Z` is that report).  Naming the cell is the cheaper half; recording the argmax beside
+        # it is what keeps the naming honest, because a reader can see both and `--select` cannot
+        # quietly become "whichever cell looks best afterwards" - it needs a `--prereg` commit whose
+        # timestamp is in the artefact.
+        "best_params_selected_by": "pre-registered rule (--select)" if select else "full-sample argmax",
+        "full_sample_argmax_params": params_by_key[argmax_key],
         "full_sample": results[best_key].summary(),
         # F3 (KILL-Q2): `best_params` is the full-sample argmax and is what reaches the registry,
         # while `walk_forward.oos_sharpe` belongs to whatever each fold chose.  When the two differ
