@@ -1,7 +1,8 @@
 """把一本书变成读数：套退出层、定价、切 fold、过三道限额、和在跑的书比。
 
 套层与定价的唯一实现在 `beidou_alpha.validation.pipeline.score_book`；这里是研究侧围绕它的
-那一圈——fold 切法、限额、合并 sleeve、netting。`_overlaid` 仍在，`validate` 的邻域探针用它。
+那一圈——fold 切法、限额、合并 sleeve、netting。`_overlaid` 只剩一个地址的用途，见它自己的
+docstring；这个包里再没有第二处「先套层再定价」。
 """
 
 from __future__ import annotations
@@ -94,6 +95,16 @@ def _exit_params(profile: Mapping[str, Any], enabled: bool, interval: str) -> Ex
 
 
 def _overlaid(weights: pd.DataFrame, close: pd.DataFrame, exits: ExitParams | None) -> pd.DataFrame:
+    """套退出层——**不要在新代码里用它**，用 `beidou_alpha.validation.pipeline.score_book`。
+
+    它今天还在，只因为一个地址：`scratchpad/p32f_embargo_and_decay.py` 从 `beidou_cli.research_cmd`
+    导入它。那些脚本是**记录**（`pyproject.toml` 把 `scratchpad/*.py` 排除出格式化，理由逐字是
+    「Reformatting either edits a record of what happened」），所以改它们等于改一份已经发生过的记录。
+
+    2026-09-17 之前 `validate` 的邻域探针也走这里，于是「先套层再定价」在这个仓库里有两份表达。
+    两份算的是同一件事，所以没有读数差——它是一条会漂的缝，不是一个 bug。探针已改走 `score_book`，
+    剩下的就只有这个地址。
+    """
     return weights if exits is None else apply_exits(weights, close, exits).weights
 
 
