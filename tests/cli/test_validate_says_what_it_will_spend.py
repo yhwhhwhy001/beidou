@@ -92,7 +92,9 @@ def test_the_shared_ledger_refuses_the_default_grid_before_any_data_is_read(
     would fail with a data error instead of the charge message, which is the property that makes
     running it against the real registry safe.
     """
-    monkeypatch.setattr("beidou_cli.research_cmd.ledger_redirection", lambda: "")
+    # 守卫里调 `ledger_redirection()` 的是 `_refuse_an_undeclared_charge`，它住在 research_ledger_io。
+    # M6 之后这个名字读在哪就打在哪：`research_cmd` 只是它的历史地址，打在再导出上不会影响真正的调用点。
+    monkeypatch.setattr("beidou_cli.research_ledger_io.ledger_redirection", lambda: "")
     result = CliRunner().invoke(
         main,
         ["research", "validate", "--strategy", "tsmom", "--root", str(tmp_path), "--registry", REGISTRY],
@@ -106,7 +108,9 @@ def test_declaring_it_gets_past_the_guard_and_then_the_ordinary_run_begins(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The escape hatch is a sentence, not a flag: `--charge N` must be the number, and then it proceeds."""
-    monkeypatch.setattr("beidou_cli.research_cmd.ledger_redirection", lambda: "")
+    # 守卫里调 `ledger_redirection()` 的是 `_refuse_an_undeclared_charge`，它住在 research_ledger_io。
+    # M6 之后这个名字读在哪就打在哪：`research_cmd` 只是它的历史地址，打在再导出上不会影响真正的调用点。
+    monkeypatch.setattr("beidou_cli.research_ledger_io.ledger_redirection", lambda: "")
     args = ["research", "validate", "--strategy", "tsmom", "--root", str(tmp_path), "--registry", REGISTRY]
     result = CliRunner().invoke(main, [*args, "--charge", str(DEFAULT_CELLS)])
     assert f"--charge {DEFAULT_CELLS}" not in result.output, result.output

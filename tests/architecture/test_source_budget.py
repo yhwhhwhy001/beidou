@@ -3106,7 +3106,32 @@ CEILING = {
     # 本分支 6_009 -> 6_034），合并后实测 6_284 = 6_259 + 25。分支的 +25 换到新 base 上分毫不差，
     # 因为 M6 把 panel 层移出 `research_cmd.py` 是一次 MOVE，ratchet 数的是包的总行数。这一行是
     # 记账不是新抬顶：两侧的理由都已写在上面，没有一段被删。
-    "beidou_cli": 6_284,
+    # +725 beidou_cli，2026-09-17（6_284 -> 7_009）：M6 第二步，九个子命令各自一个模块。操作者裁定
+    # 「把 M6 剩下的九个子命令拆了」。这一笔**一行行为都不买**，买的是往后每次改一条命令时不必在
+    # 3,457 行里找它。
+    #
+    # 725 行是什么，量过：14 个新模块的 import 头共 **684 行**，`research_cmd.py` 的再导出块 **130 行**，
+    # 减掉它原来那一份 118 行的头。**正文是纯搬运**——14 个模块的正文 3,356 行加 `research_cmd.py`
+    # 剩下的 12 行，对原文件的 3,457 行，差额是 ruff format 的空行。ratchet 数的是包的总行数，所以
+    # 搬运本身它看不见，能看见的正是「同一组 import 现在要写 14 遍」这件事，而那就是拆分的价钱。
+    #
+    # 接缝是量出来的，不是按整齐分的：43 个顶层 helper 里 **25 个只被一个命令用到**，8 个被两个用，
+    # 只有 10 个被三个以上用。所以共用件按**概念**落成五层（options / grids / report / ledger_io /
+    # book_eval），而不是按「碰巧谁在调它」；单一消费者的 helper 跟着它的命令走。依赖是无环的：
+    # report / grids / options 是叶子，ledger_io 用前两者，book_eval 用 ledger_io。
+    #
+    # 这次拆分唯一会**静默**坏掉的事，以及为什么它没有静默：
+    # `monkeypatch.setattr(research_cmd, "cpcv_splits", ...)` 在拆分前有效，拆分后改的是再导出，而
+    # 读它的代码在 `research_validate_cmd` 里——补丁不生效，测试却照样绿。三处测试
+    # （`ledger_redirection` / `cpcv_splits` / `enumerate_candidates`）之所以是响亮的 AttributeError
+    # 而不是静默通过，是因为 `research_cmd` 只再导出契约里的 35 个名字，其余库名一个不留。
+    # `tests/cli/test_nine_commands_nine_modules.py` 把这个性质本身钉成一条测试。
+    #
+    # 地址契约：`scratchpad/` 与 tests 一共按 `from beidou_cli.research_cmd import ...` 写死 35 个
+    # 名字（29 个复现脚本要的 `_load` / `_membership` / `_resolve_symbols` 在内）。搬家不改别人的
+    # import 行，所以三个此前只是「顺带能取到」的名字也留着：`cost_model` 与 `portfolio_params`
+    # （`scratchpad/u3_attrib.py`）、click group `research`（`test_research_mine_asks_r1_before_it_spends`）。
+    "beidou_cli": 7_009,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
