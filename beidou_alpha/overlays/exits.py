@@ -44,6 +44,36 @@ class ExitParams:
     cooldown_bars: int = 24
     vol_halflife: int = 48
     bars_per_day: int = 24
+    # A FLOOR with no ceiling, and that asymmetry is the whole of what follows.  Every rule below
+    # divides a price difference measured FROM the entry anchor by `sigma * entry_price`, and a long's
+    # price cannot go below zero, so `adverse`'s numerator is bounded by the entry price itself:
+    #
+    #     adverse = (entry - price) * held / (sigma * entry),  price >= 0  =>  adverse <= 1 / sigma
+    #
+    # So a long's `stop_loss` is UNREACHABLE whenever `k_sl > 1/sigma`, however far the price falls -
+    # the threshold is arithmetic, not protection.  The mirror holds for a short's `take_profit`; a
+    # short's `stop_loss` and a long's `take_profit` have an unbounded numerator and no ceiling at all.
+    # `min_unit` bounds sigma from BELOW so a dead-quiet series cannot make a one-tick stop.  Nothing
+    # bounds it from above, so a loud enough symbol silently gets a threshold no price path can reach.
+    #
+    # This is not a new fact, it is the other half of a recorded one.  KILL-TL04 (2026-09-07,
+    # `scratchpad/exit_reachability.py`; table in `docs/analysis/2026-09-07-exits-tail-endpoint.md`
+    # 2.1) derived `retrace <= 1/sigma` on a long that never rallies and MEASURED what it costs:
+    # trailing k=12 fires on 0 of 0 episodes book-wide, k=9 on 3 / 4.  `config/live.demo.yaml` states
+    # the bridge between the two in the same block - "retrace >= adverse always holds", because
+    # `_enter` initialises `extreme` to the entry price - so the `stop_loss` half follows from two
+    # facts this repository already had, and was simply never written down on this side or read off
+    # the live book.
+    #
+    # What it binds on today, over the 17 held positions in `.beidou/live/state.json`, 2026-09-17, at
+    # the shipped `stop_loss` 6.0 (`unit_mode="entry"`, so these are the sigmas frozen at entry):
+    #     LSKUSDT  sigma 0.4517  ceiling  2.21 sigma   <- below 6.0: no price path reaches this stop
+    #     ZECUSDT  sigma 0.0603  ceiling 16.59 sigma      the next tightest, clearing 6.0 by 2.8x
+    #     BTCUSDT  sigma 0.0156  ceiling 64.25 sigma      the loosest
+    # One of seventeen, and it is the one whose sigma made inverse-vol sizing give it the smallest
+    # weight in the book - the same input produces both, which is why a fix aimed at either alone
+    # misses.  `beidou_live.reports.exit_reachability` takes this reading every day, so the next one
+    # is found by the report rather than by an operator noticing a margin figure in a phone app.
     min_unit: float = 0.005  # floor on sigma_1d (fraction) so a dead-quiet series cannot make a 1-tick stop
     unit_mode: str = "entry"  # entry | current: which sigma_1d the k-units are measured in (EXP-EX3)
     regime_window: int = 0  # bars of Kaufman efficiency ratio; 0 disables the regime scaling (EXP-EX2)
