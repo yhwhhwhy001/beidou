@@ -12052,3 +12052,92 @@ corr(I·r, r) = E[I·r²] / sqrt(E[I·r²]·E[r²]) = sqrt( E[I·r²] / E[r²] )
 因为这条推导被挡下（`governance/reopen.yaml` 的 regime-47 条目 `check: data_columns`，从未触发）。
 它的代价是另一种：**一条写在日志里、看起来可以事前免费判死一整类候选的规则**，而下一个人会信它。
 这也是 PR #46 那次分析犯的错之一——作者照抄了它，没有自己推一遍（校准表 2026-09-17 行第 ② 条）。
+
+
+## 2026-09-17（续二）· 操作者裁定 Q-A/Q-B/Q-D：层 0 六项已合入——研究命令的尺子从今天起变了
+
+裁定原话：「**Q-A 全做，Q-B 先 M6 后下沉，Q-D 是**」。方案见
+`docs/analysis/2026-09-17-alpha-module-deep-analysis.md` §12.2。**Q-C（候选前向板）未答**，因此
+`forward_board` 未建，C-AM08 保持 UNKNOWN。
+
+### 一、六项的落点
+
+| 项 | 内容 | PR | 合并 commit |
+| --- | --- | --- | --- |
+| ① | `validate` 对在位者必须说出它花多少，否则拒跑（Q-D 的严格版） | #40 | `26701642` |
+| ③ | `ExitParams.trailing_activate`——移动止损第一次知道自己有没有在赚钱 | #41 | `61d9914c` |
+| ④ | 三个观测量：`portfolio_vol`、`clipped_risk_share`、`symbols_settled` | #42 | `0a281b1d` |
+| ⑤⑥ | `--select` 按预登记规则选格；一本书不能悄悄多出第二条策略 | #44 | `8f7decbe` |
+| ②之一 | M6 第一步：panel 层离开 CLI（`beidou_cli/research_panel.py`，278 行） | #45 | `cf30b960` |
+| ②之二 | 下沉：`beidou_alpha/validation/pipeline.py` 的 `score_book` / `layers_applied` | #48 | `60258a9f` |
+
+Q-B 的「先 M6 后下沉」按字面执行：#45 先搬接缝，#48 再下沉判据机器。**M6 的剩余部分（把九个
+子命令各自拆成模块）没做**——`research_cmd.py` 仍约 3,400 行，而 PR #36 正开着并改这个文件
+（`+39/-14`），现在拆等于把冲突塞给另一个会话。
+
+### 二、跑研究命令的人今天起要知道的四件事
+
+**一、`research backtest` 默认过 exit overlay 了。** 此前它**根本没有这个开关**——即使被要求也量不了
+循环持有的那本书。同一本 tsmom 书，这一件事值 **0.058 个 Sharpe**（`backtest` 1.6146 对 `validate`
+1.6725）。09-17 之前的每一份 backtest 报告量的都是不带 shipped exits 的书，**复现它们要传
+`--no-exits`**。
+
+**二、`validate` / `backtest` / `book` 的报告带 `layers` 了**（`band` / `book_guards` / `exits`）。
+在这之前，一份 overlay 的 1.85 与一份 validation 的 1.59 之间，文件里没有任何东西说它们不是同一本书，
+而它们被互相引用过。**没有 `layers` 的报告是这条改动之前的，按各自命令的历史协议读**。
+
+**三、对在位者跑 `validate` 不显式传 `--grid`（或 `--charge N`）会拒跑。** 守卫在 `_load` 之前跑，
+所以它不花数据时间。这条是 Q-D 的严格版，直接针对 09-17 上午那次「按 2 笔定价、实计 32 笔」
+（见本日「ledger 冲突只能按并集解」一节与 `beidou_alpha/validation/ledger.py` 的 `undeclared_charge`）。
+
+**四、`--select` 要配 `--prereg`**，且必须命中且仅命中一格；报告记 `best_params_selected_by` 与
+`full_sample_argmax_params` 两个字段，于是「这一格是规则选的还是全样本 argmax 选的」可从报告本身读出。
+
+### 三、一处自我更正：「六条命令三本书」不全是缺陷
+
+分析稿把它整个记成口径缺陷。做下来只有一部分是，另一部分动了会打断既有裁决：
+
+* `research overlay` 量**裸 ensemble**，这是写下来的协议。本日志 2026-09-08 原话：「判据评的是不带
+  shipped exits 的裸 ensemble（`research overlay` 的既有协议，原 D-017 证据同样如此），所以它与历史
+  裁决可比」。给它套上线的 `stop_loss 6 / take_profit 6`，等于让它与**每一条** D-017 裁决不可比。
+* `research book` 用 `bare` + 带，是 D-018 预登记时用的那把尺子。
+* `correlate` 要的是净收益序列，套路径依赖的层不是它的问题。
+
+真缺陷只有两条，都已修：`backtest` 缺 `--exits`；五种报告里四种不说自己量的哪本书。因此
+**M-AM03「层 0 ② 落地后六条命令的 Sharpe 之差按构造为 0」这条验收作废**——它要求的恰恰是打断可比性。
+分析文档已按 `[R2 修订]` 标注。
+
+### 四、EXP-AE3 的代码前置已就位（预登记段一字不改）
+
+本日志上文 EXP-AE3 的预登记写着「代码：`ExitParams` 加 `trailing_activate`…`ExitState` 加 armed 标志」。
+这段代码现在存在（#41 `61d9914c`）：
+
+* 默认 `0.0`，`_armed` 在读 excursion 之前就返回 True，所以**行为逐位不变**；scalar 与 vectorised
+  两套引擎同步，过既有等价测试。
+* 武装判据 `(extreme − entry_price) × direction / unit_price ≥ trailing_activate`，与网格用的
+  σ_entry 单位同一把尺。
+* 拒绝 `trailing_activate > 0` 配 `trailing_stop <= 0`——武装一个不存在的 trail 是配置错误，不是关。
+* 构造 `CONSTRUCTION_PAYLOAD_VERSION` 8，别名 `d995e0cce6af… → 46b8d731530a…`，证明在同一提交里重算
+  （去掉这个键复现 `ccd7bb97…`，而该表已声明它等于 `46b8d731…`）。
+
+**跑与采纳仍在 2026-10-13T19:00Z 之后**，先验为负这一条也不变。冻结检查今天在 `1ebeb7f0` 上
+15 passed；`config/live.demo.yaml` 与 `config/alpha_registry.yaml` 自 `4068ba15` 起 `git diff --stat` 为空。
+
+### 五、④ 的三个观测量在循环上还没生效——这是可观测事实，不是故障
+
+`portfolio_vol` / `clipped_risk_share` / `symbols_settled` 是**每周期写**的字段，不是启动时建的模型。
+两个可观测数：
+
+* armed 进程 PID **66666** 启动于 **2026-09-16T18:50:38Z**（`state.json` 的 `restarted_at` 同值，
+  `restarts` = 51）。
+* #42 / #44 / #48 分别合并于 **09-17T09:33:31Z / 12:39:55Z / 13:45:44Z**，三个都在该进程启动之后。
+
+所以今天的 `cycles.jsonl` 里没有 `book_vol`、`inputs` 里没有 `symbols_settled`，**这是预期的**。
+要它们出现需要一次重启，而重启按 `CLAUDE.md` 的纪律有价钱（约 1.16% 概率吃掉一根 bar 的退出检查），
+**交操作者**。本节只记进程启动时刻与合并时刻这两个数，**不按时间相关性给任何实盘动作归因**。
+
+### 六、本节没做什么
+
+没跑 `validate` / `mine` / `book` / `overlay` / `diagnose`；`reports/research/trials.jsonl` 未被触碰；
+两份配置一字未动；未重启任何进程；未下单；未改 `beidou_governance/policy.py` 的任何常量。
+
