@@ -11629,3 +11629,63 @@ ledger 是共享的 append-only 文件，跨 worktree 复制它等于重写它�
 - residual 与 xsmom 的判定不变，`config/alpha_registry.yaml` 不动，实盘构造不动。
 - reopen.yaml 的 residual 条目维持 `check: operator`；本次不写入 `note`，因为同网格重跑按它自己的
   措辞不算新信息。
+
+## 2026-09-17（续）· ledger 冲突只能按并集解；以及一次两点式 diff 差点让我把纯增量分支判成「会倒退」
+
+`#43` 合并后，`#38`（`research/flat-inside-band-ab`，CI 已绿、非 draft）从 MERGEABLE 变成
+**CONFLICTING**。原因是 `#43` 把 19,797 行追加进 `reports/research/trials.jsonl` 时 `#38` 正开着，
+两边都往同一段尾部追加。**这个故障是 `#43` 造成的**，不是 `#38` 做错了什么。
+
+### ledger 冲突不能选边
+
+冲突只在 `trials.jsonl` 一个文件，没有代码冲突。按并集解：
+
+| | 行数 |
+|---|---|
+| merge base（`f28d688e`） | 2,326 |
+| main 侧新增（`#43` 九策略重跑） | +19,797 |
+| 分支侧新增（`#38` 的配对臂） | +36 |
+| **并集** | **22,159** |
+
+两侧的行逐一验证一行不丢，22,159 行全部可解析。合并结果相对 main 是 11 个文件、4,098 行插入、
+**零删除**。
+
+**为什么不能选边**：ledger 是 DSR 的分母，`ledger.py` 开头就写着「Selection bias does not reset
+between research rounds」。选任一侧都会静默删掉另一侧**已经花掉**的 trial，而一次已评估却未计入
+分母的 trial 就是一次免费窥视——`mining/search.py:9` 把这件事叫做「p-hacking with extra steps」。
+`git checkout --ours/--theirs` 在这个文件上永远是错的答案。
+
+### 两点式 diff 差点让我判错
+
+第一眼用 `git diff --stat origin/main..HEAD` 看 `#38`，读数是 **3,328 insertions, 29,394 deletions**
+——`trials.jsonl` 显示 `19833 +------`、`docs/RESEARCH_LOG.md` 显示 `108 -`、九份验证报告全是 `-`。
+这与 CLAUDE.md 记的 `#16`「合并会倒退 6,096 行」同形，差一点就按那条规则停下来报「这个 PR 不该合」。
+
+**两点式把「main 有而分支没有」也算成删除。** 换三点式 `origin/main...HEAD`（从 merge base 起算）
+是 **4,098 insertions, 0 deletions**，纯增量。判「会不会倒退」必须用三点式，或者直接比对合并结果与
+main。两点式回答的是另一个问题。
+
+### 操作教训：大批量 ledger 提交会阻塞同期的绿色 PR
+
+`#43` 那 19,797 行里有 19,772 行是 `pairs_search` 的 census。一次提交把共享 append-only 文件撑大
+十倍，代价不在自己这条分支上，而落在**所有同期开着的 PR** 上——它们全都要重解同一个冲突。
+
+**仍在旧 base 上的 worktree**：`m6-panel`、`slip-gate`。它们合并时会撞上同一个冲突，解法同上（并集，
+不是选边）。
+
+### tsmom family gate 的余量，两个时点
+
+| | ledger unique | N | 门槛 | headroom | 剩余 |
+|---|---|---|---|---|---|
+| `#38` 合并前 | 107 | 261 | 1.5581 | +0.0338 | 90 笔 |
+| `#38` 合并后 | 141 | 295 | 1.5723 | +0.0197 | **56 笔** |
+
+证据一个字没改（OOS 仍是 1.5919），动的只有分母。这也说明**「还剩多少 headroom」这个数只在 main 上
+成立**：`#38` 的 36 笔在合并前一直存在于一个 worktree 里，main 上量到的 90 笔当时已经是高估。
+**报 headroom 要先 fetch，并说清是哪个 commit 上的读数。**
+
+### 一处口径更正
+
+先前把分支的增量说成「35 行」，那是分支总数 181 减 main 总数 146。正确口径是对 merge base 的增量：
+145（base）+ 1（`#43`）+ 36（`#38`）= 182 行 tsmom，**分支加的是 36 行**。比总数之差要用 merge base，
+不要用两个分支的 HEAD。
