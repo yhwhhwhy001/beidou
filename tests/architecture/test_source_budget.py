@@ -2670,7 +2670,17 @@ CEILING = {
     # worth writing: it turns "someone set enabled: true" into a decision with evidence.  Refused at
     # this seam only - `composition.build_model` is what the live loop holds - so research can still
     # build the combination it would have to measure.
-    "beidou_alpha": 9_437,
+    # Seventeenth raise, 2026-09-17 (9_437 -> 9_532, +95 beidou_alpha): `validation/pipeline.py`, the
+    # sink half of Q-B.  `score_book` is one implementation of "apply the exit overlay, then price",
+    # which six commands had spelled inline, and `layers_applied` puts the answer in the artefact.
+    #
+    # Most of the 95 lines are the distinction the module exists to draw, and it is worth the space
+    # because getting it wrong would have broken rulings: `research overlay` scoring the BARE ensemble
+    # is a WRITTEN protocol (RESEARCH_LOG 2026-09-08, "判据评的是不带 shipped exits 的裸 ensemble ...
+    # 所以它与历史裁决可比"), and `research book`'s `bare` + band is what D-018 was pre-registered on.
+    # The defect was never that the commands disagree; it was that only `validation` reports recorded
+    # WHICH book they had, so an overlay 1.85 and a validation 1.59 were quoted against each other.
+    "beidou_alpha": 9_532,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -3062,7 +3072,12 @@ CEILING = {
     # both what those scripts want and what the sink step moves again, out of `beidou_cli` for good.
     # The re-export is therefore temporary and says so, and a test asserts the old addresses still
     # resolve to the one definition rather than to a second copy.
-    "beidou_cli": 6_227,
+    # +32 beidou_cli, 2026-09-17: `research backtest` gains `--exits` (default on) and both it and
+    # `validate` go through `score_book`.  This command had no such flag at all, so it could not price
+    # the book the loop holds even when asked - measured, its Sharpe sat 0.058 below `validate`'s on
+    # identical inputs for that reason alone, and a test now asserts the two agree.  `--no-exits`
+    # reproduces every backtest report written before, the same escape `--no-guards` already had.
+    "beidou_cli": 6_259,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
