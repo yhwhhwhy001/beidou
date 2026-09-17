@@ -11408,3 +11408,54 @@ EXP-AE1 测的是「更早的固定止盈/止损」，EXP-AE3 测的才是「移
 - EXP-AE1 与 EXP-AE2 都**没有跑**，ledger 一行未动（2,322 行不变），`policy.py` 一个常量未改。
 - 审计 §6.1（`flat_inside_band` A/B，2 笔）与 §6.2（k 阶梯重测，14 笔）仍待裁定，本轮未问。
 - C-AE03（「最近的收益不足是不是 alpha 的问题」）仍 UNKNOWN，判据是 10-13 的 M-010 30 天归因。
+
+
+## 2026-09-17 · 预登记：embargo 720 的对照重跑（backtest-guard 审查的第一条可测项）
+
+`cpcv_splits` 的 docstring 自 2026-09-13 起把这条记成 OPEN：caller 传 `embargo = purge = 50`，而模型的
+feature lookback 是 `AlphaModel.warmup_bars` 1,442（tsmom 自己最长 `max(horizons)` 720）。测试块之后
+`k < lookback` 的每一根训练 bar，都是由一个覆盖该测试块的窗口算出来的，而 `cpcv_evaluate` 正是在那些
+bar 上选参数。收益仍然因果，所以这是**选择污染而非前视**——它让 D-020 的硬门 `fraction_negative <= 0.10`
+比应有的容易过。registry 引用的那份报告里这个数是 **0.0**。
+
+**至今没有人跑过它。** 那句 docstring 给了论证、给了该用的数(720/1442)、给了旋钮(`--embargo`)，然后
+把默认留在 `--purge`，理由是「adopting a real embargo means a pre-registered re-run that charges the
+trials ledger, which is a decision, not a refactor」。这一节就是那个 pre-registration。
+
+### 协议（两臂，除 `--embargo` 外逐格相同）
+
+    research validate --strategy tsmom --universe pit --capital 0 \
+      --grid '{"crowding_window": [0, 72]}' \
+      --folds 5 --min-train 4000 --purge 50 --cpcv-groups 6 \
+      --prior-trials 152 --to 2026-09-14 \
+      --embargo 50   --prereg <本提交>     # 对照臂
+      --embargo 720  --prereg <本提交>     # 处理臂
+
+**为什么要对照臂**，而不是直接拿 `tsmom-validation-20260913T182325Z.json` 当对照：那次的 range 止于
+`2026-09-13 16:00`（跑的时候的最新闭合 bar），而 `--to 2026-09-14` 会走到 `09-13 23:00`，多 7 根 bar。
+不跑对照臂就分不清「embargo 的效应」和「7 根 bar 的效应」。
+
+### 这次跑不增加分母，而这是算出来的不是希望
+
+`TrialRecord.fold_key` = (`param_key`, `range_start`, `_range_end_bucket(range_end, 7)`, `symbols`,
+`construction_digest`, `overlay_digest`, `symbol_set_hash`, `search_space_version`)。**`embargo` 不在里面**，
+它只改 `cpcv_splits` 的切分。而 `_range_end_bucket` 按**日期**分桶：`09-13 16:00` 与 `09-13 23:00` 同为
+`2026-09-13`，7 天粒度下同桶。所以两臂的 2 个格点彼此 dedupe，也与 09-13 那次 dedupe。
+
+**预期 `ledger_rows` +4、`ledger_trials` 不变(88)、`oos_selection.n_trials` 不变(242)、门不变(1.5493)。**
+这四个数任何一个动了，说明上面这段推理错了，先查口径再读结果。
+
+### 验收规则（先写，后跑）
+
+| 可观测量 | 现值(09-13 报告) | 判读 |
+| --- | ---: | --- |
+| `cpcv.fraction_negative` | 0.0 | 两臂之差即 embargo 的效应。>0.10 则 D-020 的硬门在处理臂下**不过** |
+| `cpcv.oos_sharpe_q05` | 1.1850 | 同上，方向应向下 |
+| `oos_selection` margin | +0.0426 | embargo 不进这个块，两臂应当**逐位相同**；不同即本页推理有误 |
+| 「Cost stress against that gate」 | 09-13 那份**没有** | 新工具的第一次读数：滑点 5.5/9.2 档下 **OOS** 对门的余量 |
+
+**证伪线**：若处理臂的 `fraction_negative` 仍为 0.0 且 `oos_sharpe_q05` 移动小于 0.05，则「embargo 短了一个
+数量级」这条 OPEN boundary 在**这份证据上**不改变任何结论，应当照此结案而不是继续挂着。反之若它把
+`fraction_negative` 推过 0.10，则 registry 引用的证据在 D-020 的一道硬门上不成立，这是操作者的事。
+
+**不改的东西**：不动任何其它参数、不动 registry、不动实盘、不改 `--embargo` 的默认值。本次只产生读数。
