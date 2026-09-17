@@ -242,8 +242,16 @@ def run_backtest(
     ``guards`` replays the two book-level guards the live loop applies after the model and before
     the rebalancer (D-004).  Leave it None for the historical path; pass it to score the book the
     loop would actually hold.  The replay is causal and path dependent - the daily-loss pause reads
-    the equity this same replay produced - so it cannot be vectorised, and it is a no-op whenever
-    neither guard binds (the shipped book at ``vol_target 0.15``: zero pauses in 5.6 years).
+    the equity this same replay produced - so it cannot be vectorised.
+
+    It is a no-op only when neither guard binds, and on the book that is actually shipped they both
+    do.  This sentence used to read "the shipped book at ``vol_target 0.15``: zero pauses in 5.6
+    years", and that book stopped being the shipped one when the target moved to 0.60: measured on
+    ``tsmom-validation-20260913T182325Z.json``, the report the live registry cites, 491 of 49,240
+    bars pause on the daily loss and 4,070 (8.3%) are gross-capped.  A "no-op" the reader carries
+    forward from this docstring is therefore a claim about a book four times smaller than the one in
+    front of them, and the replay's own path dependence is what makes the difference impossible to
+    read off a scaled number.
     """
     cost = cost or CostModel()
     columns = [symbol for symbol in weights.columns if symbol in panel.close.columns]

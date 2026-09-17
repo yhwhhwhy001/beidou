@@ -2596,7 +2596,14 @@ CEILING = {
     # estimator behind a flag, not a line, and re-tuning a bandwidth that decides nothing would rewrite
     # an archived field to change no verdict.  A disclosure with no direction and no size is the thing
     # this repo keeps finding written down with nothing behind it, so the sizes are in there.
-    "beidou_alpha": 9_149,
+    # Twelfth raise, 2026-09-17 (9_149 -> 9_157, +8 beidou_alpha), and all eight lines are prose in
+    # `run_backtest`'s docstring.  It told the reader the guard replay "is a no-op whenever neither
+    # guard binds" and offered `vol_target 0.15`, zero pauses in 5.6 years, as the evidence.  That
+    # book has not been the shipped one since the target moved to 0.60, and the report the live
+    # registry cites measures the replayed one: 491 of 49,240 bars pause on the daily loss, 4,070
+    # (8.3%) are gross-capped.  The replay is path dependent, so a reader cannot scale the old figure
+    # to the new target either - which is why this costs a paragraph rather than a number.
+    "beidou_alpha": 9_157,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2937,7 +2944,16 @@ CEILING = {
     # slack here would have silently bought the next change a free allowance nobody argued for - which
     # is the same defect as raising a ceiling without a reason, with the sign flipped and no red test
     # to catch it.  A ratchet only means something while it is tight.
-    "beidou_cli": 5_943,
+    # +66 beidou_cli, 2026-09-17 (5_943 -> 6_009): two more caveat notes in the Markdown report, the
+    # same mechanism as `_MARGIN_BUFFER_NOTE` / `_embargo_note` / `_pbo_note` and written for the same
+    # reason those three were.  `_caliber_note` prints R0's two N's side by side and `_full_sample_tail_note`
+    # says what `oos_is_full_sample_tail: True` means, because both facts were in the JSON and in the
+    # stdout of a run that has since scrolled away, and in neither case in the artefact a reader opens.
+    # Measured on the report the registry cites: the gate at N=242 leaves +0.04, the library at N=2,914
+    # leaves -0.23, and the Markdown printed only the first.  The payload is untouched by all of it -
+    # every archived sha256 stays comparable, which is the constraint the first three notes were
+    # written under and the reason this is 66 lines of prose rather than a second gate.
+    "beidou_cli": 6_009,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
