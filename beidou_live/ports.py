@@ -185,6 +185,16 @@ class TargetSet(Protocol):
     @property
     def book_weights(self) -> Mapping[str, Mapping[str, float]]: ...
 
+    # The two the model can say about the construction rather than about a symbol, declared here for
+    # the reason the four above are: the engine reads them every cycle and writes them into
+    # `cycles.jsonl`, and a protocol that omits what the caller reads has stopped describing the
+    # contract.  Optional, so a model that cannot compute them still trades.
+    @property
+    def portfolio_vol(self) -> float | None: ...
+
+    @property
+    def clipped_risk_share(self) -> float | None: ...
+
 
 class StrategyEntryLike(Protocol):
     """One enabled strategy, as the live loop reads it (structural; see ``beidou_alpha.registry.StrategyEntry``).

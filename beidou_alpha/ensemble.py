@@ -26,6 +26,16 @@ class TargetWeights:
     # evidence is in), and a sleeve's mark-to-market P&L cannot be computed at all without these -
     # `contributions` is per STRATEGY and pre-sizing, and `weights` is already the sum.
     book_weights: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Observability, same standing as the two above, and the two quantities the construction could not
+    # state about ITSELF.  `portfolio_vol` is the ex-ante annualised volatility of the weights as they
+    # leave the model - after the caps and after the sleeves are summed - which is the only reading
+    # that answers whether the book the loop holds is at the vol target it declares: stage 2 targets
+    # the vol of stage 1, `combine_books` sums sleeves without re-targeting (a 1/3 sleeve took the
+    # 2026-09-07 book from 32.24% to 35.66%), and `max_weight` then takes some of it back off.
+    # `clipped_risk_share` is how much the per-symbol cap removed on this bar (GAP-AM02).
+    # `None` means "this model did not compute it", which is not the same fact as 0.0.
+    portfolio_vol: float | None = None
+    clipped_risk_share: float | None = None
 
 
 def combine_targets(
@@ -66,6 +76,8 @@ def snapshot(
     targets_by_strategy: Mapping[str, pd.DataFrame],
     asset_vol: pd.Series | None = None,
     book_weights: Mapping[str, pd.DataFrame] | None = None,
+    portfolio_vol: float | None = None,
+    clipped_risk_share: float | None = None,
 ) -> TargetWeights:
     """Latest row of the model outputs with NaN treated as flat."""
     as_of = pd.Timestamp(weights.index[-1])
@@ -87,4 +99,6 @@ def snapshot(
             str(book): {str(symbol): float(value) for symbol, value in frame.iloc[-1].fillna(0.0).items()}
             for book, frame in book_weights.items()
         },
+        portfolio_vol=portfolio_vol,
+        clipped_risk_share=clipped_risk_share,
     )

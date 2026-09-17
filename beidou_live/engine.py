@@ -872,6 +872,19 @@ class LiveEngine:
             # which is uniform by construction and adapts to nothing (D-037).  `getattr` because
             # this is observability: a model that cannot supply it must still be able to trade.
             "asset_vol": dict(getattr(targets, "asset_vol", {}) or {}),
+            # The construction describing ITSELF, which until now it could not.  `vol_target` says what
+            # the book asks for; `ex_ante` is what the weights leaving the model actually carry, after
+            # `combine_books` has summed sleeves without re-targeting (a 1/3 sleeve took the 2026-09-07
+            # book from 32.24% vol to 35.66%) and after `max_weight` has taken some back off - and
+            # `clipped` is how much it took, which 49 of 95 cycles' worth of counts could not say
+            # (GAP-AM02).  Both `None` when the model could not compute them, never 0.0: the same rule
+            # `enforced: false` follows elsewhere (D-035), because a book that is warming up and a book
+            # at zero volatility are different facts.
+            "book_vol": {
+                "target": config.portfolio.vol_target,
+                "ex_ante": getattr(targets, "portfolio_vol", None),
+                "clipped_risk_share": getattr(targets, "clipped_risk_share", None),
+            },
             # DL-X1 / M-Q06: how far the nearest liquidation is, in the daily-vol units `exits`
             # already speaks.  Foreign positions are in it: under cross margin a liquidation is an
             # account event, and D-014's "leave them alone" is about not TRADING them, not about not
