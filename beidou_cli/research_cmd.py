@@ -656,6 +656,58 @@ def _embargo_note(embargo: int) -> str:
     )
 
 
+def _full_sample_tail_note(is_tail: object) -> str:
+    """KILL-Q2 / D-043, printed beside `oos_is_full_sample_tail` instead of only on stdout.
+
+    The stdout NOTE at the end of `validate` has said this since KILL-Q2, and stdout is not an
+    artefact: the run scrolls away and the Markdown is what the registry's reader opens a year later.
+    `oos_is_full_sample_tail: True` on its own is a bare boolean next to a Sharpe that reads like an
+    out-of-sample estimate, which is the same shape the three notes above were written to close.
+    """
+    if is_tail is not True:
+        return "folds exercised a choice: this OOS is a selection procedure's out-of-sample record"
+    return (
+        "NO fold had a choice to make (single configuration, or every fold picked the same one), so the "
+        "OOS Sharpe above is the TAIL OF ONE FULL-SAMPLE SERIES, not a selection's out-of-sample record.  "
+        "D-043 caps such a report at WEAK_PASS: the number stands, the claim that a selection survived "
+        "out of sample does not.  `registry.py` still admits WEAK_PASS to live use."
+    )
+
+
+def _caliber_note(gate: Mapping[str, Any], library: Mapping[str, Any] | None) -> str:
+    """R0's two N's, side by side, with the margin each one leaves.
+
+    `oos_selection_whole_library` has been in the JSON since DL-G1, whose own comment says an artefact
+    carrying only the caliber that was chosen "cannot be used to re-open the choice".  The Markdown
+    carried only the chosen one, so for every reader who does not open the JSON the artefact was
+    exactly that.  Same rule as `_MARGIN_BUFFER_NOTE`: Markdown only, the payload is untouched, every
+    archived sha256 stays comparable.
+
+    Measured on `tsmom-validation-20260913T182325Z.json`, the report the live registry cites: the gate
+    at N=242 leaves +0.04, the library at N=2,914 leaves -0.23.  Neither number is new and the verdict
+    does not move - `verdict.decide` reads `oos_selection` and nothing else, and a test holds that.
+    What moves is whether a reader of the Markdown can see that the choice of N was consequential.
+    """
+    if not library:
+        return "not reported (policy.report_whole_library_n is off)"
+    gate_sharpe, gate_n = gate.get("oos_sharpe_annual"), gate.get("n_trials")
+    gate_threshold, lib_threshold = gate.get("threshold_annual"), library.get("threshold_annual")
+    lib_n, lib_p = library.get("n_trials"), library.get("p_family")
+    if not isinstance(gate_sharpe, (int, float)) or not isinstance(lib_threshold, (int, float)):
+        return "reported but not comparable: the two blocks do not carry the same fields"
+    # Signed, unlike `_fmt`: the sign IS the reading here - one caliber clears and the other does not,
+    # and a bare "0.04" next to a bare "0.23" reads like two distances of the same kind.
+    gate_margin = f"{gate_sharpe - gate_threshold:+.2f}" if isinstance(gate_threshold, (int, float)) else "n/a"
+    return (
+        f"ENFORCED at N={gate_n} (the per-strategy bucket): threshold {_fmt(gate_threshold)}, "
+        f"margin {gate_margin}.  REPORTED and never enforced at N={lib_n} (the whole library): "
+        f"threshold {_fmt(lib_threshold)}, margin {gate_sharpe - lib_threshold:+.2f}"
+        + (f", p_family {lib_p:.4f}" if isinstance(lib_p, (int, float)) else "")
+        + ".  Which N is the gate is R0 / KILL-AR-01, an operator ruling rather than a property of the "
+        "arithmetic, and both numbers are printed so the ruling stays arguable from the artefact alone."
+    )
+
+
 def _pbo_note(grid_trials: object) -> str:
     """PBO below four configurations is a coin flip; `decide` knows that and readers of the report did not."""
     try:
@@ -1148,6 +1200,7 @@ def research_validate(
                 {
                     **{k: v for k, v in wf_summary.items() if k != "chosen_params"},
                     "best_key_oos_sharpe": report["best_key_oos_sharpe"],
+                    "selection_exercised": _full_sample_tail_note(wf_summary.get("oos_is_full_sample_tail")),
                 },
             ),
             ("CPCV", {**{k: v for k, v in cpcv.items() if k != "chosen"}, "embargo": _embargo_note(embargo_bars)}),
@@ -1165,7 +1218,20 @@ def research_validate(
                 if signal_search is not None
                 else []
             ),
-            ("Selection-deflated OOS threshold (D-028)", report["oos_selection"]),
+            (
+                "Selection-deflated OOS threshold (D-028)",
+                {
+                    **report["oos_selection"],
+                    "caliber": _caliber_note(report["oos_selection"], report.get("oos_selection_whole_library")),
+                },
+            ),
+            # R0's other caliber, in the artefact rather than only in the payload.  It is the block DL-G1
+            # added so that "which N" stays arguable, and until now the Markdown dropped it.
+            *(
+                [("The other caliber (R0: reported, never enforced)", report["oos_selection_whole_library"])]
+                if report.get("oos_selection_whole_library")
+                else []
+            ),
             (
                 "Cost stress against that gate (same folds, same N, best_key basis)",
                 {
