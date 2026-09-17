@@ -3076,7 +3076,22 @@ CEILING = {
     # the book the loop holds even when asked - measured, its Sharpe sat 0.058 below `validate`'s on
     # identical inputs for that reason alone, and a test now asserts the two agree.  `--no-exits`
     # reproduces every backtest report written before, the same escape `--no-guards` already had.
-    "beidou_cli": 6_259,
+    # +25 beidou_cli, 2026-09-17 (6_009 -> 6_034): `slippage_stress_gate`, D-028's threshold re-asked
+    # on the grid that holds the taker fee fixed.  `cost_stress_gate` already existed and answers a
+    # different question - a multiplier scales the fee with the slippage, and 5.0 bps is a contract
+    # constant, so its x1.5 cell prices a world where VIP0 taker is 7.5.  The two grids coincide
+    # wherever their totals do (x1.5 and slip5.5 are both 10.5 bps), which is exactly why having a gate
+    # on only one of them was hard to see: the mislabelled reading is right at that one cell and wrong
+    # everywhere else.  Measured on the 2026-09-17 embargo arms, the gate is crossed between x1 (+0.03)
+    # and x1.5 (-0.03), and the fills' own centre - 4.43 bps, notional-weighted over 81 decision-close
+    # fills - falls inside that interval with no multiplier cell of its own.  Most of the 25 lines are
+    # the paragraph saying which grid answers which question; without it the next reader re-derives the
+    # coincidence, or does not.
+    # 合并 origin/main 时重测，2026-09-17：上面两组理由分别在各自的 base 上量过（main 侧到 6_259，
+    # 本分支 6_009 -> 6_034），合并后实测 6_284 = 6_259 + 25。分支的 +25 换到新 base 上分毫不差，
+    # 因为 M6 把 panel 层移出 `research_cmd.py` 是一次 MOVE，ratchet 数的是包的总行数。这一行是
+    # 记账不是新抬顶：两侧的理由都已写在上面，没有一段被删。
+    "beidou_cli": 6_284,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
