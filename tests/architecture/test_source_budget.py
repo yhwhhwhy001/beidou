@@ -2680,7 +2680,6 @@ CEILING = {
     # 所以它与历史裁决可比"), and `research book`'s `bare` + band is what D-018 was pre-registered on.
     # The defect was never that the commands disagree; it was that only `validation` reports recorded
     # WHICH book they had, so an overlay 1.85 and a validation 1.59 were quoted against each other.
-    "beidou_alpha": 9_532,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -3156,6 +3155,22 @@ CEILING = {
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
     "beidou_governance": 3_940,
+    # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
+    # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
+    # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
+    # packages returned nothing while the reopen condition ruled that same morning named it as the gate.
+    # 38 of the 71 lines are the docstrings carrying what the eight measured cells said, and that is
+    # the raise's justification rather than an overrun of it: the parameter ships OFF because all eight
+    # came back worse than the -0.62 baseline (-0.66 at 48 bars down to -0.87 at the tightest gate), so
+    # the lines a later reader needs are the ones saying the clock was tried and why it cannot work -
+    # it cuts the absolute loss only by cutting exposure, which is the measurement that refutes round
+    # 1's mechanism.  Deleting the prose to fit under the ceiling would leave a dead parameter with no
+    # account of why it is off, and the next person would implement it for a third time.
+    # Set to 9_603 first and failed at 9_604 - the ratchet doing its job on its author for the second
+    # time in this file's history, same as the opening paragraph records for beidou_live.  The extra
+    # line is mypy's: `np.sign` is typed as returning ndarray, so the DataFrame has to be rebuilt
+    # explicitly instead of chaining `.fillna` onto it.
+    "beidou_alpha": 9_604,
 }
 
 
