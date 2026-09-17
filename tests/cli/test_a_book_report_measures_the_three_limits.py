@@ -167,10 +167,14 @@ def test_the_slippage_arm_re_prices_the_same_decision_rather_than_a_different_on
     assert by_level["slip2"]["fold_deltas"] == baseline["fold_deltas"]
 
     # The sleeve's own Sharpe curve is the same shape validation reports carry, so the two artefacts
-    # can be read against each other rather than only within themselves.
-    levels = ("slip2", "slip5.5", "slip9.2")
+    # can be read against each other rather than only within themselves.  The levels come from
+    # `costs.yaml`, not from a tuple here: a second copy of the declaration goes red the day the grid
+    # gains a cell, and it gained one (4.43, the fills' own measured centre) on 2026-09-17.  Sorted by
+    # the bps they price rather than by their string, or `slip4.43` would sort before `slip2`.
+    declared = sorted(float(v) for v in load_yaml(ROOT / "config" / "costs.yaml")["slippage_stress_bps"])
+    levels = tuple(f"slip{level:g}" for level in declared)
     sleeve = report["book_limits"]["slippage_stress"]["sleeve_standalone_sharpe"]
-    assert sorted(sleeve) == list(levels)
+    assert set(sleeve) == set(levels)
 
     curves = {
         "main book": [by_level[key]["main_oos_sharpe"] for key in levels],
