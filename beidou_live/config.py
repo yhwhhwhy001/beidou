@@ -102,9 +102,11 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
             # replay carries the same field and the two have to be flipped together (KILL-027).
             exempt_reductions=bool(portfolio.get("exempt_reductions", False)),
             # Both read the same `portfolio` block the backtest's `PortfolioParams.from_mapping` reads,
-            # so `flat_inside_band` reaches the two halves from one key and cannot be half-flipped.
+            # so `flat_inside_band` and `band_entry_multiple` reach the two halves from one key each and
+            # cannot be half-flipped.
             exempt_crossings=bool(portfolio.get("exempt_crossings", False)),
             flat_inside_band=bool(portfolio.get("flat_inside_band", False)),
+            band_entry_multiple=float(portfolio.get("band_entry_multiple", 1.0)),
         ),
         guards=GuardParams(
             daily_loss_pause=float(guards.get("daily_loss_pause", -0.05)),

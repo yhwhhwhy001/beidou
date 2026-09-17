@@ -234,6 +234,36 @@ portfolio:
   # evidence pointer no longer describes the construction; the portfolio-layer evidence is the P10 index
   # above.  The startup gate compares registry params only, so it cannot see this - a known gap.
   no_trade_rel_band: 0.40     # ...or smaller than 40% of the current position (same-direction resizes only)
+  # 2026-09-17（操作者裁定，选项 D：现在改，不等冻结到期）。三个键一起翻，因为它们是同一条不变式的
+  # 三个半边：**永远不持有一笔小于绝对臂的仓位，并且永远平得掉已经存在的那笔。**
+  #
+  # 触发它的是 LSKUSDT。完整链条在 `.beidou/live/cycles.jsonl` 里，40 根周期：
+  #   09-16T02:00Z  BUY 139 @0.3766，目标 52.40 对 band 52.12——过线 0.28 USDT
+  #   09-16T17:00Z  SELL 76 reduce_only，113.50 → 51.27——减仓落进 band（ENAUSDT 那条路径）
+  #   09-16T21:00Z  BUY 74 @0.7287，目标 54.08 对 band 53.66——过线 0.42 USDT
+  #   09-16T22:00Z  价格 −8%，|current| 49.53 < band 53.74  →  BAND_BLOCKS_EXIT，此后每根周期都是
+  #   09-17T14:00Z  |current| 35.45，止损 6σ 对天花板 2.21σ（`exit_reachability` 每天在报）
+  # 一小时，从一个 D2 批准的目标，到一笔谁也平不掉的仓位。
+  #
+  # 为什么三个都要开，每一个单独都不够——2026-09-17 用当天真值重放 `plan_rebalance` 量的：
+  #   都关（当时）            无单，BAND_BLOCKS_EXIT
+  #   只开 exempt_crossings   无单——模型目标 58.66 不是恰好 0，够不着豁免条件
+  #   只开 flat_inside_band   无单——58.66 在 band 之外，D2 没有意见
+  #   D1 + D2                 **仍然无单**，同样的理由：D2 判的是目标，而目标在 band 外
+  #   D1 + D2 + D3(2.0)       58.66 < 110.66 → 目标归零 → D1 让它穿过 band → SELL 74 reduce_only
+  # 前四行是 `docs/RESEARCH_LOG.md` 2026-09-14 那节没覆盖的：它记了两条造零头的路径，都是问目标落在
+  # 哪；这一条问的是仓位漂到哪，所以 D2 在入口批准它，之后再不过问。
+  #
+  # 代价，明说。D3 把目标小于 2×band 的名字剪掉，剪的是模型的真实意图——一个 0.53% 的 conviction
+  # 被当作 0。今天这本书上它只动 LSKUSDT（0.53%）与 TRUMPUSDT（0.003%），第三小的 LINKUSDT 是
+  # 202 USDT 对 55.33，有 3.65 倍余量。A/B 的定价见 RESEARCH_LOG 同日那节。
+  #
+  # 这次改动**结束 2026-09-14 的构造冻结**，M-010 的 30 天窗口、`realised_vol` 的单构造条件与 L3 的
+  # 7 天条件一起从重启那一刻重新起算。操作者知道自己在买什么：冻结买的是三个监控，而这三个监控
+  # 正在看着一本每小时都可能再造一笔平不掉仓位的账。
+  exempt_crossings: true      # D1：目标恰为 0 时豁免绝对臂——回测一直是这样，实盘的 false 才是偏离
+  flat_inside_band: true      # D2：目标落进绝对臂就当作平
+  band_entry_multiple: 2.0    # D3：目标要清 band 这么多倍才算数（1.0 = D2 本身）
   min_history_bars: 720       # a symbol needs 30 days of bars before it can be traded
 pool:
   # Re-rank once per UTC day with the hysteresis in universe.yaml (D-014); never = static.

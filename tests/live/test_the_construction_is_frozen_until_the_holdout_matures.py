@@ -36,12 +36,21 @@ from beidou_live.engine import construction_fingerprint
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: 冻结到期。M-010 的 30 天窗口自 2026-09-13T19:00:25Z 起算，这是它满期的那一天。
-FREEZE_ENDS = "2026-10-13T19:00:00+00:00"
+#: 冻结到期。**2026-09-17 操作者重新裁定**：上一轮钉的是 2026-10-13T19:00Z，对应自
+#: 2026-09-13T19:00:25Z 起算的 M-010 窗口；D1+D2+D3 把三个时钟一起清零，窗口从这次重启重新起算，
+#: 所以到期日同步后移。写 10-18T00:00Z 而不是「重启时刻 +30 天」，是因为重启时刻在本提交写下时还
+#: 不存在——它是这条裁定的上界，宁可多冻几个小时，也不要钉一个还没发生的时刻。实际重启时刻记在
+#: `docs/RESEARCH_LOG.md` 同日那节。
+FREEZE_ENDS = "2026-10-18T00:00:00+00:00"
 
-#: 2026-09-13T19:00:25Z 起 armed 循环持有的那套构造（vol_target 0.60 的第一根周期）。
-#: 与 `.beidou/live/cycles.jsonl` 的 `construction` 和 heartbeat 的短摘要 `46b8d731530a` 同源。
-FROZEN_CONSTRUCTION = "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
+#: 2026-09-17 起 armed 循环持有的那套构造：D1 `exempt_crossings`、D2 `flat_inside_band`、
+#: D3 `band_entry_multiple: 2.0` 同时打开，payload v9。**这不是 `46b8d731530a` 的别名**，它是另一
+#: 本账——`beidou_live/construction.py` 的 v9 那段写明了为什么这一次没有别名。
+#:
+#: 上一轮钉的 `46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10` 不再是 shipped 的那
+#: 套，但它仍然是 `tests/live/test_construction_identity.py` 的 `FROZEN`：历史不重写，那套构造确实
+#: 被冻过，AFTER_V7 与 AFTER_TRAILING_ACTIVATE 仍然解析到它。
+FROZEN_CONSTRUCTION = "0c555e1c837e342a8af1edca0089b12461a9bdbe3b9a0f122142c63d6ba54bd7"
 
 
 def _shipped_construction() -> str:
@@ -55,8 +64,8 @@ def test_the_construction_is_frozen_until_the_holdout_matures() -> None:
     if datetime.now(UTC) >= datetime.fromisoformat(FREEZE_ENDS):
         return  # 冻结已到期，这条检查自动变惰，不需要任何人来收拾
     assert _shipped_construction() == FROZEN_CONSTRUCTION, (
-        f"构造在冻结期内变了。操作者 2026-09-14 裁定冻结到 {FREEZE_ENDS}，理由是 M-010 的 30 天窗口、"
-        "`realised_vol` 的单构造条件与 L3 的 7 天条件全都因为构造抖动而关着（11.25 天换过 10 次）。"
+        f"构造在冻结期内变了。操作者 2026-09-17 重新裁定冻结到 {FREEZE_ENDS}，理由与 09-14 那次相同："
+        "M-010 的 30 天窗口、`realised_vol` 的单构造条件与 L3 的 7 天条件都要求构造不动。"
         "改构造会把这三个时钟一起清零。要么把改动撤回，要么由操作者重新裁定冻结期并在同一个提交里"
         "更新 FROZEN_CONSTRUCTION 与 FREEZE_ENDS——后者是一次裁定，不是让测试变绿的手段。"
     )
