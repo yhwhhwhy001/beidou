@@ -10,6 +10,7 @@ code path is bit-for-bit the original one.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 
@@ -95,6 +96,36 @@ class AlphaModel:
     ) -> AlphaModel:
         if not registry.enabled:
             raise ValueError("registry has no enabled strategies")
+        counts = Counter(entry.book for entry in registry.enabled)
+        crowded = sorted(book for book, count in counts.items() if count > 1)
+        if crowded:
+            # The `turnover_penalty` precedent, one layer up: a path that is reachable, looks supported
+            # and has never been scored.  `book_targets` combines a book's strategies with
+            # `combine_targets`, which takes a weighted MEAN of their targets, and `build_weights` then
+            # sizes on that number - so two strategies at +1 and -1 produce 0, which `scores_to_targets`
+            # would have read as NO_ACTION and this path reads as a CLOSE, and three at +1/+1/-1 produce
+            # a third of a position.  That is the magnitude back in the book.
+            #
+            # `conviction_mode: sign` was adopted on the measurement that magnitude carries no return
+            # information (D-024: `magnitude_over_direction` is exactly 0.0, and the paired per-bar
+            # difference has a Newey-West t of -0.047), and no run has ever scored the ensemble that
+            # puts it back.  Today the refusal is unreachable - both books run one strategy - which is
+            # the right time to write it: the day a second one is added is the day this should be a
+            # decision with evidence rather than a side effect of an `enabled: true`.
+            #
+            # Refused HERE and not in `AlphaModel.__post_init__` or `parse_registry`: this is the seam
+            # where a registry becomes the model the live loop holds (`composition.build_model`).
+            # Research builds multi-strategy models directly - `research correlate` is exactly that -
+            # and measuring the combination is how it would ever earn its way in.
+            raise ValueError(
+                f"book(s) {crowded} enable more than one strategy, and the ensemble that would combine "
+                "them re-introduces the magnitude this construction was validated without: "
+                "`combine_targets` takes a weighted mean of per-strategy targets and `build_weights` "
+                "sizes on it, so +1 and -1 become a close and +1/+1/-1 becomes a third of a position.  "
+                "D-024 measured that magnitude carries no return information and `conviction_mode: sign` "
+                "was adopted on it; the combination has never been scored.  Wiring it is a construction "
+                "change with its own evidence - until then a book runs one strategy."
+            )
         return cls(
             entries=registry.enabled,
             portfolio=portfolio,

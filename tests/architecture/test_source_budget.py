@@ -2661,7 +2661,16 @@ CEILING = {
     # not binding.  `portfolio_vol` is the ex-ante vol of the weights as they leave the model, after
     # `combine_books` sums sleeves without re-targeting and after the cap: neither of the two numbers
     # anyone measured.
-    "beidou_alpha": 9_406,
+    # Sixteenth raise, 2026-09-17 (9_406 -> 9_437, +31 beidou_alpha): `from_registry` refuses a book
+    # that enables more than one strategy.  `combine_targets` takes a weighted MEAN of a book's
+    # per-strategy targets and `build_weights` sizes on it, so +1 and -1 become a close and +1/+1/-1
+    # becomes a third of a position - the magnitude back in a book whose `conviction_mode: sign` was
+    # adopted on D-024's measurement that magnitude carries no return information, and a combination
+    # nothing has ever scored.  Unreachable today (both books run one strategy), which is when it is
+    # worth writing: it turns "someone set enabled: true" into a decision with evidence.  Refused at
+    # this seam only - `composition.build_model` is what the live loop holds - so research can still
+    # build the combination it would have to measure.
+    "beidou_alpha": 9_437,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -3031,7 +3040,15 @@ CEILING = {
     # `ledger_redirection`'s own docstring asks that a redirected run never look like a charged one;
     # the refusal is scoped to the shared ledger, which is also what keeps it off the test suite
     # without an exemption list (`tests/conftest.py` redirects every test).
-    "beidou_cli": 6_089,
+    # +58 beidou_cli, 2026-09-17: `--select`, the cell a PRE-REGISTERED rule chose, reported as
+    # `best_params` instead of the full-sample argmax - round 7's副产品 1 made addressable.  `validate`
+    # has always picked by full-sample Sharpe and the startup gate compares against that field, so a
+    # candidate winning on a rule like H-001's ("OOS >= baseline - 0.05 AND drawdown improves AND
+    # turnover falls") could not be reported by the run that evaluated it; adopting one took a second
+    # single-configuration report.  The safeguard is most of the price: `--select` requires `--prereg`,
+    # matches exactly one cell or refuses, and the argmax is recorded beside it either way, so it
+    # cannot become "whichever cell looks best afterwards".
+    "beidou_cli": 6_147,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
