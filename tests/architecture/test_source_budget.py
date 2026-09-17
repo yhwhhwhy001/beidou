@@ -1971,6 +1971,33 @@ CEILING = {
     # What is NOT left to convention: the VALUES.  Every merge re-measures them against the merged
     # tree, because no side's count describes code that now includes the others'.
     #
+    # Thirty-third raise OF THIS TABLE, 2026-09-17: +30 beidou_alpha, +57 beidou_live, +2 beidou_cli so
+    # a threshold no price path can reach is a daily reading instead of a thing found by eye.
+    #
+    # Almost all of beidou_alpha's 30 is comment, and the comment is the deliverable: `min_unit` is a
+    # FLOOR on sigma with no ceiling above it, and every rule in that file divides a move measured from
+    # the entry anchor by `sigma * entry_price`.  A long's price floor is 0, so `adverse <= 1/sigma`
+    # and a `stop_loss` at `k > 1/sigma` is arithmetic rather than protection.
+    #
+    # The fact is not new and the comment says so rather than claiming a discovery: KILL-TL04
+    # (2026-09-07) derived the same bound for `retrace` and measured the grid it empties, and
+    # `live.demo.yaml` records "retrace >= adverse always holds" in the same block - so the stop_loss
+    # half follows from two facts already in the tree and had simply never been written on this side.
+    # What IS new is the reading: over the 17 held positions on 2026-09-17, one is past its ceiling
+    # (LSKUSDT, sigma 0.4517, ceiling 2.21 against the shipped 6.0) and the other sixteen clear it by
+    # 2.8x or more.  That one was found by the operator reading a margin figure off a phone app, which
+    # is not a control, and `exit_reachability` is what replaces that route.
+    #
+    # It reports no threshold it has not bounded.  A long's take-profit and a short's stop have
+    # unbounded numerators, so they are omitted rather than called reachable - "no ceiling" and "a
+    # ceiling nothing has crossed" are different facts, and the mirror cases DO carry the bound.  A
+    # reading with no alert, for the reason the sizing gives it: the same sigma that puts the stop out
+    # of reach is what made inverse-vol sizing give the symbol the smallest weight in the book, so the
+    # exposure it describes is bounded by the same input.  Nothing here can be acted on inside an hour.
+    #
+    # The 57 in beidou_live is that function plus its wiring; beidou_cli's 2 are an import and the
+    # profile's exit params reaching `daily_payload`, which had no way to see them.
+    #
     # Thirty-second raise OF THIS TABLE, 2026-09-15: +17 beidou_data, +8 beidou_live - the dataset
     # gate stopped checking pit reports against a file they never open.
     #
@@ -2603,7 +2630,57 @@ CEILING = {
     # registry cites measures the replayed one: 491 of 49,240 bars pause on the daily loss, 4,070
     # (8.3%) are gross-capped.  The replay is path dependent, so a reader cannot scale the old figure
     # to the new target either - which is why this costs a paragraph rather than a number.
-    "beidou_alpha": 9_157,
+    # Thirteenth raise, 2026-09-17 (9_187 -> 9_267, +80 beidou_alpha): `undeclared_charge`, the pure
+    # half of the rule that a `research validate` against an enabled registry entry has to say what it
+    # will spend.  The measurement that made it a check rather than a RUNBOOK line is in its docstring
+    # and is the reason 80 lines is the right price: a two-arm A/B priced to the operator at "2 trials"
+    # ran without `--grid`, got the sixteen-cell default on each arm, and charged 32 - tsmom's family
+    # gate went N 259 -> 293, its threshold 1.5572 -> 1.5715, and the incumbent's own margin +0.0347 ->
+    # +0.0204.  About 35% of the remaining headroom, in one command, from a default nobody typed.  It
+    # lands in `beidou_alpha` rather than in the CLI because the quantity it protects is the DSR
+    # denominator, which is what this package's `ledger` module is for; the I/O half (which registry,
+    # which report) stays in `beidou_cli`, the same split `registry.evidence_problems` already uses.
+    # Fourteenth raise, 2026-09-17 (9_267 -> 9_322, +55 beidou_alpha): `exits.trailing_activate`, the
+    # activation threshold EXP-AE3 needs and this tree did not have.  Nearly all of it is the paragraph
+    # saying why the field is not a variant of `trailing_stop`: that rule measures the retracement from
+    # an `extreme` initialised to the ENTRY price, so `retrace >= adverse` holds on every bar and it
+    # fires while a position is still losing - which is the mechanism behind `k_tr <= k_sl` turning
+    # `stop_loss` into dead code (`sl0/tr4/tp0` and `sl4/tr4/tp0`: an identical 1.6132 over an identical
+    # 904 exits) and behind EXP-AE1's third cell being withdrawn on 2026-09-17 rather than run.  Ships
+    # at 0.0 and `_armed` short-circuits there, so both engines stay bit-identical; the evidence it
+    # would need is EXP-AE3, which cannot run before the freeze ends.
+    # Fifteenth raise, 2026-09-17 (9_322 -> 9_406, +84 beidou_alpha): the two quantities the
+    # construction could not state about ITSELF, and the extraction that makes one of them exact.
+    # `vol_targeted` is stages 1 and 2 lifted out of `build_weights` (which now calls it) for the
+    # reason `asset_vol` was lifted out one layer down - a diagnostic that rebuilds its own copy of
+    # the sizing can disagree with the book while both look right, and the seam is held to bit-for-bit
+    # reproduction by a test.  `clipped_risk_share` is then how much of the requested risk the
+    # per-symbol cap removed: at `vol_target` 0.60 that cap binds on 49 of 95 cycles and the COUNT was
+    # already recorded, while the risk it takes off was not - which is the reading P13's identity
+    # needs, since "scaling every weight by k leaves net Sharpe unchanged" holds only while the cap is
+    # not binding.  `portfolio_vol` is the ex-ante vol of the weights as they leave the model, after
+    # `combine_books` sums sleeves without re-targeting and after the cap: neither of the two numbers
+    # anyone measured.
+    # Sixteenth raise, 2026-09-17 (9_406 -> 9_437, +31 beidou_alpha): `from_registry` refuses a book
+    # that enables more than one strategy.  `combine_targets` takes a weighted MEAN of a book's
+    # per-strategy targets and `build_weights` sizes on it, so +1 and -1 become a close and +1/+1/-1
+    # becomes a third of a position - the magnitude back in a book whose `conviction_mode: sign` was
+    # adopted on D-024's measurement that magnitude carries no return information, and a combination
+    # nothing has ever scored.  Unreachable today (both books run one strategy), which is when it is
+    # worth writing: it turns "someone set enabled: true" into a decision with evidence.  Refused at
+    # this seam only - `composition.build_model` is what the live loop holds - so research can still
+    # build the combination it would have to measure.
+    # Seventeenth raise, 2026-09-17 (9_437 -> 9_532, +95 beidou_alpha): `validation/pipeline.py`, the
+    # sink half of Q-B.  `score_book` is one implementation of "apply the exit overlay, then price",
+    # which six commands had spelled inline, and `layers_applied` puts the answer in the artefact.
+    #
+    # Most of the 95 lines are the distinction the module exists to draw, and it is worth the space
+    # because getting it wrong would have broken rulings: `research overlay` scoring the BARE ensemble
+    # is a WRITTEN protocol (RESEARCH_LOG 2026-09-08, "判据评的是不带 shipped exits 的裸 ensemble ...
+    # 所以它与历史裁决可比"), and `research book`'s `bare` + band is what D-018 was pre-registered on.
+    # The defect was never that the commands disagree; it was that only `validation` reports recorded
+    # WHICH book they had, so an overlay 1.85 and a validation 1.59 were quoted against each other.
+    "beidou_alpha": 9_532,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2887,7 +2964,20 @@ CEILING = {
     # model once), and the count is a LOWER bound on any window that was also gross-capped, because
     # stage 3 clips per symbol and then scales the row.  GROSS_CAPPED is 0 of 376 cycles today, so the
     # reading is exact; the guard is written now rather than the first time it is not.
-    "beidou_live": 9_727,
+    # +29 beidou_live, 2026-09-17: the same field reaching the record - one line in
+    # `construction_fingerprint`'s `exits` block and the v8 note plus alias in `construction.py`.  The
+    # alias's proof is recomputed in the commit that adds it: drop the new key from the v8 payload and
+    # the hash comes back `ccd7bb97...`, which the table already declares to be the frozen
+    # `46b8d731...`.  Without it the next restart would not merely reset M-010's window, it would turn
+    # `test_the_construction_is_frozen_until_the_holdout_matures` red for a book that has not moved.
+    # +37 more beidou_live, 2026-09-17 (9_813 -> 9_850): the same two reaching `cycles.jsonl` as `book_vol` (declared in
+    # `cycle_record.KEYS`, which is the guard that caught it), the two
+    # properties added to the `TargetSet` protocol so the contract names what the engine reads, and
+    # `ModelInputs.settled_symbols` - the live twin of `Panel.settled_symbols`.  The loop recorded
+    # `funding_history: true`, which says a frame was FETCHED and stayed true for 37 cycles while the
+    # modifier was inert (D-042); research has recorded `symbols_settled` since `_funding_facts`, so
+    # the two halves of one comparison were not comparable.
+    "beidou_live": 9_850,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2953,6 +3043,40 @@ CEILING = {
     # leaves -0.23, and the Markdown printed only the first.  The payload is untouched by all of it -
     # every archived sha256 stays comparable, which is the constraint the first three notes were
     # written under and the reason this is 66 lines of prose rather than a second gate.
+    # +78 beidou_cli, 2026-09-17 (6_011 -> 6_089): the I/O half of the same check - `_incumbent_grid`
+    # reads whether the strategy is an enabled entry and what grid its cited evidence used, and
+    # `_refuse_an_undeclared_charge` prints the price of every run and refuses an undeclared one
+    # against the shared ledger.  The echo is unconditional and names WHERE the rows go, because
+    # `ledger_redirection`'s own docstring asks that a redirected run never look like a charged one;
+    # the refusal is scoped to the shared ledger, which is also what keeps it off the test suite
+    # without an exemption list (`tests/conftest.py` redirects every test).
+    # +58 beidou_cli, 2026-09-17: `--select`, the cell a PRE-REGISTERED rule chose, reported as
+    # `best_params` instead of the full-sample argmax - round 7's副产品 1 made addressable.  `validate`
+    # has always picked by full-sample Sharpe and the startup gate compares against that field, so a
+    # candidate winning on a rule like H-001's ("OOS >= baseline - 0.05 AND drawdown improves AND
+    # turnover falls") could not be reported by the run that evaluated it; adopting one took a second
+    # single-configuration report.  The safeguard is most of the price: `--select` requires `--prereg`,
+    # matches exactly one cell or refuses, and the argmax is recorded beside it either way, so it
+    # cannot become "whichever cell looks best afterwards".
+    # +80 beidou_cli, 2026-09-17 (6_147 -> 6_227), and this one buys no behaviour at all: it is M6
+    # step 1, the panel layer moving out of `research_cmd.py` into `research_panel.py`.  The 216 lines
+    # of definitions are a MOVE - the ratchet does not see them, because the package total is what it
+    # counts - so the +80 is the new module's header and imports plus the re-export block, i.e. the
+    # price of writing down why the seam is there.
+    #
+    # Why that seam and not the nine commands, measured: twenty-nine scripts under `scratchpad/` - the
+    # reproductions behind D-035's ladder bootstrap, P26, P29, P32, D-039's band sweep and the exit
+    # reachability tables - open with `from beidou_cli.research_cmd import _load, _membership,
+    # _resolve_symbols`.  The evidence base of this repository imports three private functions out of a
+    # command-line module; splitting the COMMANDS apart would not have touched that, and this layer is
+    # both what those scripts want and what the sink step moves again, out of `beidou_cli` for good.
+    # The re-export is therefore temporary and says so, and a test asserts the old addresses still
+    # resolve to the one definition rather than to a second copy.
+    # +32 beidou_cli, 2026-09-17: `research backtest` gains `--exits` (default on) and both it and
+    # `validate` go through `score_book`.  This command had no such flag at all, so it could not price
+    # the book the loop holds even when asked - measured, its Sharpe sat 0.058 below `validate`'s on
+    # identical inputs for that reason alone, and a test now asserts the two agree.  `--no-exits`
+    # reproduces every backtest report written before, the same escape `--no-guards` already had.
     # +25 beidou_cli, 2026-09-17 (6_009 -> 6_034): `slippage_stress_gate`, D-028's threshold re-asked
     # on the grid that holds the taker fee fixed.  `cost_stress_gate` already existed and answers a
     # different question - a multiplier scales the fee with the slippage, and 5.0 bps is a contract
@@ -2964,7 +3088,11 @@ CEILING = {
     # fills - falls inside that interval with no multiplier cell of its own.  Most of the 25 lines are
     # the paragraph saying which grid answers which question; without it the next reader re-derives the
     # coincidence, or does not.
-    "beidou_cli": 6_034,
+    # 合并 origin/main 时重测，2026-09-17：上面两组理由分别在各自的 base 上量过（main 侧到 6_259，
+    # 本分支 6_009 -> 6_034），合并后实测 6_284 = 6_259 + 25。分支的 +25 换到新 base 上分毫不差，
+    # 因为 M6 把 panel 层移出 `research_cmd.py` 是一次 MOVE，ratchet 数的是包的总行数。这一行是
+    # 记账不是新抬顶：两侧的理由都已写在上面，没有一段被删。
+    "beidou_cli": 6_284,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

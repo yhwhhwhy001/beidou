@@ -40,10 +40,62 @@ COOLDOWN = "COOLDOWN"
 class ExitParams:
     stop_loss: float = 0.0  # k x sigma_1d adverse move from entry; 0 disables
     trailing_stop: float = 0.0  # k x sigma_1d retracement from the favourable extreme; 0 disables
+    # EXP-AE3 (2026-09-17, operator ruling Q-CRITICAL = D).  How far a position must have gone in
+    # PROFIT before `trailing_stop` is allowed to fire; 0 - the shipped value - arms it from entry,
+    # which is what it has always done.  Off is bit-identical by construction rather than by argument:
+    # `_armed` short-circuits on `<= 0` without reading the excursion at all, so the NaN-extreme path a
+    # state read back from disk can take is untouched too.
+    #
+    # **This is the parameter the operator has been asking for, and the repository did not have it.**
+    # `trailing_stop` alone measures the retracement from `extreme`, and `_enter` initialises `extreme`
+    # to the ENTRY price, so `retrace >= adverse` holds on every bar: today's trailing stop fires while
+    # a position is still losing, and does it EARLIER than `stop_loss`.  That is what makes
+    # `k_tr <= k_sl` turn `stop_loss` into dead code - measured, `sl0/tr4/tp0` and `sl4/tr4/tp0` give an
+    # identical 1.6132 over an identical 904 exits - and it is why `config/live.demo.yaml` says a future
+    # trailing experiment must take `k_tr > 6`, and why EXP-AE1's third cell (`tr 2.0`) was withdrawn.
+    # A rule that cannot tell a profit from a loss cannot protect a profit.
+    #
+    # An activation threshold changes exactly that one thing: with `trailing_activate > 0` the rule
+    # cannot fire before the position has been that far ahead, so it no longer pre-empts `stop_loss` on
+    # a position that never rallied, and `k_tr <= k_sl` stops being a way to switch the stop off.  What
+    # it does NOT promise is that the exit is profitable - armed at +a and trailing by b > a still exits
+    # below entry.  `docs/RESEARCH_LOG.md` 2026-09-08 recorded this shape as "仍未实现、未测"; it is now
+    # implemented and still untested, which is EXP-AE3's job and not this field's.
+    trailing_activate: float = 0.0
     take_profit: float = 0.0  # k x sigma_1d favourable move from entry; 0 disables
     cooldown_bars: int = 24
     vol_halflife: int = 48
     bars_per_day: int = 24
+    # A FLOOR with no ceiling, and that asymmetry is the whole of what follows.  Every rule below
+    # divides a price difference measured FROM the entry anchor by `sigma * entry_price`, and a long's
+    # price cannot go below zero, so `adverse`'s numerator is bounded by the entry price itself:
+    #
+    #     adverse = (entry - price) * held / (sigma * entry),  price >= 0  =>  adverse <= 1 / sigma
+    #
+    # So a long's `stop_loss` is UNREACHABLE whenever `k_sl > 1/sigma`, however far the price falls -
+    # the threshold is arithmetic, not protection.  The mirror holds for a short's `take_profit`; a
+    # short's `stop_loss` and a long's `take_profit` have an unbounded numerator and no ceiling at all.
+    # `min_unit` bounds sigma from BELOW so a dead-quiet series cannot make a one-tick stop.  Nothing
+    # bounds it from above, so a loud enough symbol silently gets a threshold no price path can reach.
+    #
+    # This is not a new fact, it is the other half of a recorded one.  KILL-TL04 (2026-09-07,
+    # `scratchpad/exit_reachability.py`; table in `docs/analysis/2026-09-07-exits-tail-endpoint.md`
+    # 2.1) derived `retrace <= 1/sigma` on a long that never rallies and MEASURED what it costs:
+    # trailing k=12 fires on 0 of 0 episodes book-wide, k=9 on 3 / 4.  `config/live.demo.yaml` states
+    # the bridge between the two in the same block - "retrace >= adverse always holds", because
+    # `_enter` initialises `extreme` to the entry price - so the `stop_loss` half follows from two
+    # facts this repository already had, and was simply never written down on this side or read off
+    # the live book.
+    #
+    # What it binds on today, over the 17 held positions in `.beidou/live/state.json`, 2026-09-17, at
+    # the shipped `stop_loss` 6.0 (`unit_mode="entry"`, so these are the sigmas frozen at entry):
+    #     LSKUSDT  sigma 0.4517  ceiling  2.21 sigma   <- below 6.0: no price path reaches this stop
+    #     ZECUSDT  sigma 0.0603  ceiling 16.59 sigma      the next tightest, clearing 6.0 by 2.8x
+    #     BTCUSDT  sigma 0.0156  ceiling 64.25 sigma      the loosest
+    # One of seventeen, and it is the one whose sigma made inverse-vol sizing give it the smallest
+    # weight in the book - the same input produces both, which is why a fix aimed at either alone
+    # misses.  `beidou_live.reports.exit_reachability` takes this reading every day, so the next one
+    # is found by the report rather than by an operator noticing a margin figure in a phone app.
     min_unit: float = 0.005  # floor on sigma_1d (fraction) so a dead-quiet series cannot make a 1-tick stop
     unit_mode: str = "entry"  # entry | current: which sigma_1d the k-units are measured in (EXP-EX3)
     regime_window: int = 0  # bars of Kaufman efficiency ratio; 0 disables the regime scaling (EXP-EX2)
@@ -93,6 +145,16 @@ class ExitParams:
     def __post_init__(self) -> None:
         if min(self.stop_loss, self.trailing_stop, self.take_profit) < 0:
             raise ValueError("exit thresholds must be >= 0")
+        if self.trailing_activate < 0:
+            raise ValueError("trailing_activate must be >= 0 (0 arms the trailing stop from entry)")
+        if self.trailing_activate > 0 and self.trailing_stop <= 0:
+            # The `turnover_penalty` precedent: a value that is parsed, hashed and read by nothing looks
+            # adopted and is not.  Arming a rule that is switched off is that, so it is refused at the
+            # door rather than left to be discovered in a report that says the setting was in force.
+            raise ValueError(
+                "trailing_activate arms `trailing_stop`, which is 0 here: the threshold would be parsed, "
+                "hashed into the construction and read by nothing.  Set trailing_stop, or leave both at 0."
+            )
         if self.cooldown_bars < 0 or self.vol_halflife <= 0 or self.bars_per_day <= 0 or self.min_unit <= 0:
             raise ValueError("invalid exit parameters")
         if self.stale_carry_bars < 0:
@@ -183,6 +245,22 @@ def _unit_price(state: ExitState, sigma_1d: float, params: ExitParams) -> float:
     return max(unit, params.min_unit) * state.entry_price
 
 
+def _armed(state: ExitState, extreme: float, unit_price: float, params: ExitParams) -> bool:
+    """Has this position been far enough in PROFIT for the trailing stop to be live (EXP-AE3)?
+
+    The excursion is measured from the entry anchor to the favourable extreme - the same two prices
+    `retrace` is measured between, so the two thresholds speak one unit and `trailing_activate` reads
+    as "arm at +a, then trail by b".
+
+    ``<= 0`` returns True before the excursion is computed at all.  That is what makes the shipped
+    value bit-identical rather than merely equivalent: a state whose `extreme` came back NaN from disk
+    would otherwise compare NaN and silently switch the trailing stop off.
+    """
+    if params.trailing_activate <= 0.0:
+        return True
+    return (extreme - state.entry_price) * state.direction / unit_price >= params.trailing_activate
+
+
 def exit_step(
     state: ExitState,
     target: float,
@@ -253,7 +331,9 @@ def exit_step(
         reason = ""
         if params.stop_loss > 0 and adverse >= params.stop_loss:
             reason = STOP_LOSS
-        elif params.trailing_stop > 0 and retrace >= params.trailing_stop:
+        elif (
+            params.trailing_stop > 0 and retrace >= params.trailing_stop and _armed(state, extreme, unit_price, params)
+        ):
             reason = TRAILING_STOP
         elif params.take_profit > 0 and favourable >= params.take_profit * tp_scale:
             reason = TAKE_PROFIT
@@ -511,6 +591,11 @@ def _run_vectorised(
                 moved = np.where(held > 0, np.maximum(extreme, price), np.minimum(extreme, price))
                 moved = np.where(np.isnan(moved), price, moved)
                 hit_trail = (moved - price) * held / unit_price >= params.trailing_stop
+                # `_armed`, element-wise, and guarded by the same `<= 0` short circuit for the same
+                # reason: at the shipped value the array is not touched, so the engines agree bit for
+                # bit without the comparison ever meeting a NaN.
+                if params.trailing_activate > 0.0:
+                    hit_trail = hit_trail & ((moved - entry_price) * held / unit_price >= params.trailing_activate)
             else:
                 hit_trail = never
             stopped = managed & hit_stop

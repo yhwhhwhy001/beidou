@@ -56,9 +56,19 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     The number is a ratchet, not a fact about the world: a condition written into RESEARCH_LOG and not
     into the list is the exact gap this file exists to close, and the only way to notice it is for the
     count to be pinned.  Raise it in the commit that adds the entry, never to make a red test green.
+
+    2026-09-17 (Q-SF2) raised it 14 -> 19, and the five split into two kinds.  Three were the gap this
+    test is named for: breakout, chanlun and pairs each had a reopen condition written into RESEARCH_LOG
+    (block 6 s4.5, P27's second point, P28's correction) that the 2026-09-09 audit did not count, so they
+    sat closed with nobody reading their terms.  The other two are a different thing and their entries say
+    so out loud: meanrev and xsmom had NO condition anywhere - their rulings say only "do not re-run" - and
+    what the list now carries was PROPOSED by that day's pit diagnostics, not ruled by the operator.  Both
+    are `check: operator`, so they can only ever report NEEDS A PERSON; writing an unruled condition down
+    is how a judgement gets queued instead of forgotten, which is what this file is for.  What would be
+    wrong is letting either of those two become machine-askable before the operator has ruled it.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 14, f"the list holds {len(entries)}; the audit counted 13 in RESEARCH_LOG plus P30's"
+    assert len(entries) == 19, f"the list holds {len(entries)}; 13 from the audit, P30's, and Q-SF2's five"
 
 
 def test_every_entry_quotes_its_condition_and_cites_the_log() -> None:

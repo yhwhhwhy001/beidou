@@ -55,6 +55,7 @@ from beidou_alpha.validation.ledger import (
     ledger_scope,
     parse_ledger,
     resolve_ledger_path,
+    undeclared_charge,
     unique_trials,
 )
 from beidou_alpha.validation.metrics import (
@@ -72,6 +73,7 @@ from beidou_alpha.validation.multiple_testing import (
     multiple_testing_report,
     oos_selection_threshold,
 )
+from beidou_alpha.validation.pipeline import layers_applied, score_book
 from beidou_alpha.validation.stability import (
     cost_stress,
     parameter_neighborhood,
@@ -82,15 +84,33 @@ from beidou_alpha.validation.stability import (
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_evaluate, walk_forward_folds
 from beidou_cli import research
+
+# The panel layer now lives in `beidou_cli/research_panel.py` (M6 step 1) and is re-exported here.
+# Twenty-nine scripts under `scratchpad/` - the reproductions behind D-035's ladder bootstrap, P26,
+# P29, P32, D-039's band sweep and the exit reachability tables - import `_load`, `_membership` and
+# `_resolve_symbols` from THIS module, and a dozen tests import the others.  Moving the definitions
+# without keeping the addresses would have made a move-only commit break the evidence base, so the
+# addresses stay until the sink step gives those names a home outside `beidou_cli` entirely.
+from beidou_cli.research_panel import (  # noqa: F401  (re-exported for callers of this module)
+    _entry,
+    _funding_consumers,
+    _funding_facts,
+    _load,
+    _membership,
+    _membership_table,
+    _model,
+    _require_funding,
+    _resolve_mined,
+    _resolve_symbols,
+    _wants_metrics,
+    _wants_spot,
+)
 from beidou_data.manifest import build_manifest
-from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
-from beidou_data.store import SPOT_KLINE_KIND, FundingStore, KlineStore, MetricsStore
 from beidou_governance.policy import Policy
 from beidou_live.composition import (
     build_model,
     cost_model,
     impact_model,
-    load_panel,
     load_registry,
     portfolio_params,
     read_universe,
@@ -174,222 +194,6 @@ def _common_options(function: Any) -> Any:
     return function
 
 
-def _membership_table(root: str) -> pd.DataFrame:
-    path = Path(root) / MEMBERSHIP_FILE
-    if not path.exists():
-        raise click.ClickException(f"{path} is missing; run `beidou data pool history` first")
-    table = pd.read_parquet(path)
-    index = pd.DatetimeIndex(table.index)
-    table.index = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
-    return table.astype(bool)
-
-
-def _resolve_symbols(root: str, symbols: str, interval: str, universe_mode: str = "static") -> list[str]:
-    if symbols:
-        return [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if universe_mode == "pit":
-        table = _membership_table(root)
-        union = [str(s) for s in table.columns[table.any(axis=0)]]
-        stored = set(KlineStore(root).symbols(interval))
-        missing = sorted(set(union) - stored)
-        if missing:
-            click.echo(f"pit universe: {len(missing)} member symbols have no {interval} klines yet: {missing[:10]}...")
-        return [s for s in union if s in stored]
-    universe = read_universe(root)
-    return universe or KlineStore(root).symbols(interval)
-
-
-def _membership(root: str, universe_mode: str, panel: Panel, min_tenure: int = 0) -> pd.DataFrame | None:
-    """Bars x symbols boolean mask for ``--universe pit``; ``None`` keeps the static behaviour."""
-    if universe_mode != "pit":
-        return None
-    return membership_at_bars(tenure_mask(_membership_table(root), min_tenure), panel.index)
-
-
-def _resolve_mined(strategy: str, grids: str = "") -> None:
-    """Make a ``mined_<hash>`` id addressable in this process by re-deriving it from the search.
-
-    This is what the canonical hash is for.  Enumeration is deterministic and touches no data, so a
-    candidate does not need persisting to be referred to across commands - and re-deriving rather than
-    storing means a hash that no longer enumerates is reported as gone instead of silently resolving to
-    a stale definition.
-    """
-    if not strategy.startswith("mined_"):
-        return
-    wanted = strategy.removeprefix("mined_")
-    for candidate in enumerate_candidates(**(json.loads(grids) if grids else {})).candidates:
-        if candidate.hash == wanted:
-            register_signal(to_signal(candidate))
-            return
-    raise click.ClickException(f"no candidate hashes to {wanted} in the current search space")
-
-
-def _entry(strategy: str, registry_path: str, params: str, grids: str = "") -> StrategyEntry:
-    # Every command resolves its strategy id through here, so a mined candidate is addressable wherever
-    # a hand-written one is.  It used to be wired into `correlate` alone: `research validate --strategy
-    # mined_<hash>` raised a bare KeyError, which is precisely the wall an operator hits the moment the
-    # shortlist hands them something worth validating.  A no-op for every id that is not `mined_`.
-    _resolve_mined(strategy, grids)
-    get_signal(strategy)
-    base: dict[str, Any] = dict(SIGNALS[strategy].default_params)
-    registry_file = Path(registry_path)
-    if registry_file.exists():
-        for candidate in load_registry(registry_file).strategies:
-            if candidate.id == strategy:
-                base.update(candidate.params)
-    if params:
-        base.update(json.loads(params))
-    return StrategyEntry(id=strategy, params=base)
-
-
-def _model(entry: StrategyEntry, profile: dict[str, Any], interval: str, min_history: int | None = None) -> AlphaModel:
-    if min_history is None:
-        min_history = int((profile.get("portfolio", {}) or {}).get("min_history_bars", 720))
-    return AlphaModel(
-        entries=(entry,), portfolio=portfolio_params(profile), interval=interval, min_history_bars=min_history
-    )
-
-
-def _load(
-    root: str,
-    symbols: list[str],
-    interval: str,
-    start: str | None,
-    end: str | None,
-    funding: bool,
-    metrics: bool = False,
-    spot: bool = False,
-) -> Panel:
-    """The research panel.  ``metrics`` and ``spot`` are opt-in and default off, deliberately.
-
-    Loading them means reading a parquet per symbol and aligning every bucket, which is real work for a
-    run whose signals read none of it - and the alignment is where the only look-ahead in this data
-    lives, so a run that does not need the columns is better off not carrying them at all.  Callers
-    turn them on when a strategy declares `needs_metrics` / `needs_spot`, and `research mine` turns both
-    on always, because the candidates it is about to enumerate are exactly what decides the answer.
-
-    ``spot`` was the missing half of DL-D5 until 2026-09-09 and the shape of the miss is worth keeping:
-    every part of the spot path existed - the store, the ingest command, the alignment contract, the
-    `basis` leaf, `load_panel`'s own `spot_store` parameter, and `mine`'s narrowing on
-    `Panel.spot_symbols` - and nothing built the store here, so `spot_symbols` was 0 on every panel this
-    module could construct and the narrowing switched the family off on every run.  Eighteen shapes,
-    zero enumerated, and the artefact said `include_basis: false` truthfully.  That is the same defect
-    DL-D4 had one feed over, arriving through the panel rather than through the flag.
-
-    What is still NOT wired, named rather than left for the next reader to discover: `backtest`, `book`,
-    `diagnose`, `correlate` and `overlay` pass neither `metrics` nor `spot`, so a mined `oi`, `lsr` or
-    `basis` candidate that survives `validate` cannot yet be run through them.  One predicate per site
-    fixes it; it is a separate change because it is the metrics feed's gap too and the two should move
-    together rather than leave the pipeline half-asymmetric in a new place.
-    """
-    store = KlineStore(root)
-    return load_panel(
-        store,
-        symbols,
-        interval,
-        funding_store=FundingStore(root) if funding else None,
-        metrics_store=MetricsStore(root) if metrics else None,
-        spot_store=KlineStore(root, kind=SPOT_KLINE_KIND) if spot else None,
-        start=start,
-        end=end,
-    )
-
-
-def _wants_metrics(strategy: str, params: Mapping[str, Any]) -> bool:
-    """Does this strategy declare it reads a metrics column?  Unknown ids answer no, not crash.
-
-    `research validate` is handed a strategy id from the command line, and a mined id that no longer
-    enumerates is reported as gone elsewhere rather than here; this only decides whether to carry the
-    columns, and carrying them for a signal that reads none is waste, not danger.
-    """
-    try:
-        spec = get_signal(strategy)
-    except (KeyError, ValueError):
-        return False
-    predicate = getattr(spec, "needs_metrics", None)
-    return bool(predicate(params)) if predicate is not None else False
-
-
-def _wants_spot(strategy: str, params: Mapping[str, Any]) -> bool:
-    """Does this strategy declare it reads `panel.spot` (DL-D5)?  Unknown ids answer no, not crash.
-
-    A second function rather than a parameterised one, exactly as `LiveEngine` keeps
-    `strategies_needing_metrics` and `strategies_needing_spot` apart: the two answer for different
-    stores and a caller that asked for "the extra columns" would carry a metrics alignment it never
-    reads on every basis run, and vice versa.
-    """
-    try:
-        spec = get_signal(strategy)
-    except (KeyError, ValueError):
-        return False
-    predicate = getattr(spec, "needs_spot", None)
-    return bool(predicate(params)) if predicate is not None else False
-
-
-def _funding_consumers(entries: Sequence[StrategyEntry]) -> list[str]:
-    return sorted({entry.id for entry in entries if get_signal(entry.id).needs_funding(entry.params)})
-
-
-def _require_funding(entries: Sequence[StrategyEntry], panel: Panel) -> None:
-    """Refuse a run whose signals consume funding against a panel that carries none (E-040 / KILL-027).
-
-    ``AlphaModel.strategy_targets`` refuses the same thing and is the guard that cannot be forgotten;
-    this one exists for three reasons it cannot cover.  ``research diagnose`` computes the signal directly
-    and never builds a model, so nothing else would stop it.  The operator asked for ``--no-funding``, so
-    the answer belongs at the flag - which strategy, which flag - rather than in a library traceback.
-
-    And ``--funding`` is the DEFAULT, which is the case the library guard is blind to by construction.
-    ``FundingStore.load`` returns an empty frame for a symbol with no archive, so an unsynced root yields
-    a funding frame of all zeros rather than ``None``; tsmom's crowding rank then reads every symbol as
-    uncrowded and the run writes the exact report E-040 is about, at exit 0, with nothing said anywhere.
-    A signal that reads no settlement at all is as inert as one handed no frame, so it is refused alike.
-    """
-    hungry = _funding_consumers(entries)
-    if not hungry:
-        return
-    settled, total = panel.settled_symbols, len(panel.symbols)
-    if panel.funding is None:
-        raise click.ClickException(
-            f"{', '.join(hungry)} consumes funding history under these params, so --no-funding would run the "
-            "signal on inputs it was never judged on (E-040 / KILL-027). Pass --funding, or choose params "
-            "that read none (tsmom: crowding_window 0) to run the control arm deliberately."
-        )
-    if settled == 0:
-        raise click.ClickException(
-            f"{', '.join(hungry)} consumes funding history, but the archive under this root holds no "
-            f"settlement for any of the {total} symbols in the panel, so the signal would read zeros and be "
-            "as inert as it is under --no-funding (E-040 / KILL-027). Run `beidou data sync` first."
-        )
-    if settled < total:
-        click.echo(
-            f"warning: {', '.join(hungry)} reads funding and only {settled}/{total} symbols have any "
-            "settlement stored; the rest read as zero, which the signal cannot tell from calm funding."
-        )
-
-
-def _funding_facts(entries: Sequence[StrategyEntry], panel: Panel) -> dict[str, Any]:
-    """What the signals required of funding, beside what the panel actually carried.
-
-    Recorded as ``funding_inputs``, deliberately not ``funding``: a report already carries
-    ``dataset.funding`` (D-040), which counts FILES IN THE ARCHIVE, and both blocks would then hold a
-    ``symbols`` key meaning different things - 2 files on disk against a 4-symbol panel.  On a
-    partially-synced root the two numbers even coincide by accident, which is the worst kind of
-    collision to leave in the artifact an operator reads to decide whether to trust a strategy.
-
-    Reports recorded the *cost model's* ``use_funding`` and nothing about the signals' own requirement, so
-    a reader could not tell a modifier that was absent from one that ran on nothing.  ``_require_funding``
-    now refuses both of the wholly-inert cases, which leaves this to record the partial one it lets run:
-    a symbol with no archive contributes a zero column that tsmom's crowding rank reads as uncrowded, so
-    ``symbols_settled`` is what keeps a thinner modifier legible on disk rather than merely quieter.
-    """
-    return {
-        "required_by": _funding_consumers(entries),
-        "panel_carried": panel.funding is not None,
-        "symbols_settled": panel.settled_symbols,
-        "panel_symbols": len(panel.symbols),
-    }
-
-
 def _write(out: str, name: str, payload: dict[str, Any], markdown: str) -> tuple[Path, str]:
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
@@ -430,9 +234,22 @@ def research_list() -> None:
     show_default=True,
     help="replay the book-level guards the live loop applies (gross cap + daily-loss pause)",
 )
+@click.option(
+    "--exits/--no-exits",
+    "exits",
+    default=True,
+    show_default=True,
+    help=(
+        "apply the profile's exit overlay, i.e. price the book the loop holds.  This command had no "
+        "such flag until 2026-09-17 and so could not measure it at all: its Sharpe sat 0.058 below "
+        "`validate`'s on identical inputs for that reason alone.  `--no-exits` reproduces every "
+        "backtest report written before."
+    ),
+)
 def research_backtest(
     capital: float,
     guards: bool,
+    exits: bool,
     strategy: str,
     params: str,
     root: str,
@@ -466,11 +283,17 @@ def research_backtest(
     # wherever neither binds (`tests/alpha/test_book_guard_replay.py`), so leaving them on keeps a
     # report describing the book that would actually be held.  `--no-guards` reproduces older reports.
     book_guards = _book_guards(profile_payload, guards)
-    result = run_backtest(panel, weights, cost, execution=execution, guards=book_guards, impact=impact)  # type: ignore[arg-type]
+    exit_params = _exit_params(profile_payload, exits, interval)
+    result, _priced = score_book(
+        panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
+    )
     summary = result.summary()
     bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
     report: dict[str, Any] = {
         "kind": "backtest",
+        # Which of the live book's four layers this priced.  Until 2026-09-17 this command could not
+        # apply the overlay at all, and no report kind but `validation` said which book it measured.
+        "layers": layers_applied(band="model", guards=book_guards, exits=exit_params),
         "strategy": strategy,
         "params": entry.params,
         "portfolio": model.portfolio.__dict__,
@@ -600,6 +423,105 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     for values in itertools.product(*(grid[key] for key in keys)):
         combos.append({**base, **dict(zip(keys, values, strict=True))})
     return combos
+
+
+def _incumbent_grid(registry_path: str, strategy: str) -> tuple[bool, Mapping[str, Any] | None]:
+    """Is this strategy an ENABLED registry entry, and what grid did the evidence it cites use?
+
+    Read off the registry rather than off a flag, for the reason `_running_book_nets` reads it: the
+    registry is the governed decision about what runs, and "am I about to spend the incumbent's
+    margin" is a question about that decision and not about how the command was typed.
+
+    ``None`` for the grid is not "no grid": it is "this cannot be compared" - the pointer is missing,
+    unreadable, or predates the `grid` field (nine archived reports do).  The caller treats that as
+    undeclared, which is the conservative direction and the one the ledger is already resolved in
+    (`unique_trials` charges more when it cannot tell two runs apart).
+    """
+    path = Path(registry_path)
+    if not path.exists():
+        return False, None
+    for candidate in load_registry(path).enabled:
+        if candidate.id != strategy:
+            continue
+        report = Path(str((candidate.evidence or {}).get("report", "")))
+        if not report.is_file():
+            return True, None
+        try:
+            payload = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True, None
+        cited = payload.get("grid") if isinstance(payload, Mapping) else None
+        return True, cited if isinstance(cited, Mapping) else None
+    return False, None
+
+
+def _selected_key(select_json: str, params_by_key: Mapping[str, Mapping[str, Any]], prereg: str) -> str | None:
+    """The one grid cell a pre-registered rule named, or ``None`` when the run names none.
+
+    Round 7's副产品 1, made addressable.  `best_params` is the full-sample argmax and is what the
+    registry's startup gate compares against, so a candidate chosen by a rule that is not "highest
+    full-sample Sharpe" - H-001's was "OOS >= baseline - 0.05 AND drawdown improves AND turnover
+    falls" - could not be reported by the run that evaluated it.  The workaround was a second,
+    single-configuration report.
+
+    `--prereg` is required rather than encouraged, and that is the whole safeguard: naming a cell
+    after seeing the grid is the selection D-028 exists to deflate, while naming one from a commit
+    that predates the run is the pre-registration DL-K3 asks for - and `_preregistration` records the
+    commit's own timestamp, so the ordering stays checkable from the artefact afterwards.
+
+    Exactly one match, never the first of several: a selector that silently picked one of two cells
+    would be choosing, which is the thing being pre-registered away.
+    """
+    if not select_json:
+        return None
+    if not prereg.strip():
+        raise click.ClickException(
+            "--select names the cell a pre-registered rule chose, so it needs --prereg <commit> to say "
+            "WHICH rule and when it was written.  Without that it is just a different way of picking a "
+            "winner after seeing the grid, which is the selection D-028 deflates."
+        )
+    wanted = json.loads(select_json)
+    matches = [key for key, combo in params_by_key.items() if all(combo.get(k) == v for k, v in wanted.items())]
+    if len(matches) != 1:
+        raise click.ClickException(
+            f"--select {select_json} matches {len(matches)} of this run's {len(params_by_key)} cells; it "
+            "has to match exactly one, because picking one of several here would be the choice the "
+            "pre-registration is supposed to have already made."
+        )
+    return matches[0]
+
+
+def _refuse_an_undeclared_charge(
+    strategy: str, registry_path: str, grid_json: str, cells: int, declared: int | None
+) -> None:
+    """Say what this run will spend, and refuse an undeclared spend against an enabled entry.
+
+    Two halves, and only the second one can refuse.  The echo is unconditional because a price nobody
+    is told is a price nobody can decline, and it names where the rows are going: `ledger_redirection`
+    exists precisely so a redirected run cannot look like a charged one.
+
+    The refusal is scoped to the SHARED ledger.  A redirected run spends nothing that any gate reads,
+    so guarding it would be ceremony - and the autouse fixture in `tests/conftest.py` redirects every
+    test, which is what keeps this check off the suite's back without an exemption list.
+    """
+    where = ledger_redirection()
+    click.echo(
+        f"charge: {cells} row(s) to " + (f"the redirected ledger {where}" if where else "the shared trials ledger")
+    )
+    if where:
+        return
+    incumbent, cited = _incumbent_grid(registry_path, strategy)
+    if not incumbent:
+        return
+    problem = undeclared_charge(
+        strategy=strategy,
+        cells=cells,
+        grid=json.loads(grid_json) if grid_json else DEFAULT_GRIDS.get(strategy, {}),
+        cited_grid=cited,
+        declared=declared,
+    )
+    if problem:
+        raise click.ClickException(problem)
 
 
 # CPCV's embargo is not walk-forward's purge read backwards; `cpcv_splits`' docstring has the argument
@@ -757,6 +679,26 @@ def _stressed_oos_gate(net: pd.Series, folds: Sequence[Any], bars_per_year: floa
 @research.command("validate")
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
+@click.option(
+    "--select",
+    "select",
+    default="",
+    help=(
+        "JSON {param: value} naming the ONE grid cell a pre-registered rule chose, reported as "
+        "`best_params` instead of the full-sample argmax.  Requires --prereg; the argmax is recorded "
+        "beside it either way."
+    ),
+)
+@click.option(
+    "--charge",
+    default=None,
+    type=int,
+    help=(
+        "how many rows this run appends to the strategy's ledger bucket, stated out loud.  Required "
+        "when the strategy is an enabled registry entry and the grid is not the one its cited evidence "
+        "used; `undeclared_charge` carries the run that made this a check rather than a RUNBOOK line."
+    ),
+)
 @click.option("--folds", default=5, show_default=True)
 @click.option("--min-train", default=4000, show_default=True, help="bars before the first test fold")
 @click.option("--purge", default=50, show_default=True)
@@ -823,6 +765,8 @@ def research_validate(
     universe_mode: str,
     min_tenure: int,
     grid: str,
+    select: str,
+    charge: int | None,
     folds: int,
     min_train: int,
     purge: int,
@@ -837,6 +781,10 @@ def research_validate(
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
+    # Priced before the panel is loaded, because what a run costs is decided by the grid and the grid is
+    # already known here - afterwards the only thing left to do about it is to have not run it.
+    combos = _grid(strategy, grid, entry.params)
+    _refuse_an_undeclared_charge(strategy, registry_path, grid, len(combos), charge)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     # DL-D4 and DL-D5: carry the metrics or spot columns only when this strategy declares it reads
     # them, so a run that reads none does not pay for the alignment - and does not carry the one place
@@ -879,7 +827,6 @@ def research_validate(
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     impact = impact_model(load_yaml(costs_path), capital=capital)
-    combos = _grid(strategy, grid, entry.params)
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
     _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
     bpy = panel.bars_per_year
@@ -896,8 +843,9 @@ def research_validate(
         key = param_key(combo)
         model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel, membership)
-        decisions[key] = _overlaid(weights, panel.close, exit_params)
-        result = run_backtest(panel, decisions[key], cost, execution=execution, guards=book_guards, impact=impact)  # type: ignore[arg-type]
+        result, decisions[key] = score_book(
+            panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
+        )
         results[key] = result
         nets[key] = result.portfolio_net
         params_by_key[key] = combo
@@ -918,7 +866,8 @@ def research_validate(
     full_sharpes: dict[str, float] = {
         key: (value if value is not None else -np.inf) for key, value in full_sharpes_raw.items()
     }
-    best_key = max(full_sharpes, key=lambda k: full_sharpes[k])
+    argmax_key = max(full_sharpes, key=lambda k: full_sharpes[k])
+    best_key = _selected_key(select, params_by_key, prereg) or argmax_key
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
     # D-024: the construction the numbers were produced by, named once and used by both the report and
     # the ledger signature, so the two can never describe different books.
@@ -1107,6 +1056,11 @@ def research_validate(
         # and skips a report that carries no key at all.
         "book_guards": None if book_guards is None else dict(vars(book_guards)),
         "exits": None if exit_params is None else dict(vars(exit_params)),
+        # The same two, plus the band convention, in the shape every other report kind now carries.
+        # Kept BESIDE the two above rather than replacing them: `registry.construction_problems` reads
+        # `book_guards` and `exits` by name out of archived reports, and moving them would make every
+        # report written from here on unreadable to the startup gate.
+        "layers": layers_applied(band="model", guards=book_guards, exits=exit_params),
         # The data this verdict was computed from.  Everything else here already names itself - the report
         # has a digest, the registry a fingerprint, the construction another - but the dataset did not, and
         # on 2026-09-04 the membership table was rebuilt monthly -> daily while the profile still described
@@ -1136,6 +1090,16 @@ def research_validate(
         # "this signal ran no search" and "its search found nothing" are different facts (DL-K2).
         **({"signal_search": signal_search} if signal_search is not None else {}),
         "best_params": params_by_key[best_key],
+        # Which rule picked that, and what the other one would have picked.  `validate` has always
+        # chosen by full-sample Sharpe, and round 7 recorded the consequence: a candidate that wins on
+        # a PRE-REGISTERED rule but is a shade lower on the full sample can never be a grid report's
+        # `best_params`, so adopting one meant issuing a second, single-configuration report (H-001's
+        # `020459Z` is that report).  Naming the cell is the cheaper half; recording the argmax beside
+        # it is what keeps the naming honest, because a reader can see both and `--select` cannot
+        # quietly become "whichever cell looks best afterwards" - it needs a `--prereg` commit whose
+        # timestamp is in the artefact.
+        "best_params_selected_by": "pre-registered rule (--select)" if select else "full-sample argmax",
+        "full_sample_argmax_params": params_by_key[argmax_key],
         "full_sample": results[best_key].summary(),
         # F3 (KILL-Q2): `best_params` is the full-sample argmax and is what reaches the registry,
         # while `walk_forward.oos_sharpe` belongs to whatever each fold chose.  When the two differ
@@ -2159,6 +2123,12 @@ def _evaluate_book(
     decided = raw_gross[w_sleeve.notna().any(axis=1)]
     payload: dict[str, Any] = {
         "universe_mode": universe_mode,
+        # D-018's protocol, declared: `bare` weights plus the band, no guards and no overlay.  That is
+        # not the book the loop holds and it is not a defect - the rule was pre-registered on this
+        # ruler and every archived book verdict was measured with it - but until now the file did not
+        # say so, and an overlay report's 1.85 and a validation report's 1.59 were quoted against each
+        # other for exactly that reason.
+        "layers": layers_applied(band="after_bare", guards=None, exits=None),
         "symbols": panel.symbols,
         "range": {"start": str(index[0]), "end": str(index[-1]), "bars": n_bars, "oos_start": str(index[oos_start])},
         "main_only": {**main_metrics, "summary": main_result.summary()},
