@@ -1971,6 +1971,33 @@ CEILING = {
     # What is NOT left to convention: the VALUES.  Every merge re-measures them against the merged
     # tree, because no side's count describes code that now includes the others'.
     #
+    # Thirty-third raise OF THIS TABLE, 2026-09-17: +30 beidou_alpha, +57 beidou_live, +2 beidou_cli so
+    # a threshold no price path can reach is a daily reading instead of a thing found by eye.
+    #
+    # Almost all of beidou_alpha's 30 is comment, and the comment is the deliverable: `min_unit` is a
+    # FLOOR on sigma with no ceiling above it, and every rule in that file divides a move measured from
+    # the entry anchor by `sigma * entry_price`.  A long's price floor is 0, so `adverse <= 1/sigma`
+    # and a `stop_loss` at `k > 1/sigma` is arithmetic rather than protection.
+    #
+    # The fact is not new and the comment says so rather than claiming a discovery: KILL-TL04
+    # (2026-09-07) derived the same bound for `retrace` and measured the grid it empties, and
+    # `live.demo.yaml` records "retrace >= adverse always holds" in the same block - so the stop_loss
+    # half follows from two facts already in the tree and had simply never been written on this side.
+    # What IS new is the reading: over the 17 held positions on 2026-09-17, one is past its ceiling
+    # (LSKUSDT, sigma 0.4517, ceiling 2.21 against the shipped 6.0) and the other sixteen clear it by
+    # 2.8x or more.  That one was found by the operator reading a margin figure off a phone app, which
+    # is not a control, and `exit_reachability` is what replaces that route.
+    #
+    # It reports no threshold it has not bounded.  A long's take-profit and a short's stop have
+    # unbounded numerators, so they are omitted rather than called reachable - "no ceiling" and "a
+    # ceiling nothing has crossed" are different facts, and the mirror cases DO carry the bound.  A
+    # reading with no alert, for the reason the sizing gives it: the same sigma that puts the stop out
+    # of reach is what made inverse-vol sizing give the symbol the smallest weight in the book, so the
+    # exposure it describes is bounded by the same input.  Nothing here can be acted on inside an hour.
+    #
+    # The 57 in beidou_live is that function plus its wiring; beidou_cli's 2 are an import and the
+    # profile's exit params reaching `daily_payload`, which had no way to see them.
+    #
     # Thirty-second raise OF THIS TABLE, 2026-09-15: +17 beidou_data, +8 beidou_live - the dataset
     # gate stopped checking pit reports against a file they never open.
     #
@@ -2603,7 +2630,7 @@ CEILING = {
     # registry cites measures the replayed one: 491 of 49,240 bars pause on the daily loss, 4,070
     # (8.3%) are gross-capped.  The replay is path dependent, so a reader cannot scale the old figure
     # to the new target either - which is why this costs a paragraph rather than a number.
-    "beidou_alpha": 9_157,
+    "beidou_alpha": 9_187,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2887,7 +2914,7 @@ CEILING = {
     # model once), and the count is a LOWER bound on any window that was also gross-capped, because
     # stage 3 clips per symbol and then scales the row.  GROSS_CAPPED is 0 of 376 cycles today, so the
     # reading is exact; the guard is written now rather than the first time it is not.
-    "beidou_live": 9_727,
+    "beidou_live": 9_784,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -2953,7 +2980,7 @@ CEILING = {
     # leaves -0.23, and the Markdown printed only the first.  The payload is untouched by all of it -
     # every archived sha256 stays comparable, which is the constraint the first three notes were
     # written under and the reason this is 66 lines of prose rather than a second gate.
-    "beidou_cli": 6_009,
+    "beidou_cli": 6_011,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.overlays.exits import COOLDOWN
+from beidou_alpha.overlays.exits import COOLDOWN, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP, ExitParams
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import MAIN_BOOK
 from beidou_alpha.report import render_markdown
@@ -817,6 +817,52 @@ def exit_and_pool_events(store: StateStore, day: str) -> dict[str, Any]:
         "pool_quarantined": quarantined,  # D-031: the falsifier is counted here, not asserted in a docstring
         "pool_changes": len(entered) + len(left),
     }
+
+
+def exit_reachability(store: StateStore, params: ExitParams | None) -> dict[str, Any]:
+    """Held positions carrying an exit threshold that no price path can reach.
+
+    `ExitParams.min_unit`'s comment carries the derivation and the live table; the short form is that a
+    long's price floor is zero, so `adverse <= 1/sigma` and a `stop_loss` at `k > 1/sigma` is arithmetic
+    rather than protection.  The same bound lands on a short's `take_profit`, and on a long's trailing
+    stop through `extreme`, which starts at the entry price and opens the ceiling up only as the
+    position rallies.  A short's stop and a long's take-profit have unbounded numerators and are
+    omitted rather than reported as safe, because "no ceiling" and "a ceiling nothing has crossed" are
+    different facts and only the first is theirs.
+
+    A reading, deliberately with no threshold and no alert.  A ceiling under the shipped `k` is not a
+    fault: it is what inverse-vol sizing leaves behind on a symbol too loud to hold much of, and the
+    position it describes is small for the same reason it is unreachable - one input, both effects.
+    What it replaces is the way the first one was found, which was an operator reading a margin figure
+    off a phone app.  Nothing here can be acted on inside the hour, so it must not page.
+    """
+    if params is None or not params.enabled:
+        return {"checked": 0, "unreachable": [], "enabled": False}
+    state, _ = readable_state(store)
+    unreachable: list[dict[str, Any]] = []
+    checked = 0
+    for symbol, raw in sorted((state.exit_states or {}).items()):
+        held = int(raw.get("direction") or 0)
+        entry, unit = raw.get("entry_price"), raw.get("unit")
+        if held == 0 or not entry or unit is None:
+            continue
+        sigma = max(float(unit), params.min_unit)  # `_unit_price`'s own floor, or the ceiling is a fiction
+        ceiling = 1.0 / sigma
+        limits: list[tuple[str, float, float]] = []
+        if params.stop_loss > 0 and held > 0:
+            limits.append((STOP_LOSS, params.stop_loss, ceiling))
+        if params.take_profit > 0 and held < 0:
+            limits.append((TAKE_PROFIT, params.take_profit, ceiling))
+        if params.trailing_stop > 0 and held > 0:
+            top = float(raw.get("extreme") or entry)
+            limits.append((TRAILING_STOP, params.trailing_stop, top / (sigma * float(entry))))
+        for rule, k, cap in limits:
+            checked += 1
+            if k > cap:
+                unreachable.append(
+                    {"symbol": symbol, "rule": rule, "k": k, "ceiling": cap, "sigma": sigma, "direction": held}
+                )
+    return {"checked": checked, "unreachable": unreachable, "enabled": True}
 
 
 BACKTEST_EXITS_PER_WEEK = 562.0 / 49_735.0 * 24.0 * 7.0  # P11: 544 take-profits + 18 stops over 49,735 hourly bars
@@ -1840,6 +1886,7 @@ def daily_payload(
     margin_cap: float | None = None,
     data_root: str | Path = ".beidou/data",
     closes: Callable[[str], pd.Series] | None = None,
+    exits: ExitParams | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -1945,6 +1992,10 @@ def daily_payload(
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
+        # Beside the exit COUNT rather than inside it: that block says what the overlay did today,
+        # and this says which thresholds it could not have reached whatever the price did.  A zero
+        # count means both things at once until something separates them.
+        "exit_reachability": exit_reachability(store, exits),
         "noise_scale": noise_scale(store, day, vol_target=vol_target),
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
@@ -2517,6 +2568,12 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "pool_entered": json_dumps((payload.get("events") or {}).get("pool_entered") or []),
                     "pool_left": json_dumps((payload.get("events") or {}).get("pool_left") or []),
                     "pool_quarantined": json_dumps((payload.get("events") or {}).get("pool_quarantined") or []),
+                    "unreachable_thresholds": json_dumps(
+                        [
+                            f"{row['symbol']} {row['rule']} k={row['k']:g} > {row['ceiling']:.2f}"
+                            for row in (payload.get("exit_reachability") or {}).get("unreachable") or []
+                        ]
+                    ),
                 },
             ),
             ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
