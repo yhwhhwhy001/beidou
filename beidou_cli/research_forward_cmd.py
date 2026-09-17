@@ -191,8 +191,25 @@ def forward_add(
     click.echo(f"  板上现有 {census([*existing, candidate])} 个板位")
 
 
+# `status` **不用** `_common_options`，因为那里面 `--strategy` 是必填的，而读板根本不需要它：
+# 每个板位的策略、参数与 universe 都在板条目里，那正是上板时钉死的东西。照抄 `_common_options`
+# 的代价是具体的——`deploy/run_forward_board.sh` 就是不带 `--strategy` 调它的，于是日任务每天失败，
+# 而失败的方式是 click 的用法错误，看起来像脚本写错而不是命令定义错。
 @research_forward.command("status")
-@_common_options
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--symbols", default="", help="comma-separated; default = selected universe or all stored")
+@click.option("--interval", default="1h", show_default=True)
+@click.option("--from", "start", default=None, help="YYYY-MM-DD inclusive")
+@click.option("--to", "end", default=None, help="YYYY-MM-DD exclusive")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--registry", "registry_path", default="config/alpha_registry.yaml", show_default=True)
+@click.option("--costs", "costs_path", default="config/costs.yaml", show_default=True)
+@click.option("--execution", type=click.Choice(["open_to_close", "close_to_close"]), default="open_to_close")
+@click.option("--funding/--no-funding", default=True, show_default=True)
+@click.option("--out", default="reports/research", show_default=True)
+@click.option("--min-history", default=None, type=int, help="bars a symbol must have before it is tradable")
+@click.option("--min-tenure", default=0, show_default=True, help="pit only: refreshes before a symbol is tradable")
+@click.option("--grids", default="", help="JSON of enumerate_candidates grids, for mined ids on the board")
 @click.option("--board", default=DEFAULT_BOARD, show_default=True, help="板文件")
 @click.option("--guards/--no-guards", default=True, show_default=True, help="按实盘的 book guards 定价")
 @click.option("--exits/--no-exits", "exits", default=True, show_default=True, help="按实盘的退出层定价")
@@ -200,8 +217,6 @@ def forward_status(
     board: str,
     guards: bool,
     exits: bool,
-    strategy: str,
-    params: str,
     root: str,
     symbols: str,
     interval: str,
@@ -214,7 +229,6 @@ def forward_status(
     funding: bool,
     out: str,
     min_history: int | None,
-    universe_mode: str,
     min_tenure: int,
     grids: str,
 ) -> None:
