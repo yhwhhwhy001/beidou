@@ -2630,7 +2630,17 @@ CEILING = {
     # registry cites measures the replayed one: 491 of 49,240 bars pause on the daily loss, 4,070
     # (8.3%) are gross-capped.  The replay is path dependent, so a reader cannot scale the old figure
     # to the new target either - which is why this costs a paragraph rather than a number.
-    "beidou_alpha": 9_187,
+    # Thirteenth raise, 2026-09-17 (9_187 -> 9_267, +80 beidou_alpha): `undeclared_charge`, the pure
+    # half of the rule that a `research validate` against an enabled registry entry has to say what it
+    # will spend.  The measurement that made it a check rather than a RUNBOOK line is in its docstring
+    # and is the reason 80 lines is the right price: a two-arm A/B priced to the operator at "2 trials"
+    # ran without `--grid`, got the sixteen-cell default on each arm, and charged 32 - tsmom's family
+    # gate went N 259 -> 293, its threshold 1.5572 -> 1.5715, and the incumbent's own margin +0.0347 ->
+    # +0.0204.  About 35% of the remaining headroom, in one command, from a default nobody typed.  It
+    # lands in `beidou_alpha` rather than in the CLI because the quantity it protects is the DSR
+    # denominator, which is what this package's `ledger` module is for; the I/O half (which registry,
+    # which report) stays in `beidou_cli`, the same split `registry.evidence_problems` already uses.
+    "beidou_alpha": 9_267,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2980,7 +2990,14 @@ CEILING = {
     # leaves -0.23, and the Markdown printed only the first.  The payload is untouched by all of it -
     # every archived sha256 stays comparable, which is the constraint the first three notes were
     # written under and the reason this is 66 lines of prose rather than a second gate.
-    "beidou_cli": 6_011,
+    # +78 beidou_cli, 2026-09-17 (6_011 -> 6_089): the I/O half of the same check - `_incumbent_grid`
+    # reads whether the strategy is an enabled entry and what grid its cited evidence used, and
+    # `_refuse_an_undeclared_charge` prints the price of every run and refuses an undeclared one
+    # against the shared ledger.  The echo is unconditional and names WHERE the rows go, because
+    # `ledger_redirection`'s own docstring asks that a redirected run never look like a charged one;
+    # the refusal is scoped to the shared ledger, which is also what keeps it off the test suite
+    # without an exemption list (`tests/conftest.py` redirects every test).
+    "beidou_cli": 6_089,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
