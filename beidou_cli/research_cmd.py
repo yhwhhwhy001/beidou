@@ -73,6 +73,7 @@ from beidou_alpha.validation.multiple_testing import (
     multiple_testing_report,
     oos_selection_threshold,
 )
+from beidou_alpha.validation.pipeline import layers_applied, score_book
 from beidou_alpha.validation.stability import (
     cost_stress,
     parameter_neighborhood,
@@ -233,9 +234,22 @@ def research_list() -> None:
     show_default=True,
     help="replay the book-level guards the live loop applies (gross cap + daily-loss pause)",
 )
+@click.option(
+    "--exits/--no-exits",
+    "exits",
+    default=True,
+    show_default=True,
+    help=(
+        "apply the profile's exit overlay, i.e. price the book the loop holds.  This command had no "
+        "such flag until 2026-09-17 and so could not measure it at all: its Sharpe sat 0.058 below "
+        "`validate`'s on identical inputs for that reason alone.  `--no-exits` reproduces every "
+        "backtest report written before."
+    ),
+)
 def research_backtest(
     capital: float,
     guards: bool,
+    exits: bool,
     strategy: str,
     params: str,
     root: str,
@@ -269,11 +283,17 @@ def research_backtest(
     # wherever neither binds (`tests/alpha/test_book_guard_replay.py`), so leaving them on keeps a
     # report describing the book that would actually be held.  `--no-guards` reproduces older reports.
     book_guards = _book_guards(profile_payload, guards)
-    result = run_backtest(panel, weights, cost, execution=execution, guards=book_guards, impact=impact)  # type: ignore[arg-type]
+    exit_params = _exit_params(profile_payload, exits, interval)
+    result, _priced = score_book(
+        panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
+    )
     summary = result.summary()
     bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
     report: dict[str, Any] = {
         "kind": "backtest",
+        # Which of the live book's four layers this priced.  Until 2026-09-17 this command could not
+        # apply the overlay at all, and no report kind but `validation` said which book it measured.
+        "layers": layers_applied(band="model", guards=book_guards, exits=exit_params),
         "strategy": strategy,
         "params": entry.params,
         "portfolio": model.portfolio.__dict__,
@@ -823,8 +843,9 @@ def research_validate(
         key = param_key(combo)
         model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel, membership)
-        decisions[key] = _overlaid(weights, panel.close, exit_params)
-        result = run_backtest(panel, decisions[key], cost, execution=execution, guards=book_guards, impact=impact)  # type: ignore[arg-type]
+        result, decisions[key] = score_book(
+            panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
+        )
         results[key] = result
         nets[key] = result.portfolio_net
         params_by_key[key] = combo
@@ -1019,6 +1040,11 @@ def research_validate(
         # and skips a report that carries no key at all.
         "book_guards": None if book_guards is None else dict(vars(book_guards)),
         "exits": None if exit_params is None else dict(vars(exit_params)),
+        # The same two, plus the band convention, in the shape every other report kind now carries.
+        # Kept BESIDE the two above rather than replacing them: `registry.construction_problems` reads
+        # `book_guards` and `exits` by name out of archived reports, and moving them would make every
+        # report written from here on unreadable to the startup gate.
+        "layers": layers_applied(band="model", guards=book_guards, exits=exit_params),
         # The data this verdict was computed from.  Everything else here already names itself - the report
         # has a digest, the registry a fingerprint, the construction another - but the dataset did not, and
         # on 2026-09-04 the membership table was rebuilt monthly -> daily while the profile still described
@@ -2072,6 +2098,12 @@ def _evaluate_book(
     decided = raw_gross[w_sleeve.notna().any(axis=1)]
     payload: dict[str, Any] = {
         "universe_mode": universe_mode,
+        # D-018's protocol, declared: `bare` weights plus the band, no guards and no overlay.  That is
+        # not the book the loop holds and it is not a defect - the rule was pre-registered on this
+        # ruler and every archived book verdict was measured with it - but until now the file did not
+        # say so, and an overlay report's 1.85 and a validation report's 1.59 were quoted against each
+        # other for exactly that reason.
+        "layers": layers_applied(band="after_bare", guards=None, exits=None),
         "symbols": panel.symbols,
         "range": {"start": str(index[0]), "end": str(index[-1]), "bars": n_bars, "oos_start": str(index[oos_start])},
         "main_only": {**main_metrics, "summary": main_result.summary()},
