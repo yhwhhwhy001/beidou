@@ -8,6 +8,8 @@
 >
 > **本文的冻结稿在 Phase 7 被独立子代理推翻了一条 P0、九条 P1**（§8）：冻结稿把「候选进不了 registry」归因于判定与合成的机制，而唯一支撑它的案例（`594a12f9`）在仓库里有三处相反裁定；冻结稿把 O-2 的 ledger 成本写成 0（今天的 construction digest 已因 `flat_inside_band` 变了）；把退出层「全部已判负」（k<3 止盈等档位从未进网格）；把 D-045 的重启写成未发生（09-16T18:50Z 已重启）。被推翻的段落不删，标 **[R 修订]**。**并行会话同日合入的六个 PR（#32–#37）又把冻结稿的两个 Option 做完了**：O-2（embargo 720 两臂）已跑并结案，O-6（等风险书门的独立推导）已写成 EXP-AE2；操作者当日裁定 Q-CRITICAL = D、reopen 条件 (2) 授权、重启纪律入 `CLAUDE.md`。这些以 **[并行]** 标出。
 >
+> **[R2 修订，2026-09-17 当日]** 操作者裁定「**Q-A 全做，Q-B 先 M6 后下沉，Q-D 是**」。层 0 六项当日全部合入 `main`（#40 / #41 / #42 / #44 / #45 / #48），逐项落点、读数与两条对下一个人有用的更正见 `docs/RESEARCH_LOG.md` 2026-09-17（续二）与本文 §14。**Q-C（候选前向板）未答**，故 O-5 / DL-AM7 未做、C-AM08 保持 UNKNOWN。执行中查出本文自己错了一处：「六条命令三本书」不全是缺陷，其中 `overlay` 的裸 ensemble 是写在 RESEARCH_LOG 2026-09-08 的**协议**，动它会打断与每一条 D-017 裁决的可比性；受影响的句子保留原文并标 **[R2 修订]**。
+>
 > ID 命名空间 `AM`（alpha module）。Constitution：仓库无 `deep-analysis-constitution.md`；硬约束取自 `tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py`（`FREEZE_ENDS 2026-10-13T19:00Z`、`FROZEN_CONSTRUCTION 46b8d731…`）、`docs/RUNBOOK.md` K-EX14、`CLAUDE.md`「重启实盘循环」、`governance/reopen.yaml`、`governance/window_changes.yaml`、`beidou_governance/policy.py`（0.3.5）、`tests/architecture/test_source_budget.py`（三个包全部零 headroom）。本文与同日的 `2026-09-17-alpha-efficiency-deep-analysis.md`（效率）、`2026-09-17-full-system-audit.md`（审计）并读：它们已裁定的证据不重跑，只引用并点名网格。
 
 ---
@@ -239,7 +241,7 @@ K1 否；K2 否（全部 E1）；K3 否；**K4 WARNING**（成功只有方向）
 | **M-AM04** | 滞后（问题级） | 沿用 M-AE01（候选对在跑构造的等风险 ΔSharpe / ΔMDD / 尾部共回撤）与 M-010（30 天归因 z） | tsmom 1.5919 WEAK_PASS；z −0.84（2.38 天） | 盈利本身，与任何方案无关 |
 | **M-AM07** | 领先（与方案无关） | tsmom family gate 的 headroom 笔数 = 翻转点 N − 当前 N | ≈ 92（09-14）→ ≈ 58（fib-ab 合入后） | 在位者还能被研究多少次；每一笔计费都改变它 |
 | M-AM05 | 护栏 | `construction_fingerprint` 保持 `46b8d731`（别名 `ccd7bb97`）到 10-13；每次 ratchet 抬顶带理由 | 46b8d731 | 防止「优化」变成窗口外构造变更 |
-| M-AM03 | 描述 | 六条研究命令对同一书的 OOS Sharpe 之差 | backtest − validate = −0.058 | 尺子是否同一把（层 0 ② 落地后按构造为 0，不作门） |
+| M-AM03 | 描述 | 六条研究命令对同一书的 OOS Sharpe 之差 | backtest − validate = −0.058 | **[R2 修订]** 「按构造为 0」作废：`overlay` 的裸 ensemble 与 `book` 的 `bare`+带各是写下来的协议，归零等于打断与 D-017 / D-018 裁决的可比性。改为「每份报告的 `layers` 可读」——`validate` / `backtest` / `book` 已带（#48） |
 | M-AM06 | 描述 | validate 报告可从库函数逐位复现的份数 | 0（需导 CLI 私有函数） | 衔接债 |
 
 可证伪阈值：M-AM07 若在 10-13 前降到 < 16（一次默认网格就翻转），层 0 ① 没做或没起作用；EXP-AE1/AE2 落地 6 个月内若无 sleeve 或退出档位过门，F3 由 UNKNOWN 转 REFUTED，回到 F5。
@@ -431,7 +433,7 @@ Scope Firewall：2026-10-13T19:00Z 前不改 `config/live.demo.yaml` / `config/a
 | DL | 来源链 | 实现 | 测试 | 验收 |
 | --- | --- | --- | --- | --- |
 | DL-AM1 | E-AM22 → C-AM10 → ① | `validate --grid` 缺省：有 `--prereg`/`--control <report>` 时取该报告的 `grid`；否则打印预计计费（格数 × 1）并要求 `--charge N`；`research_cmd.py` 内 | 缺省调用不传 `--charge` 时退出非零并打印格数；传 `--control` 时 grid 与报告一致 | 下一次 tsmom 对照实验计费 = 对照报告格数 |
-| DL-AM2 | E-AM12 → C-AM06 → ② | 按 Q-B：M6（子命令拆模块）或 `beidou_alpha/validation/pipeline.py`；六条命令同一 `evaluate_book`；`backtest --exits` 默认开并记 `overlay_digest` | 分层回归（§5.6）；#35 两份报告逐位复现 | M-AM03 按构造为 0；M-AM06 > 0 |
+| DL-AM2 | E-AM12 → C-AM06 → ② | 按 Q-B：M6（子命令拆模块）或 `beidou_alpha/validation/pipeline.py`；六条命令同一 `evaluate_book`；`backtest --exits` 默认开并记 `overlay_digest` | 分层回归（§5.6）；#35 两份报告逐位复现 | **[R2 修订]** M-AM03 改为「`layers` 可读」（见 §12.1）；M-AM06 > 0。**已交付**：#45 搬 panel 层、#48 下沉 `score_book`；M6 余下的九个子命令拆分未做（§14） |
 | DL-AM3 | E-AM21/24 → ③ | `ExitParams.trailing_activate: float = 0.0`（武装阈值，σ_entry 单位）；`ExitState.armed`；`exit_step` 与 `_run_vectorised` 同步；`construction.py` 别名 v8 | 两套引擎逐位相等测试扩展；默认 0 下现有 `test_overlays` 逐位不变；冻结测试绿 | EXP-AE3 可预登记跑 |
 | DL-AM4 | E-AM07/08/13 → ④ | `TargetWeights.portfolio_vol`、`clipped_risk_share`；`inputs.symbols_settled` | 字段存在且不改任何权重（F1 形状） | 日报能读；重启按 `CLAUDE.md` 纪律 |
 | DL-AM5 | E-AM18 → ⑤ | `validate --select-by prereg`（按预登记规则而非全样本 Sharpe 选 `best_params`） | H-001 的 020459Z 场景可用一份报告复现 | — |
@@ -455,6 +457,8 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 
 ### 12.2 需要你决定的（一次问完，各带价钱；无默认）**[R 修订，KILL-AM-09]**
 
+**[R2 修订] 裁定已到（2026-09-17 当日）**：**Q-A = 全做**、**Q-B = 先 M6 后下沉**、**Q-D = 是**；**Q-C 未答**。下表保留提问时的原文，执行结果见 §14。
+
 | Q | 问题 | 选项与价钱 |
 | --- | --- | --- |
 | **Q-A** | 冻结期内是否授权层 0（① ③ Must、② ④ ⑤ ⑥ Should）？它们都是研究工具、观测量与一个默认关的参数，零构造变更、零 ledger | **是**：合计约 300 行（不含 ②）+ 三处 ratchet 抬顶各写理由；② 另计。**只做 ①**：< 60 行，只保护名额。**否**：什么都不做到 10-13；风险是 M-AM07 再被一次默认网格吃掉 16 笔 |
@@ -477,4 +481,65 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 - **对「更优的整体方案」**：当前证据分不出「机制在拦候选」与「没有 edge」（C-AM02 UNKNOWN）；在位者是一条全样本尾巴，真选择网格下 OOS 1.27–1.49、实测滑点下余量 −0.013——机器在按设计工作，它说的是 edge 证据薄。因此「更优」不在加机器，在：① 守住名额；② 统一尺子；③ 把操作者已选方向（Q-CRITICAL = D）需要的 `trailing_activate` 写出来，让 EXP-AE3 在 10-13 后能跑；④ 长期靠新信息与（若操作者要）年级别的前向板。
 - **10-13 之后**：EXP-AE1（8 笔）、EXP-AE2（规则事务，0.60 下更紧）、EXP-AE3（4 笔）、`flat_inside_band` 采纳裁定（已量无成本）。这四项是 alpha 侧真正的下一批可裁定项，全部已预登记，本文不增不减。
 
-**Checkpoint（2026-09-17）**：等级 L / Yellow；Phase 1–6 冻结稿被 §9 审查后修订，修订处标 [R 修订]，并行会话同日合入的事实标 [并行]；G6 PASS（P0 1 / P1 9 / P2 10 全 CLOSED）；开放 Claim C-AM02（UNKNOWN，P0，10-13 后 EXP-AE1/AE2 检验）、C-AM08（UNKNOWN，P1，Q-C）；Gap GAP-AM02 → GAP-AM03 → GAP-AM05；待决 Q-A / Q-B / Q-C / Q-D；下一动作 = 操作者答 Q-A → 是则先做 ①（独立 PR）与 ③（独立 PR），② 等 Q-B。
+**Checkpoint（2026-09-17）**：等级 L / Yellow；Phase 1–6 冻结稿被 §9 审查后修订，修订处标 [R 修订]，并行会话同日合入的事实标 [并行]；G6 PASS（P0 1 / P1 9 / P2 10 全 CLOSED）；开放 Claim C-AM02（UNKNOWN，P0，10-13 后 EXP-AE1/AE2 检验）、C-AM08（UNKNOWN，P1，Q-C）；Gap GAP-AM02 → GAP-AM03 → GAP-AM05；**[R2 修订]** 待决只剩 **Q-C**（Q-A/Q-B/Q-D 当日已裁定并执行完，§14）；下一动作 = 操作者答 Q-C，以及 ④ 的三个观测量要不要用一次重启换（价钱见 §14.3）。
+
+---
+
+## 14. 操作者裁定与执行结果（2026-09-17 当日）**[R2 新增]**
+
+裁定原话：「**Q-A 全做，Q-B 先 M6 后下沉，Q-D 是**」。**Q-C 未答。** 本节只记落点与验收状态，
+读数与对下一个人有用的两条更正在 `docs/RESEARCH_LOG.md` 2026-09-17（续二）。
+
+### 14.1 六项的落点与 Delivery Contract 验收
+
+| 项 | DL | PR / 合并 commit | 交付 | 验收状态 |
+| --- | --- | --- | --- | --- |
+| ① | DL-AM1 | #40 `26701642` | `beidou_alpha/validation/ledger.undeclared_charge`（纯规则）+ CLI 守卫；守卫在 `_load` **之前**跑，由一个用空 `--root` 的测试钉住 | **机制就位**。Q-D 的严格版：对在位者不显式传 `--grid` 或 `--charge N` 就拒跑。验收数（下一次 tsmom 对照实验计费 = 对照报告格数）要等下一次实验 |
+| ② | DL-AM2 | #45 `cf30b960` + #48 `60258a9f` | 先 M6（panel 层 12 个函数搬到 `beidou_cli/research_panel.py`，278 行，旧地址原样再导出）后下沉（`beidou_alpha/validation/pipeline.py` 的 `score_book` / `layers_applied`）；`backtest` 加 `--exits`（默认开）；`validate` / `backtest` / `book` 报告带 `layers` | **部分达成**。计价路径（`validate` 的 fold 循环、`backtest`）已走同一台机器，`layers` 可读。**但套层还有第二份表达**：`research_cmd._overlaid`（一行 `apply_exits(...).weights`）仍在，`validate` 的邻域探针 `evaluate_params`（`research_cmd.py:949`）走它而不是 `score_book`——今天两者算同一件事（探针不传 `impact`，`score_book` 的默认也是 `None`），所以这不是读数差，是一条会漂的缝。**M-AM06 仍未归零**：建面板还要走 `research_panel` 的私有函数，复现一份 validate 仍不能只靠库函数 |
+| ③ | DL-AM3 | #41 `61d9914c` | `ExitParams.trailing_activate`（默认 0.0，行为逐位不变）；两套引擎同步；构造 payload v8 + 别名 `d995e0cc… → 46b8d731…`，证明在同一提交里重算 | **达成**。EXP-AE3 可预登记跑；跑与采纳仍在 2026-10-13T19:00Z 之后，先验为负不变 |
+| ④ | DL-AM4 | #42 `0a281b1d` | `TargetWeights.portfolio_vol` / `clipped_risk_share`；`ModelInputs.symbols_settled`；`vol_targeted` 从 `build_weights` 里拆出来、逐位复现由测试钉住 | **未达成**。字段在代码里，但循环上还没有——见 §14.3 第三条 |
+| ⑤ | DL-AM5 | #44 `8f7decbe` | `validate --select`（必须配 `--prereg` 且命中且仅命中一格）；报告记 `best_params_selected_by` 与 `full_sample_argmax_params` | **达成**。「这一格是规则选的还是全样本 argmax 选的」可从报告本身读出 |
+| ⑥ | DL-AM6 | #44 `8f7decbe` | `AlphaModel.from_registry` 拒绝 enabled 策略多于一条的主书 | **达成** |
+| — | DL-AM7 | — | 候选前向板 | **未做**，Q-C 未答；O-5 与 C-AM08 状态不变（UNKNOWN） |
+
+### 14.2 执行中查出本文错了一处
+
+本文 §2 衔接·研究行、E-AM12、§5 因果链与 §13 都把「六条命令量三本书」整个记成口径缺陷。**做下来
+只有一部分是**：
+
+* `research overlay` 量**裸 ensemble**，这是协议不是缺陷。`docs/RESEARCH_LOG.md` 2026-09-08 原话：
+  「判据评的是不带 shipped exits 的裸 ensemble（`research overlay` 的既有协议，原 D-017 证据同样
+  如此），所以它与历史裁决可比」。给它套上线的 exits，等于让它与**每一条** D-017 裁决不可比。
+* `research book` 的 `bare` + 带，是 D-018 预登记时用的那把尺子。
+* `correlate` 要净收益序列，套路径依赖的层不是它的问题。
+
+真缺陷只有两条，都已修：**`backtest` 根本没有 `--exits`**（值 0.058 个 Sharpe），**五种报告里四种不说
+自己量的哪本书**。M-AM03 的验收「按构造为 0」因此作废并改口径（§12.1）。这一处更正的方向与 Phase 7
+审查相反——审查没抓到它，是实现时读 RESEARCH_LOG 才发现的。
+
+### 14.3 未闭合的三件
+
+1. **Q-C 未答。** 候选前向板要 ≈ 650 行 + 一条 launchd + 一个独立 ledger 桶（上板即计费），它是年级别
+   仪器。不答就不建，C-AM08 保持 UNKNOWN。
+2. **M6 只做了第一步。** 九个子命令拆成模块没做，`research_cmd.py` 仍约 3,400 行。原因是 PR #36 正开着
+   并改这个文件（`+39/-14`）：现在拆等于把冲突塞给另一个会话。选 panel 层做第一个接缝是因为
+   `scratchpad/` 下有 **29 个复现脚本**从 `research_cmd` 导入 `_load` / `_membership` / `_resolve_symbols`，
+   拆九个命令碰不到它们；那层再导出是临时的。
+3. **④ 的三个观测量在循环上还没生效。** 它们是每周期写的字段，而 armed 进程 PID 66666 启动于
+   **2026-09-16T18:50:38Z**（`state.json` 的 `restarted_at` 同值，`restarts` 51），#42 / #44 / #48 分别
+   合并于 09-17T09:33:31Z / 12:39:55Z / 13:45:44Z——**都在该进程启动之后**。所以今天的 `cycles.jsonl`
+   里没有 `book_vol`，这是预期不是故障。**价钱**：要它们出现需要一次重启，按 `CLAUDE.md`「重启实盘循环」
+   约 1.16% 概率吃掉一根 bar 的退出检查；构造不变（冻结检查在 `1ebeb7f0` 上 15 passed），三个监控时钟
+   不清零。**交操作者裁定**。本节只记进程启动时刻与合并时刻这两个可观测数，不按时间相关性给实盘动作归因。
+
+4. **套层还剩第二份表达。** `research_cmd._overlaid` 仍在，`validate` 的邻域探针
+   （`evaluate_params`，`research_cmd.py:949`）走它而不是 `score_book`；`scratchpad/p32f_embargo_and_decay.py`
+   也在导入它。**今天两者算同一件事**，所以没有读数差；但 `score_book` 一旦改套层顺序或加一层，探针不会
+   跟着走。改它是两行，本轮没改的理由与第 2 条相同：PR #36 正开着并改这个文件。
+
+### 14.4 这一轮执行没动什么
+
+`config/live.demo.yaml` 与 `config/alpha_registry.yaml` 自 `4068ba15` 起 `git diff --stat` 为空；
+`reports/research/trials.jsonl` 未被触碰；没跑 `validate` / `mine` / `book` / `overlay` / `diagnose`；
+`beidou_governance/policy.py` 的常量一个没改；没重启任何进程；没下单。Scope Firewall 的三条
+（不改构造字段、不在 reopen 条件外重测 `594a12f9`、不用近两周实盘数选参数）全程未破。

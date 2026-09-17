@@ -12054,6 +12054,148 @@ corr(I·r, r) = E[I·r²] / sqrt(E[I·r²]·E[r²]) = sqrt( E[I·r²] / E[r²] )
 这也是 PR #46 那次分析犯的错之一——作者照抄了它，没有自己推一遍（校准表 2026-09-17 行第 ② 条）。
 
 
+## 2026-09-17（续二）· 操作者裁定 Q-A/Q-B/Q-D：层 0 六项已合入——研究命令的尺子从今天起变了
+
+裁定原话：「**Q-A 全做，Q-B 先 M6 后下沉，Q-D 是**」。方案见
+`docs/analysis/2026-09-17-alpha-module-deep-analysis.md` §12.2。**Q-C（候选前向板）未答**，因此
+`forward_board` 未建，C-AM08 保持 UNKNOWN。
+
+### 一、六项的落点
+
+| 项 | 内容 | PR | 合并 commit |
+| --- | --- | --- | --- |
+| ① | `validate` 对在位者必须说出它花多少，否则拒跑（Q-D 的严格版） | #40 | `26701642` |
+| ③ | `ExitParams.trailing_activate`——移动止损第一次知道自己有没有在赚钱 | #41 | `61d9914c` |
+| ④ | 三个观测量：`portfolio_vol`、`clipped_risk_share`、`symbols_settled` | #42 | `0a281b1d` |
+| ⑤⑥ | `--select` 按预登记规则选格；一本书不能悄悄多出第二条策略 | #44 | `8f7decbe` |
+| ②之一 | M6 第一步：panel 层离开 CLI（`beidou_cli/research_panel.py`，278 行） | #45 | `cf30b960` |
+| ②之二 | 下沉：`beidou_alpha/validation/pipeline.py` 的 `score_book` / `layers_applied` | #48 | `60258a9f` |
+
+Q-B 的「先 M6 后下沉」按字面执行：#45 先搬接缝，#48 再下沉判据机器。**M6 的剩余部分（把九个
+子命令各自拆成模块）没做**——`research_cmd.py` 仍约 3,400 行，而 PR #36 正开着并改这个文件
+（`+39/-14`），现在拆等于把冲突塞给另一个会话。
+
+### 二、跑研究命令的人今天起要知道的四件事
+
+**一、`research backtest` 默认过 exit overlay 了。** 此前它**根本没有这个开关**——即使被要求也量不了
+循环持有的那本书。同一本 tsmom 书，这一件事值 **0.058 个 Sharpe**（`backtest` 1.6146 对 `validate`
+1.6725）。09-17 之前的每一份 backtest 报告量的都是不带 shipped exits 的书，**复现它们要传
+`--no-exits`**。
+
+**二、`validate` / `backtest` / `book` 的报告带 `layers` 了**（`band` / `book_guards` / `exits`）。
+在这之前，一份 overlay 的 1.85 与一份 validation 的 1.59 之间，文件里没有任何东西说它们不是同一本书，
+而它们被互相引用过。**没有 `layers` 的报告是这条改动之前的，按各自命令的历史协议读**。
+
+**三、对在位者跑 `validate` 不显式传 `--grid`（或 `--charge N`）会拒跑。** 守卫在 `_load` 之前跑，
+所以它不花数据时间。这条是 Q-D 的严格版，直接针对 09-17 上午那次「按 2 笔定价、实计 32 笔」
+（见本日「ledger 冲突只能按并集解」一节与 `beidou_alpha/validation/ledger.py` 的 `undeclared_charge`）。
+
+**四、`--select` 要配 `--prereg`**，且必须命中且仅命中一格；报告记 `best_params_selected_by` 与
+`full_sample_argmax_params` 两个字段，于是「这一格是规则选的还是全样本 argmax 选的」可从报告本身读出。
+
+### 三、一处自我更正：「六条命令三本书」不全是缺陷
+
+分析稿把它整个记成口径缺陷。做下来只有一部分是，另一部分动了会打断既有裁决：
+
+* `research overlay` 量**裸 ensemble**，这是写下来的协议。本日志 2026-09-08 原话：「判据评的是不带
+  shipped exits 的裸 ensemble（`research overlay` 的既有协议，原 D-017 证据同样如此），所以它与历史
+  裁决可比」。给它套上线的 `stop_loss 6 / take_profit 6`，等于让它与**每一条** D-017 裁决不可比。
+* `research book` 用 `bare` + 带，是 D-018 预登记时用的那把尺子。
+* `correlate` 要的是净收益序列，套路径依赖的层不是它的问题。
+
+真缺陷只有两条，都已修：`backtest` 缺 `--exits`；五种报告里四种不说自己量的哪本书。因此
+**M-AM03「层 0 ② 落地后六条命令的 Sharpe 之差按构造为 0」这条验收作废**——它要求的恰恰是打断可比性。
+分析文档已按 `[R2 修订]` 标注。
+
+### 四、EXP-AE3 的代码前置已就位（预登记段一字不改）
+
+本日志上文 EXP-AE3 的预登记写着「代码：`ExitParams` 加 `trailing_activate`…`ExitState` 加 armed 标志」。
+这段代码现在存在（#41 `61d9914c`）：
+
+* 默认 `0.0`，`_armed` 在读 excursion 之前就返回 True，所以**行为逐位不变**；scalar 与 vectorised
+  两套引擎同步，过既有等价测试。
+* 武装判据 `(extreme − entry_price) × direction / unit_price ≥ trailing_activate`，与网格用的
+  σ_entry 单位同一把尺。
+* 拒绝 `trailing_activate > 0` 配 `trailing_stop <= 0`——武装一个不存在的 trail 是配置错误，不是关。
+* 构造 `CONSTRUCTION_PAYLOAD_VERSION` 8，别名 `d995e0cce6af… → 46b8d731530a…`，证明在同一提交里重算
+  （去掉这个键复现 `ccd7bb97…`，而该表已声明它等于 `46b8d731…`）。
+
+**跑与采纳仍在 2026-10-13T19:00Z 之后**，先验为负这一条也不变。冻结检查今天在 `1ebeb7f0` 上
+15 passed；`config/live.demo.yaml` 与 `config/alpha_registry.yaml` 自 `4068ba15` 起 `git diff --stat` 为空。
+
+### 五、④ 的三个观测量在循环上还没生效——这是可观测事实，不是故障
+
+`portfolio_vol` / `clipped_risk_share` / `symbols_settled` 是**每周期写**的字段，不是启动时建的模型。
+两个可观测数：
+
+* armed 进程 PID **66666** 启动于 **2026-09-16T18:50:38Z**（`state.json` 的 `restarted_at` 同值，
+  `restarts` = 51）。
+* #42 / #44 / #48 分别合并于 **09-17T09:33:31Z / 12:39:55Z / 13:45:44Z**，三个都在该进程启动之后。
+
+所以今天的 `cycles.jsonl` 里没有 `book_vol`、`inputs` 里没有 `symbols_settled`，**这是预期的**。
+要它们出现需要一次重启，而重启按 `CLAUDE.md` 的纪律有价钱（约 1.16% 概率吃掉一根 bar 的退出检查），
+**交操作者**。本节只记进程启动时刻与合并时刻这两个数，**不按时间相关性给任何实盘动作归因**。
+
+### 六、本节没做什么
+
+没跑 `validate` / `mine` / `book` / `overlay` / `diagnose`；`reports/research/trials.jsonl` 未被触碰；
+两份配置一字未动；未重启任何进程；未下单；未改 `beidou_governance/policy.py` 的任何常量。
+
+## 2026-09-17 · 4.43 那一格:实测滑点下 tsmom 差 0.013 个 Sharpe 过不了 D-028 的门
+
+上一节留的「未答」——`slippage_stress_bps` 里没有 4.43 这一格,所以「实测滑点下到底过不过」是插值不是
+测量。这一节把它跑了。报告 `tsmom-validation-20260917T074143Z.json`,prereg `2034060e`。
+
+### 一、先修的不是网格,是门挂错了地方
+
+`cost_stress_gate` 按 multiplier 放大 `turnover_bps`,而 `turnover_bps = taker_fee + slippage`。**fee 是
+合同常数**:VIP0 taker 5.0 bps 不会因为执行变差而涨。所以 `x1.5` 那格定价的是一个 fee 为 7.5 的世界,
+它的 margin 不是「滑点假设错了」的 margin。`slippage_levels` 的 docstring 从这个网格建起来就写着这个
+论证;缺的是**门只挂在 multiplier 网格上**,于是产物回答了没被问的那个问题、对被问的那个沉默。
+
+难发现的原因是两个网格**在总额相同处数值重合**——`x1.5` 与 `slip5.5` 都是 10.5 bps,本次实测两者
+margin 逐位相同(−0.0318)。把 `x1.5` 读成滑点结论在那一格恰好对、在别处全错,包括 4.43:它根本没有
+multiplier 对应格,而门正好在它所在的区间里被跨过。
+
+### 二、读数(N=259,门 1.5571,fee 固定 5.0)
+
+| 档 | 滑点 bps | OOS | margin | 过？ |
+| --- | ---: | ---: | ---: | --- |
+| `slip2`（现行假设） | 2.0 | 1.5854 | **+0.0283** | 过 |
+| **`slip4.43`（实测中心）** | **4.43** | **1.5437** | **−0.0134** | **不过** |
+| `slip5.5` | 5.5 | 1.5253 | −0.0318 | 不过 |
+| `slip9.2` | 9.2 | 1.4618 | −0.0954 | 不过 |
+
+**缺口 0.0134 个 Sharpe。** 现行假设与实测之间隔着这道门。
+
+### 三、这个结论有多强,以及它不是什么
+
+**不是**「tsmom 该被退休」。三条限定,每条都收窄它:
+
+1. **4.43 的 CI 宽到覆盖两侧。** `costs.yaml` 记的是 81 笔成交、均值 95% CI **[−1.09, +10.87]**。这个区间
+   同时含 2.0（过）与 9.2（不过）。点估计落在「不过」那侧,是**目前最好的估计**,不是一个被确立的事实。
+2. **`verdict.decide` 不读这个块。** 它读 `cost_stress.x2`（本次 1.549 ≥ 0.0,过）。本次 verdict 仍是
+   **WEAK_PASS**,理由仍是 `oos_is_full_sample_tail`——与滑点无关。**实盘不受影响,registry 未动。**
+3. **门自己也在走。** N 从 242（09-13）到 259（今天）,门 1.5493 → 1.5571。`slip2` 的 margin 同期从
+   +0.0426 缩到 +0.0283。**在这个 headroom 上,门每涨一点就吃掉一次「过」。**
+
+### 四、所以真正被量出来的是刀刃,不是判决
+
+三个数放在一起看:`slip2` 余 +0.028、`slip4.43` 差 −0.013、门本身四天涨了 0.008。**这三个量级相同。**
+在这个位置,「过不过」由三件事共同决定,而其中两件（滑点的真值、今天的 N）都不是 tsmom 的性质。
+
+**这不构成 D-018/D-020 意义上的任何一道门被触发**,它是一次读数:现行成本假设与「不过」之间的距离,
+比这个仓库四天里若干次例行动作造成的门漂移还小。
+
+### 五、未做 / 未动
+
+`slippage_bps` 仍是 2.0——加一格是给压力网格加刻度,不是换假设,`costs.yaml` 那条「change a number here
+only with the fill sample that justifies it」正是 4.43 满足而 2.0→4.43 不满足的。registry、实盘、
+`verdict.decide`、任何门限都未动。分母未动:`ledger_trials` 105 不变,`replayed_rows: 2`——多一档滑点
+不进 `construction_digest`。
+
+**要settle 它需要的是更多成交,以及不全是 demo 的成交**（KILL-Q12 的老答案）。在那之前,这一格的价值
+是把一个插值变成了一个测量,并把它记在证据可以被引用的地方。
 ## 2026-09-17 · 一个 band 批准的目标，一小时后就是平不掉的仓位；D1+D2 救不了它，D3 才可以
 
 操作者在币安上看到 LSKUSDT 的回报率读数跑到 −300% 一档，问「只能手动平吗」。答案是两把独立的锁，
@@ -12174,8 +12316,10 @@ fold 级配对：`−0.0378 / +0.0078 / −0.0032 / −0.0078 / +0.0429`，均�
 
 ### 六、账
 
-ledger +4 笔（22,160 → 22,164）。family gate：N 295 → 299，门 1.5723 → 1.5738，tsmom OOS 1.5919
-余量 +0.0196 → **+0.0181**，翻转点 N≈350，headroom 55 → **51 笔**。注册表未动。
+ledger +4 笔（本分支 22,160 → 22,164；合入 #36 的 2 笔后总计 22,166——两侧都是纯追加，按并集解）。
+family gate：N 295 → 299，门 1.5723 → 1.5738，tsmom OOS 1.5919 余量 +0.0196 → **+0.0181**，
+翻转点 N=351，headroom 55 → **51 笔**。#36 那 2 笔没有抬高 N（`unique@7d` 去重），合并前后同读数。
+注册表未动。
 
 `config/live.demo.flat-inside-band.yaml`（#38 留下的 A/B 臂）删除：主 profile 现在就是处理臂，那份
 副本已经漂移——它缺了本次新增的整段裁定注释。留一个与主 profile 只差一行的完整副本，是每次改主

@@ -39,7 +39,20 @@ use_actual_funding: true  # backtests charge the historical funding rate on held
 #     demo book and a real one differ most.
 # What would settle it: more fills, and fills that are not all demo.  Until then the honest state is
 # that the assumption is no longer the best estimate and the sample is not good enough to replace it.
-slippage_stress_bps: [2.0, 5.5, 9.2]
+#
+# 2026-09-17, second note: 4.43 joins the grid, and it is the ONE number above that had no cell of its
+# own.  The rule one screen up - "change a number here only with the fill sample that justifies it" -
+# is satisfied by the paragraph above rather than waived: 4.43 IS that sample's notional-weighted
+# centre, measured from the decision close on the same 81 demo fills.  `slippage_bps` is still 2.0;
+# what changes is only that the measured value now gets priced instead of being interpolated between
+# 2.0 and 5.5 by whoever reads the report.
+#
+# Why it mattered enough to add a cell: `cost_stress_gate` (the multiplier grid) put x1 at +0.03 and
+# x1.5 at -0.03 against D-028's threshold, so the gate is crossed BETWEEN them and 4.43 lands in that
+# interval.  Reading the answer off x1.5 would also have been wrong in a second way - a multiplier
+# scales the taker fee too, and 5.0 bps is a contract constant that does not move when execution gets
+# worse.  `slippage_stress_gate` prices this grid with the fee held at `taker_fee_bps`.
+slippage_stress_bps: [2.0, 4.43, 5.5, 9.2]
 
 # DL-C1 / KILL-A (2026-09-08): the impact model, off by default.
 # Everything above charges the same bps for a 40 USDT order and a 4M one, which makes the whole

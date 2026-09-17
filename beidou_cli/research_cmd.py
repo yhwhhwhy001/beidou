@@ -996,20 +996,36 @@ def research_validate(
     levels = slippage_levels(
         taker_fee_bps=fee_bps, levels=[float(v) for v in costs_payload.get("slippage_stress_bps", []) or []]
     )
-    slippage = slippage_stress(
-        {
-            level: run_backtest(
-                panel,
-                best_weights,
-                CostModel(total, cost.carry_bps_per_bar, cost.use_funding),
-                execution=execution,  # type: ignore[arg-type]
-                guards=book_guards,
-                impact=impact,
-            ).portfolio_net
-            for level, total in levels.items()
-        },
-        bpy,
-    )
+    slippage_nets = {
+        level: run_backtest(
+            panel,
+            best_weights,
+            CostModel(total, cost.carry_bps_per_bar, cost.use_funding),
+            execution=execution,  # type: ignore[arg-type]
+            guards=book_guards,
+            impact=impact,
+        ).portfolio_net
+        for level, total in levels.items()
+    }
+    slippage = slippage_stress(slippage_nets, bpy)
+    # D-028's gate on the slippage grid, which is the grid the question is actually about.
+    #
+    # `cost_stress_gate` above answers "does it still clear if COSTS scale", and scaling costs scales
+    # the taker fee with them.  The fee is a contract constant - VIP0 taker is 5.0 bps whatever happens
+    # to execution - so `x1.5` charges 7.5 bps of fee that no venue will ever bill, and its margin is
+    # therefore not the margin of a slippage assumption being wrong.  `slippage_levels`' docstring has
+    # made that argument since the grid was added; what was missing is that only the multiplier grid
+    # had a gate attached, so the artefact could answer the question it was not asked and not the one
+    # it was.  (The two grids coincide numerically wherever the totals match - `x1.5` and `slip5.5` are
+    # both 10.5 bps - which is exactly why the labels have to be right: reading `x1.5` as a slippage
+    # result is correct by accident at one cell and wrong at every other.)
+    #
+    # Same `.reindex(common_index)` as above, and load-bearing for the same reason: `fold_list` was cut
+    # against `len(common_index)` while a fresh `run_backtest` returns its own longer index.
+    slippage_gate = {
+        f"slip{level:g}": _stressed_oos_gate(net.reindex(common_index).fillna(0.0), fold_list, bpy, pooled["n_trials"])
+        for level, net in sorted(slippage_nets.items())
+    }
     # The convention the default drops: `open_to_close` never earns close_t -> open_{t+1}, and the loop
     # holds through every one of those.  Measured on the pit book it is worth -0.029 OOS Sharpe, i.e. the
     # dropped component is mildly ADVERSE to this book, so "conservative" is true of the entry price and
@@ -1119,6 +1135,7 @@ def research_validate(
         # The fee is a contract constant and the slippage assumption is the half the loop measures, so
         # this varies only the second one at declared levels (`costs.yaml: slippage_stress_bps`).
         "slippage_stress": slippage,
+        "slippage_stress_gate": slippage_gate,
         "execution_comparison": {"execution": other_execution, **comparison},
         # DL-G9.  Two fields that exist so a machine can read what a person used to read in prose.
         # `preregistration` is null when the run declared none - a statement, not an absence, the same
@@ -1202,6 +1219,14 @@ def research_validate(
                     level: f"oos={_fmt(v['oos_sharpe'])} threshold={_fmt(v['threshold'])} "
                     f"margin={_fmt(v['margin'])} clears={_fmt(v['clears'])}"
                     for level, v in stress_gate.items()
+                },
+            ),
+            (
+                "Slippage stress against that gate (fee held fixed - the grid the question is about)",
+                {
+                    level: f"oos={_fmt(v['oos_sharpe'])} threshold={_fmt(v['threshold'])} "
+                    f"margin={_fmt(v['margin'])} clears={_fmt(v['clears'])}"
+                    for level, v in slippage_gate.items()
                 },
             ),
             (
