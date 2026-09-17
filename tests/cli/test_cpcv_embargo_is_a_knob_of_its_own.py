@@ -26,7 +26,7 @@ from click.testing import CliRunner
 
 from beidou_alpha.validation.cpcv import cpcv_splits
 from beidou_alpha.validation.verdict import decide
-from beidou_cli import main, research_cmd
+from beidou_cli import main, research_validate_cmd
 from beidou_cli.research_cmd import _embargo_bars, research_book, research_validate
 from beidou_data.store import KlineStore
 from beidou_governance.assemble import newest
@@ -104,7 +104,8 @@ def test_validate_records_the_embargo_it_used_and_still_reads_a_report_without_o
         seen.append((kwargs["purge"], kwargs["embargo"]))
         return cpcv_splits(n_bars, **kwargs)
 
-    monkeypatch.setattr(research_cmd, "cpcv_splits", recording)
+    # M6 之后这个名字读在哪就打在哪：`research_cmd` 只是它的历史地址，打在再导出上不会影响真正的调用点。
+    monkeypatch.setattr(research_validate_cmd, "cpcv_splits", recording)
 
     def run(out: Path, *extra: str) -> dict:
         result = runner.invoke(

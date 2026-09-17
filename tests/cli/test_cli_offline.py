@@ -903,15 +903,16 @@ def test_mine_refuses_to_write_a_report_whose_arithmetic_does_not_close(
     until a real run silently produced an artefact that bills more trials than it accounts for - and
     `--prior-trials` is the number the whole promotion gate is scaled by.
     """
-    from beidou_cli import research_cmd
+    from beidou_cli import research_mine_cmd
 
-    real = research_cmd.enumerate_candidates
+    real = research_mine_cmd.enumerate_candidates
 
     def inflated(**kwargs: object) -> object:
         result = real(**kwargs)  # type: ignore[arg-type]
         return dataclasses.replace(result, evaluated=result.evaluated + 1)
 
-    monkeypatch.setattr(research_cmd, "enumerate_candidates", inflated)
+    # M6 之后这个名字读在哪就打在哪：`research_cmd` 只是它的历史地址，打在再导出上不会影响真正的调用点。
+    monkeypatch.setattr(research_mine_cmd, "enumerate_candidates", inflated)
     root = tmp_path / "data"
     _store_from_fixtures(august_dir, root)
     code, output, _ = _mine(root, tmp_path / "reports", "--no-funding", "--no-include-funding")
