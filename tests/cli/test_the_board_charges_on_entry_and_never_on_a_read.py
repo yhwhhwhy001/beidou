@@ -214,10 +214,6 @@ def test_reading_the_board_never_writes_a_ledger_row(tmp_path: Path, august_dir:
         "research",
         "forward",
         "status",
-        "--strategy",
-        "tsmom",
-        "--params",
-        FIXTURE_PARAMS,
         "--root",
         str(root),
         "--symbols",
@@ -263,10 +259,6 @@ def test_day_one_reads_as_zero_forward_bars_rather_than_crashing(tmp_path: Path,
             "research",
             "forward",
             "status",
-            "--strategy",
-            "tsmom",
-            "--params",
-            FIXTURE_PARAMS,
             "--root",
             str(root),
             "--symbols",
@@ -289,6 +281,35 @@ def test_day_one_reads_as_zero_forward_bars_rather_than_crashing(tmp_path: Path,
     assert "OBSERVING" in result.output
 
 
+def test_the_daily_job_can_actually_call_the_command_it_calls(tmp_path: Path) -> None:
+    """`deploy/run_forward_board.sh` 里那行命令必须真的能跑。
+
+    这条是补的，因为第一版漏了它，代价是**日任务每天失败**：`status` 从 `_common_options` 继承了
+    必填的 `--strategy`，而脚本只传 `--board`。失败的形式是 click 的用法错误，看起来像脚本写错，
+    而其实是命令定义错。当时的 shell 只做了 `bash -n` 语法检查——语法检查看不见这个。
+
+    所以这里不检查语法，而是把脚本里真正那行的参数喂给命令本身。
+    """
+    script = (ROOT / "deploy" / "run_forward_board.sh").read_text(encoding="utf-8")
+    line = next(li for li in script.splitlines() if "research forward status" in li and "beidou" in li)
+    # 脚本里是 `"$REPO/.venv/bin/beidou" research forward status --board "$BOARD" 2>&1`
+    assert "--board" in line, "脚本不再显式传 --board 了？那它会依赖命令的默认值"
+    flags = [token for token in line.split() if token.startswith("--")]
+
+    params = {opt for p in main.commands["research"].commands["forward"].commands["status"].params for opt in p.opts}
+    unknown = [flag for flag in flags if flag not in params]
+    assert not unknown, f"脚本传了命令不认识的选项：{unknown}"
+
+    result = CliRunner().invoke(main, ["research", "forward", "status", "--board", str(tmp_path / "nothing.jsonl")])
+    assert result.exit_code == 0, f"日任务那行跑不起来：{result.output}"
+
+
+def test_status_needs_no_strategy_because_the_board_carries_it(tmp_path: Path) -> None:
+    """板位的策略、参数、universe 都在条目里——那正是上板时钉死的东西，不该再从命令行要一遍。"""
+    required = [p.opts for p in main.commands["research"].commands["forward"].commands["status"].params if p.required]
+    assert not required, f"`status` 不该有必填项，现在有：{required}"
+
+
 def test_status_on_an_empty_board_says_so_and_charges_nothing(tmp_path: Path) -> None:
     before = len(_charges(tmp_path))
     result = CliRunner().invoke(
@@ -297,8 +318,6 @@ def test_status_on_an_empty_board_says_so_and_charges_nothing(tmp_path: Path) ->
             "research",
             "forward",
             "status",
-            "--strategy",
-            "tsmom",
             "--root",
             str(tmp_path),
             "--registry",

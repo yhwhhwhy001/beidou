@@ -3162,7 +3162,18 @@ CEILING = {
     # sha256 一起钉进板条目。理由与上面同源：手输的「声称 Sharpe」正是会被往低里写的那个数——写低
     # 一点，`years_to_decide` 就短一点，板位就能早点「到期」。样本外优先于全样本，因为在架那个
     # 1.59 就是一条全样本尾巴（D-043）。
-    "beidou_cli": 7_315,
+    # +14 beidou_cli，2026-09-17（7_315 -> 7_329）：`research forward status` 不再继承
+    # `_common_options`，改成自己列一份不含 `--strategy` 的选项。
+    #
+    # 这一笔是修一个当天就该发现的错。`_common_options` 里 `--strategy` 是必填的，而读板根本不需要
+    # 它——每个板位的策略、参数与 universe 都在板条目里，那正是上板时钉死的东西。照抄的代价很具体：
+    # `deploy/run_forward_board.sh` 只传 `--board`，于是**日任务每天失败**，而失败的形式是 click 的
+    # 用法错误，看起来像脚本写错而不是命令定义错。
+    #
+    # 为什么原来的测试没抓到：那一轮对 shell 只做了 `bash -n` 语法检查，而语法检查看不见「这个命令
+    # 认不认识这个选项」。新加的那条测试从脚本里**读出真正那行**的参数，喂给命令本身——脚本与命令
+    # 定义从此对得上，再漂就是红的。
+    "beidou_cli": 7_329,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
