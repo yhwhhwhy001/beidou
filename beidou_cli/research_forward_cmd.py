@@ -34,6 +34,7 @@ from beidou_alpha.validation.forward_board import (
     census,
     claimed_sharpe_from,
     forward_reading,
+    full_sample_tail,
     read_board,
 )
 from beidou_alpha.validation.ledger import TrialRecord, resolve_ledger_path
@@ -88,11 +89,22 @@ def _sha256(path: Path) -> str:
         "这个桶——每上一个板位，**所有**在板候选的判定年限一起变长。不写这个数就拒跑。"
     ),
 )
+@click.option(
+    "--accept-full-sample-tail",
+    is_flag=True,
+    default=False,
+    help=(
+        "证据的样本外是全样本尾巴（D-043 的 `oos_is_full_sample_tail`）时仍然上板。"
+        "默认拒绝：判定年限是 (z / claimed_sharpe)²，声称越高年限越短，所以一条乐观读数只会让板"
+        "判得**太早**。用这个开关就是承认这一点，而承认会被写进板条目、跟着这个板位走完一生。"
+    ),
+)
 @click.option("--board", default=DEFAULT_BOARD, show_default=True, help="板文件（append-only）")
 @click.option("--note", default="", help="给下一个读板的人的一句话")
 def forward_add(
     evidence: str,
     charge: int | None,
+    accept_full_sample_tail: bool,
     board: str,
     note: str,
     strategy: str,
@@ -128,6 +140,17 @@ def forward_add(
             "「这个候选没希望」，而真相是「没读到那个数」。"
         )
 
+    is_tail = full_sample_tail(report)
+    if is_tail and not accept_full_sample_tail:
+        raise click.ClickException(
+            f"{evidence_path} 的样本外是**全样本尾巴**（`walk_forward.oos_is_full_sample_tail` 为真，"
+            f"D-043 因此给它封顶 WEAK_PASS），而 {where} = {claimed:.4f} 就是那条尾巴。\n"
+            "板的判定年限是 (z / claimed_sharpe)²——声称越高年限越短，所以拿乐观读数当基准只会让板"
+            "判得**太早**：到点时估计量的噪声还大，一段走运的行情更容易把它推过门。\n"
+            "要么换一份样本外真的是样本外的报告，要么显式写 `--accept-full-sample-tail` 承认这一点"
+            "（承认会写进板条目，跟着这个板位走完一生）。"
+        )
+
     entry_spec = _entry(strategy, registry_path, params, grids)
     profile_payload = load_yaml(profile)
     portfolio = _model(entry_spec, profile_payload, interval, min_history).portfolio.__dict__
@@ -145,6 +168,7 @@ def forward_add(
         claimed_sharpe=claimed,
         evidence=str(evidence_path),
         evidence_sha256=_sha256(evidence_path),
+        claimed_is_full_sample_tail=is_tail,
         note=note,
     )
 
@@ -184,7 +208,8 @@ def forward_add(
         handle.write(candidate.to_json() + "\n")
 
     click.echo(f"上板：{strategy} {candidate.param_key} universe={universe_mode}")
-    click.echo(f"  声称 Sharpe {claimed:.4f}（读自 {evidence_path} 的 {where}）")
+    tail_note = "，**而它是一条全样本尾巴，年限建在乐观读数上**" if is_tail else ""
+    click.echo(f"  声称 Sharpe {claimed:.4f}（读自 {evidence_path} 的 {where}{tail_note}）")
     click.echo(
         f"  计费 {'1 笔' if charged else '0 笔（同一笔已在账上）'} → {ledger_path}（桶 {FORWARD_BOARD_STRATEGY}）"
     )
