@@ -39,6 +39,12 @@ PARAM_SETS = [
     ExitParams(stop_loss=2.0, take_profit=3.0, stale_carry_bars=0),
     ExitParams(stop_loss=2.0, take_profit=3.0, stale_carry_bars=1),
     ExitParams(stop_loss=2.0, take_profit=3.0, stale_carry_bars=12),
+    # EXP-AE3's branch, on both sides of its edge: armed from entry (the shipped 0.0, which must not
+    # reach the comparison at all), armed only after a profit, and armed so far out that nothing in
+    # the panels below ever reaches it.
+    ExitParams(stop_loss=6.0, trailing_stop=2.0, trailing_activate=1.5),
+    ExitParams(stop_loss=6.0, trailing_stop=2.0, trailing_activate=0.0),
+    ExitParams(trailing_stop=1.0, trailing_activate=40.0, cooldown_bars=3),
 ]
 
 

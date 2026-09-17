@@ -24,12 +24,18 @@ from __future__ import annotations
 #      `regime_window` defaults to 0 and `regime_tp_scale()` returns None at <= 0, and the profile sets
 #      none of the four - so again the values are unchanged and only the shape moved.  Twice in one day
 #      is why `test_construction_identity` now pins the field set: the next one fails a test instead.
+#   8: + `exits.trailing_activate` (EXP-AE3, 2026-09-17).  The activation threshold the operator's
+#      "移动止盈" needs and the repository did not have: `trailing_stop` alone measures the retracement
+#      from an `extreme` initialised to the ENTRY price, so it fires while a position is still losing.
+#      Ships at 0.0, which arms from entry - today's behaviour exactly - and `_armed` returns True
+#      before reading the excursion at all, so the two engines stay bit-identical and only the shape of
+#      what is hashed moved.
 #   4: + `portfolio.min_history_bars` (2026-09-09).  Inert at the shipped config for the same reason
 #      the two above were: the value is 720 before and after, and only the shape of what is hashed
 #      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
 #      may be held at all, so changing it changes the book - found while asking whether the
 #      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
-CONSTRUCTION_PAYLOAD_VERSION = 7
+CONSTRUCTION_PAYLOAD_VERSION = 8
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
@@ -103,6 +109,21 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # window, it would break an operator ruling.  Which is also the reason both knobs ship off:
     # turning either ON is a construction change and belongs to the operator, after the freeze.
     "ccd7bb9764b5fe0cf170f4943fedeb67ca8ec39a790903ec649ef7705d1d82f2": (
+        "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
+    ),
+    # v8 (+ exits.trailing_activate), 2026-09-17, on the same proof as v3-v7 and recomputed in the
+    # commit that adds it: drop the one new key from the v8 payload and the hash comes back
+    # `ccd7bb97...` exactly - which this table already declares to be `46b8d731...`.  The shipped
+    # profile names no such key, 0.0 arms the trailing stop from entry (what the overlay has always
+    # done), and `_armed` short-circuits on `<= 0` before reading anything, so both engines are
+    # bit-identical across the addition and only the shape of what is hashed moved.
+    #
+    # It carries the same weight v7 does and for the same reason: the construction is frozen to
+    # 2026-10-13T19:00Z, so without this entry the next restart would not merely reset M-010's window,
+    # it would break an operator ruling and turn `test_the_construction_is_frozen_until_the_holdout_matures`
+    # red for a book that has not moved.  Which is also why the knob ships at 0: turning it on is a
+    # construction change, it belongs to the operator, and EXP-AE3 is the evidence it would need.
+    "d995e0cce6af69ddd839cdba4f44c4e895e37167f9fbc1235892c2e4b2786cca": (
         "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
     ),
 }
