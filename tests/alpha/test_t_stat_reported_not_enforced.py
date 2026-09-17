@@ -18,6 +18,7 @@ reports, 0 flips.  ``test_no_archived_verdict_changes`` is that measurement, kep
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,16 @@ from beidou_alpha.validation.multiple_testing import SELECTION_GATE
 from beidou_alpha.validation.verdict import VerdictThresholds, decide
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# When D-043 landed: commit 86a9f673, which added `cap_unselected_at_weak`.  From this instant a
+# report's stored `verdict` is the CAPPED one, and before it the uncapped one - so the archive holds
+# two kinds and every guard below has to say which it is judging.  The first two reports written on
+# the far side of it are the 2026-09-17 embargo arms, whose stored verdict is WEAK_PASS rather than
+# the PASS every earlier tsmom report at `grid_size` 2 carries; without this line they read as ten
+# flips plus two verdicts that "changed for no reason", which is the guard mistaking a rule that has
+# landed for a rule that is leaking.  A timestamp rather than a name list, because the set of reports
+# on the far side grows with every run and a list would have to be edited by every future one.
+D043_LANDED = datetime(2026, 9, 16, 17, 30, 28, tzinfo=UTC)
 
 # D-043 (2026-09-17): the ten archived reports whose stored PASS the unselected-evidence cap turns
 # into WEAK_PASS.  Listed by name rather than counted, because the guard below is pre-registered and
@@ -48,6 +59,23 @@ D043_CAPPED = frozenset(
 # The same rules with D-043 switched off: what `decide` said the day before it existed.  Used to
 # prove the cap is the ONLY thing that moved, rather than asserting that nothing moved at all.
 BEFORE_D043 = VerdictThresholds(cap_unselected_at_weak=False)
+
+
+def _written_after_d043(report: dict[str, Any]) -> bool:
+    """Was this report's stored `verdict` produced with the cap already on?
+
+    A report with no readable `generated_at` is treated as older, which is the safe direction: it
+    keeps the pre-registered "nothing flips" guard applying to it rather than exempting it.
+    """
+    try:
+        return datetime.fromisoformat(str(report.get("generated_at", ""))) >= D043_LANDED
+    except ValueError:
+        return False
+
+
+def _rules_that_produced(report: dict[str, Any]) -> VerdictThresholds | None:
+    """The thresholds a report's own stored verdict was decided under.  `None` means today's."""
+    return None if _written_after_d043(report) else BEFORE_D043
 
 
 def _clean(**walk_forward: Any) -> dict[str, Any]:
@@ -171,7 +199,7 @@ def test_no_archived_verdict_changes_for_any_reason_but_the_gate_rename() -> Non
     for name, report in _archived_reports():
         checked += 1
         with_gate = {**report, "oos_selection": {**report["oos_selection"], "gate": SELECTION_GATE}}
-        assert decide(with_gate, BEFORE_D043)[0] == report["verdict"], name
+        assert decide(with_gate, _rules_that_produced(report))[0] == report["verdict"], name
 
     assert checked >= 12
 
@@ -192,6 +220,12 @@ def test_d043_flips_exactly_the_reports_it_was_measured_on() -> None:
         walk_forward = report.get("walk_forward")
         if not isinstance(walk_forward, dict) or "oos_sharpe" not in walk_forward:
             continue
+        if _written_after_d043(report):
+            # Written with the cap already on, so it cannot be one of the reports the cap FLIPPED -
+            # its stored verdict is the capped one.  That it agrees with `decide` is asserted by the
+            # two guards above; asserting it here as well would make the list grow by one per run and
+            # stop meaning "the blast radius D-043 was measured on".
+            continue
         before = decide(report, BEFORE_D043)[0]
         after, reasons = decide(report)
         if before == after:
@@ -203,6 +237,29 @@ def test_d043_flips_exactly_the_reports_it_was_measured_on() -> None:
     assert flipped == D043_CAPPED, (
         f"unexpected: {sorted(flipped - D043_CAPPED)}, missing: {sorted(D043_CAPPED - flipped)}"
     )
+
+
+def test_the_archive_holds_reports_from_both_sides_of_d043() -> None:
+    """The split above is only doing work while both sides are populated.
+
+    `_written_after_d043` returning False for everything would silently restore the pre-D-043 file
+    and every guard in it would still pass - the vacuous-by-inversion shape this module already hit
+    once, when a pin written for "no archived report names its gate" survived the first one that did.
+    So both sides are asserted, and the far side is asserted to carry a WEAK_PASS earned by the cap
+    rather than by the Sharpe bar: that is what makes it a different case from the near side at all.
+    """
+    reports = _archived_reports()
+    after = [(name, r) for name, r in reports if _written_after_d043(r)]
+    before = [(name, r) for name, r in reports if not _written_after_d043(r)]
+
+    assert before, "no report predates D-043; the pre-registered guard has nothing to guard"
+    assert after, "no report postdates D-043; the split is vacuous and the file has silently reverted"
+
+    for name, report in after:
+        # Stored verdict == today's rules, which is what `_rules_that_produced` claims for this side.
+        assert decide(report)[0] == report["verdict"], name
+        if report["verdict"] == "WEAK_PASS" and report["walk_forward"].get("oos_sharpe", 0.0) >= 1.0:
+            assert decide(report, BEFORE_D043)[0] == "PASS", f"{name}: uncapped it should have been PASS"
 
 
 def test_the_report_the_live_registry_cites_is_one_of_them() -> None:
@@ -247,6 +304,6 @@ def test_a_report_that_names_its_gate_is_judged_on_its_numbers() -> None:
     reports = _archived_reports(with_gate=True)
     assert reports, "no archived report names its gate yet"
     for name, report in reports:
-        verdict, reasons = decide(report, BEFORE_D043)
+        verdict, reasons = decide(report, _rules_that_produced(report))
         assert verdict == report["verdict"], name
         assert not any("gate" in reason for reason in reasons), name

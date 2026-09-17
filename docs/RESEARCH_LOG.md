@@ -11408,3 +11408,116 @@ EXP-AE1 测的是「更早的固定止盈/止损」，EXP-AE3 测的才是「移
 - EXP-AE1 与 EXP-AE2 都**没有跑**，ledger 一行未动（2,322 行不变），`policy.py` 一个常量未改。
 - 审计 §6.1（`flat_inside_band` A/B，2 笔）与 §6.2（k 阶梯重测，14 笔）仍待裁定，本轮未问。
 - C-AE03（「最近的收益不足是不是 alpha 的问题」）仍 UNKNOWN，判据是 10-13 的 M-010 30 天归因。
+
+
+## 2026-09-17 · 预登记：embargo 720 的对照重跑（backtest-guard 审查的第一条可测项）
+
+`cpcv_splits` 的 docstring 自 2026-09-13 起把这条记成 OPEN：caller 传 `embargo = purge = 50`，而模型的
+feature lookback 是 `AlphaModel.warmup_bars` 1,442（tsmom 自己最长 `max(horizons)` 720）。测试块之后
+`k < lookback` 的每一根训练 bar，都是由一个覆盖该测试块的窗口算出来的，而 `cpcv_evaluate` 正是在那些
+bar 上选参数。收益仍然因果，所以这是**选择污染而非前视**——它让 D-020 的硬门 `fraction_negative <= 0.10`
+比应有的容易过。registry 引用的那份报告里这个数是 **0.0**。
+
+**至今没有人跑过它。** 那句 docstring 给了论证、给了该用的数(720/1442)、给了旋钮(`--embargo`)，然后
+把默认留在 `--purge`，理由是「adopting a real embargo means a pre-registered re-run that charges the
+trials ledger, which is a decision, not a refactor」。这一节就是那个 pre-registration。
+
+### 协议（两臂，除 `--embargo` 外逐格相同）
+
+    research validate --strategy tsmom --universe pit --capital 0 \
+      --grid '{"crowding_window": [0, 72]}' \
+      --folds 5 --min-train 4000 --purge 50 --cpcv-groups 6 \
+      --prior-trials 152 --to 2026-09-14 \
+      --embargo 50   --prereg <本提交>     # 对照臂
+      --embargo 720  --prereg <本提交>     # 处理臂
+
+**为什么要对照臂**，而不是直接拿 `tsmom-validation-20260913T182325Z.json` 当对照：那次的 range 止于
+`2026-09-13 16:00`（跑的时候的最新闭合 bar），而 `--to 2026-09-14` 会走到 `09-13 23:00`，多 7 根 bar。
+不跑对照臂就分不清「embargo 的效应」和「7 根 bar 的效应」。
+
+### 这次跑不增加分母，而这是算出来的不是希望
+
+`TrialRecord.fold_key` = (`param_key`, `range_start`, `_range_end_bucket(range_end, 7)`, `symbols`,
+`construction_digest`, `overlay_digest`, `symbol_set_hash`, `search_space_version`)。**`embargo` 不在里面**，
+它只改 `cpcv_splits` 的切分。而 `_range_end_bucket` 按**日期**分桶：`09-13 16:00` 与 `09-13 23:00` 同为
+`2026-09-13`，7 天粒度下同桶。所以两臂的 2 个格点彼此 dedupe，也与 09-13 那次 dedupe。
+
+**预期 `ledger_rows` +4、`ledger_trials` 不变(88)、`oos_selection.n_trials` 不变(242)、门不变(1.5493)。**
+这四个数任何一个动了，说明上面这段推理错了，先查口径再读结果。
+
+### 验收规则（先写，后跑）
+
+| 可观测量 | 现值(09-13 报告) | 判读 |
+| --- | ---: | --- |
+| `cpcv.fraction_negative` | 0.0 | 两臂之差即 embargo 的效应。>0.10 则 D-020 的硬门在处理臂下**不过** |
+| `cpcv.oos_sharpe_q05` | 1.1850 | 同上，方向应向下 |
+| `oos_selection` margin | +0.0426 | embargo 不进这个块，两臂应当**逐位相同**；不同即本页推理有误 |
+| 「Cost stress against that gate」 | 09-13 那份**没有** | 新工具的第一次读数：滑点 5.5/9.2 档下 **OOS** 对门的余量 |
+
+**证伪线**：若处理臂的 `fraction_negative` 仍为 0.0 且 `oos_sharpe_q05` 移动小于 0.05，则「embargo 短了一个
+数量级」这条 OPEN boundary 在**这份证据上**不改变任何结论，应当照此结案而不是继续挂着。反之若它把
+`fraction_negative` 推过 0.10，则 registry 引用的证据在 D-020 的一道硬门上不成立，这是操作者的事。
+
+**不改的东西**：不动任何其它参数、不动 registry、不动实盘、不改 `--embargo` 的默认值。本次只产生读数。
+
+### 结果（2026-09-17，两臂均已跑完，prereg `37a6546c`）
+
+对照臂 `tsmom-validation-20260917T071916Z.json`（embargo 50），处理臂 `…072049Z.json`（embargo 720）。
+
+**一、核心推理成立，但预登记的三个预期数字全错，错法值得记下来**
+
+`replayed_rows: 0 -> 2`、`ledger_trials: 105 -> 105`：处理臂那两行被判为 replay，**`embargo` 确实不进
+`fold_key`**，`oos_selection` 块两臂逐位相同。这一半对了。
+
+错的是基线。预登记写「预期 `ledger_trials` 不变(88)、`n_trials` 不变(242)、门不变(1.5493)」，实测是
+**105 / 259 / 1.5571**。原因不是推理错，是**基线在我写下它的时候就已经不是 88 了**：09-13 之后别的
+session 又跑了 17 个 tsmom trial，而 pit membership 每天重排，union 从 205 涨到 206（新增 `SYNUSDT`）。
+我拿一份四天前的报告当"现值"，而这个仓库的 ledger 是共享追加的、pool 是每天重排的。
+
+**headroom 因此在缩，这是本节最该被人看见的副产品**：同一个 OOS，09-13 的 margin 是 +0.0426，今天是
+**+0.0283**。没有人做错什么，`family_gate` 早就写明「搜得越多越退休自己的 incumbent」——这是那句话
+第一次以两个可比的数字出现。
+
+**二、embargo 的效应：证伪线命中，而且是最强的形式**
+
+| 量 | embargo 50 | embargo 720 |
+| --- | ---: | ---: |
+| `fraction_negative`（D-020 硬门） | 0.0 | **0.0** |
+| `oos_sharpe_q05` | 1.1890587478551330 | **1.1890587478551330** |
+| `oos_sharpe_min` | 1.1277877127608256 | **1.1277877127608256** |
+| `oos_sharpe_mean` | 1.6149630027189017 | 1.6492784056253902 |
+
+q05 与 min **逐位不变**，不是「移动小于 0.05」。唯一动的 mean 还往上走了 0.034。
+
+**为什么**，而这是把两条发现接起来的地方：embargo 防的是「在被污染的 bar 上**选**参数」，而这个网格
+`grid_size: 2`、`fold_consistency: 1.0`——**根本没有在选**。同一件事在这份报告里还有另一个名字，叫
+`oos_is_full_sample_tail: True`，D-043 为它把判定压到 WEAK_PASS。砍掉多少训练 bar 都不改变一个不做
+选择的过程。
+
+**所以这条 OPEN boundary 在这份证据上结案**：不是「embargo 够长了」，是**「在 grid_size 2 上它不可
+观测」**。要真检验它，得先有一个真的在选的网格——那是另一次跑，也是 D-043 那条 WEAK_PASS 的同一个
+出口。默认值不动。
+
+**三、意外的主要收获：`Cost stress against that gate` 的第一次读数**
+
+09-13 那份报告**没有这个块**（`_stressed_oos_gate` 晚于它）。它把成本压力和门放到同一把尺子上——
+同 folds、同 N、`best_key` 基准：
+
+| 档 | turnover_bps | OOS | 门 1.5571 | 过？ |
+| --- | ---: | ---: | ---: | --- |
+| x1（滑点 2.0，现行假设） | 7.0 | 1.59 | +0.03 | **过** |
+| x1.5（滑点 5.5） | 10.5 | 1.53 | −0.03 | **不过** |
+| x2（滑点 9.2） | 14.0 | 1.47 | −0.09 | **不过** |
+
+而 `config/costs.yaml` 2026-09-17 那段记着：同口径（从 decision close）实测 notional-weighted
+**+4.43 bps**，现行假设 2.0，约 2.2 倍。4.43 落在 x1 与 x1.5 之间，**而门正是在这两点之间被跨过的**。
+
+这不是「成本翻倍下仍然稳健」——`cost_stress` 那三个数（1.67/1.61/1.55）全是 full-sample Sharpe，
+量在 49,247 根 bar 上，而门比的是 45,247 根的 OOS。两者不能相减，`_stressed_oos_gate` 的 docstring
+写的正是这件事。**同尺子一比，现行假设与「不过」之间只隔 0.03 个 Sharpe。**
+
+**未答**：4.43 那一格没跑，所以「实测滑点下到底过不过」仍是插值而不是测量。跑它要往
+`slippage_stress_bps` 加一档，那是改 `costs.yaml`，是操作者的事。本节只交读数。
+
+**四、未动的东西**：`--embargo` 默认值、registry、实盘、`costs.yaml`、任何门限。ledger 加 4 行、
+unique trials 不变（105）。
