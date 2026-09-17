@@ -3131,7 +3131,26 @@ CEILING = {
     # 名字（29 个复现脚本要的 `_load` / `_membership` / `_resolve_symbols` 在内）。搬家不改别人的
     # import 行，所以三个此前只是「顺带能取到」的名字也留着：`cost_model` 与 `portfolio_params`
     # （`scratchpad/u3_attrib.py`）、click group `research`（`test_research_mine_asks_r1_before_it_spends`）。
-    "beidou_cli": 7_009,
+    # +14 beidou_cli，2026-09-17（7_009 -> 7_023）：`validate` 的邻域探针改走 `score_book`，
+    # 而 14 行全是说明为什么。操作者裁定「把 `_overlaid` 那条缝也补了」。
+    #
+    # 代码本身是**两行换成两行**：`_overlaid(...)` + `run_backtest(...)` 变成一次 `score_book(...)`。
+    # **今天它算的是同一件事**——`score_book` 的套层那行与 `_overlaid` 字符级相同，探针不传
+    # `impact` 而 `score_book` 的默认也是 `None`。所以这一笔改的不是任何读数，`validate` 的
+    # stability 块一位不动。
+    #
+    # 那为什么值 14 行：它拆的是一条**会漂**的缝。`score_book` 一旦改套层顺序或再加一层，探针不会
+    # 自己跟上，于是同一份 validate 报告里「最优那一格」与「它周围的格子」按两种口径算，而没有任何
+    # 东西会说出来——这正是 PR #48 立 `score_book` 时要消灭的那类事，当时只做到一半。
+    #
+    # `_overlaid` 留着，因为 `scratchpad/p32f_embargo_and_decay.py` 按
+    # `from beidou_cli.research_cmd import _overlaid` 导入它，而那些脚本是记录：`pyproject.toml`
+    # 把 `scratchpad/*.py` 排除出格式化，理由逐字是「Reformatting either edits a record of what
+    # happened」。所以它的 docstring 现在写明「不要在新代码里用它」，而
+    # `tests/cli/test_one_machine_applies_the_layers_everywhere.py` 断言包里再没有第二处调用、
+    # 那个地址还在、以及两种写法逐位相等（并先证明退出层真触发了 144/480 个格子，否则那条等价
+    # 断言会随 fixture 变化静默退化成「比两个原样的 frame」）。
+    "beidou_cli": 7_023,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

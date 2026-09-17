@@ -51,7 +51,6 @@ from beidou_cli.research_book_eval import (
     _book_guards,
     _embargo_bars,
     _exit_params,
-    _overlaid,
     _stressed_oos_gate,
 )
 from beidou_cli.research_grids import (
@@ -378,11 +377,15 @@ def research_validate(
     mt["ledger_trials"] = pooled["ledger_trials"]
 
     def evaluate_params(candidate: Mapping[str, Any]) -> float | None:
+        # 走 `score_book`，与上面那条计价路径同一台机器。此前这里是 `_overlaid` + `run_backtest` 的
+        # 两步写法：**今天它算的是同一件事**——`score_book` 的套层那行与 `_overlaid` 字符级相同，而
+        # 这里不传 `impact`，`score_book` 的默认也是 `None`。所以这不是修一个读数错，是拆掉一条会漂
+        # 的缝：`score_book` 一旦改套层顺序或再加一层，邻域探针不会自己跟上，于是同一份报告里
+        # 「最优那一格」与「它周围的格子」会按两种口径算，而没有任何东西会说出来。
         model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval, min_history)
         weights, _c, _p = model.evaluate(panel, membership)
-        overlaid = _overlaid(weights, panel.close, exit_params)
-        net = run_backtest(panel, overlaid, cost, execution=execution, guards=book_guards).portfolio_net  # type: ignore[arg-type]
-        return sharpe(net, bpy)
+        priced, _overlay = score_book(panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params)
+        return sharpe(priced.portfolio_net, bpy)
 
     neighbourhood = parameter_neighborhood(
         evaluate_params, params_by_key[best_key], numeric_keys=tuple(sorted(DEFAULT_GRIDS.get(strategy, {})))
