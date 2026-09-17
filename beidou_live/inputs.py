@@ -42,11 +42,24 @@ class ModelInputs:
     funding_history: dict[str, pd.Series] | None = None
     dropped: list[str] = field(default_factory=list)  # symbols whose frame was missing or too short
 
+    def settled_symbols(self) -> int:
+        """Symbols carrying at least one settlement this cycle.  A zero column and no column are one input."""
+        if self.funding_history is None:
+            return 0
+        return sum(1 for series in self.funding_history.values() if float(series.abs().sum()) > 0)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "symbols": len(self.bars),
             "bars": min((len(frame) for frame in self.bars.values()), default=0),
             "funding_history": self.funding_history is not None,
+            # The live twin of `Panel.settled_symbols`, and the question the flag above cannot answer.
+            # `funding_history is not None` says a frame was FETCHED - it stayed true for 37 cycles
+            # while the crowding modifier was inert (D-042) - and a symbol with no archive comes back
+            # as a column of zeros, which the modifier cannot tell from calm funding.  Research has
+            # recorded `symbols_settled` in every report since `_funding_facts`; the loop recorded a
+            # boolean, so the two halves of one comparison were not comparable.
+            "symbols_settled": self.settled_symbols(),
             "dropped": list(self.dropped),
         }
 

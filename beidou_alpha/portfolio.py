@@ -279,9 +279,17 @@ def risk_budget(sigma: pd.DataFrame, returns: pd.DataFrame, params: PortfolioPar
     return inverse.div(total.where(total > 0), axis=0)
 
 
-def build_weights(
+def vol_targeted(
     targets: pd.DataFrame, close: pd.DataFrame, bars_per_year: float, params: PortfolioParams
 ) -> pd.DataFrame:
+    """Stages 1 and 2 - the weights the vol target asks for, BEFORE either cap.
+
+    Extracted from ``build_weights`` (which now calls it) for the reason ``asset_vol`` was extracted
+    one layer down: the question "how much of the requested risk did `max_weight` remove" can only be
+    answered against the number the construction actually divided by, and a diagnostic that rebuilds
+    its own copy of these two stages is a diagnostic that can disagree with the book while both look
+    right.  One implementation, two readers.
+    """
     aligned = targets.reindex(index=close.index, columns=close.columns)
     sigma = asset_vol(close, params, bars_per_year)
     returns = close.pct_change()
@@ -296,7 +304,34 @@ def build_weights(
         stage1 = (aligned.fillna(0.0) * budget * params.vol_target).fillna(0.0)
     portfolio_vol = ewma_portfolio_vol(returns, stage1, params.covariance_halflife, bars_per_year)
     scalar = (params.vol_target / portfolio_vol.where(portfolio_vol > 1e-12)).clip(upper=params.max_scalar).fillna(0.0)
-    stage2 = stage1.mul(scalar, axis=0).clip(-params.max_weight, params.max_weight)
+    return stage1.mul(scalar, axis=0)
+
+
+def clipped_risk_share(sized: pd.DataFrame, params: PortfolioParams) -> pd.Series:
+    """Per bar, the share of the requested |weight| that ``max_weight`` removed and did NOT give back.
+
+    GAP-AM02.  At ``vol_target`` 0.60 the per-symbol cap binds on about half the cycles that record
+    per-book weights - only BTCUSDT and BNBUSDT, because inverse-vol sizing necessarily hands the
+    largest weight to the calmest name - and `config/live.demo.yaml` records the count.  What no
+    reading answered is how much RISK that removes, and the difference matters twice over: the book
+    then runs under its vol target, and the identity P13 rests on ("scaling every weight by k leaves
+    net Sharpe exactly unchanged, so the dial carries no alpha") holds only while the cap does not
+    bind.  A count cannot say either; this can.
+
+    Only the per-symbol cap.  The gross cap is a row-wise rescale that keeps the book's SHAPE, it is
+    already visible as `GROSS_CAPPED`, and folding the two together would report one number for two
+    different events.
+    """
+    requested = sized.abs().sum(axis=1)
+    kept = sized.clip(-params.max_weight, params.max_weight).abs().sum(axis=1)
+    return (1.0 - kept / requested.where(requested > 0)).fillna(0.0)
+
+
+def build_weights(
+    targets: pd.DataFrame, close: pd.DataFrame, bars_per_year: float, params: PortfolioParams
+) -> pd.DataFrame:
+    aligned = targets.reindex(index=close.index, columns=close.columns)
+    stage2 = vol_targeted(targets, close, bars_per_year, params).clip(-params.max_weight, params.max_weight)
     gross = stage2.abs().sum(axis=1)
     factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
     weights = stage2.mul(factor, axis=0)

@@ -2649,7 +2649,19 @@ CEILING = {
     # 904 exits) and behind EXP-AE1's third cell being withdrawn on 2026-09-17 rather than run.  Ships
     # at 0.0 and `_armed` short-circuits there, so both engines stay bit-identical; the evidence it
     # would need is EXP-AE3, which cannot run before the freeze ends.
-    "beidou_alpha": 9_322,
+    # Fifteenth raise, 2026-09-17 (9_322 -> 9_406, +84 beidou_alpha): the two quantities the
+    # construction could not state about ITSELF, and the extraction that makes one of them exact.
+    # `vol_targeted` is stages 1 and 2 lifted out of `build_weights` (which now calls it) for the
+    # reason `asset_vol` was lifted out one layer down - a diagnostic that rebuilds its own copy of
+    # the sizing can disagree with the book while both look right, and the seam is held to bit-for-bit
+    # reproduction by a test.  `clipped_risk_share` is then how much of the requested risk the
+    # per-symbol cap removed: at `vol_target` 0.60 that cap binds on 49 of 95 cycles and the COUNT was
+    # already recorded, while the risk it takes off was not - which is the reading P13's identity
+    # needs, since "scaling every weight by k leaves net Sharpe unchanged" holds only while the cap is
+    # not binding.  `portfolio_vol` is the ex-ante vol of the weights as they leave the model, after
+    # `combine_books` sums sleeves without re-targeting and after the cap: neither of the two numbers
+    # anyone measured.
+    "beidou_alpha": 9_406,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2939,7 +2951,14 @@ CEILING = {
     # the hash comes back `ccd7bb97...`, which the table already declares to be the frozen
     # `46b8d731...`.  Without it the next restart would not merely reset M-010's window, it would turn
     # `test_the_construction_is_frozen_until_the_holdout_matures` red for a book that has not moved.
-    "beidou_live": 9_813,
+    # +37 more beidou_live, 2026-09-17 (9_813 -> 9_850): the same two reaching `cycles.jsonl` as `book_vol` (declared in
+    # `cycle_record.KEYS`, which is the guard that caught it), the two
+    # properties added to the `TargetSet` protocol so the contract names what the engine reads, and
+    # `ModelInputs.settled_symbols` - the live twin of `Panel.settled_symbols`.  The loop recorded
+    # `funding_history: true`, which says a frame was FETCHED and stayed true for 37 cycles while the
+    # modifier was inert (D-042); research has recorded `symbols_settled` since `_funding_facts`, so
+    # the two halves of one comparison were not comparable.
+    "beidou_live": 9_850,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
