@@ -40,6 +40,28 @@ COOLDOWN = "COOLDOWN"
 class ExitParams:
     stop_loss: float = 0.0  # k x sigma_1d adverse move from entry; 0 disables
     trailing_stop: float = 0.0  # k x sigma_1d retracement from the favourable extreme; 0 disables
+    # EXP-AE3 (2026-09-17, operator ruling Q-CRITICAL = D).  How far a position must have gone in
+    # PROFIT before `trailing_stop` is allowed to fire; 0 - the shipped value - arms it from entry,
+    # which is what it has always done.  Off is bit-identical by construction rather than by argument:
+    # `_armed` short-circuits on `<= 0` without reading the excursion at all, so the NaN-extreme path a
+    # state read back from disk can take is untouched too.
+    #
+    # **This is the parameter the operator has been asking for, and the repository did not have it.**
+    # `trailing_stop` alone measures the retracement from `extreme`, and `_enter` initialises `extreme`
+    # to the ENTRY price, so `retrace >= adverse` holds on every bar: today's trailing stop fires while
+    # a position is still losing, and does it EARLIER than `stop_loss`.  That is what makes
+    # `k_tr <= k_sl` turn `stop_loss` into dead code - measured, `sl0/tr4/tp0` and `sl4/tr4/tp0` give an
+    # identical 1.6132 over an identical 904 exits - and it is why `config/live.demo.yaml` says a future
+    # trailing experiment must take `k_tr > 6`, and why EXP-AE1's third cell (`tr 2.0`) was withdrawn.
+    # A rule that cannot tell a profit from a loss cannot protect a profit.
+    #
+    # An activation threshold changes exactly that one thing: with `trailing_activate > 0` the rule
+    # cannot fire before the position has been that far ahead, so it no longer pre-empts `stop_loss` on
+    # a position that never rallied, and `k_tr <= k_sl` stops being a way to switch the stop off.  What
+    # it does NOT promise is that the exit is profitable - armed at +a and trailing by b > a still exits
+    # below entry.  `docs/RESEARCH_LOG.md` 2026-09-08 recorded this shape as "仍未实现、未测"; it is now
+    # implemented and still untested, which is EXP-AE3's job and not this field's.
+    trailing_activate: float = 0.0
     take_profit: float = 0.0  # k x sigma_1d favourable move from entry; 0 disables
     cooldown_bars: int = 24
     vol_halflife: int = 48
@@ -123,6 +145,16 @@ class ExitParams:
     def __post_init__(self) -> None:
         if min(self.stop_loss, self.trailing_stop, self.take_profit) < 0:
             raise ValueError("exit thresholds must be >= 0")
+        if self.trailing_activate < 0:
+            raise ValueError("trailing_activate must be >= 0 (0 arms the trailing stop from entry)")
+        if self.trailing_activate > 0 and self.trailing_stop <= 0:
+            # The `turnover_penalty` precedent: a value that is parsed, hashed and read by nothing looks
+            # adopted and is not.  Arming a rule that is switched off is that, so it is refused at the
+            # door rather than left to be discovered in a report that says the setting was in force.
+            raise ValueError(
+                "trailing_activate arms `trailing_stop`, which is 0 here: the threshold would be parsed, "
+                "hashed into the construction and read by nothing.  Set trailing_stop, or leave both at 0."
+            )
         if self.cooldown_bars < 0 or self.vol_halflife <= 0 or self.bars_per_day <= 0 or self.min_unit <= 0:
             raise ValueError("invalid exit parameters")
         if self.stale_carry_bars < 0:
@@ -213,6 +245,22 @@ def _unit_price(state: ExitState, sigma_1d: float, params: ExitParams) -> float:
     return max(unit, params.min_unit) * state.entry_price
 
 
+def _armed(state: ExitState, extreme: float, unit_price: float, params: ExitParams) -> bool:
+    """Has this position been far enough in PROFIT for the trailing stop to be live (EXP-AE3)?
+
+    The excursion is measured from the entry anchor to the favourable extreme - the same two prices
+    `retrace` is measured between, so the two thresholds speak one unit and `trailing_activate` reads
+    as "arm at +a, then trail by b".
+
+    ``<= 0`` returns True before the excursion is computed at all.  That is what makes the shipped
+    value bit-identical rather than merely equivalent: a state whose `extreme` came back NaN from disk
+    would otherwise compare NaN and silently switch the trailing stop off.
+    """
+    if params.trailing_activate <= 0.0:
+        return True
+    return (extreme - state.entry_price) * state.direction / unit_price >= params.trailing_activate
+
+
 def exit_step(
     state: ExitState,
     target: float,
@@ -283,7 +331,9 @@ def exit_step(
         reason = ""
         if params.stop_loss > 0 and adverse >= params.stop_loss:
             reason = STOP_LOSS
-        elif params.trailing_stop > 0 and retrace >= params.trailing_stop:
+        elif (
+            params.trailing_stop > 0 and retrace >= params.trailing_stop and _armed(state, extreme, unit_price, params)
+        ):
             reason = TRAILING_STOP
         elif params.take_profit > 0 and favourable >= params.take_profit * tp_scale:
             reason = TAKE_PROFIT
@@ -541,6 +591,11 @@ def _run_vectorised(
                 moved = np.where(held > 0, np.maximum(extreme, price), np.minimum(extreme, price))
                 moved = np.where(np.isnan(moved), price, moved)
                 hit_trail = (moved - price) * held / unit_price >= params.trailing_stop
+                # `_armed`, element-wise, and guarded by the same `<= 0` short circuit for the same
+                # reason: at the shipped value the array is not touched, so the engines agree bit for
+                # bit without the comparison ever meeting a NaN.
+                if params.trailing_activate > 0.0:
+                    hit_trail = hit_trail & ((moved - entry_price) * held / unit_price >= params.trailing_activate)
             else:
                 hit_trail = never
             stopped = managed & hit_stop

@@ -2132,6 +2132,14 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # rule, a knob the record cannot see is KILL-Q15's shape, and the record has to have been
             # carrying it from before that day, not from after it.
             "stale_carry_bars": config.exits.stale_carry_bars,
+            # v8 (EXP-AE3, 2026-09-17).  How far in PROFIT a position must have been before
+            # `trailing_stop` is allowed to fire.  It ships at 0.0 - arm from entry, which is what the
+            # overlay has always done - and `_armed` short-circuits on `<= 0` before reading anything,
+            # so the value is unchanged on both sides of this addition and only the shape of what is
+            # hashed moved; `CONSTRUCTION_ALIASES` carries that proof.  It is hashed for the reason
+            # every other `exits` key is: turning it on changes which bar closes a position, and a knob
+            # the record cannot see is KILL-Q15's shape.
+            "trailing_activate": config.exits.trailing_activate,
         },
         "throttle": {
             "enabled": config.throttle.enabled,

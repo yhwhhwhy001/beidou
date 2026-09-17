@@ -2640,7 +2640,16 @@ CEILING = {
     # lands in `beidou_alpha` rather than in the CLI because the quantity it protects is the DSR
     # denominator, which is what this package's `ledger` module is for; the I/O half (which registry,
     # which report) stays in `beidou_cli`, the same split `registry.evidence_problems` already uses.
-    "beidou_alpha": 9_267,
+    # Fourteenth raise, 2026-09-17 (9_267 -> 9_322, +55 beidou_alpha): `exits.trailing_activate`, the
+    # activation threshold EXP-AE3 needs and this tree did not have.  Nearly all of it is the paragraph
+    # saying why the field is not a variant of `trailing_stop`: that rule measures the retracement from
+    # an `extreme` initialised to the ENTRY price, so `retrace >= adverse` holds on every bar and it
+    # fires while a position is still losing - which is the mechanism behind `k_tr <= k_sl` turning
+    # `stop_loss` into dead code (`sl0/tr4/tp0` and `sl4/tr4/tp0`: an identical 1.6132 over an identical
+    # 904 exits) and behind EXP-AE1's third cell being withdrawn on 2026-09-17 rather than run.  Ships
+    # at 0.0 and `_armed` short-circuits there, so both engines stay bit-identical; the evidence it
+    # would need is EXP-AE3, which cannot run before the freeze ends.
+    "beidou_alpha": 9_322,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2924,7 +2933,13 @@ CEILING = {
     # model once), and the count is a LOWER bound on any window that was also gross-capped, because
     # stage 3 clips per symbol and then scales the row.  GROSS_CAPPED is 0 of 376 cycles today, so the
     # reading is exact; the guard is written now rather than the first time it is not.
-    "beidou_live": 9_784,
+    # +29 beidou_live, 2026-09-17: the same field reaching the record - one line in
+    # `construction_fingerprint`'s `exits` block and the v8 note plus alias in `construction.py`.  The
+    # alias's proof is recomputed in the commit that adds it: drop the new key from the v8 payload and
+    # the hash comes back `ccd7bb97...`, which the table already declares to be the frozen
+    # `46b8d731...`.  Without it the next restart would not merely reset M-010's window, it would turn
+    # `test_the_construction_is_frozen_until_the_holdout_matures` red for a book that has not moved.
+    "beidou_live": 9_813,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
