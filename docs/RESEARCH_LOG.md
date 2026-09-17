@@ -11459,3 +11459,65 @@ trials ledger, which is a decision, not a refactor」。这一节就是那个 pr
 `fraction_negative` 推过 0.10，则 registry 引用的证据在 D-020 的一道硬门上不成立，这是操作者的事。
 
 **不改的东西**：不动任何其它参数、不动 registry、不动实盘、不改 `--embargo` 的默认值。本次只产生读数。
+
+### 结果（2026-09-17，两臂均已跑完，prereg `37a6546c`）
+
+对照臂 `tsmom-validation-20260917T071916Z.json`（embargo 50），处理臂 `…072049Z.json`（embargo 720）。
+
+**一、核心推理成立，但预登记的三个预期数字全错，错法值得记下来**
+
+`replayed_rows: 0 -> 2`、`ledger_trials: 105 -> 105`：处理臂那两行被判为 replay，**`embargo` 确实不进
+`fold_key`**，`oos_selection` 块两臂逐位相同。这一半对了。
+
+错的是基线。预登记写「预期 `ledger_trials` 不变(88)、`n_trials` 不变(242)、门不变(1.5493)」，实测是
+**105 / 259 / 1.5571**。原因不是推理错，是**基线在我写下它的时候就已经不是 88 了**：09-13 之后别的
+session 又跑了 17 个 tsmom trial，而 pit membership 每天重排，union 从 205 涨到 206（新增 `SYNUSDT`）。
+我拿一份四天前的报告当"现值"，而这个仓库的 ledger 是共享追加的、pool 是每天重排的。
+
+**headroom 因此在缩，这是本节最该被人看见的副产品**：同一个 OOS，09-13 的 margin 是 +0.0426，今天是
+**+0.0283**。没有人做错什么，`family_gate` 早就写明「搜得越多越退休自己的 incumbent」——这是那句话
+第一次以两个可比的数字出现。
+
+**二、embargo 的效应：证伪线命中，而且是最强的形式**
+
+| 量 | embargo 50 | embargo 720 |
+| --- | ---: | ---: |
+| `fraction_negative`（D-020 硬门） | 0.0 | **0.0** |
+| `oos_sharpe_q05` | 1.1890587478551330 | **1.1890587478551330** |
+| `oos_sharpe_min` | 1.1277877127608256 | **1.1277877127608256** |
+| `oos_sharpe_mean` | 1.6149630027189017 | 1.6492784056253902 |
+
+q05 与 min **逐位不变**，不是「移动小于 0.05」。唯一动的 mean 还往上走了 0.034。
+
+**为什么**，而这是把两条发现接起来的地方：embargo 防的是「在被污染的 bar 上**选**参数」，而这个网格
+`grid_size: 2`、`fold_consistency: 1.0`——**根本没有在选**。同一件事在这份报告里还有另一个名字，叫
+`oos_is_full_sample_tail: True`，D-043 为它把判定压到 WEAK_PASS。砍掉多少训练 bar 都不改变一个不做
+选择的过程。
+
+**所以这条 OPEN boundary 在这份证据上结案**：不是「embargo 够长了」，是**「在 grid_size 2 上它不可
+观测」**。要真检验它，得先有一个真的在选的网格——那是另一次跑，也是 D-043 那条 WEAK_PASS 的同一个
+出口。默认值不动。
+
+**三、意外的主要收获：`Cost stress against that gate` 的第一次读数**
+
+09-13 那份报告**没有这个块**（`_stressed_oos_gate` 晚于它）。它把成本压力和门放到同一把尺子上——
+同 folds、同 N、`best_key` 基准：
+
+| 档 | turnover_bps | OOS | 门 1.5571 | 过？ |
+| --- | ---: | ---: | ---: | --- |
+| x1（滑点 2.0，现行假设） | 7.0 | 1.59 | +0.03 | **过** |
+| x1.5（滑点 5.5） | 10.5 | 1.53 | −0.03 | **不过** |
+| x2（滑点 9.2） | 14.0 | 1.47 | −0.09 | **不过** |
+
+而 `config/costs.yaml` 2026-09-17 那段记着：同口径（从 decision close）实测 notional-weighted
+**+4.43 bps**，现行假设 2.0，约 2.2 倍。4.43 落在 x1 与 x1.5 之间，**而门正是在这两点之间被跨过的**。
+
+这不是「成本翻倍下仍然稳健」——`cost_stress` 那三个数（1.67/1.61/1.55）全是 full-sample Sharpe，
+量在 49,247 根 bar 上，而门比的是 45,247 根的 OOS。两者不能相减，`_stressed_oos_gate` 的 docstring
+写的正是这件事。**同尺子一比，现行假设与「不过」之间只隔 0.03 个 Sharpe。**
+
+**未答**：4.43 那一格没跑，所以「实测滑点下到底过不过」仍是插值而不是测量。跑它要往
+`slippage_stress_bps` 加一档，那是改 `costs.yaml`，是操作者的事。本节只交读数。
+
+**四、未动的东西**：`--embargo` 默认值、registry、实盘、`costs.yaml`、任何门限。ledger 加 4 行、
+unique trials 不变（105）。
