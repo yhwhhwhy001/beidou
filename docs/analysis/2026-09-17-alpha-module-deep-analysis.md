@@ -495,7 +495,7 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
 | 项 | DL | PR / 合并 commit | 交付 | 验收状态 |
 | --- | --- | --- | --- | --- |
 | ① | DL-AM1 | #40 `26701642` | `beidou_alpha/validation/ledger.undeclared_charge`（纯规则）+ CLI 守卫；守卫在 `_load` **之前**跑，由一个用空 `--root` 的测试钉住 | **机制就位**。Q-D 的严格版：对在位者不显式传 `--grid` 或 `--charge N` 就拒跑。验收数（下一次 tsmom 对照实验计费 = 对照报告格数）要等下一次实验 |
-| ② | DL-AM2 | #45 `cf30b960` + #48 `60258a9f` | 先 M6（panel 层 12 个函数搬到 `beidou_cli/research_panel.py`，278 行，旧地址原样再导出）后下沉（`beidou_alpha/validation/pipeline.py` 的 `score_book` / `layers_applied`）；`backtest` 加 `--exits`（默认开）；`validate` / `backtest` / `book` 报告带 `layers` | **部分达成**。「一台机器套层」已是唯一实现；`layers` 可读。**M-AM06 仍未归零**：建面板还要走 `research_panel` 的私有函数，复现一份 validate 仍不能只靠库函数 |
+| ② | DL-AM2 | #45 `cf30b960` + #48 `60258a9f` | 先 M6（panel 层 12 个函数搬到 `beidou_cli/research_panel.py`，278 行，旧地址原样再导出）后下沉（`beidou_alpha/validation/pipeline.py` 的 `score_book` / `layers_applied`）；`backtest` 加 `--exits`（默认开）；`validate` / `backtest` / `book` 报告带 `layers` | **部分达成**。计价路径（`validate` 的 fold 循环、`backtest`）已走同一台机器，`layers` 可读。**但套层还有第二份表达**：`research_cmd._overlaid`（一行 `apply_exits(...).weights`）仍在，`validate` 的邻域探针 `evaluate_params`（`research_cmd.py:949`）走它而不是 `score_book`——今天两者算同一件事（探针不传 `impact`，`score_book` 的默认也是 `None`），所以这不是读数差，是一条会漂的缝。**M-AM06 仍未归零**：建面板还要走 `research_panel` 的私有函数，复现一份 validate 仍不能只靠库函数 |
 | ③ | DL-AM3 | #41 `61d9914c` | `ExitParams.trailing_activate`（默认 0.0，行为逐位不变）；两套引擎同步；构造 payload v8 + 别名 `d995e0cc… → 46b8d731…`，证明在同一提交里重算 | **达成**。EXP-AE3 可预登记跑；跑与采纳仍在 2026-10-13T19:00Z 之后，先验为负不变 |
 | ④ | DL-AM4 | #42 `0a281b1d` | `TargetWeights.portfolio_vol` / `clipped_risk_share`；`ModelInputs.symbols_settled`；`vol_targeted` 从 `build_weights` 里拆出来、逐位复现由测试钉住 | **未达成**。字段在代码里，但循环上还没有——见 §14.3 第三条 |
 | ⑤ | DL-AM5 | #44 `8f7decbe` | `validate --select`（必须配 `--prereg` 且命中且仅命中一格）；报告记 `best_params_selected_by` 与 `full_sample_argmax_params` | **达成**。「这一格是规则选的还是全样本 argmax 选的」可从报告本身读出 |
@@ -531,6 +531,11 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
    里没有 `book_vol`，这是预期不是故障。**价钱**：要它们出现需要一次重启，按 `CLAUDE.md`「重启实盘循环」
    约 1.16% 概率吃掉一根 bar 的退出检查；构造不变（冻结检查在 `1ebeb7f0` 上 15 passed），三个监控时钟
    不清零。**交操作者裁定**。本节只记进程启动时刻与合并时刻这两个可观测数，不按时间相关性给实盘动作归因。
+
+4. **套层还剩第二份表达。** `research_cmd._overlaid` 仍在，`validate` 的邻域探针
+   （`evaluate_params`，`research_cmd.py:949`）走它而不是 `score_book`；`scratchpad/p32f_embargo_and_decay.py`
+   也在导入它。**今天两者算同一件事**，所以没有读数差；但 `score_book` 一旦改套层顺序或加一层，探针不会
+   跟着走。改它是两行，本轮没改的理由与第 2 条相同：PR #36 正开着并改这个文件。
 
 ### 14.4 这一轮执行没动什么
 
