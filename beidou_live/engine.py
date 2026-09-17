@@ -2118,6 +2118,13 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # strictly inside the band and leave a position that can never be closed again.
             "exempt_crossings": config.rebalance.exempt_crossings,
             "flat_inside_band": config.rebalance.flat_inside_band,
+            # v9 (+ rebalance.band_entry_multiple), 2026-09-17.  **Declared WITHOUT an alias, which is
+            # the difference between this bump and v3-v8.**  Every one of those added a field whose
+            # shipped value was off on both sides, so the digest moved while the book did not, and the
+            # alias said so.  This commit turns `exempt_crossings` and `flat_inside_band` ON in the
+            # same breath, so the book DID change: aliasing the new digest to the old one would be a
+            # false statement about evidence, and M-010's window is supposed to reset here.
+            "band_entry_multiple": config.rebalance.band_entry_multiple,
         },
         # v6's third field.  How many consecutive cycles a symbol may come back with no closed
         # bars before the loop treats it as delisted and flattens it.  1 is today's behaviour
@@ -2199,8 +2206,11 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
             "no_trade_band": config.rebalance.no_trade_band,
             "no_trade_rel_band": config.rebalance.no_trade_rel_band,
             "sleeve_max_gross": config.portfolio.sleeve_max_gross,
-            # D2's backtest-visible half, so DL-G9's intersection keeps matching `CONSTRUCTION_KEYS`.
+            # D2's and D3's backtest-visible halves, so DL-G9's intersection keeps matching
+            # `CONSTRUCTION_KEYS`.  `exempt_crossings` stays absent for the reason recorded there: it
+            # has no backtest counterpart, so no report can disagree with it.
             "flat_inside_band": config.portfolio.flat_inside_band,
+            "band_entry_multiple": config.portfolio.band_entry_multiple,
         },
         "book_guards": {
             "max_weight": config.guards.max_weight,

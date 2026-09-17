@@ -2680,7 +2680,6 @@ CEILING = {
     # 所以它与历史裁决可比"), and `research book`'s `bare` + band is what D-018 was pre-registered on.
     # The defect was never that the commands disagree; it was that only `validation` reports recorded
     # WHICH book they had, so an overlay 1.85 and a validation 1.59 were quoted against each other.
-    "beidou_alpha": 9_532,
     # +694 beidou_live, the biggest raise on this page and the one that buys the least alpha.  It is the
     # cost of the 2026-09-13 review's second finding: `state.json` is the ONLY copy of the income
     # watermark, the equity high-water mark, the exit anchors and the D-005 hold seeds, and `load()`
@@ -2977,7 +2976,22 @@ CEILING = {
     # `funding_history: true`, which says a frame was FETCHED and stayed true for 37 cycles while the
     # modifier was inert (D-042); research has recorded `symbols_settled` since `_funding_facts`, so
     # the two halves of one comparison were not comparable.
-    "beidou_live": 9_850,
+    #
+    # +48 more beidou_live, 2026-09-17 (9_850 -> 9_898): D3's live half.  The derivation and the cost
+    # are in the `beidou_alpha` entry one screen up - thirty-fifth raise OF THIS TABLE - and are not
+    # repeated here; what is spent on this side is the fingerprint field (v9, and the note saying why
+    # it is the first bump in that list with NO alias), the `evidence_construction` key that keeps
+    # DL-G9's intersection matching `CONSTRUCTION_KEYS`, and `snapped_flat`.
+    #
+    # `snapped_flat` is eight of the lines and it is not bookkeeping.  Below the band arithmetic, a
+    # symbol that is flat and wants to be flat records nothing - right for a `leaving` name, wrong for
+    # a name the model asked for and a rule refused.  Without it, turning D3 on makes LSKUSDT vanish
+    # from `skipped[]` and from `report daily`'s `blocked_entry` on the same cycle it stops being
+    # traded, which is CYSUSDT's bare `continue` again: "a symbol the band can never let in read
+    # exactly like a symbol that did not need trading".  The row also carries `snapped_from_notional`,
+    # because after the snap `delta` and `current` are both 0 and the number that explains the refusal
+    # is the one that was thrown away.
+    "beidou_live": 9_898,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3077,7 +3091,22 @@ CEILING = {
     # the book the loop holds even when asked - measured, its Sharpe sat 0.058 below `validate`'s on
     # identical inputs for that reason alone, and a test now asserts the two agree.  `--no-exits`
     # reproduces every backtest report written before, the same escape `--no-guards` already had.
-    "beidou_cli": 6_259,
+    # +25 beidou_cli, 2026-09-17 (6_009 -> 6_034): `slippage_stress_gate`, D-028's threshold re-asked
+    # on the grid that holds the taker fee fixed.  `cost_stress_gate` already existed and answers a
+    # different question - a multiplier scales the fee with the slippage, and 5.0 bps is a contract
+    # constant, so its x1.5 cell prices a world where VIP0 taker is 7.5.  The two grids coincide
+    # wherever their totals do (x1.5 and slip5.5 are both 10.5 bps), which is exactly why having a gate
+    # on only one of them was hard to see: the mislabelled reading is right at that one cell and wrong
+    # everywhere else.  Measured on the 2026-09-17 embargo arms, the gate is crossed between x1 (+0.03)
+    # and x1.5 (-0.03), and the fills' own centre - 4.43 bps, notional-weighted over 81 decision-close
+    # fills - falls inside that interval with no multiplier cell of its own.  Most of the 25 lines are
+    # the paragraph saying which grid answers which question; without it the next reader re-derives the
+    # coincidence, or does not.
+    # 合并 origin/main 时重测，2026-09-17：上面两组理由分别在各自的 base 上量过（main 侧到 6_259，
+    # 本分支 6_009 -> 6_034），合并后实测 6_284 = 6_259 + 25。分支的 +25 换到新 base 上分毫不差，
+    # 因为 M6 把 panel 层移出 `research_cmd.py` 是一次 MOVE，ratchet 数的是包的总行数。这一行是
+    # 记账不是新抬顶：两侧的理由都已写在上面，没有一段被删。
+    "beidou_cli": 6_284,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3141,6 +3170,63 @@ CEILING = {
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
     "beidou_governance": 3_940,
+    # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
+    # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
+    # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
+    # packages returned nothing while the reopen condition ruled that same morning named it as the gate.
+    # 38 of the 71 lines are the docstrings carrying what the eight measured cells said, and that is
+    # the raise's justification rather than an overrun of it: the parameter ships OFF because all eight
+    # came back worse than the -0.62 baseline (-0.66 at 48 bars down to -0.87 at the tightest gate), so
+    # the lines a later reader needs are the ones saying the clock was tried and why it cannot work -
+    # it cuts the absolute loss only by cutting exposure, which is the measurement that refutes round
+    # 1's mechanism.  Deleting the prose to fit under the ceiling would leave a dead parameter with no
+    # account of why it is off, and the next person would implement it for a third time.
+    # Set to 9_603 first and failed at 9_604 - the ratchet doing its job on its author for the second
+    # time in this file's history, same as the opening paragraph records for beidou_live.  The extra
+    # line is mypy's: `np.sign` is typed as returning ndarray, so the DataFrame has to be rebuilt
+    # explicitly instead of chaining `.fillna` onto it.
+    #
+    # Thirty-fifth raise OF THIS TABLE, 2026-09-17: +52 beidou_alpha, +48 beidou_live (D3), so that a
+    # target the band APPROVED cannot become a position nothing can close one bar later.
+    #
+    # The number is 9_604 -> 9_656 and it was RE-MEASURED on the merged tree, not added to the branch's
+    # own reading.  This entry and the meanrev one above it were written concurrently: that session
+    # moved `beidou_alpha` to the end of this dict while this one was adding a paragraph where it used
+    # to be, which is what the merge conflicted on.  The two raises turn out to be additive here
+    # (9_532 + 72 + 52), because they touch different files - but that is a measurement, not a
+    # convention, and the opening note of this table says to re-measure every merge for exactly this
+    # reason.
+    #
+    # The code is four lines - a float on each half's params, one multiplication inside the existing
+    # `flat_inside_band` predicate, and a flag so the refusal still records a row.  The rest is the
+    # reading it came from, and the reading is the deliverable, because the shape is one this table
+    # already paid for twice and got wrong both times:
+    #
+    #     09-16T21:00Z  LSKUSDT BUY 74 @0.7287, target 54.08 against a 53.92 band - it cleared by 0.3%
+    #     09-16T22:00Z  price -8%, |current| 49.53 < band 53.74  ->  BAND_BLOCKS_EXIT, permanently
+    #     09-17T14:00Z  |current| 35.45, 14 of 14 cycles blocked, stop_loss 6.0 against a 2.21 ceiling
+    #
+    # D2 (2026-09-14) tests the TARGET on the way in and never looks again; the position walks into the
+    # band afterwards, on price.  So `docs/RESEARCH_LOG.md`'s two recorded paths to a stub - a reduction
+    # landing inside the band, a flip landing inside it - are both about where the target lands, and
+    # this is a third they do not cover.  Measured on the live cycle, `exempt_crossings` and
+    # `flat_inside_band` TOGETHER still plan no order for it: the target 58.66 is outside the band, so
+    # D2 has no opinion, and the 23.21 gap is under the 55.33 threshold.  That is the sentence worth
+    # the lines - the two knobs this repository has been holding for the 10-13 thaw do not fix the case
+    # that made the operator ask.
+    #
+    # Why the test is on the target and not on `|current|`.  "Close whatever now sits inside the band"
+    # oscillates: LSKUSDT's target is 0.53% of equity against a 0.50% band and its hourly sigma is 9.2%,
+    # so it would close, re-open at the unchanged target, and close again - measured on the same cycle.
+    # Testing the target is stable because the target is the thing that holds still, and it clears the
+    # EXISTING stub for free, since a target taken as flat is a target of exactly zero, which is the one
+    # case `exempt_crossings` waves through the band.
+    #
+    # What it costs, named rather than buried: D3 discards a conviction the model really has - 0.53% is
+    # what inverse-vol sizing gives a name with 814% annualised vol, not a rounding error.  On the
+    # 2026-09-17 book it moves exactly two names (LSKUSDT and TRUMPUSDT); the third smallest, LINKUSDT,
+    # clears 2x the band by 3.65x.  The A/B pricing is in RESEARCH_LOG the same day.
+    "beidou_alpha": 9_656,
 }
 
 

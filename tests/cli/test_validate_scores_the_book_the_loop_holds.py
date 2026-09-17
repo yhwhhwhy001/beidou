@@ -21,6 +21,9 @@ from click.testing import CliRunner
 
 from beidou_cli import main
 from beidou_data.store import KlineStore
+from beidou_shared.config import load_yaml
+
+ROOT = Path(__file__).resolve().parents[2]
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
 
@@ -109,11 +112,23 @@ def test_the_report_prices_the_book_at_the_declared_slippage_levels(tmp_path: Pa
 
     report = _validate(root, out)
 
+    # Read from `costs.yaml` rather than spelled here: that file is where the levels are DECLARED, and
+    # this test is named for the declaration.  A hard-coded set is a second copy of the config that
+    # goes red when the first one gains a cell - which is what it did when 4.43, the fills' own
+    # measured centre, was added; the grid is meant to grow as the fill sample says more.
+    declared = [float(v) for v in load_yaml(ROOT / "config" / "costs.yaml")["slippage_stress_bps"]]
     levels = report["slippage_stress"]
-    assert set(levels) == {"slip2", "slip5.5", "slip9.2"}, levels
+    assert set(levels) == {f"slip{level:g}" for level in declared}, levels
     assert levels["slip2"] > levels["slip9.2"], "more slippage cannot help"
     # the shipped assumption is one of the levels, so the block contains its own baseline
     assert levels["slip2"] == report["cost_stress"]["x1"]
+
+    # Each declared level also gets D-028's gate, on the same folds and the same N as the verdict.
+    gate = report["slippage_stress_gate"]
+    assert set(gate) == set(levels), "a level priced without a gate answers only half the question"
+    assert all(cell["threshold"] == gate["slip2"]["threshold"] for cell in gate.values()), (
+        "the threshold is a property of the trials count, not of the cost assumption"
+    )
 
 
 def test_the_report_carries_the_other_execution_convention_as_a_comparator(tmp_path: Path, august_dir: Path) -> None:

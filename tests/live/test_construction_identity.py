@@ -96,10 +96,15 @@ EXPECTED_FIELDS = {
         "max_participation",
         "max_order_notional",
         "exempt_reductions",
-        # v7, 2026-09-14.  Both ship False, both are asserted to be bit-identical off, and
-        # CONSTRUCTION_ALIASES carries the declaration - the book did NOT change.
+        # v7, 2026-09-14.  Both SHIPPED False, both were asserted bit-identical off, and
+        # CONSTRUCTION_ALIASES carries the declaration - the book did NOT change then.  Both ship True
+        # from 2026-09-17; the v7 aliases stay, because they describe the digests the loop actually
+        # wrote while the values were still False, and history is not rewritten.
         "exempt_crossings",
         "flat_inside_band",
+        # v9, 2026-09-17 (D3).  The only field in this table whose arrival coincided with the book
+        # changing, so it has deliberately NO alias - the note in `construction.py` says why.
+        "band_entry_multiple",
     },
     "exits": {
         "stop_loss",
@@ -154,6 +159,13 @@ AFTER_V7 = "ccd7bb9764b5fe0cf170f4943fedeb67ca8ec39a790903ec649ef7705d1d82f2"
 AFTER_TRAILING_ACTIVATE = "d995e0cce6af69ddd839cdba4f44c4e895e37167f9fbc1235892c2e4b2786cca"
 FROZEN = "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
 
+#: v9, D1+D2+D3 (2026-09-17).  **Not an alias of `FROZEN` and not declared as one.**  Every digest above
+#: this line is the same book measured with a longer ruler; this one is a different book, because the
+#: same commit that added `band_entry_multiple` turned `exempt_crossings` and `flat_inside_band` on.
+#: It is pinned here for the same reason the others are - so the next field-set change fails a test
+#: instead of moving it silently - and NOT in `CONSTRUCTION_ALIASES`, so M-010's window restarts.
+SHIPPED_D3 = "0c555e1c837e342a8af1edca0089b12461a9bdbe3b9a0f122142c63d6ba54bd7"
+
 
 def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:
     """The freeze test compares the CANONICAL digest, so a field set that grows must not trip it.
@@ -165,13 +177,22 @@ def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() 
         assert canonical_construction(digest) == FROZEN
 
 
-def test_the_shipped_construction_is_one_of_the_digests_that_resolve_to_frozen() -> None:
-    """...and the one this tree computes today is among them, which is what makes the two agree."""
+def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
+    """D1+D2+D3 is a construction CHANGE, so the shipped digest must NOT resolve to the frozen one.
+
+    This assertion is inverted from the one it replaces, and the inversion is the record: until
+    2026-09-17 every digest this tree could compute was the frozen book seen through a longer field
+    set, and the test said so by resolving to `FROZEN`.  Turning the three band knobs on ends that.
+    Asserting the inequality rather than deleting the test is what keeps a future alias - which would
+    quietly re-declare the two to be one book - from passing unnoticed.
+    """
     from beidou_live.engine import construction_fingerprint
     from tests.live.helpers_construction import live_config_for_profile
 
     digest = construction_fingerprint(live_config_for_profile())["digest"]
-    assert canonical_construction(digest) == FROZEN, digest
+    assert digest == SHIPPED_D3, digest
+    assert canonical_construction(digest) == SHIPPED_D3, "D3 的构造不是冻结那本，不能有别名指回去"
+    assert canonical_construction(digest) != FROZEN
 
 
 # --- the readers.  A canonicaliser nothing calls leaves M-010 reset exactly as before ----------------

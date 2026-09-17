@@ -539,7 +539,9 @@ Source Trace：C-AM01 ← E-AM04/19；C-AM02 ← E-AM09/10/22（UNKNOWN）；C-A
    `2026-09-17T15:00:00Z` 的周期上现身**：`book_vol` = `{target 0.6, ex_ante 0.5346,
    clipped_risk_share 0.0}`、`inputs.symbols_settled` = 17（= `symbols` 17）。**GAP-AM02 因此有了
    第一个读数**——书的事前波动是目标的 89%，而 `max_weight` 这个周期没截掉任何风险。n=1，不拿它
-   选参数。读数与纪律三步见 `docs/RESEARCH_LOG.md` 2026-09-17（续三）。
+   选参数。读数与纪律三步见 `docs/RESEARCH_LOG.md` 2026-09-17（续三）。**同日 16:07:34Z 循环
+   再次重启到 `0c555e1c837e`（D1+D2+D3，PR #53）**，09-14 的构造冻结随之结束、`FREEZE_ENDS` 移到
+   10-18；本文 §14.4 与 Scope Firewall 里「不改构造字段」的那一条自那一刻起由那条新裁定取代。
 
 4. **套层还剩第二份表达。** `research_cmd._overlaid` 仍在，`validate` 的邻域探针
    （`evaluate_params`，`research_cmd.py:949`）走它而不是 `score_book`；`scratchpad/p32f_embargo_and_decay.py`

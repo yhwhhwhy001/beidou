@@ -35,7 +35,14 @@ from __future__ import annotations
 #      moved.  It belongs in the digest because `AlphaModel.eligible` uses it to decide WHICH SYMBOLS
 #      may be held at all, so changing it changes the book - found while asking whether the
 #      new-listing strategy (#27) could be implemented, which it cannot without lowering this.
-CONSTRUCTION_PAYLOAD_VERSION = 8
+#   9: + `rebalance.band_entry_multiple` (D3, 2026-09-17).  **The first bump in this list with no
+#      alias, and the only one whose commit also changed values.**  Every entry above says the same
+#      sentence - the field arrived inert, so the digest moved while the book did not - and each one
+#      earned an alias by it.  This commit turns `exempt_crossings` and `flat_inside_band` on in the
+#      same breath, so that sentence is false here: the book changed, the digest is supposed to move,
+#      and M-010's window is supposed to restart.  A bump still belongs, because a reader comparing two
+#      rows across it needs to know the FIELD SET differs as well as the values.
+CONSTRUCTION_PAYLOAD_VERSION = 9
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
