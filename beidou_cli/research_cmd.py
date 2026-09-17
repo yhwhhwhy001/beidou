@@ -55,6 +55,7 @@ from beidou_alpha.validation.ledger import (
     ledger_scope,
     parse_ledger,
     resolve_ledger_path,
+    undeclared_charge,
     unique_trials,
 )
 from beidou_alpha.validation.metrics import (
@@ -602,6 +603,69 @@ def _grid(strategy: str, grid_json: str, base: dict[str, Any]) -> list[dict[str,
     return combos
 
 
+def _incumbent_grid(registry_path: str, strategy: str) -> tuple[bool, Mapping[str, Any] | None]:
+    """Is this strategy an ENABLED registry entry, and what grid did the evidence it cites use?
+
+    Read off the registry rather than off a flag, for the reason `_running_book_nets` reads it: the
+    registry is the governed decision about what runs, and "am I about to spend the incumbent's
+    margin" is a question about that decision and not about how the command was typed.
+
+    ``None`` for the grid is not "no grid": it is "this cannot be compared" - the pointer is missing,
+    unreadable, or predates the `grid` field (nine archived reports do).  The caller treats that as
+    undeclared, which is the conservative direction and the one the ledger is already resolved in
+    (`unique_trials` charges more when it cannot tell two runs apart).
+    """
+    path = Path(registry_path)
+    if not path.exists():
+        return False, None
+    for candidate in load_registry(path).enabled:
+        if candidate.id != strategy:
+            continue
+        report = Path(str((candidate.evidence or {}).get("report", "")))
+        if not report.is_file():
+            return True, None
+        try:
+            payload = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True, None
+        cited = payload.get("grid") if isinstance(payload, Mapping) else None
+        return True, cited if isinstance(cited, Mapping) else None
+    return False, None
+
+
+def _refuse_an_undeclared_charge(
+    strategy: str, registry_path: str, grid_json: str, cells: int, declared: int | None
+) -> None:
+    """Say what this run will spend, and refuse an undeclared spend against an enabled entry.
+
+    Two halves, and only the second one can refuse.  The echo is unconditional because a price nobody
+    is told is a price nobody can decline, and it names where the rows are going: `ledger_redirection`
+    exists precisely so a redirected run cannot look like a charged one.
+
+    The refusal is scoped to the SHARED ledger.  A redirected run spends nothing that any gate reads,
+    so guarding it would be ceremony - and the autouse fixture in `tests/conftest.py` redirects every
+    test, which is what keeps this check off the suite's back without an exemption list.
+    """
+    where = ledger_redirection()
+    click.echo(
+        f"charge: {cells} row(s) to " + (f"the redirected ledger {where}" if where else "the shared trials ledger")
+    )
+    if where:
+        return
+    incumbent, cited = _incumbent_grid(registry_path, strategy)
+    if not incumbent:
+        return
+    problem = undeclared_charge(
+        strategy=strategy,
+        cells=cells,
+        grid=json.loads(grid_json) if grid_json else DEFAULT_GRIDS.get(strategy, {}),
+        cited_grid=cited,
+        declared=declared,
+    )
+    if problem:
+        raise click.ClickException(problem)
+
+
 # CPCV's embargo is not walk-forward's purge read backwards; `cpcv_splits`' docstring has the argument
 # and `docs/analysis/2026-09-13-full-repo-review.md` has the finding.  The knob is split out here so the
 # boundary CAN be closed; the default stays `--purge` so that this commit changes no published number.
@@ -757,6 +821,16 @@ def _stressed_oos_gate(net: pd.Series, folds: Sequence[Any], bars_per_year: floa
 @research.command("validate")
 @_common_options
 @click.option("--grid", default="", help="JSON {param: [values...]} (default grid per strategy)")
+@click.option(
+    "--charge",
+    default=None,
+    type=int,
+    help=(
+        "how many rows this run appends to the strategy's ledger bucket, stated out loud.  Required "
+        "when the strategy is an enabled registry entry and the grid is not the one its cited evidence "
+        "used; `undeclared_charge` carries the run that made this a check rather than a RUNBOOK line."
+    ),
+)
 @click.option("--folds", default=5, show_default=True)
 @click.option("--min-train", default=4000, show_default=True, help="bars before the first test fold")
 @click.option("--purge", default=50, show_default=True)
@@ -823,6 +897,7 @@ def research_validate(
     universe_mode: str,
     min_tenure: int,
     grid: str,
+    charge: int | None,
     folds: int,
     min_train: int,
     purge: int,
@@ -837,6 +912,10 @@ def research_validate(
     """Walk-forward + CPCV + DSR/PBO + stability for one strategy; writes the evidence report for the registry."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
+    # Priced before the panel is loaded, because what a run costs is decided by the grid and the grid is
+    # already known here - afterwards the only thing left to do about it is to have not run it.
+    combos = _grid(strategy, grid, entry.params)
+    _refuse_an_undeclared_charge(strategy, registry_path, grid, len(combos), charge)
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     # DL-D4 and DL-D5: carry the metrics or spot columns only when this strategy declares it reads
     # them, so a run that reads none does not pay for the alignment - and does not carry the one place
@@ -879,7 +958,6 @@ def research_validate(
     membership = _membership(root, universe_mode, panel, min_tenure)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     impact = impact_model(load_yaml(costs_path), capital=capital)
-    combos = _grid(strategy, grid, entry.params)
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
     _require_funding([StrategyEntry(id=strategy, params=combo) for combo in combos], panel)
     bpy = panel.bars_per_year

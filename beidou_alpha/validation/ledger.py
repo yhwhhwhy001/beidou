@@ -354,3 +354,83 @@ def dsr_inputs(
         "range_end_granularity_days": int(range_end_granularity_days),
         "pooled_sharpes": len(pooled),
     }
+
+
+def _grid_key(grid: Mapping[str, Any]) -> str:
+    """Two grids that enumerate the same cells compare equal, whichever side they were written on.
+
+    One comes from ``--grid`` or ``DEFAULT_GRIDS`` (Python literals), the other off a validation
+    report (JSON), so the comparison has to survive that round trip and nothing else: same keys, same
+    values, order-insensitive.
+    """
+    return json.dumps({str(key): grid[key] for key in sorted(grid)}, sort_keys=True, default=str)
+
+
+def undeclared_charge(
+    *,
+    strategy: str,
+    cells: int,
+    grid: Mapping[str, Any],
+    cited_grid: Mapping[str, Any] | None,
+    declared: int | None,
+) -> str:
+    """Why this run's ledger charge has not been declared, or ``""`` when it has.
+
+    Every grid cell appends one row per run, and the strategy's own bucket is the denominator of the
+    D-028 threshold the SAME strategy's cited evidence has to clear - `family_gate`'s docstring states
+    the consequence, "searching more retires your own incumbents".  So a run against an enabled entry
+    spends the incumbent's remaining margin, and the amount has to be something the operator said out
+    loud rather than something ``--grid``'s default chose.
+
+    **Why this exists as an executing check rather than a line in the RUNBOOK.**  Measured 2026-09-17:
+    a two-arm A/B was priced to the operator at "2 trials", ran without ``--grid``, and got
+    ``DEFAULT_GRIDS["tsmom"]`` - sixteen cells - on each arm.  It charged 32.  tsmom's family gate went
+    N 259 -> 293 and its threshold 1.5572 -> 1.5715, taking the incumbent's margin from +0.0347 to
+    +0.0204: about 35% of the remaining headroom, in one command, from a default nobody typed.  The
+    control arm also stopped reproducing the shipped pointer, so the evidence could not anchor to it.
+
+    Two ways to be declared, and they are different statements:
+
+    * the run reproduces the grid the cited evidence used - the same experiment, so the charge is the
+      one already paid for and dedupes against it (D-024);
+    * ``--charge N`` names the exact number of rows, which is a sentence someone had to write.
+
+    ``declared`` that disagrees with ``cells`` is refused rather than accepted as "close enough": the
+    whole value of the declaration is that it is the number, and a wrong one is how the 2-against-32
+    mistake reads in a commit message afterwards.
+    """
+    if cited_grid is not None and _grid_key(grid) == _grid_key(cited_grid):
+        return ""
+    if declared is not None and declared == cells:
+        return ""
+    cited = (
+        f"{len(_cells_of(cited_grid))} cell(s), {json.dumps(cited_grid, sort_keys=True, default=str)}"
+        if cited_grid is not None
+        else "no grid at all, so the two cannot be compared"
+    )
+    if declared is not None:
+        return (
+            f"--charge {declared} does not match this run: it enumerates {cells} cell(s), so it will "
+            f"append {cells} row(s) to {strategy}'s ledger bucket.  Declare the number it actually "
+            f"spends (--charge {cells}) or change the grid."
+        )
+    return (
+        f"{strategy} is an enabled registry entry and this grid is not the one its cited evidence "
+        f"used: {cells} cell(s) here, against {cited}.  Every cell appends a row to the shared trials "
+        f"ledger, which is the denominator of the D-028 gate that same evidence has to clear - on "
+        f"2026-09-17 a run priced at 2 trials spent 32 this way and took tsmom's headroom from ~92 to "
+        f"~58.  Either reproduce the pointer (pass its grid to --grid) or say what this one spends "
+        f"with --charge {cells}."
+    )
+
+
+def _cells_of(grid: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The cells a grid enumerates - the same product ``research validate`` builds, for counting only."""
+    keys = sorted(grid)
+    if not keys:
+        return [{}]
+    out: list[dict[str, Any]] = [{}]
+    for key in keys:
+        values = grid[key] if isinstance(grid[key], list) else [grid[key]]
+        out = [{**cell, key: value} for cell in out for value in values]
+    return out
