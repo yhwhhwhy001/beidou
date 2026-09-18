@@ -21,7 +21,15 @@ beidou_cli       beidou data | research | governance | live | report
 
 - 架构：`docs/ARCHITECTURE.md`
 - 运行：`docs/RUNBOOK.md`
+- **安全：[`SECURITY.md`](SECURITY.md)**——这是公开仓库，凭据与个人信息的红线、
+  四层拦截各自的覆盖范围、泄漏后的处置顺序都在那里
 - 重构方案与证据账本：`~/.claude/plans/nifty-gliding-petal.md`（deep-analysis L 级）
+
+新 clone 装本地拦截（**第一件事**，不是可选项）：
+
+```bash
+brew install gitleaks && bash deploy/install-hooks.sh
+```
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]" && pytest -q
