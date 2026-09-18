@@ -39,6 +39,36 @@ COOLDOWN = "COOLDOWN"
 @dataclass(frozen=True)
 class ExitParams:
     stop_loss: float = 0.0  # k x sigma_1d adverse move from entry; 0 disables
+    # EXP-SL1 (2026-09-17, operator ruling: 根治 `k_eff = min(k_sl, c/sigma)`).  A CEILING on the price
+    # move `stop_loss` is allowed to ask for, as a fraction of the entry price; 0 - the shipped value -
+    # disables it and is bit-identical, because the `> 0` guard skips the arithmetic entirely.
+    #
+    # **What it is, in one line.**  `k_eff = min(stop_loss, c / sigma)`, and that second term unfolds to
+    # a plain percentage stop:
+    #
+    #     adverse >= c / sigma   <=>   (entry - price) * held / entry >= c
+    #
+    # So `c` says "however loud this symbol is, a move of `c` from entry stops it".  Below `c = 1` a
+    # long's stop is therefore ALWAYS reachable, which is the whole point: `min_unit`'s comment derives
+    # the bound `adverse <= 1/sigma` and this is the term that puts the threshold under it.
+    #
+    # **Measured before the number was chosen** (206 symbols x 5.7 years of 1h PIT bars, 6,315,054
+    # symbol-bars with a finite sigma).  The unreachable set is `sigma > 1/6 = 0.1667`, which is
+    # **138,386 symbol-bars = 2.191%** - not a corner case, and the same set is rescued by EVERY c < 1.
+    # What the choice of c buys is therefore only how much EXTRA it tightens on positions whose stop was
+    # already reachable:
+    #     c=0.9  bites 2.801%  ->  0.61pp extra    c=0.6  bites  8.486%  ->  6.30pp extra
+    #     c=0.8  bites 3.814%  ->  1.62pp extra    c=0.5  bites 14.084%  -> 11.89pp extra
+    #     c=0.7  bites 5.517%  ->  3.33pp extra    c=0.3  bites 47.637%  -> 45.45pp extra
+    # sigma's own distribution is why: p50 0.0486, p95 0.1209, p99 0.2505, p99.9 2.2050, max 2.4960.
+    #
+    # **Longs only** (operator ruling 2026-09-17).  A SHORT's `adverse` numerator is `(price - entry)`
+    # and price has no ceiling, so a short never had an unreachable stop; a cap there would be pure
+    # tightening for none of the rescue this rule is named for.  The first draft was symmetric and was
+    # withdrawn on its own measurement: at c=0.9 the ONLY difference over 5.7 years was one KNCUSDT
+    # short stopped 41 hours early - a behaviour change bought with zero benefit.  `_stop_threshold`
+    # carries the predicate; both engines take it.
+    stop_loss_price_cap: float = 0.0
     trailing_stop: float = 0.0  # k x sigma_1d retracement from the favourable extreme; 0 disables
     # EXP-AE3 (2026-09-17, operator ruling Q-CRITICAL = D).  How far a position must have gone in
     # PROFIT before `trailing_stop` is allowed to fire; 0 - the shipped value - arms it from entry,
@@ -329,7 +359,7 @@ def exit_step(
         favourable = -adverse
         retrace = (extreme - price) * held / unit_price
         reason = ""
-        if params.stop_loss > 0 and adverse >= params.stop_loss:
+        if params.stop_loss > 0 and adverse >= _stop_threshold(state.entry_price, unit_price, params, held):
             reason = STOP_LOSS
         elif (
             params.trailing_stop > 0 and retrace >= params.trailing_stop and _armed(state, extreme, unit_price, params)
@@ -353,6 +383,27 @@ def exit_step(
     if bar < state.cooldown_until and wanted == state.cooldown_direction:
         return replace(state, direction=0), 0.0, COOLDOWN
     return _enter(state, wanted, price, sigma_1d, params), target, ""
+
+
+def _stop_threshold(entry_price: float, unit_price: float, params: ExitParams, held: int) -> float:
+    """`k_eff = min(stop_loss, c / sigma)` for a LONG; `stop_loss` untouched for a short.
+
+    `unit_price` is `sigma_eff * entry_price` (the floored sigma the caller already resolved), so
+    `c / sigma_eff` is `c * entry_price / unit_price` and no second sigma is read - the two engines
+    divide by the same denominator or they stop agreeing.  `c <= 0` returns `stop_loss` untouched,
+    which is what makes the shipped default bit-identical without a branch anywhere else.
+
+    **Longs only, by operator ruling 2026-09-17, and the asymmetry is the point rather than an
+    oversight.**  The bound this cap exists to get under is `adverse <= 1/sigma`, and it comes from a
+    long's price floor of zero.  A short's `adverse` numerator is `(price - entry)` with no ceiling at
+    all, so a short never had an unreachable stop and a cap there would be pure tightening for no
+    rescue.  Measured on the symmetric draft before it was withdrawn: at c=0.9 the ONLY difference
+    across 5.7 years was one KNCUSDT short, stopped 41 hours early - a change bought with none of the
+    benefit the rule is named for.
+    """
+    if params.stop_loss_price_cap <= 0 or held <= 0:
+        return params.stop_loss
+    return min(params.stop_loss, params.stop_loss_price_cap * entry_price / unit_price)
 
 
 def _enter(state: ExitState, direction: int, price: float, sigma_1d: float, params: ExitParams) -> ExitState:
@@ -585,7 +636,14 @@ def _run_vectorised(
             # The scalar version is an if/elif/elif chain, so each rule only fires when the ones above
             # it did not.  The masks below are deliberately written that way even though `fired` is
             # their union either way, because the rule NAME is picked from them further down.
-            hit_stop = (adverse >= params.stop_loss) if params.stop_loss > 0 else never
+            # `_stop_threshold`, element-wise.  Guarded by the same `<= 0` short circuit for the same
+            # reason `trailing_activate` is: at the shipped value the array is never built, so the two
+            # engines agree bit for bit without this expression ever meeting a NaN entry price.
+            k_stop: Any = params.stop_loss
+            if params.stop_loss_price_cap > 0:
+                capped = np.minimum(params.stop_loss, params.stop_loss_price_cap * entry_price / unit_price)
+                k_stop = np.where(held > 0, capped, params.stop_loss)
+            hit_stop = (adverse >= k_stop) if params.stop_loss > 0 else never
             hit_take = (favourable >= params.take_profit * scales[t]) if params.take_profit > 0 else never
             if trailing:
                 moved = np.where(held > 0, np.maximum(extreme, price), np.minimum(extreme, price))

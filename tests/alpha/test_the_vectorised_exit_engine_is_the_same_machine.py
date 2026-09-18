@@ -45,6 +45,13 @@ PARAM_SETS = [
     ExitParams(stop_loss=6.0, trailing_stop=2.0, trailing_activate=1.5),
     ExitParams(stop_loss=6.0, trailing_stop=2.0, trailing_activate=0.0),
     ExitParams(trailing_stop=1.0, trailing_activate=40.0, cooldown_bars=3),
+    # EXP-SL1's branch, on both sides of its edge, the same shape as the three above.  The shipped 0.0
+    # must not reach the arithmetic at all (every other row here carries it); 0.5 binds on the loud
+    # bars these panels generate; 100.0 takes the branch and loses the `min` every time, which is the
+    # case that would hide a reciprocal or a sign error from the other two.
+    ExitParams(stop_loss=6.0, take_profit=6.0, stop_loss_price_cap=0.5),
+    ExitParams(stop_loss=2.0, take_profit=3.0, stop_loss_price_cap=0.9, unit_mode="current"),
+    ExitParams(stop_loss=6.0, take_profit=6.0, stop_loss_price_cap=100.0),
 ]
 
 

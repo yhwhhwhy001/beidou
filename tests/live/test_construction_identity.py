@@ -121,6 +121,9 @@ EXPECTED_FIELDS = {
         # v8, 2026-09-17 (EXP-AE3): ships 0.0, which is "arm from entry" - today's behaviour - and
         # CONSTRUCTION_ALIASES carries the recomputation showing the book did NOT change.
         "trailing_activate",
+        # v10, 2026-09-17 (EXP-SL1): ships 0.0, which is "no price cap" - today's behaviour - and
+        # CONSTRUCTION_ALIASES carries the recomputation showing the book did NOT change.
+        "stop_loss_price_cap",
     },
     "throttle": {"enabled", "start", "stop", "floor"},
     "leverage": {"mode", "margin_cap", "max_leverage", "margin_buffer"},
@@ -166,6 +169,10 @@ FROZEN = "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
 #: instead of moving it silently - and NOT in `CONSTRUCTION_ALIASES`, so M-010's window restarts.
 SHIPPED_D3 = "0c555e1c837e342a8af1edca0089b12461a9bdbe3b9a0f122142c63d6ba54bd7"
 
+#: v10 (+ `exits.stop_loss_price_cap`), EXP-SL1.  Inert at 0.0, so unlike `SHIPPED_D3` it IS an
+#: alias of the line above - declared before the loop ever writes it, same as v3-v8.
+AFTER_PRICE_CAP = "b8f215ab706ca7c472028d109f96f9fbb911097a9a16bb4b6fb9dee9ec5b528a"
+
 
 def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:
     """The freeze test compares the CANONICAL digest, so a field set that grows must not trip it.
@@ -190,8 +197,8 @@ def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
     from tests.live.helpers_construction import live_config_for_profile
 
     digest = construction_fingerprint(live_config_for_profile())["digest"]
-    assert digest == SHIPPED_D3, digest
-    assert canonical_construction(digest) == SHIPPED_D3, "D3 的构造不是冻结那本，不能有别名指回去"
+    assert digest == AFTER_PRICE_CAP, digest
+    assert canonical_construction(digest) == SHIPPED_D3, "v10 是惰性字段，必须解析回 D3 那本账"
     assert canonical_construction(digest) != FROZEN
 
 

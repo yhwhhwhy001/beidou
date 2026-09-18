@@ -849,8 +849,16 @@ def exit_reachability(store: StateStore, params: ExitParams | None) -> dict[str,
         sigma = max(float(unit), params.min_unit)  # `_unit_price`'s own floor, or the ceiling is a fiction
         ceiling = 1.0 / sigma
         limits: list[tuple[str, float, float]] = []
+        # EXP-SL1: with a price cap on, the effective k is `min(stop_loss, c / sigma)`, and that second
+        # term is below `1/sigma` for every `c < 1` - so the long stop this function exists to flag
+        # stops being unreachable by construction and reporting it would be false.  The cap is read
+        # rather than assumed: `c >= 1` puts the threshold back at or above the ceiling, which is
+        # exactly the case still worth naming.
+        k_stop = params.stop_loss
+        if params.stop_loss_price_cap > 0:
+            k_stop = min(k_stop, params.stop_loss_price_cap / sigma)
         if params.stop_loss > 0 and held > 0:
-            limits.append((STOP_LOSS, params.stop_loss, ceiling))
+            limits.append((STOP_LOSS, k_stop, ceiling))
         if params.take_profit > 0 and held < 0:
             limits.append((TAKE_PROFIT, params.take_profit, ceiling))
         if params.trailing_stop > 0 and held > 0:
