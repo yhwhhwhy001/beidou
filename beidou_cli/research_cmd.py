@@ -55,6 +55,7 @@ from beidou_cli.research_diagnose_cmd import (
 )
 from beidou_cli.research_forward_cmd import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     forward_add,
+    forward_retire,
     forward_status,
     research_forward,
 )

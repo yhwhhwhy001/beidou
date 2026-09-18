@@ -11,9 +11,12 @@
 
 1. **前向就是前向。** 读数只用 `entered_at` 当根 bar 及其之后的收益（`forward_slice`）。一个候选上板
    之前的表现，无论多好，都不进它的板读数——那正是它上板之前已经被用过的那部分样本。
-2. **上板即计费，计到独立桶。** 每个板条目在 `FORWARD_BOARD_STRATEGY` 桶里写一行。`ledger_scope`
-   对任何真实策略都不返回这个桶，所以板的计费**不进任何 family gate 的分母**；反过来，板自己的门
-   `board_threshold` 读的就是这个桶的行数。RISK-AM03：板若不计费就是一条免费窥视通道。
+2. **上板即计费，计到独立桶。** 每次 `add` 在 `FORWARD_BOARD_STRATEGY` 桶里写一行。`ledger_scope`
+   对任何真实策略都不返回这个桶，所以板的计费**不进任何 family gate 的分母**。RISK-AM03：板若不
+   计费就是一条免费窥视通道。
+   **门的 N 不是这个桶的行数，是 `census`——板上不同板位的个数**（含退役的）。两者不相等，也不该
+   相等：ledger 的行数是「有人做过几次动作」的审计痕迹（重新钉一次声称值也算一次），而 N 是
+   「在看几个不同的假设」。重上同一个板位不是一个新候选，所以它不抬门。
 3. **板上的候选不许被换参数。** 条目记 `param_key`（参数的规范摘要）。重算时参数对不上就是
    `TAMPERED`，那一条作废而不是给出读数（FM-AM4：板上候选被换参数 → 撤板）。
 4. **板读数不进任何历史选择。** 这个模块不导出任何能喂给 `validate` / `book` 的东西，它的报告也
@@ -73,6 +76,9 @@ class BoardEntry:
     #: `years_to_decide` 就短一点，板位就能早点「到期」。从报告读并钉住摘要，这条路就堵上了。
     evidence: str = ""
     evidence_sha256: str = ""
+    #: 那份证据自己的裁决。板不因为 FAIL 就拒绝上板——板要看的正是「可观察但不可裁定」的那批，
+    #: 而一份 FAIL 报告的样本外仍然是一次测量。但读板的人要能看见它。
+    evidence_verdict: str = ""
     #: 这个 `claimed_sharpe` 是不是一条全样本尾巴（D-043），以及上板时操作者显式承认了它。
     #: 跟着板位走完一生：几年后读这块板的人要能看出这一条的年限是建在乐观读数上的。
     claimed_is_full_sample_tail: bool = False
@@ -101,6 +107,7 @@ class BoardEntry:
                 claimed_sharpe=float(payload.get("claimed_sharpe", 0.0)),
                 evidence=str(payload.get("evidence", "")),
                 evidence_sha256=str(payload.get("evidence_sha256", "")),
+                evidence_verdict=str(payload.get("evidence_verdict", "")),
                 claimed_is_full_sample_tail=bool(payload.get("claimed_is_full_sample_tail", False)),
                 note=str(payload.get("note", "")),
             )
@@ -192,6 +199,97 @@ def full_sample_tail(report: Mapping[str, Any]) -> bool:
     return _dig(report, FULL_SAMPLE_TAIL_FIELD) is True
 
 
+@dataclass(frozen=True)
+class Retirement:
+    """把一个板位从**报告**里撤下来，但**不**把它从门的 N 里撤下来。
+
+    这两件事必须分开，否则板就有了一个后门：退掉表现差的板位，所有还在板上的候选的门就降低了。
+    「看过就是看过」——那一笔花掉的钱买的是一次观察的权利，撤回观察不能退钱，也不能退多重检验的代价。
+
+    所以 `census`（门的 N）数的是**曾经上过板的所有板位**，而 `live_entries`（报告读哪些）才排除
+    退役的。退役的唯一正当用途是**更正**：一个板位的 `claimed_sharpe` 钉错了，换一个重上，而旧的
+    那一次观察照样计在 N 里。
+    """
+
+    candidate: str
+    param_key: str
+    universe: str
+    construction_digest: str
+    retired_at: str
+    reason: str
+
+    def to_json(self) -> str:
+        return json.dumps({"retired": asdict(self)}, sort_keys=True, ensure_ascii=False)
+
+    def identity(self) -> tuple[str, str, str, str]:
+        return (self.candidate, self.param_key, self.universe, self.construction_digest)
+
+    @classmethod
+    def from_json(cls, line: str) -> Retirement | None:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        node = payload.get("retired") if isinstance(payload, dict) else None
+        if not isinstance(node, dict):
+            return None
+        try:
+            return cls(
+                candidate=str(node["candidate"]),
+                param_key=str(node["param_key"]),
+                universe=str(node["universe"]),
+                construction_digest=str(node["construction_digest"]),
+                retired_at=str(node["retired_at"]),
+                reason=str(node["reason"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+
+def read_retirements(lines: Iterable[str]) -> list[Retirement]:
+    out: list[Retirement] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        item = Retirement.from_json(line)
+        if item is not None:
+            out.append(item)
+    return out
+
+
+def live_entries(lines: Iterable[str]) -> list[BoardEntry]:
+    """报告读哪些板位。**不是** `census` 数的那些——见 `Retirement` 的 docstring。
+
+    **按文件顺序折叠，不是按集合相减。** 这是 append-only 文件唯一正确的读法，也是第一版写错的地方：
+    退役与重上的板位身份完全相同（同参数、同 universe、同构造），按身份相减会把**重上的那个也
+    一起减掉**，板于是读成空的。位置在这里是有意义的——一条退役只作用于它**之前**的那个条目，
+    之后再 append 的同身份条目是新的一次观察，重新生效。
+
+    这也正是「更正一个钉错的 `claimed_sharpe`」那条路能走通的原因：退役旧的、append 新的，
+    而两次都留在 `census` 里。
+    """
+    held: dict[tuple[str, str, str, str], BoardEntry | None] = {}
+    order: list[tuple[str, str, str, str]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        entry = BoardEntry.from_json(line)
+        if entry is not None:
+            if entry.identity() not in held:
+                order.append(entry.identity())
+            held[entry.identity()] = entry
+            continue
+        retirement = Retirement.from_json(line)
+        if retirement is not None and retirement.identity() in held:
+            held[retirement.identity()] = None
+    out: list[BoardEntry] = []
+    for key in order:
+        entry = held[key]
+        if entry is not None:
+            out.append(entry)
+    return out
+
+
 def read_board(lines: Iterable[str]) -> list[BoardEntry]:
     """读板。坏行跳过而不是抛错——板是 append-only 的记录，一行坏掉不该让整块读不出来。"""
     out: list[BoardEntry] = []
@@ -205,7 +303,10 @@ def read_board(lines: Iterable[str]) -> list[BoardEntry]:
 
 
 def census(entries: Sequence[BoardEntry]) -> int:
-    """板上有几个不同的板位。门的 N 就是它——**板越大，每个候选越难过门**。
+    """**曾经**上过板的板位数。门的 N 就是它——**板越大，每个候选越难过门**。
+
+    数的是曾经，不是现在：退役一个板位不会把它从这里撤下来（见 `Retirement`）。否则退掉输家
+    就能降低所有还在板上的候选的门，而那正是这块东西要防的那类事。
 
     这与 D-028「搜得越多越退休自己的 incumbent」是同一条性质，换到前向上：多看一个候选，
     是在抬高所有候选的门，包括已经在板上看了两年的那个。写在这里是为了让加板位这件事有价钱。

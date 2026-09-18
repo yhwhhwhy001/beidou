@@ -3176,7 +3176,18 @@ CEILING = {
     # +25 beidou_cli，2026-09-17（7_329 -> 7_354）：`research forward add` 的全样本尾巴守卫与
     # `--accept-full-sample-tail`，理由见上面 beidou_alpha 那条。大部分行是拒绝消息本身——它要说清
     # 「为什么这会让板判得太早」，否则下一个人只会照着提示加那个开关。
-    "beidou_cli": 7_354,
+    # +77 beidou_cli，2026-09-17（7_354 -> 7_431）：`research forward retire`，`add` 认得退役的板位
+    # 可以重上，以及板读数换一个目录。
+    #
+    # 目录那件事小但有代价：板读数原来写进 `reports/research/`，而那里放的是**计过费的证据**。
+    # 板读数是可从板与数据完全复现的派生物，日任务每天写一份——一年 365 个未跟踪文件会把
+    # `git status` 淹掉，掩盖真正的新证据。改写 `reports/forward-board/`。这与本页记过的另一类错误
+    # 同形：一层噪声掩盖另一层的信号。
+    #
+    # 重上要**再计一笔**，但**不抬门**：ledger 那行是「谁在什么时候改了这个板位的声称值」的审计
+    # 痕迹，而门的 N 数的是「在看几个不同的假设」。重新钉一次声称值不是一个新候选。两者本来就
+    # 不该相等。
+    "beidou_cli": 7_431,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3330,7 +3341,25 @@ CEILING = {
     # 估计量的噪声还大。误差的方向是要紧的：高估 claimed 只会太早、不会太晚，所以默认拒绝，要用
     # 就显式承认，承认写进板条目跟着板位走完一生。真选择网格下 tsmom 的样本外是 1.27——按尾巴算
     # 1.07 年，按 1.27 算 1.66 年，差 0.6 年。
-    "beidou_alpha": 10_012,
+    # +101 beidou_alpha，2026-09-17（10_012 -> 10_113）：前向板的退役机制（`Retirement` /
+    # `live_entries`），以及板条目记下证据自己的 verdict。
+    #
+    # 为什么需要它：更正一个钉错的 `claimed_sharpe`。板是 append-only，条目改不了，而 tsmom 第一个
+    # 板位钉的是一条全样本尾巴（1.5919）。查清 `oos_is_full_sample_tail = consistent or
+    # len(param_keys) <= 1` 之后知道，**一个固定配置的 walk-forward 永远是尾巴**——没有选择就没有
+    # 选择的样本外，所以「在架 tsmom 的非尾巴样本外」在定义上不存在，重跑同一个 2 格网格只会再得
+    # 一条尾巴（归档里六份该网格的报告，六份 `consistent=True`）。更正的路只能是换一份真做过选择的
+    # 读数重上。
+    #
+    # 这套机制唯一真正危险的地方，以及它是怎么被堵住的：**退掉表现差的板位来降低别人的门**。
+    # 所以退役只把板位撤出**报告**，`census`（门的 N）数的是**曾经**上过板的，一个都不减。
+    # 「看过就是看过」——那一笔买的是一次观察的权利，撤回观察不能退多重检验的代价。
+    #
+    # `live_entries` 按**文件顺序折叠**而不是按身份相减，这是第一版写错的地方：退役与重上的板位
+    # 身份完全相同（同参数、同 universe、同构造），相减会把重上的那个也一起减掉，板读成空的——
+    # 更正 tsmom 时正是这样，`status` 报「全部已退役」。位置是有意义的：一条退役只作用于它**之前**
+    # 的那个条目。
+    "beidou_alpha": 10_113,
 }
 
 

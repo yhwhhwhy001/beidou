@@ -16,12 +16,14 @@ from beidou_alpha.validation.forward_board import (
     OBSERVING,
     TAMPERED,
     BoardEntry,
+    Retirement,
     board_param_key,
     board_report,
     board_threshold,
     census,
     forward_reading,
     forward_slice,
+    live_entries,
     read_board,
     tampering,
     years_to_decide,
@@ -259,3 +261,67 @@ def test_the_same_candidate_twice_is_one_slot() -> None:
     entry = _entry()
     assert census([entry, _entry()]) == 1
     assert census([entry, _entry(params={"horizon": 336})]) == 2
+
+
+# ---- 退役：能更正一个钉错的板位，但不能靠它降低别人的门 ------------------------------------
+
+
+def _retire(entry: BoardEntry, reason: str = "claimed 钉错了") -> Retirement:
+    return Retirement(
+        candidate=entry.candidate,
+        param_key=entry.param_key,
+        universe=entry.universe,
+        construction_digest=entry.construction_digest,
+        retired_at="2026-09-17T22:00:00+00:00",
+        reason=reason,
+    )
+
+
+def test_retiring_takes_a_slot_out_of_the_report() -> None:
+    entry = _entry()
+    lines = [entry.to_json(), _retire(entry).to_json()]
+    assert live_entries(lines) == []
+
+
+def test_retiring_does_not_lower_the_gate_for_anyone_else() -> None:
+    """这是这套机制唯一真正危险的地方：退掉表现差的板位来降低别人的门。
+
+    `census` 数的是**曾经**上过板的，所以退役对门的 N 一点作用都没有。
+    """
+    a, b = _entry(candidate="tsmom"), _entry(candidate="meanrev")
+    lines = [a.to_json(), b.to_json(), _retire(b).to_json()]
+    assert len(live_entries(lines)) == 1, "退役的没被撤出报告"
+    assert census(read_board(lines)) == 2, "退役把门的 N 降下来了——那是这套机制的后门"
+    assert board_threshold(2, n_obs=8760) > board_threshold(1, n_obs=8760), "前提：N 更大门更高"
+
+
+def test_a_slot_re_added_after_retirement_is_live_again() -> None:
+    """**按文件顺序折叠，不是按身份相减。** 第一版就错在这里。
+
+    退役与重上的板位身份完全相同（同参数、同 universe、同构造），按身份相减会把重上的那个也一起
+    减掉，板读成空的——2026-09-17 更正 tsmom 的 claimed 时正是这样，板显示「全部已退役」。
+    位置是有意义的：一条退役只作用于它**之前**的那个条目。
+    """
+    old = _entry(claimed_sharpe=1.5919)
+    new = _entry(claimed_sharpe=1.2757)
+    lines = [old.to_json(), _retire(old).to_json(), new.to_json()]
+    live = live_entries(lines)
+    assert len(live) == 1, "重上的板位被退役记录误伤了"
+    assert live[0].claimed_sharpe == pytest.approx(1.2757), "读到的还是旧的那个声称值"
+
+
+def test_re_adding_does_not_raise_the_gate_because_it_is_the_same_hypothesis() -> None:
+    """重新钉一次声称值不是一个新候选，所以它不抬门。计一笔是审计痕迹，与 N 是两件事。"""
+    old = _entry(claimed_sharpe=1.5919)
+    new = _entry(claimed_sharpe=1.2757)
+    assert census(read_board([old.to_json(), _retire(old).to_json(), new.to_json()])) == 1
+
+
+def test_a_retirement_for_something_never_on_the_board_is_ignored() -> None:
+    assert len(live_entries([_entry().to_json(), _retire(_entry(candidate="xsmom")).to_json()])) == 1
+
+
+def test_a_correction_lengthens_the_horizon_which_is_the_point() -> None:
+    """更正的方向：从尾巴 1.5919 换成真选择网格的 1.2757，年限 1.07 -> 1.66 年。"""
+    assert years_to_decide(1.5919, n_on_board=1) == pytest.approx(1.07, abs=0.02)
+    assert years_to_decide(1.2757, n_on_board=1) == pytest.approx(1.66, abs=0.02)
