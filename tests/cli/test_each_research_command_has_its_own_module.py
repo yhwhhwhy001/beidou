@@ -49,6 +49,9 @@ COMMANDS = {
     "research_book": "research_book_cmd",
     "research_decompose": "research_decompose_cmd",
     "research_mine": "research_mine_cmd",
+    # Q-SY1 (2026-09-18): the gate's power table, computable before a run so a pre-registration
+    # can quote it.  Its own module because it shares nothing with `validate` except a renderer.
+    "research_power": "research_power_cmd",
     # `forward` 是一个 group 不是命令：`add` 花钱、`status` 不花钱，做成同一条命令的两个开关
     # 迟早会有人读一次板就花掉一笔（见 `research_forward_cmd` 的模块 docstring）。
     "research_forward": "research_forward_cmd",
@@ -93,6 +96,7 @@ def test_every_command_is_registered() -> None:
         "book",
         "decompose",
         "mine",
+        "power",
         "forward",
     }
     assert registered == expected, f"注册的命令与预期不符：多 {registered - expected}，少 {expected - registered}"

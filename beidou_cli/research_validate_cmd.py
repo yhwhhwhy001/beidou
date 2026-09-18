@@ -97,6 +97,7 @@ from beidou_cli.research_report import (
     _full_sample_tail_note,
     _grid_table,
     _pbo_note,
+    _power_rows,
     _stamp,
     _write,
 )
@@ -639,9 +640,17 @@ def research_validate(
             (
                 "Selection-deflated OOS threshold (D-028)",
                 {
-                    **report["oos_selection"],
+                    **{k: v for k, v in report["oos_selection"].items() if k != "power"},
                     "caliber": _caliber_note(report["oos_selection"], report.get("oos_selection_whole_library")),
                 },
+            ),
+            # The same gate read the other way round.  Pulled out of the spread above rather than left
+            # as one nested cell: `render_markdown` would print it as a Python dict on a single row,
+            # and this is the block the 2026-09-18 analysis says has been missing from every answer to
+            # "is the bar too high" (Q-SY1).
+            (
+                "Power of that gate (D-020 + D-028): what it would have detected",
+                _power_rows(report["oos_selection"].get("power")),
             ),
             # R0's other caliber, in the artefact rather than only in the payload.  It is the block DL-G1
             # added so that "which N" stays arguable, and until now the Markdown dropped it.
@@ -746,6 +755,14 @@ def research_validate(
         f"at {report['oos_selection']['n_trials']} trials, alpha={report['oos_selection']['alpha']}, "
         f"p_family={_fmt(report['oos_selection']['p_family'])} (D-028)"
     )
+    power = report["oos_selection"].get("power")
+    if power:
+        detected = "  ".join(f"SR{d['true_sharpe_annual']:.1f}->{d['power']:.1%}" for d in power["detects"])
+        click.echo(
+            f"power of that gate ({power['gate_annual']:.4f}, {power['binding']} binds, "
+            f"se={power['se_annual']:.4f}): {detected}  "
+            "(selection + pass line only; CPCV/PBO/fold/cost x2 make the joint power LOWER)"
+        )
     click.echo(
         f"grid of {mt['grid_trials']} is worth {_fmt(mt.get('grid_effective_trials'))} independent trials "
         "(reported; the gate's denominator is the raw ledger count)"

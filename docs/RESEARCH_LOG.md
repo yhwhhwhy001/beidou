@@ -13050,3 +13050,60 @@ Sharpe。不能拿本轮的数据去配一个事后的判据。
 - `config/live.demo.yaml` **不写它**。K-EX14 本来就管到 2026-10-17T16:07Z，而本轮的裁决是 REFUTED，
   两条各自独立地指向同一个结果。
 - ledger +4 笔（两臂各 2），不是预登记估的 8 笔——static 臂按规则免跑。
+
+## 2026-09-18 · Q-SY1 裁「要」：门的功效表进了代码——「太严」从此是一个数，不是一个词
+
+操作者对 09-18 系统优化分析（`docs/analysis/2026-09-18-system-optimization-and-factor-module-deep-analysis.md`）
+留下的三条裁定全答「要」。本节记第一条（Q-SY1，Q-CRITICAL，零 ledger）的落地。另两条（Q-SY2 residual
+上前向板、Q-SY3 #27 回填 623 个标的）各自另记。
+
+### 为什么这条值得写代码
+
+**同一个问题被问了四次**（09-17 三次、09-18 一次）：判定条件是不是太严。四次的回答都是「不是门」，
+四次都**没有给数**——所以它每次都回来。而数一直在手边：每份 validation 报告自己存着样本外 Sharpe
+估计的抽样方差 `oos_selection.variance`，从它到「真年化 Sharpe 是 s 的策略过得了这道门的概率」只是
+一次正态尾概率。09-18 的独立对抗审查（K-SY02）指出了这一点，并算出了那张表。
+
+### 做了什么
+
+| 位置 | 内容 |
+| --- | --- |
+| `beidou_alpha/validation/multiple_testing.py` | `selection_power()` 与常量 `PASS_LINE_ANNUAL` / `POWER_SHARPES`；`oos_selection_threshold()` 的返回里多一个 `power` 块 |
+| `beidou_cli/research_report.py` | `_power_rows()`：一个渲染器，预登记与报告共用，两边逐行可比 |
+| `beidou_cli/research_validate_cmd.py` | 功效进 Markdown 自己一节、进 stdout 一行 |
+| `beidou_cli/research_power_cmd.py` | 新命令 `beidou research power`，**跑之前**就能算，零 ledger |
+| `docs/PREREGISTRATION.md` | 预登记模板，七项必写，功效读数是第 5 项 |
+
+### 落盘的读数（用 registry 引用的那份证据复算，`tsmom-validation-20260913T182325Z.json`）
+
+样本外 Sharpe 估计的年化标准误 **0.4396**（45,240 根 1h bar = 5.164 年，年化常量 8760）。
+门取 `max(D-028 选择门, D-020 的 1.0 PASS 线)`：
+
+| 桶 / N | 门 | 谁挡路 | 真 1.0 | 1.2 | 1.5 | 2.0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 空桶 N=1 | 1.0000 | PASS 线 | **50.0%** | 67.5% | 87.2% | 98.9% |
+| residual N=16 | 1.1985 | 选择门 | 32.6% | 50.1% | 75.4% | 96.6% |
+| N=100 | 1.4433 | 选择门 | 15.7% | 29.0% | 55.1% | 89.7% |
+| tsmom N=299 | 1.5738 | 选择门 | 9.6% | 19.8% | **43.3%** | 83.4% |
+| tsmom N=315（+16 格） | 1.5798 | 选择门 | 9.4% | 19.4% | 42.8% | 83.0% |
+| tsmom N=351（翻转点） | 1.5921 | 选择门 | 8.9% | 18.6% | 41.7% | 82.3% |
+
+与分析 §5.2.1 那张表逐格一致（`tests/alpha/test_the_gate_reports_what_it_would_detect.py` 钉住），
+**除了一格**：分析写「16 格网格把 N 推到 315，功效再降约 2 个百分点」，实测是 **0.49** 个百分点。
+原句按惯例保留并就地标注更正；校准记录加了一行。发现它的是这张表接进代码之后的第一次运行——
+那一格是写正文时心算的，同一节里另外二十个数都是跑出来的，而读者无从分辨哪一格是哪一种。
+
+### 三条要记住的读法
+
+1. **空桶里挡路的是 D-020 的 PASS 线，不是 D-028。** 真 Sharpe 恰好 1.0 的策略，估计量围绕 1.0
+   对称，所以过线概率是一半。这与多重检验无关，是五年样本外的抽样噪声。
+2. **这张表是上界。** 它只含选择门与 PASS 线，不含 CPCV 负路径、PBO、fold 一致性、成本 ×2。
+   真实联合功效只会更低。artefact 自己带这句话（`power.excludes`）。
+3. **功效低不是放宽门的理由。** α 是操作者签的 0.05；功效是样本长度的函数。它能改变的是
+   **要不要跑**：一次只有 43% 把握的 validate 花的是同一笔 ledger，还会把同桶所有候选的门再抬高。
+
+### 本节没做什么
+
+没跑 `validate` / `mine` / `book` / `diagnose`；`trials.jsonl` 未被触碰；没改 `config/alpha_registry.yaml`
+与任何 registry 参数；没改判据阈值（`VerdictThresholds` 一个字段都没动，`power` 块不参与 `decide`）；
+没动实盘。source budget 抬顶 +109 beidou_alpha / +168 beidou_cli，理由写在紧挨常量的注释里。

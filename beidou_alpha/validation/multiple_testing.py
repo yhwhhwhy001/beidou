@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Any
@@ -290,8 +291,102 @@ def family_p_value(sharpe_period: float, n_trials: int, sharpe_variance: float) 
     return float(1.0 - normal_cdf(sharpe_period / math.sqrt(sharpe_variance)) ** trials)
 
 
+# D-020's PASS line - the other half of the bar.  A report is judged against `max(selection threshold,
+# pass line)`, and below about thirty trials it is the pass line that binds, not D-028.  The number
+# `decide` reads is `VerdictThresholds.pass_oos_sharpe`; this constant exists because `verdict` imports
+# THIS module and the arrow cannot point both ways.  `test_the_power_table_reads_the_same_pass_line_the
+# _verdict_does` asserts they are equal, so the duplication is checked rather than promised.
+PASS_LINE_ANNUAL = 1.0
+
+# The true annual Sharpes the table is read at.  Fixed rather than chosen per run: rows that move with
+# the candidate are rows that can be picked after seeing the answer.  1.0 is the pass line itself, 1.5
+# is roughly what the shipped book claims, 2.0 is the best this pipeline has ever measured out of
+# sample.  1.2 sits between the first two because that is where the interesting candidates have landed.
+POWER_SHARPES: tuple[float, ...] = (1.0, 1.2, 1.5, 2.0)
+
+
+def selection_power(
+    *,
+    sharpe_variance: float,
+    bars_per_year: float,
+    n_trials: int,
+    alpha: float = 0.05,
+    pass_line_annual: float = PASS_LINE_ANNUAL,
+    true_sharpes: Sequence[float] = POWER_SHARPES,
+) -> dict[str, Any] | None:
+    """How often a strategy whose TRUE annual Sharpe is ``s`` clears this gate.  D-028's other half.
+
+    ``oos_selection_threshold`` answers one question: how high must the bar be so that pure noise
+    clears it at most ``alpha`` of the time.  It has never answered the question underneath it - how
+    often a REAL edge clears the same bar - and the operator has now asked whether the pipeline is too
+    strict four times (2026-09-17 three times, 2026-09-18 once).  Every previous answer was the word
+    "no" with no number beside it, which is why the question kept coming back.  This is the number.
+
+    The arithmetic is three lines and was available the whole time, which is the uncomfortable part.
+    The OOS Sharpe estimate is asymptotically normal around the true Sharpe with the standard error
+    this report already stores (``variance``, per period; annualised here by sqrt(bars_per_year)).  So
+    the probability of clearing an annual gate ``g`` is ``1 - Phi((g - s) / se)``.  On the evidence
+    report the registry cites (``tsmom-validation-20260913T182325Z``) that standard error is **0.44**
+    over 5.16 years out of sample, and the consequences are not small:
+
+        N=1   gate 1.000   true SR 1.0 -> 50.0%   1.5 -> 87.2%
+        N=299 gate 1.574   true SR 1.0 ->  9.6%   1.5 -> 43.3%
+
+    A true Sharpe 1.0 strategy is a coin flip against the PASS line in an EMPTY bucket, before any
+    multiple-testing penalty exists.  That is not D-028's doing and cannot be fixed by moving D-028:
+    it is what a five-year out-of-sample window buys.  The two things that move it are a longer sample
+    (the forward board's whole purpose) and a larger true Sharpe.  Lowering ``alpha`` is the third and
+    it is not available - the operator signed 0.05, and a gate loosened because a candidate failed it
+    is not a gate.
+
+    What this is NOT.  It covers the selection threshold and the pass line only, not CPCV's negative
+    path share, PBO, fold consistency or the doubled-cost Sharpe.  Those are four further conditions a
+    real candidate also has to satisfy, so the joint power of the pipeline is **lower** than the number
+    printed here, never higher.  Stated rather than caveated away, because a power table that reads as
+    an upper bound is the honest shape for this one.
+
+    One approximation, with its size.  The standard error is the one the report measured at its own
+    moments, not one re-derived at each hypothesised Sharpe.  ``sampling_variance`` is
+    ``(1 - skew * sr + (kurt - 1) / 4 * sr^2) / (n - 1)`` with ``sr`` per period, and the hypothesised
+    Sharpes sit within 1.0 annual of the observed one - which at 8,760 bars a year is 0.0107 per
+    period.  So for a skew of 1.0 the variance moves by about 1.1% and the annual standard error by
+    about 0.5%: 0.4396 against 0.4418, which moves the 43.3% cell to 43.4%.  Below the resolution of
+    any decision this table is used for.
+    """
+    if sharpe_variance <= 0 or bars_per_year <= 0 or not 0.0 < alpha < 1.0:
+        return None
+    scale = math.sqrt(bars_per_year)
+    se_annual = math.sqrt(sharpe_variance) * scale
+    trials = max(1, int(n_trials))
+    selection_annual = max_sharpe_quantile(trials, sharpe_variance, alpha) * scale
+    gate_annual = max(selection_annual, float(pass_line_annual))
+    return {
+        "n_trials": trials,
+        "alpha": alpha,
+        "se_annual": se_annual,
+        "pass_line_annual": float(pass_line_annual),
+        "selection_threshold_annual": selection_annual,
+        "gate_annual": gate_annual,
+        # WHICH of the two halves is binding at this N.  Without it a reader who sees a gate of 1.0
+        # cannot tell whether the bucket is empty or D-028 happened to land there.
+        "binding": "selection" if selection_annual > pass_line_annual else "pass_line",
+        "detects": [
+            {"true_sharpe_annual": float(s), "power": 1.0 - normal_cdf((gate_annual - float(s)) / se_annual)}
+            for s in true_sharpes
+        ],
+        # The gates this table does NOT include, carried in the artefact so the bound stays visible
+        # where the numbers are rather than only in this docstring.
+        "excludes": ["cpcv_fraction_negative", "pbo", "fold_consistency", "cost_stress_x2"],
+    }
+
+
 def oos_selection_threshold(
-    oos_returns: np.ndarray, *, n_trials: int, bars_per_year: float, alpha: float = 0.05
+    oos_returns: np.ndarray,
+    *,
+    n_trials: int,
+    bars_per_year: float,
+    alpha: float = 0.05,
+    pass_line_annual: float = PASS_LINE_ANNUAL,
 ) -> dict[str, Any]:
     """D-028: the out-of-sample Sharpe a strategy must clear given how many configurations were tried.
 
@@ -332,6 +427,10 @@ def oos_selection_threshold(
             "threshold_annual": None,
             "expected_max_annual": None,
             "p_family": None,
+            # A series too short to give a Sharpe gives no null either, so there is no gate to be
+            # powerful against.  Null rather than an empty table: "not computed" and "computed and
+            # found to detect nothing" are different facts.
+            "power": None,
         }
     skew, kurt = moments(values)
     variance = sampling_variance(period, n_obs, skew, kurt)
@@ -349,6 +448,16 @@ def oos_selection_threshold(
         "expected_max_annual": expected_max_sharpe(trials, variance) * scale,
         "p_family": family_p_value(period, trials, variance),
         "oos_sharpe_annual": period * scale,
+        # D-020 + D-028 read the other way round: given this gate and this sample, what would it
+        # have detected.  Carried in every report so "is the bar too high" is a number in the
+        # artefact instead of an argument four rounds long (2026-09-18, Q-SY1).
+        "power": selection_power(
+            sharpe_variance=variance,
+            bars_per_year=bars_per_year,
+            n_trials=trials,
+            alpha=alpha,
+            pass_line_annual=pass_line_annual,
+        ),
     }
 
 

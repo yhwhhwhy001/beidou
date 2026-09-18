@@ -111,6 +111,9 @@ from beidou_cli.research_panel import (  # noqa: F401  (re-exported at its histo
     _wants_metrics,
     _wants_spot,
 )
+from beidou_cli.research_power_cmd import (
+    research_power,
+)
 from beidou_cli.research_report import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     _MARGIN_BUFFER_NOTE,
     COST_SHARE_LIMIT,
@@ -145,5 +148,6 @@ __all__ = [
     "research_list",
     "research_mine",
     "research_overlay",
+    "research_power",
     "research_validate",
 ]
