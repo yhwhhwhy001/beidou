@@ -67,6 +67,15 @@ protection 认不出 Binance 的密钥。**
 **拦不住本仓库唯一真正怕丢的那个东西**。它仍然有价值——它是唯一绕不过的一层——
 但不要指望它接住 Binance 的 key。
 
+**别被这个 API 骗了**：`secret_scanning_non_provider_patterns`（通用模式检测，能抓
+认证头、连接串、私钥）看起来是个能补上缺口的开关，但它同样要付费的 Secret Protection。
+实测把它 PATCH 成 `enabled`，**GitHub 返回 200，状态却仍然是 `disabled`**——它是静默
+拒绝，不报错。只看 HTTP 状态码会以为开好了。要确认一个开关真的生效，读回它的值：
+
+```bash
+gh api repos/yhwhhwhy001/beidou --jq '.security_and_analysis'
+```
+
 ### 由此得到的实际结论
 
 **Binance 密钥在"进入公开仓库之前"的拦截，只剩本机那两个 hook，而它们都能被
