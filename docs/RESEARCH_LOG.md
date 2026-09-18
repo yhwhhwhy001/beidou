@@ -13354,3 +13354,84 @@ residual 今天的处置是前向板（PR #67，claimed 1.0484），要等 **3.4
 
 完整分析见 `docs/analysis/2026-09-18-ledger-denominator-and-four-objectives-deep-analysis.md`
 （§13 是本节的来源，§7 是推翻第一版结论的那次独立审查）。
+
+## 2026-09-18 · 预登记：tsmom 证据重出（我重建成员表把它的 dataset manifest 作废了）
+
+**写在跑之前。** 起因是我自己造成的：执行优化方案的 B2 时重建了 `.beidou/data/membership.parquet`
+（2,042 → 2,056 次刷新、877 → 881 列、并集 211 → 212、末行 09-03 → 09-17），而 `membership` 是
+`beidou_data/manifest.py` 的 `BLOCKING_FIELDS` 之一。后果：tsmom 在架证据
+`tsmom-validation-20260913T182325Z.json` 记录的 manifest 与磁盘不再一致，
+`registry_dataset_problems` 返回 blocking，而 `beidou_cli/live_cmd.py:303-309` 在 armed 启动时
+遇到 blocking 会抛异常拒绝启动。**循环现在还在跑（PID 88298），但下一次重启会起不来**，而
+`com.beidou.live.plist` 的 KeepAlive 是开着的。
+
+旧表恢复不了：日线已推到 09-17，重建只会再得到 2,056。本文件 `855` 行记过 2026-09-04 同一件事的
+结论——「时点半边不可复现，而且修不了」。所以走重出，与 09-04 之后的做法一致。
+
+### 1. 假设
+
+tsmom 的已采纳配置在**重建后的**时点成员表上仍然通过 D-020/D-028，即样本外 Sharpe 仍在其
+family gate 之上。
+
+### 2. 这是「新信息」还是「新网格」
+
+**两者都不是。** 同一个策略、同一组参数、同一个网格、同一套判据，只是数据底座变了（成员表多 14 次
+刷新、多 1 个标的，klines 多 4 天）。这是一次**重新测量**，不是一次搜索。因此不重开任何 KILL，
+不改任何门限。
+
+### 3. 协议（逐项抄自被作废的那份报告，不是新拟的）
+
+```bash
+.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 152 --charge 2 --prereg <本节的 commit>
+```
+
+`--folds 5` / `--min-train 4000` / `--purge 50` / `--embargo`（跟随 purge = 50）/ `--cpcv-groups 6`
+/ `--guards` / `--exits` / `--capital 0.0` 全部是默认值，与 `20260913T182325Z` 的
+`folds: 5, min_train: 4000, purge: 50, embargo: 50, cpcv_groups: 6` 逐项相同。
+**`--to` 不钉**：钉住它不再是免费重放，而且本次的目的正是让证据描述**今天**的数据。
+
+### 4. 计费与桶
+
+**2 笔**，进 `tsmom` 桶（`grid_size: 2`，与被作废那份相同）。tsmom 的 family gate N **299 → 301**。
+`--charge` 显式传，尽管本次网格与被引用证据相同、CLI 未必强制要求。
+
+### 5. 功效读数
+
+```
+N=301, 门 1.5746（选择门 binding），SE 0.4396
+  真 Sharpe 1.0 -> 9.6%    1.2 -> 19.7%    1.5 -> 43.3%    2.0 -> 83.3%
+```
+由 `research power --evidence reports/research/tsmom-validation-20260913T182325Z.json --trials 299
+--charge 2` **跑出来**的，不是手算的。零 ledger。
+
+**这一格差点又是心算。** 本节初稿按外推写了「门 1.5744、SE 0.4395、43.2%」，跑完命令才发现第 3–4 位
+有效数字不对。校准表 2026-09-18 那行写着「同一张表里不允许混入心算格——要么整张表由一段可重跑的
+代码产出，要么逐格标出哪些是跑的」。本节在**提交之后、运行之前**改了过来，SHA 因此变过一次。
+
+不含 CPCV / PBO / fold 一致 / 成本 ×2，所以这是**上界**，真实联合功效只会更低。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS`（`registry.py` 的上线口径） | — |
+| 样本外 Sharpe 对 family gate | `oos > gate` | 直接读报告的 `oos_selection`，不手算 |
+| dataset manifest | 新报告的 `membership` 与磁盘逐字段一致 | 由 `registry_dataset_problems` 判，不目测 |
+
+**判负之后做什么，先写死**：若 verdict 为 `FAIL`，**不重跑、不换网格、不申诉门**。那意味着
+tsmom 在重建后的成员表上不再成立——这是一个远比「循环重启不了」更大的发现，按 D-020 走，
+并把实盘处置交操作者裁定。若只是 `WEAK_PASS`，按上线口径仍可更新指针，但要在报告里写明降级。
+
+### 7. 预期
+
+预期 `PASS`，样本外 Sharpe 与 1.5919 的差在 **±0.05** 以内——成员表只多 14 次刷新（0.7%）与
+1 个标的，klines 多 4 天。若差超过 0.15，说明成员表的那点变化不足以解释它，要先查是不是别的东西
+一起变了（例如 klines 的 4 天尾巴或 funding 的 248 → 255），**再**谈判定。
+
+### 8. 本次服务四个目标里的哪一个
+
+**服务：G-C（更高吞吐）。** 它不产出新 alpha，也不改回撤；它买回的是**可重启性**——一个失去可重启性
+的循环，其后续每一次观察都建立在「只要不崩」之上。按 2026-09-18 采纳的排序 G-C 排第一。
