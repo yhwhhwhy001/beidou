@@ -1,0 +1,116 @@
+专有软件许可声明
+PROPRIETARY SOFTWARE LICENSE
+
+版权所有 © 2026 yhwhhwhy001。保留所有权利。
+Copyright © 2026 yhwhhwhy001. All rights reserved.
+
+---
+
+## 中文
+
+本仓库（「北斗 / Beidou」，含全部源代码、文档、配置、研究报告与数据产物，
+以下统称「本软件」）是专有软件，不是开源软件。
+
+**公开可见不等于授予许可。** 本仓库在 GitHub 上公开可读，仅为便于作者本人查阅、
+备份与协作。任何人不因能够读到它而获得使用它的权利。
+
+未经版权所有者事先书面许可，任何人不得：
+
+1. 复制、下载或留存本软件的全部或部分，用于阅读之外的任何用途；
+2. 修改本软件，或基于本软件制作派生作品；
+3. 分发、再许可、出售、出租或以其它方式向第三方提供本软件；
+4. 将本软件的全部或部分用于商业用途，包括但不限于实盘交易、受托理财、
+   投资咨询，以及任何形式的对外服务；
+5. 将本软件用于训练机器学习模型或构建数据集。
+
+GitHub 服务条款授予的权利不受本声明影响：依据该条款，公开仓库的内容可被浏览，
+并可通过 GitHub 的 fork 功能复制到 GitHub 平台内部。此项例外仅限于 GitHub 平台
+本身提供的功能，不构成对上述任何限制的豁免。
+
+### 第三方组件（不适用本声明）
+
+以下目录的内容**不是**本声明的标的，其许可条款以各自目录内的许可证文件为准：
+
+- `.claude/skills/backtest-guard/` —— 两个第三方 MIT 项目的合并版：
+  - `LICENSE.backtest-guard`（MIT，Copyright © 2026 paidaxing）
+  - `LICENSE.strategy-critique`（MIT，Copyright © 2026 Shaan Shaik）
+
+上述组件依 MIT 许可证授权使用，本声明的任何条款均不得解释为限制 MIT 许可证
+授予任何人的权利。本软件依赖的第三方 Python 包同样各自适用其自身的许可证，
+不受本声明约束。
+
+**免责声明。** 本软件按「现状」提供，不附带任何形式的明示或默示担保，包括但不
+限于适销性、特定用途适用性与不侵权的担保。在任何情况下，版权所有者均不对任何
+索赔、损害或其它责任负责，无论其源于合同、侵权或其它事由，亦无论其是否与本软件
+或本软件的使用或其它交易有关。
+
+**关于金融风险的特别声明。** 本软件是量化交易系统的研究与实现，仓库中的研究
+报告、回测结果、参数与判定记录均为作者本人的研究记录，**不构成投资建议、
+财务建议或任何形式的要约**。加密货币衍生品交易具有高风险，可能导致全部本金损失。
+任何人依据本软件或其中任何内容作出的交易决策，后果由其自行承担。
+
+许可咨询：请通过本仓库的 GitHub 私有渠道联系版权所有者。
+
+---
+
+## English
+
+This repository ("Beidou", including all source code, documentation, configuration,
+research reports, and data artifacts, collectively the "Software") is proprietary
+software. It is not open source.
+
+**Public visibility does not grant a license.** This repository is publicly readable
+on GitHub solely for the author's own reference, backup, and collaboration. No one
+acquires any right to use it merely by being able to read it.
+
+Without the prior written permission of the copyright holder, no person may:
+
+1. copy, download, or retain all or part of the Software for any purpose other
+   than reading it;
+2. modify the Software or create derivative works based on it;
+3. distribute, sublicense, sell, rent, or otherwise make the Software available
+   to third parties;
+4. use all or part of the Software for any commercial purpose, including but not
+   limited to live trading, managing funds for others, investment advisory, or
+   any form of service provided to others;
+5. use the Software to train machine learning models or to build datasets.
+
+Rights granted by the GitHub Terms of Service are unaffected: under those terms,
+the contents of a public repository may be viewed and may be copied within the
+GitHub platform via GitHub's fork feature. This exception is limited to
+functionality provided by the GitHub platform itself and does not waive any of
+the restrictions above.
+
+### Third-party components (not covered by this notice)
+
+The contents of the following directory are **not** subject to this notice.
+They are licensed under the terms of the license files within that directory:
+
+- `.claude/skills/backtest-guard/` — a merge of two third-party MIT projects:
+  - `LICENSE.backtest-guard` (MIT, Copyright © 2026 paidaxing)
+  - `LICENSE.strategy-critique` (MIT, Copyright © 2026 Shaan Shaik)
+
+These components are licensed under the MIT License, and nothing in this notice
+shall be construed to limit the rights the MIT License grants to any person.
+Third-party Python packages this Software depends on are likewise governed by
+their own licenses and are not subject to this notice.
+
+**Disclaimer.** THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+**Financial risk notice.** The Software is research into, and an implementation
+of, a quantitative trading system. The research reports, backtest results,
+parameters, and adjudication records in this repository are the author's own
+research notes. They do **not** constitute investment advice, financial advice,
+or an offer of any kind. Trading cryptocurrency derivatives carries a high risk
+of loss, up to and including the total loss of principal. Anyone who makes a
+trading decision on the basis of the Software or anything in it does so entirely
+at their own risk.
+
+Licensing enquiries: contact the copyright holder through this repository's
+private GitHub channels.
