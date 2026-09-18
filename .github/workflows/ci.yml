@@ -65,7 +65,38 @@ jobs:
       # "依赖按 requirements.lock 安装、不每次重新解析"那条规矩，理由正是"解析到当天最新"会静默变。
       # `@v7` 在 v7.x 内部同样会自己变。两者风险不同量级（action 是 GitHub 自己维护的少数几个），
       # 要不要改成 SHA 钉住是一次单独的决定，不在这次升级里顺手做。
+      # `fetch-depth: 0` 是给下面那道 Secrets 门用的，它要全部历史。默认的浅检出只有
+      # 一个 commit，在它上面跑历史扫描会安静地通过——而「安静地通过」正是这个仓库
+      # 反复付过学费的那种失败（见文件开头的 23 次红 CI）。代价是检出慢几秒，
+      # 72 MB 的仓库量过：浅检出 ~2s，完整 ~8s。
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # ↓ 第五道门：Secrets。2026-09-19 加，起因是发现本仓库**从 2026-08-05 创建起
+      #   就是公开的**——而 CLAUDE.md 里一直写着「Free plan 的 private repo」，这个
+      #   认知差持续了 45 天。当天全历史扫描的结论是干净的（1,637 commits、72 MB、
+      #   零真实泄漏），这道门是为了让它**保持**干净。
+      #
+      #   为什么扫全历史而不是只扫这次改动：密钥一旦进了历史，把文件删掉不会让它消失。
+      #   只扫工作树的检查会对着一个仍然公开可读的密钥报平安。
+      #
+      #   为什么钉版本而不用 `gitleaks/gitleaks-action@v2`：与「依赖按 requirements.lock
+      #   安装、不每次重新解析」同一条理由。扫描规则集会随版本变，一次规则更新让这道门
+      #   在没人改过代码的情况下变红或者变哑，都不是这里想要的。升级版本是一次显式提交，
+      #   升级时要重跑 `.gitleaks.toml` 的自检（见 deploy/install-hooks.sh 末尾那段）。
+      #
+      #   这道门与其它四道一样带 `if: !cancelled()`，红了不遮挡后面的步骤。
+      - name: Secrets（全历史扫描）
+        if: ${{ !cancelled() }}
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks version
+          /tmp/gitleaks detect --source . --config .gitleaks.toml --redact --no-banner
 
       - uses: actions/setup-python@v7
         with:

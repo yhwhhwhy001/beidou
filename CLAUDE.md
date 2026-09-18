@@ -1,5 +1,55 @@
 # 北斗 V5 — 给 Claude Code 的约定
 
+## 这是公开仓库（放在第一条，因为它改变其它每一条的代价）
+
+`github.com/yhwhhwhy001/beidou` 是 **public**，而且**从 2026-08-05 创建起就是**
+（`PublicEvent` 时间戳 = `createdAt`）。这份文件此前写着「Free plan 的 private repo」，
+认知差持续了 45 天——不是谁疏忽，是没人去核过。所以先核，再写。
+
+推上去的每一行全世界都能读，`git push --force` 收不回来：fork、克隆、镜像、搜索引擎
+缓存都不归它管。
+
+**永远不进仓库的东西**（完整清单与理由见 [`SECURITY.md`](SECURITY.md)）：
+
+- Binance API key / secret——本仓库唯一真正怕丢的东西
+- 任何其它 key、token、密码、SSH 私钥、`.pem`
+- `.env` / `env.sh` 及任何含实际值的配置文件
+- 身份证件号、银行卡号、交易所 UID、真实资金账户的权益与持仓
+
+**测试里也不行，注释掉也不行，"先跑通再换掉"也不行。** 判据不是"提交了没有"：写进文件
+的密钥就当已经泄漏——Time Machine 有备份，编辑器有 swap，shell 有 history。值离开密码
+管理器就该去交易所作废重发。
+
+凭据只有一个位置：`~/Library/Application Support/beidou/env.sh`（`chmod 600`），
+由 `deploy/run_live.sh` 读。代码里取凭据只有一种写法——从环境读，缺了就炸，**不带默认值**。
+
+机械上有四层，但**对 Binance 密钥真正管用的只有本机那两个 hook**（pre-commit / pre-push），
+而它们都能被 `--no-verify` 绕过：
+
+| 层 | 对 Binance 密钥 |
+|---|---|
+| pre-commit（本机，扫暂存区） | ✅ |
+| pre-push（本机，扫将要推送的全部 commit） | ✅ |
+| GitHub push protection（服务端） | ❌ **无效** |
+| CI 的 Secrets 门（扫全历史） | ⚠️ **事后**，红的时候密钥已经公开可读 |
+
+第三层为什么无效，2026-09-19 核实过：**Binance 不在 GitHub secret scanning 的 partner
+pattern 列表里**，而能自己加模式的 custom patterns 要求仓库属于**组织**并启用付费的
+Secret Protection（$19/月/committer）——个人账户下的公开仓库两条都不满足。它拦得住
+GitHub token、AWS、OpenAI 这些，拦不住本仓库唯一真正怕丢的那个。
+
+所以：**`--no-verify` 在这个仓库里不是日常开关。** 用它之前先想清楚绕过的是哪一层，
+以及后面有没有网。
+
+**新 clone 的第一件事**：
+
+```bash
+brew install gitleaks && bash deploy/install-hooks.sh
+```
+
+2026-09-19 的全历史扫描结论：1,637 个 commit、72 MB，**凭据零泄漏**，基线是零。
+看到任何命中都要当真，别当噪声。
+
 ## PR 流程
 
 改完代码走 PR，不直推 main。
@@ -32,9 +82,22 @@
   **2,000 分钟/月**。分界点在 11:41:37Z（PR #70，success 5m33s）与 12:09:36Z（main 的 push，
   failure 4s）之间——**在那之后连 main 自己的 CI 也是红的，而它红的原因同样不在代码里**，别被它吓到。
   额度恢复要操作者去 Billing 页面提额或修付款方式，那是付款相关的动作，不由 agent 做。
+
+  **2026-09-19 更正一条推断**：上面那段把原因归给「私有仓库 2,000 分钟/月」，而仓库**从
+  2026-08-05 创建起就是公开的**（`PublicEvent` 时间戳 = `createdAt`），公开仓库用标准 runner
+  跑 Actions 不计入那个额度。所以额度算术解释不了它。判据没变、做法没变——job 未启动、
+  ANNOTATIONS 里那句付款失败——但归因要改成**账户级**的付款问题：它连公开仓库一起 block，
+  换个仓库或者转公开都修不好。仍然是操作者去 Billing 页面的事。
 - **这个 PR 不该合**——内容已被 main 取代，或合并会造成倒退。把证据摆出来。2026-09-16 的 #15 与 #16 就是：两个都落后 main 数百个 commit，#16 合并会倒退 6,096 行
 
-不用 GitHub auto-merge 的原因：本仓库是 Free plan 的 private repo，branch protection 与 rulesets 都返回 403，没有 required status checks，auto-merge 无从触发。桌面版那个开关只是同一功能的前端，同样开不起来。
+不用 GitHub auto-merge 的原因（**2026-09-19 重写，原文的前提是错的**）：原文说「本仓库是 Free plan
+的 private repo，branch protection 与 rulesets 都返回 403」。仓库其实一直是 **public**，而 Free plan
+的公开仓库**可以**用 branch protection 与 rulesets——当天实测 rulesets 返回 `[]`、branch protection
+返回 404「Branch not protected」，都是"没配置"而不是"没权限"。
+
+所以今天不开 auto-merge 的理由只剩一条，而且是主动选的：**CI 当前跑不起来**（账户级付款问题，见上），
+没有能当 required status check 的绿灯，auto-merge 会退化成"无条件合并"。等 CI 恢复之后，开不开
+branch protection 是一个可以重新做的决定，不再是做不到。
 
 ## CI 监控开关：开完 PR 立刻打开
 
