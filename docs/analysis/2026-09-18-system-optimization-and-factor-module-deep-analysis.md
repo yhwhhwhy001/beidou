@@ -431,3 +431,48 @@ Won't（写明，防止再问）：放宽 D-020 / D-028 任何阈值（§5.2.1 �
 ## 10. Final Decision
 
 **PIVOT**（H2）。操作者的三个怀疑里：「门太严」对已判负的 7 个族不成立（5 个在网格上也过不了任何合理的门、1 个只挂 D-028 且重开已用尽、1 个只跑过单点），但对未来候选成立且是结构性的——五年样本外的 Sharpe 标准误 0.44，真 Sharpe 1.0 在空桶里只有一半机会过线；「数据有错」在文件级不成立，口径级的三条保守偏差不翻转任何一族的判定；「缺因子」在当前语法与数据内已被 914 个表达式穷尽，剩下的是离散门控（从未搜过）与数据可得性。分母也错了：51 条清单里被建成的手写信号族只有 7 个，新存活 0，在架的两个是清单之前的。真正没做过的三件事是：把功效表接进每份预登记、把历史穷尽的候选送上前向板（默认不上，两个前置）、给唯一可得的新信息补数据（人类确认点）——第一件零成本、冻结内、今天就能做。
+
+---
+
+## V3.8 产物自检表回填（2026-09-18，事后）
+
+> 本节在报告合入（`44e65574`）之后加，不改上文任何结论与数字。它量的是流程不是内容。
+>
+> 起因：本报告是 deep-analysis V3.7 下写的，V3.7 的评分表（`evals/output_rubric.json` 12 项）只量 SKILL.md 5.1 / 5.3 / 5.4 / 9 / 10 五节，本文全部满足。2026-09-18 复盘同仓库七份 L 级报告，发现凡是只在 SKILL.md 第 8 节一行 Produces 或附录表里出现的产物（Axiom Trace、Risk Register、四类 Contract、Checkpoint、Phase 记录头……）七份里零产出——不是模型不服从，是 skill 没给位置。V3.8 据此新增 `templates/ml-report.md`，§11 是 24 行产物自检表，每行只能是 PASS / COMPRESSED（理由）/ N/A（证据），空着或删行等于 FAIL；Phase 7 审查者第一步核它。下面是拿这张表回头核本文的结果，作为 V3.8 的第一个校准点。
+>
+> 判法：行文含「全字段」的，缺定义列即 FAIL；不含的，产物在且核心字段在即 PASS。行号按 `813c9187` 版。
+
+| # | 产物 | 状态 | 证据 / 缺什么 | 补法 |
+| --- | --- | --- | --- | --- |
+| 1 | Phase 级头部（Reading Check + Interaction 行） | PASS | 行 5–9：复述、六灯、等级与命中条件、决策上限、输出状态、外部动作授权 | — |
+| 2 | 需求四问 / 来源与偏差 / 需求预设清单（六列）/ Early Kill | FAIL | §2.1–2.4 四件都在（行 56–84）；预设清单只有 5 列，缺「依据来源」 | 补一列 |
+| 3 | Context Intake | PASS | 行 9：四类已覆盖、一类登记 A-SY01 | — |
+| 4 | Evidence Ledger 全字段，每条可复核位置 | FAIL | 24 条记录式（行 86–134），每条有 ID、来源、命令与路径、等级、`[本文实测]` / `[审查复算一致]`——可复核位置做得比要求好；缺适用范围、置信度、敏感性、Owner，日期只有全局一处 | 记录式每条加四个加粗字段 |
+| 5 | Claim Register 全字段；P0/P1 的 Axiom Trace 是回答不是标签 | FAIL | 行 138–146 七列；Axiom 列是 `A2/A6` 这样的标签，全文无一处写这条命题对公理强制问题的回答；缺反证 IDs、置信度、决策影响、Owner | 七条各写一句回答（如 C-SY01：`A6：Falsifier = 门降到 0.00 仍有族不过，已观察到`）；补四列 |
+| 6 | G1–G7 每门有 ≥1 条追溯命题，或 N/A 带理由 | FAIL | 七条 Claim 只追溯 A1/A2/A3/A5/A6；A4、A7 零挂载，而 G4（行 43）、G7（行 46）写的是 PASS——两道门空转 | G4/G7 改 N/A 并说明，或补 A4 命题（O-SY2 的 tsmom 板位机会成本）与 A7 命题（Q-SY1–3 能否验收） |
+| 7 | Assumption Register 全字段；高×高有实验并对齐 Gap Plan | FAIL | 行 150–155 五列，含 Impact × Risk 与验证；缺类型、通过阈值、未通过动作、Gap ID、决策上限、Owner；四条无高×高，但没写「无高×高假设」那句 | 补列 + 一句 |
+| 8 | Gap Plan | PASS | 行 417：GAP-SY01–04，各有影响的 Claim、最小方法、价钱与先验；行文式，缺 Owner、通过阈值、失败动作 | — |
+| 9 | Problem Statement / 5W2H / Causal Chain | FAIL | §4.1 在（行 161）；5W2H、Causal Chain 零，静默省略——单操作者研究系统本可各写一行 COMPRESSED（5W2H 与四问重合；§5.2.3 五种死因实际承担了因果链） | 两行 COMPRESSED |
+| 10 | Problem Reframing ≥2 + `D-xxx` | PASS | §4.2 F1 / F2 / F3 各配区分证据，D-SY00 选 F2（行 165–171）；未写放弃框定的重开条件 | — |
+| 11 | Success Definition 在 Option 之前，`M-xxx` 三类 | PASS | §4.3 M-SY01 领先 / M-SY02 护栏 / M-SY03 滞后，带基线（行 173–179）；冻结稿按方案反推，K-SY06 修订后合规 | — |
+| 12 | JTBD / Stakeholder（含受损方）/ Scenario / Journey / Edge Cases | FAIL | 受损方 §4.4 在（行 183）；其余四件零，静默省略 | 四行 COMPRESSED（单操作者、无用户旅程） |
+| 13 | Strategic Fit / Relative Value（含四必答）/ Business Case / Cost of Delay | FAIL | Memo 一格 High / Strong（行 26）；四必答只答了「80% 方案」（G3，行 42），「什么证据会证明本方案并非相对最优」零；Business Case、Cost of Delay 零 | Falsifier 要写；后两件可 COMPRESSED（零 ledger 方案） |
+| 14 | As-Is/To-Be / Constraint Map / Impact Radius / Engineering Pre-check | COMPRESSED | G5 行 44 写了理由：零代码、零配置、零 ledger，影响半径 R0 | — |
+| 15 | Risk Register | FAIL | RISK-SY01 / RISK-SY02 只在 Memo 行 25 一格里以文字出现；无表，无概率、预警、缓解、失败动作、人类确认点 | 补两行表 |
+| 16 | Option Set / Failure Modes / Recommendation 全字段 / Decision Log | FAIL | Option Set 六个在（行 359–367）；Failure Modes 零；Recommendation（行 369–375）有胜出、放弃、成立条件、偏差自检，缺推荐方案自己的 Falsifier 与灰度/降级/回滚（只有 O-SY3 一格写了「删目录可回滚」）；Decision Log 零 | Failure Modes 与推荐 Falsifier 要写；Decision Log 可 COMPRESSED（D-SY00 / D-SY01 行内已有） |
+| 17 | 每个 Phase 的 Prerequisites / Produces / Gate / Downstream | FAIL | 全文零次。这一行是每个产物写 COMPRESSED 的位置，它没了，第 9、12 行的省略只能是静默的 | 每个 Phase 三行 |
+| 18 | Phase 7 全部产物；L 级由独立子代理执行 | FAIL（P2） | 独立性声明、最强反方、独立复算、12 条 Kill、Pre-Mortem 要点、Inversion、G6、Final Kill Decision、人类确认点都在（行 377–409）——是全文做得最扎实的一节；缺「角色与攻击记录」：六角色未署名，十类攻击未逐类标注 | 审查者按 D.3 / D.4 署名 |
+| 19 | MoSCoW / Scope Firewall / Decision Compression | FAIL | Could / Won't 散在 Option 表；In / Out 两句（行 413）；Scope Firewall（Out 项的重开条件与加入后挤出项）零——PIVOT 尤其需要它；Decision Compression 零 | Firewall 要写；Compression 可 COMPRESSED（Memo 已承担） |
+| 20 | 四类 Contract（分析型交付按 §9.1） | FAIL | 零。按 V3.8 §9.1，PRD / Development 可 N/A，但 Q-SY1–3 与「下一动作」没有任何 Test / Acceptance 项（前置、操作、客观预期、证据位置、失败动作）。Q-SY1 执行后第一次运行就证否了本文 §5.2.1 的一个心算数（校准表同日第 2 行）——一条写好的验收项会把这次意外变成计划内核对 | 补 Q-SY1–3 三条验收项 |
+| 21 | Source Trace Matrix | PASS | DL-SY01 一行（行 415）：Problem → E → C → D → §7 → M；缺 Gate/Kill 状态与 Owner 列 | — |
+| 22 | Validation Plan / Experiment Design / 分析校准行 | FAIL | Learning 段（行 427）只写 M-SY01–03 从哪读，无基线数值、阈值、窗口、停止条件；Experiment Design 零；校准行已写（V3.7 六列） | Validation Plan 三行要写；Experiment 可 COMPRESSED |
+| 23 | Checkpoint 文件 `<项目>-checkpoint.md` | FAIL | 仓库无任何 `*-checkpoint.md`。本文自治一次出完，V3.7 的触发条件绑在「段末」，没有段末 | 按 V3.8 §11 在 Final Decision 前写一次 |
+| 24 | Final Decision 7 词之一 + 命中的 H-ID | PASS | 行 431–433：PIVOT（H2） | — |
+
+**计数**：PASS 7 · COMPRESSED 1 · FAIL 16。16 个 FAIL 分三类：
+
+- **纯静默省略，一行 COMPRESSED 就能关**：第 9、12 行（2 个）。它们在 V3.7 下没有写 COMPRESSED 的位置。
+- **表在、列少**：第 2、4、7 行（3 个）。同一张表在 SKILL.md 第 7 节与附录 A.5 有两套字段数，本文取的是短的那套。
+- **要写新内容**：第 5、6、13、15、16、17、18、19、20、22、23 行（11 个）。其中第 6 行是公理那条：G4、G7 写 PASS 而没有任何命题追溯到 A4、A7，两道门空转——V3.7 评分表量不到它，因为第 4 节与第 6 节都不在评分表的 `source` 里。
+
+这 16 个 FAIL 在 V3.7 的 12 项评分表下一项都不触发。它们与上文 §8 审查抓到的 8 条 P1 是两种东西：那 8 条是读法错（数字读窄、读反），这 16 条是流程缺（要求的产物没产出）。校准表此前八行只记前一种，从 2026-09-18 起多一列记后一种。
