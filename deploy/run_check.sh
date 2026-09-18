@@ -90,6 +90,33 @@ else
   failed=1
   notify "plists" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
 fi
+# Which plists this repo ships that the machine is NOT running.  REPORTED, NOT GATED, and for the
+# same reason the soak line below is: some of them are meant to be off (`shadow` and `paper-l3` are
+# started and stopped by hand), so gating would page hourly for a deliberate choice.
+#
+# What made it a line.  2026-09-17 shipped `com.beidou.forward-board.plist` - the daily read of the
+# candidate forward board - and nothing installed it.  The board had a candidate on it, the command
+# worked, the tests were green, and the instrument was inert: a file in `deploy/` is not a job.  That
+# is the third shape of the same error in one day (a fixture that tested a contract nothing produced,
+# a shell line the command could not accept), so it gets a line that says it out loud once an hour.
+# 空输出有两种来源：真的没有缺的，和这个检查根本没跑起来。按「输出为空 = ok」写，第二种会被报成
+# 第一种——而那正是这一整条要防的错误本身。所以看退出码，不看输出是不是空的。
+if missing_plists="$("$REPO/.venv/bin/python" -c '
+import sys
+from pathlib import Path
+repo, home = Path(sys.argv[1]), Path.home() / "Library" / "LaunchAgents"
+shipped = {p.name for p in (repo / "deploy").glob("com.beidou.*.plist")}
+print(" ".join(sorted(shipped - {p.name for p in home.glob("com.beidou.*.plist")})))
+' "$REPO" 2>&1)"; then
+  if [ -n "$missing_plists" ]; then
+    echo "[$(stamp)] not installed (deliberate for some; a file in deploy/ is not a job): $missing_plists"
+  else
+    echo "[$(stamp)] ok   plists installed"
+  fi
+else
+  echo "[$(stamp)] plists: 装没装这条检查自己没跑起来（$(echo "$missing_plists" | tail -n 1)）"
+fi
+
 # The drift verdict used to be computed and then discarded: nothing ever sent it anywhere.  `report daily
 # --check` exits non-zero on an ALERT - equity drift, per-strategy income drift (M-002/M-010), or more
 # construction changes in a week than the plan allows.
