@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 from click.testing import CliRunner
 
-from beidou_alpha.validation.forward_board import FORWARD_BOARD_STRATEGY, read_board
+from beidou_alpha.validation.forward_board import FORWARD_BOARD_STRATEGY, live_entries, read_board
 from beidou_alpha.validation.ledger import parse_ledger
 from beidou_cli import main
 from beidou_data.store import KlineStore
@@ -380,3 +380,119 @@ def test_status_on_an_empty_board_says_so_and_charges_nothing(tmp_path: Path) ->
     assert result.exit_code == 0
     assert "板是空的" in result.output
     assert len(_charges(tmp_path)) == before
+
+
+# ---- 退役与重上：更正一个钉错的板位 --------------------------------------------------------
+
+
+def _board_lines(tmp_path: Path) -> list[str]:
+    path = tmp_path / "board.jsonl"
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+@pytest.mark.usefixtures("isolated_trials_ledger")
+def test_retire_then_re_add_leaves_exactly_one_live_slot(tmp_path: Path, august_dir: Path) -> None:
+    """走一遍真实的更正流程：上板 -> 退役 -> 用新证据重上。
+
+    第一版这里是坏的：退役按身份相减，把重上的那个也减掉了，`status` 报「全部已退役」。
+    """
+    root = tmp_path / "data"
+    _store(august_dir, root)
+    runner = CliRunner()
+
+    first = _evidence(tmp_path / "tail.json", sharpe=1.5919, tail=True)
+    assert (
+        runner.invoke(main, _add_args(tmp_path, root, first, "--charge", "1", "--accept-full-sample-tail")).exit_code
+        == 0
+    )
+    key = _board_rows(tmp_path)[0].param_key
+
+    retired = runner.invoke(
+        main,
+        [
+            "research",
+            "forward",
+            "retire",
+            "--candidate",
+            "tsmom",
+            "--param-key",
+            key,
+            "--universe",
+            "static",
+            "--reason",
+            "claimed 钉的是一条全样本尾巴",
+            "--board",
+            str(tmp_path / "board.jsonl"),
+        ],
+    )
+    assert retired.exit_code == 0, retired.output
+    assert "看过就是看过" in retired.output
+    assert live_entries(_board_lines(tmp_path)) == []
+
+    second = _evidence(tmp_path / "clean.json", sharpe=1.2757, tail=False)
+    again = runner.invoke(main, _add_args(tmp_path, root, second, "--charge", "1"))
+    assert again.exit_code == 0, again.output
+    assert "重上" in again.output
+
+    live = live_entries(_board_lines(tmp_path))
+    assert len(live) == 1, "重上之后板应该恰好一个在板"
+    assert live[0].claimed_sharpe == pytest.approx(1.2757)
+
+    status = runner.invoke(
+        main,
+        [
+            "research",
+            "forward",
+            "status",
+            "--root",
+            str(root),
+            "--symbols",
+            ",".join(SYMBOLS),
+            "--registry",
+            REGISTRY,
+            "--profile",
+            PROFILE,
+            "--out",
+            str(tmp_path / "out"),
+            "--board",
+            str(tmp_path / "board.jsonl"),
+            "--no-funding",
+            "--min-history",
+            "0",
+        ],
+    )
+    assert status.exit_code == 0, status.output
+    assert "已退役 1 个" in status.output
+    assert "要看 1.66 年" in status.output, f"年限没跟着新的声称值走：{status.output}"
+
+
+def test_retiring_something_not_on_the_board_says_so(tmp_path: Path) -> None:
+    (tmp_path / "board.jsonl").write_text("", encoding="utf-8")
+    result = CliRunner().invoke(
+        main,
+        [
+            "research",
+            "forward",
+            "retire",
+            "--candidate",
+            "tsmom",
+            "--param-key",
+            "deadbeef",
+            "--universe",
+            "pit",
+            "--reason",
+            "x",
+            "--board",
+            str(tmp_path / "board.jsonl"),
+        ],
+    )
+    assert result.exit_code != 0 and "板上没有" in result.output
+
+
+def test_the_daily_job_writes_outside_reports_research(tmp_path: Path) -> None:
+    """板读数不进 `reports/research/`——那里放的是计过费的证据，板读数是每天一份的派生物。"""
+    from beidou_cli.research_forward_cmd import DEFAULT_BOARD_REPORTS
+
+    assert not DEFAULT_BOARD_REPORTS.startswith("reports/research"), DEFAULT_BOARD_REPORTS
+    params = {p.opts[0]: p.default for p in main.commands["research"].commands["forward"].commands["status"].params}
+    assert params["--out"] == DEFAULT_BOARD_REPORTS
