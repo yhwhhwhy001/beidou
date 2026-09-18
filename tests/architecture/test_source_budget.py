@@ -2998,7 +2998,37 @@ CEILING = {
     # read the cap.  That last one is not cosmetic: with a cap on, the long stop this function exists
     # to flag stops being unreachable by construction, so leaving it alone would make the daily report
     # keep naming a threshold that the same commit just made reachable.
-    "beidou_live": 9_938,
+    # +397 more beidou_live, 2026-09-19 (9_938 -> 10_335): `benchmark.py` (312) and `beta_markdown`
+    # plus its row helper in `reports.py` (85).  D-045, and the entry the operator asked for by name:
+    # "is the +20% the market or the strategy".
+    #
+    # WHY IT COULD NOT BE A SCRATCHPAD SCRIPT, which is where the first four answers came from.  Those
+    # four answers disagreed with each other - +15.06% of alpha, then +4.30%, then -2.19% - and every
+    # difference was a benchmark choice, not arithmetic.  Each of the four is now a line of code that
+    # cannot be chosen wrongly, and each has a test named after the mistake:
+    #   - point-in-time basket (34).  A fixed basket keeps only symbols priced across the whole window,
+    #     which silently dropped AKEUSDT, CYSUSDT and TUTUSDT - and AKEUSDT was UP 26.4% while held.
+    #     Measured: fixed +3.43% vs PIT +11.31% on 09-07..09-18, so the survivor rule understated the
+    #     market by 7.88pp and handed every point of it to alpha.
+    #   - Newey-West (22 incl. `_design`).  OLS read alpha at t=1.83 on the same series NW(48h) reads at
+    #     0.61; 257 overlapping hours are not 257 draws.  The 48 is measured, not a rule of thumb: t
+    #     stops moving between NW(48) and NW(72).
+    #   - `series_from_cycles` (49).  The equity line is `collateral.usdt_equity`, per A-GB01 - total
+    #     equity moved +1,039.45 over this window while collateral itself moved +13.38, so the total
+    #     line carries repricing the book never traded.
+    #   - `signal_state` (50).  `contributions` is sign-only, and from 09-16 all 17 symbols are +1: over
+    #     those bars the book IS `constant_long`, so no split of the return can credit the signal.  This
+    #     is the one a reader needs FIRST and it is why the section is rendered above the regressions.
+    # `foreign_bars` (19) is the fifth, found while writing the tests: `foreign` lives on
+    # attribution.jsonl and reading it off the cycle records returns [] with no error, which had let the
+    # operator's own 2026-09-10 flatten (+268.83 U through one bar) into the strategy's series.
+    #
+    # What was NOT spent.  `_ols`/`_nw_se` were first written out longhand to avoid a numpy import - 42
+    # lines - and that reason was false: `guards.py` and `reports.py` in this same package already
+    # import numpy.  Rewritten on numpy at 8 lines net, which is the only honest saving available here;
+    # the module docstring (36) stays, because it holds the four wrong answers and the measurement that
+    # killed each, and a ratchet paid for by deleting that record is the tax this table exists to refuse.
+    "beidou_live": 10_335,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3212,7 +3242,11 @@ CEILING = {
     # +6 beidou_cli，2026-09-18（7_599 -> 7_605）：`research forward status` 在**要求有人动手**时
     # 把出口契约印出来（PASS 或到点）。只在那两种时候印：给一条还在观察的板位每天印四步契约是噪声，
     # 而「一层噪声掩盖另一层的信号」正是这块板自己记过的错（板读数换目录那一条，上面第二段）。
-    "beidou_cli": 7_605,
+    # +65 more beidou_cli, 2026-09-19 (7_605 -> 7_670): `report beta`, the I/O half of the entry above.
+    # It reads the cycle and attribution rows, fills prices the loop's own `closes` does not reach back
+    # far enough for out of the parquet archive (that field is newer than the loop: 141 bars against
+    # 259 on 2026-09-19, and the gap closes on its own), and renders.  No arithmetic lives here.
+    "beidou_cli": 7_670,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
