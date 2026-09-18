@@ -150,6 +150,29 @@ def _caliber_note(gate: Mapping[str, Any], library: Mapping[str, Any] | None) ->
     )
 
 
+def _power_rows(power: Mapping[str, Any] | None) -> dict[str, str]:
+    """Render `oos_selection.power` as flat rows, for the Markdown and for `research power`.
+
+    One renderer rather than two because the pre-registration and the report it later justifies have
+    to be comparable line for line - a pre-registration that quotes 43.3% and a report that prints
+    "0.4333" is a comparison nobody makes.  The percentages carry one decimal: the approximation in
+    `selection_power`'s own docstring is worth about a tenth of a point, so a second decimal would be
+    printing noise.
+    """
+    if not power:
+        return {"power": "n/a (no null: the OOS series is too short to give a Sharpe)"}
+    rows = {
+        "standard error of the OOS Sharpe (annual)": f"{power['se_annual']:.4f}",
+        "gate (max of the two halves)": f"{power['gate_annual']:.4f}  [{power['binding']} binds]",
+        "  D-028 selection threshold": f"{power['selection_threshold_annual']:.4f} at N={power['n_trials']}, alpha={power['alpha']}",
+        "  D-020 pass line": f"{power['pass_line_annual']:.4f}",
+    }
+    for row in power["detects"]:
+        rows[f"P(clear | true annual Sharpe = {row['true_sharpe_annual']:.1f})"] = f"{row['power']:.1%}"
+    rows["not included in the above"] = ", ".join(power["excludes"]) + " (so the true joint power is LOWER)"
+    return rows
+
+
 def _pbo_note(grid_trials: object) -> str:
     """PBO below four configurations is a coin flip; `decide` knows that and readers of the report did not."""
     try:

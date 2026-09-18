@@ -3194,7 +3194,22 @@ CEILING = {
     # 重上要**再计一笔**，但**不抬门**：ledger 那行是「谁在什么时候改了这个板位的声称值」的审计
     # 痕迹，而门的 N 数的是「在看几个不同的假设」。重新钉一次声称值不是一个新候选。两者本来就
     # 不该相等。
-    "beidou_cli": 7_431,
+    # +168 beidou_cli，2026-09-18（7_431 -> 7_599）：Q-SY1，操作者裁「要」。124 行是新命令
+    # `research power`（门的功效表，跑之前就能算、零 ledger），其余是 `_power_rows` 这个共用渲染器
+    # 与 `validate` 把功效印进 Markdown 与 stdout 的接线。
+    #
+    # 为什么值这 167 行：操作者到 2026-09-18 已经**四次**问「判定条件是不是太严」，四次的回答都是
+    # 「不是门」且都没有给数，所以问题每次都回来。数一直在手边——每份报告自己存着 `oos_selection.
+    # variance`，从它到「真 Sharpe 是 s 的策略过得了这道门的概率」只有三行算术。接进来之后这句话
+    # 有了读数：五年样本外的 Sharpe 标准误 0.44，真 Sharpe 1.0 在**空桶**里也只有 50% 过 PASS 线。
+    #
+    # 命令为什么必须能在**跑之前**算：预登记是写在跑之前的，那时还没有这次的 `variance`，所以方差
+    # 从同族最近一份报告借，而这条借用必须写出来——命令因此强制 `--evidence`，并把那份报告的路径与
+    # sha256 印在输出里。手输方差的开关一个都没有：手输的那个数正是会被往大里写的。
+    #
+    # 按行数记的 alpha 占比：这一笔 277 行里只有 109 行落在 beidou_alpha（39.4%），对 90% 的
+    # effort 目标。如实报，不改尺子——K-SY13 抓过的正是「改一条会改变对自己评分的规则」。
+    "beidou_cli": 7_599,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3405,7 +3420,19 @@ CEILING = {
     # merged tree's own reading rather than either branch's - 10_012 + 58 (EXP-SL1) + 101 (the board)
     # happens to be additive because the two touch different files, which is a measurement and not a
     # convention.  The opening note of this table says to re-measure every merge for exactly this case.
-    "beidou_alpha": 10_171,
+    #
+    # +109 beidou_alpha，2026-09-18（10_171 -> 10_280）：Q-SY1 的另一半，`selection_power` 与
+    # `oos_selection_threshold` 里那个 `power` 块。D-028 一直只回答「门要多高，噪声才最多 α 的时候
+    # 过得去」；这 109 行回答它下面那个问题——**一个真有 edge 的策略过得去的概率是多少**。
+    #
+    # 三个数字说明为什么它该住在 beidou_alpha 而不是某个脚本里：N=1 门 1.000、真 Sharpe 1.0 → 50.0%；
+    # N=299 门 1.574、真 1.5 → 43.3%。这不是 D-028 造成的，是五年样本外 + 1.0 那条 PASS 线的结构性
+    # 后果，能动它的只有更长的样本。一个每份报告都带着的读数，和一张写在某份分析里的表，差别在于
+    # 前者不会随着分析被归档而消失——这张表此前被手算过一次，其中一格就错了四倍（校准记录 09-18）。
+    #
+    # PASS 线在这里重复了一次（`PASS_LINE_ANNUAL` 对 `VerdictThresholds.pass_oos_sharpe`），因为
+    # `verdict` 导入本模块、箭头不能反着指。重复的代价由一条测试付：两个数必须相等。
+    "beidou_alpha": 10_280,
 }
 
 
