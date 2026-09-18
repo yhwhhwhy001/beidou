@@ -13271,3 +13271,86 @@ fold 选择的混合，只是恰好每折都选了同一格。价钱一个字没
 没跑 `validate` / `mine` / `book`；没改 `config/alpha_registry.yaml` 与任何 registry 参数；
 没改构造；没动实盘（回填期间循环 phase 全程 OK）；没补 funding；没跑 `data pool refresh`，
 所以 `universe.json` 与实盘选池一个字没动。
+
+## 2026-09-18 · 操作者裁定「过」= 上线口径：门是 2/9 的唯一死因，不是 6/9 的
+
+操作者第五次问「判定条件是不是太严」。前四次的答案是一个词；第五次（PR #66）把门的**功效**变成了
+一个数。这一节回答另一半——**门到底拦住了谁**——而它存在的原因是这个答案在 09-18 当天被读错过一次。
+
+### 一、被读错的那一步
+
+2026-09-17 九族同管线重跑那一节的**标题**写着「只差 selection gate 的只有 residual」。同一节的
+**正文**（本文件 `11567` 行）写着：
+
+> 真正「只被多重检验门拦住」的是 flow（0.65 对 1.33，只挂这一条）与 residual。
+
+**两个，不是一个。** 当天的一份深度分析引了标题、没读正文，据此把操作者的怀疑判为 **REFUTED**，
+并写进 Decision Memo 第一格。抓住它的是 Phase 7 的独立对抗审查（K-LD02），不是作者。
+
+### 二、裁定
+
+判定词「过」在本仓库有两个口径，而它们给出不同的计数：
+
+- `{"PASS"}` → 命中 **1**（residual），怀疑看起来被推翻；
+- `beidou_alpha/registry.py` 实际收的 `{"PASS", "WEAK_PASS"}` → 命中 **2**，怀疑**没有**被推翻。
+
+两个都是对同一批报告的正确算术，只有一个是操作者问的那个问题。**操作者 2026-09-18 裁定：
+「过」= 上线口径（含 `WEAK_PASS`）。**
+
+### 三、重数
+
+`VerdictThresholds(enforce_oos_selection=False)` 就是「D-028 归零」——它去掉 deflated-threshold
+与 gate-identity 两条理由，其余判据原样留在 `decide` 里。九族各取 09-17 pit 重跑中最有利的一份：
+
+| 族 | 门归零后**剩下**的挂钩 | 判定 | 上线口径下 |
+| --- | --- | --- | :---: |
+| tsmom | D-043 unselected cap | WEAK_PASS | ✔（已在架主书） |
+| **flow** | **无** | **WEAK_PASS** | **✔** |
+| **residual** | **无**（D-043 cap 触发） | **WEAK_PASS** | **✔** |
+| pairs | CPCV 0.33 > 0.1 | FAIL | ✘ |
+| carry | Sharpe 0.46 < 0.5；CPCV 0.27 | FAIL | ✘ |
+| chanlun | Sharpe 0.07 < 0.5；CPCV 0.33 | FAIL | ✘ |
+| xsmom | Sharpe 0.14 < 0.5；CPCV 0.27；PBO 0.58 | FAIL | ✘ |
+| meanrev | Sharpe −2.29；fold 0.00；CPCV 1.00；成本 ×2 −3.39 | FAIL | ✘ |
+| breakout | Sharpe −4.30；fold 0.00；CPCV 1.00；成本 ×2 −8.47 | FAIL | ✘ |
+
+**门是 2/9 的唯一死因，不是 6/9 的。** 那六个挂的是 0.5 Sharpe 地板、CPCV、PBO、fold 一致与
+成本 ×2——D-028 一条都不碰，放宽它对它们毫无作用。
+
+### 四、为什么这次写成测试而不是写成结论
+
+一句话拦不住同一个误读第二次发生，一条重算可以。
+`tests/alpha/test_which_families_the_selection_gate_alone_is_holding_back.py`（5 条）吃
+`reports/research/` 的真实归档，每次重算这张表而不是复述它，并且把「两个口径给出不同计数」这件事
+本身也钉成了一条断言——那正是当初读错的地方。
+
+**做过变异验证**：把 `GATE_ALONE` 改成一修稿写错的 `{"residual"}`，测试当场红，且报错信息里直接给出
+正确答案 `['flow', 'residual']`；恢复后 5 条全绿。关掉字节码缓存跑的。
+
+不加库代码是有意的：`beidou_alpha` 的 source budget 天花板 10,343、实测 10,343，**零 headroom**，
+而 `decide` 已经带着 `enforce_oos_selection` 这个开关——这件事不需要一次抬顶。
+
+### 五、这解锁了什么，以及没解锁什么
+
+**没解锁**：放宽 D-020 / D-028。α 是操作者签的 0.05；而且六个族与它无关。维持 Won't。
+
+**解锁的是**：flow 与 residual 在上线口径下是 `WEAK_PASS`——**够格做 probe，不够格做主书**。
+而 `Policy.max_concurrent_probes = 2`（`beidou_governance/policy.py:159`），当前
+`governance_state.json` 里只有 flow 一个 probe：**有一个空名额**。
+
+residual 今天的处置是前向板（PR #67，claimed 1.0484），要等 **3.48 年**；一个 probe 名额给的是
+**30 天**的实盘归因读数。
+
+**但它今天不能做**：加一个 sleeve 会改构造指纹、清零 M-010，而 M-010 的 30 天连续记录正是
+2026-10-13 那道门自己要的东西。所以 **residual 进第二个 probe 名额是 10-13 裁定包的候选**，
+要与其余 11 项一起竞争那 12 笔名额；它的优势是它现在有一条别人没有的依据——操作者亲自裁定的口径
+说它够格。
+
+### 六、本节没做什么
+
+没跑 `validate` / `mine` / `book`；没写 ledger（`trials.jsonl` 全程 22,179 行）；没改
+`config/alpha_registry.yaml`、registry 参数或任何门限；没改构造；没动实盘；没碰
+`governance_state.json`。全部改动是一个测试文件加三份文档。
+
+完整分析见 `docs/analysis/2026-09-18-ledger-denominator-and-four-objectives-deep-analysis.md`
+（§13 是本节的来源，§7 是推翻第一版结论的那次独立审查）。
