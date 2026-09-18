@@ -2991,7 +2991,14 @@ CEILING = {
     # exactly like a symbol that did not need trading".  The row also carries `snapped_from_notional`,
     # because after the snap `delta` and `current` are both 0 and the number that explains the refusal
     # is the one that was thrown away.
-    "beidou_live": 9_898,
+    # +40 more beidou_live, 2026-09-17 (9_898 -> 9_938): EXP-SL1's live half.  The derivation, the
+    # measurement and the asymmetry are in the `beidou_alpha` entry and are not repeated here.  What is
+    # spent on this side: the fingerprint field (v10, WITH an alias this time - the contrast with v9
+    # one entry up is the point, and `construction.py` carries it), and `exit_reachability` learning to
+    # read the cap.  That last one is not cosmetic: with a cap on, the long stop this function exists
+    # to flag stops being unreachable by construction, so leaving it alone would make the daily report
+    # keep naming a threshold that the same commit just made reachable.
+    "beidou_live": 9_938,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3330,7 +3337,39 @@ CEILING = {
     # 估计量的噪声还大。误差的方向是要紧的：高估 claimed 只会太早、不会太晚，所以默认拒绝，要用
     # 就显式承认，承认写进板条目跟着板位走完一生。真选择网格下 tsmom 的样本外是 1.27——按尾巴算
     # 1.07 年，按 1.27 算 1.66 年，差 0.6 年。
-    "beidou_alpha": 10_012,
+    # EXP-SL1, 2026-09-17: +49 beidou_alpha, +40 beidou_live - a stop_loss threshold that no price path
+    # can reach gets a ceiling, so `k_eff = min(stop_loss, c / sigma)`.
+    #
+    # The code is one small function plus its element-wise twin.  The rest is the measurement, and the
+    # measurement is why the raise is worth taking, because it overturns how big this problem was
+    # thought to be.  `min_unit`'s comment (thirty-third raise) called the unreachable case "one of
+    # seventeen" off the 2026-09-17 live book.  Over the 1h PIT archive - 206 symbols, 5.7 years,
+    # 6,315,054 symbol-bars with a finite sigma - the unreachable set (`sigma > 1/6`) is **138,386
+    # symbol-bars = 2.191%**.  Not a corner case; the live book was simply a small sample of it.
+    #
+    # The second half of the measurement is what stops this from being a free win.  EVERY `c < 1`
+    # rescues that same 2.191%, so the choice of c buys nothing there and only decides how much extra
+    # it tightens positions whose stop was already reachable.  Replayed through `apply_exits` on the
+    # shipped book (tsmom, pit, band applied), against the 558 exits the live setting produces:
+    #     c=0.9   558 exits, 19 stops (long 4 / short 15)   48 symbol-bars differ, ONE symbol
+    #     c=0.8   562 exits, 23 stops (long 7 / short 16)   120 symbol-bars, 4 symbols
+    #     c=0.5   596 exits, 57 stops (long 31 / short 26)  656 symbol-bars, 29 symbols
+    #     c=0.4   637 exits, 96 stops (long 60 / short 36)  1,481 symbol-bars, 53 symbols
+    # At c=0.9 the long stop count does not move at all - the 48 bars are one KNCUSDT SHORT in
+    # 2022-05, stopped 41 hours earlier at 2.284 instead of 2.567.  That is the rule's asymmetry made
+    # visible: a short's `adverse` numerator is unbounded, so it never had an unreachable stop and the
+    # cap only tightens it.  The asymmetry is priced here rather than argued away.
+    #
+    # And the honest limit, written next to the number rather than left for the next reader: at c=0.9
+    # the rescued long stop still needs a 90% fall to fire.  LSKUSDT - the position that started this
+    # - fell 40.6% from entry, so this setting would NOT have closed it.  Making that case fire needs
+    # c <= 0.406, where long stops go from 4 to 60 in the same 5.7 years.  "Reachable in arithmetic"
+    # and "fires when an operator would want it to" are two different purchases and the table above is
+    # what separates them.
+    # Re-measured after the operator ruled c=0.4 LONG-ONLY: the symmetric draft was withdrawn and the
+    # paragraph that argued for symmetry was replaced by the one that prices its withdrawal (the
+    # KNCUSDT short it moved for no rescue), plus the `held` predicate in both engines.  +9.
+    "beidou_alpha": 10_070,
 }
 
 

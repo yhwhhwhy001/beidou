@@ -68,7 +68,7 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     wrong is letting either of those two become machine-askable before the operator has ruled it.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 19, f"the list holds {len(entries)}; 13 from the audit, P30's, and Q-SF2's five"
+    assert len(entries) == 20, f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, and EXP-SL1's"
 
 
 def test_every_entry_quotes_its_condition_and_cites_the_log() -> None:

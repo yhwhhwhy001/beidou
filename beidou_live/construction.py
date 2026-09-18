@@ -42,7 +42,13 @@ from __future__ import annotations
 #      same breath, so that sentence is false here: the book changed, the digest is supposed to move,
 #      and M-010's window is supposed to restart.  A bump still belongs, because a reader comparing two
 #      rows across it needs to know the FIELD SET differs as well as the values.
-CONSTRUCTION_PAYLOAD_VERSION = 9
+#  10: + `exits.stop_loss_price_cap` (EXP-SL1, 2026-09-17).  **Back to the v3-v8 shape, and the contrast
+#      with v9 one line up is the point.**  The field arrives at 0.0, `_stop_threshold` returns
+#      `stop_loss` untouched before any arithmetic runs, and the two exit engines were re-checked
+#      against each other with the cap both off and on - so the book is byte-identical and the alias
+#      below says so.  Turning the cap ON later is a separate decision, gated by K-EX14 until the
+#      current window matures; it would be a real construction change with no alias, exactly like v9.
+CONSTRUCTION_PAYLOAD_VERSION = 10
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.
@@ -132,6 +138,27 @@ CONSTRUCTION_ALIASES: dict[str, str] = {
     # construction change, it belongs to the operator, and EXP-AE3 is the evidence it would need.
     "d995e0cce6af69ddd839cdba4f44c4e895e37167f9fbc1235892c2e4b2786cca": (
         "46b8d731530a2f2375f816a1de69e4c357e41a682816c4d947832617550d2a10"
+    ),
+    # v10 (+ exits.stop_loss_price_cap), EXP-SL1, 2026-09-17.  The second alias whose target is not
+    # `0dcd044d...` and the first whose target is `0c555e1c...`: D3 (PR #53) turned the three band
+    # knobs on that same day, which is a real construction change, and `0c555e1c...` is what the armed
+    # loop has recorded since 16:07:34Z.
+    #
+    # Declared before it is ever written, on the same proof as v3-v8 and explicitly NOT on v9's: the
+    # shipped profile does not name the key, 0.0 is off, and `_stop_threshold` returns `stop_loss`
+    # untouched before touching `entry_price` at all - so recomputed against the shipped profile the
+    # value is unchanged on both sides and only the shape of what is hashed moved.  The vectorised
+    # engine takes the same short circuit, and `test_the_vectorised_exit_engine_is_the_same_machine`
+    # now carries three cap settings (off, binding, never-binding) so the agreement is checked with
+    # the branch live rather than only around it.
+    #
+    # The knob ships at 0 for the reason `trailing_activate` does: turning it on IS a construction
+    # change, it belongs to the operator, and K-EX14 holds it until the window that started at
+    # 16:07:34Z matures on 2026-10-17.  What it would buy and cost is measured in `docs/RESEARCH_LOG.md`
+    # the same day - at c=0.9 it moves 48 symbol-bars of one symbol in 5.7 years, and the long stop it
+    # makes reachable still needs a 90% fall to fire.
+    "b8f215ab706ca7c472028d109f96f9fbb911097a9a16bb4b6fb9dee9ec5b528a": (
+        "0c555e1c837e342a8af1edca0089b12461a9bdbe3b9a0f122142c63d6ba54bd7"
     ),
 }
 

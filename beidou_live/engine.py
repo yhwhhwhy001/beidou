@@ -2160,6 +2160,11 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # every other `exits` key is: turning it on changes which bar closes a position, and a knob
             # the record cannot see is KILL-Q15's shape.
             "trailing_activate": config.exits.trailing_activate,
+            # v10 (EXP-SL1, 2026-09-17).  The ceiling on the price move `stop_loss` may ask for, as a
+            # fraction of entry.  Ships at 0.0 - off - and `_stop_threshold` returns `stop_loss`
+            # untouched before any arithmetic runs, so the value is unchanged on both sides of this
+            # addition and only the shape of what is hashed moved; the alias carries that proof.
+            "stop_loss_price_cap": config.exits.stop_loss_price_cap,
         },
         "throttle": {
             "enabled": config.throttle.enabled,
