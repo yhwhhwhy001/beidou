@@ -3028,7 +3028,31 @@ CEILING = {
     # import numpy.  Rewritten on numpy at 8 lines net, which is the only honest saving available here;
     # the module docstring (36) stays, because it holds the four wrong answers and the measurement that
     # killed each, and a ratchet paid for by deleting that record is the tax this table exists to refuse.
-    "beidou_live": 10_335,
+    # +67 more beidou_live, 2026-09-19 (10_335 -> 10_402): M-007's DENOMINATOR, a second raise on the
+    # same day and in the same PR as the entry above, and deliberately a separate entry because it is
+    # a separate finding - the beta decomposition is what turned this one up.
+    #
+    # `margin_cap: 0.40` was calibrated on the backtest and the backtest models no collateral at all
+    # (RISK-G11), so 0.40 was always a statement about the USDT line.  Measured against TOTAL equity -
+    # about half BTC on this account - the ruler ran 1.9x looser than the policy it stands for, which
+    # is the 2026-09-14 correction one layer down: that one fixed the BAR (the plan's 50% judging where
+    # the profile said 40%) and this one fixes the denominator under it.  It had the same effect, and
+    # the effect is the reason the lines are worth spending: on 2026-09-13T22:00Z the book stood at
+    # 22.73% of equity and 48.71% of tradable USDT, gross at 1.20x against `max_gross` 2.0 and 2.44x
+    # tradable - and M-007 has never once reported a breach.  09-18 is already on the line: 39.34%
+    # against the 40%, 1.97x against the 2.0.
+    #
+    # Spent on: the rescaled series and its four keys in `margin_and_rejections` (~20), the render rows
+    # (~20), the notice that fires ONLY when the two rulers disagree (~12, and the condition is the
+    # point - under the same wording as the existing one it would read as a second breach rather than
+    # the same one measured properly), and the docstring paragraph carrying the measurement (~15).
+    #
+    # What this does NOT touch, and the line a later tidy-up must not cross quietly: `max_gross` clips
+    # weights in `clamp_book` and `margin_cap` derives venue leverage (D-016), both on total equity,
+    # both inside the construction fingerprint frozen to 2026-10-13.  Moving those resizes every
+    # position and resets M-010, M-G06 and `realised_vol`.  A test pins it by asserting `clamp_book`'s
+    # signature has nowhere to pass a collateral share.
+    "beidou_live": 10_402,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
