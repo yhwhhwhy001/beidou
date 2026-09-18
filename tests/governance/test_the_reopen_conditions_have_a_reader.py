@@ -66,9 +66,19 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     are `check: operator`, so they can only ever report NEEDS A PERSON; writing an unruled condition down
     is how a judgement gets queued instead of forgotten, which is what this file is for.  What would be
     wrong is letting either of those two become machine-askable before the operator has ruled it.
+
+    2026-09-19 raised it 20 -> 21 for `risk-g11-denominator`, and that entry widens what this file holds:
+    every other one is a REFUTED hypothesis waiting to be reopened, and this one is an ACCEPTED RISK waiting
+    to be re-ruled.  The shape is identical - a judgement, a condition, and no reader - and so is the failure
+    it prevents: the operator chose "do nothing until the freeze lifts" over three priced alternatives on
+    2026-09-19, and with no entry that choice would have expired on 2026-10-13 into nobody remembering it had
+    been a choice.  `check: date_after` because the date is the only part a machine can answer; the entry's
+    own `condition` says in as many words that the date is necessary and not sufficient.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 20, f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, and EXP-SL1's"
+    assert len(entries) == 21, (
+        f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, EXP-SL1's, and RISK-G11's denominator"
+    )
 
 
 def test_every_entry_quotes_its_condition_and_cites_the_log() -> None:
