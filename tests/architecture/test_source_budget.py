@@ -3209,7 +3209,10 @@ CEILING = {
     #
     # 按行数记的 alpha 占比：这一笔 277 行里只有 109 行落在 beidou_alpha（39.4%），对 90% 的
     # effort 目标。如实报，不改尺子——K-SY13 抓过的正是「改一条会改变对自己评分的规则」。
-    "beidou_cli": 7_599,
+    # +6 beidou_cli，2026-09-18（7_599 -> 7_605）：`research forward status` 在**要求有人动手**时
+    # 把出口契约印出来（PASS 或到点）。只在那两种时候印：给一条还在观察的板位每天印四步契约是噪声，
+    # 而「一层噪声掩盖另一层的信号」正是这块板自己记过的错（板读数换目录那一条，上面第二段）。
+    "beidou_cli": 7_605,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3432,7 +3435,21 @@ CEILING = {
     #
     # PASS 线在这里重复了一次（`PASS_LINE_ANNUAL` 对 `VerdictThresholds.pass_oos_sharpe`），因为
     # `verdict` 导入本模块、箭头不能反着指。重复的代价由一条测试付：两个数必须相等。
-    "beidou_alpha": 10_280,
+    #
+    # +63 beidou_alpha，2026-09-18（10_280 -> 10_343）：前向板的**出口契约**（Q-SY2 的前置 (a)，
+    # 操作者裁「要」）。K-SY08 的原话是「板 PASS 只产生一条读数，**没有后续契约**」，而那是
+    # O-SY2「默认不上」的两个理由之一。
+    #
+    # 一个没有出口的观察机制是停车场：候选进来、年限到了、没有任何人被要求做任何事，而
+    # `years_to_decide` 还会随着别人上板继续变长。所以两个方向一起写死——过门走四步
+    # （新预登记 → 前向假设 → probe，且**不解除任何 `reopen.yaml` 条件**，不写这一条板就是绕过
+    # 重开条件的后门），到点没过门退役、不延期、不换 `claimed_sharpe`。
+    #
+    # 63 行里大部分是那四段契约文本本身，而它们住在模块里而不是文档里是有理由的：`forward_reading`
+    # 把它写进**每一份**读数的 `next_step`，所以三年后读这块板的人（可能不是今天这个人）不必去翻
+    # 一份分析文档的第 7 节。这与本页记过的三条 `_*_note` 同形——一条只能靠读实现才拿得到的判读，
+    # 不是对读报告的人的披露。
+    "beidou_alpha": 10_343,
 }
 
 

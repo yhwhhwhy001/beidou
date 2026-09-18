@@ -13107,3 +13107,75 @@ Sharpe。不能拿本轮的数据去配一个事后的判据。
 没跑 `validate` / `mine` / `book` / `diagnose`；`trials.jsonl` 未被触碰；没改 `config/alpha_registry.yaml`
 与任何 registry 参数；没改判据阈值（`VerdictThresholds` 一个字段都没动，`power` 块不参与 `decide`）；
 没动实盘。source budget 抬顶 +109 beidou_alpha / +168 beidou_cli，理由写在紧挨常量的注释里。
+
+## 2026-09-18 · Q-SY2 裁「要」：residual 上板，前提是先给板装上出口
+
+操作者对 09-18 分析三条裁定的第二条。分析里 O-SY2 写的是**默认不上**，两个前置缺一不上：
+(a) 先写「板 PASS → 预登记 → probe」的契约；(b) 操作者显式接受 claimed 是全样本尾巴。
+操作者答「要」＝接受 (b)，本节做 (a) 并上板。
+
+### 一、前置 (a)：板本来没有出口
+
+K-SY08 的原话：「板 PASS 只产生一条读数，**没有后续契约**」。一个没有出口的观察机制是停车场——
+候选进来、年限到了、没有任何人被要求做任何事，而 `years_to_decide` 还会随着别人上板继续变长。
+
+出口与入口一起写死，两个方向：
+
+- **过门**走四步（`forward_board.BOARD_PASS_CONTRACT`）：① 写一份新预登记，假设必须是**前向的**，
+  不得回头再搜历史网格；② 功效读数用**板自己的 N** 与 `board_threshold`，不是 validate 的桶；
+  ③ 申请的是 **probe 位**，而 probe 要 registry 的 `probe` 块（D-019 / D-029）与一份被引用的报告，
+  **板读数不是那份报告**，所以仍要一次按正常规则计费的 validate；④ 原族 `reopen.yaml` 的重开条件
+  **不因板 PASS 而解除**——板 PASS 是向操作者提出重开的**理由**，不写这一条，板就是绕过重开条件的后门。
+- **到点没过门**（`BOARD_EXIT_CONTRACT`）：退役，**不延期、不换 `claimed_sharpe`、不换参数**。
+  延期是事后把判定年限改成「再等等看」，而那个年限正是上板时钉死 claimed 要防的循环，换了个方向。
+
+四段契约由 `forward_reading` 写进**每一份**读数的 `next_step`；`research forward status` 只在
+PASS 或到点时印出来。住在 artefact 里而不是文档里，是因为三年后读这块板的人可能不是今天这个人——
+与 `_MARGIN_BUFFER_NOTE` / `_caliber_note` / `_full_sample_tail_note` 同一条规矩的第五个实例。
+
+### 二、上板：一笔板费，读数如下
+
+```
+research forward add --strategy residual --universe pit --charge 1 --accept-full-sample-tail \
+  --params '{"horizons": [168, 336, 720], "scale": 0.1, "beta_window": 336}' \
+  --evidence reports/research/residual-validation-20260917T145128Z.json
+```
+
+| | 值 |
+| --- | --- |
+| `param_key` | `276d3b417bb95ec3`（与 `145128Z` 的 `best_params` 逐字段相同，已核） |
+| `claimed_sharpe` | **1.0484497284817458**，读自 `walk_forward.oos_sharpe` |
+| 尾巴 | **是**（`oos_is_full_sample_tail`），操作者显式接受，已写进板条目 |
+| `evidence_verdict` | FAIL（板不因 FAIL 拒绝上板——它要看的正是「可观察但不可裁定」的那批） |
+| ledger | +1 笔进 `forward_board` 桶，22,172 → **22,173**；`ledger_scope` 不把这个桶给任何真实策略，所以**不进任何 family gate 的分母** |
+| `symbols` | 206（上板这一刻 pit 可解析成员数） |
+
+**证据取 `145128Z` 而不是分析 §7 写的 `092004Z`。** 两份的 `walk_forward.oos_sharpe` 逐位相同
+（1.0484497284817458），但 `145128Z` 是单配置运行，这个数无歧义地属于这个参数点；`092004Z` 的表头是
+fold 选择的混合，只是恰好每折都选了同一格。价钱一个字没变，读法更干净。
+
+### 三、这一笔的价钱，付款人是 tsmom 板位
+
+`census` 1 → 2，板的门 z 从 **1.6449** 升到 **1.9545**：
+
+| 板位 | claimed | N=1 时的判定年限 | N=2（今天） | 差 |
+| --- | --- | --- | --- | --- |
+| tsmom | 1.2757 | 1.662 年 | **2.347 年** | **+0.685 年，无补偿** |
+| residual | 1.0484 | 2.461 年 | **3.475 年** | 它自己的年限 |
+
+这正是分析 §7 给 O-SY2 定的价，一个字没改。**受损方是 tsmom 板位，没有补偿**——这也是分析把它
+写成「默认不上」的理由，操作者裁「要」就是接受这笔。
+
+### 四、一条要留给下一个人的读法
+
+上板这一刻 pit 有 5 个曾入池成员没有 1h 数据（ALLOUSDT / BLESSUSDT / ENSOUSDT / REUSDT / SKYAIUSDT），
+所以 `symbols` 记的是 206。**同日的 #27 回填（Q-SY3）会让这 5 个变得可加载**，此后 `status` 的成员
+集合会比板条目里那个数多。板钉的是 **universe 的口径**（pit）不是名单，这条已写进板条目的 `note`，
+免得下一个人读成「板上的候选被换了标的」。
+
+### 五、本节没做什么
+
+没跑 `validate` / `mine` / `book` / `diagnose`；没改 `config/alpha_registry.yaml`；没改
+`governance/reopen.yaml`（residual 的重开条件仍是「新数据列」，板 PASS 不解除它）；没动实盘；
+`VerdictThresholds` 与 `max_sharpe_quantile` 一个字都没动。source budget 抬顶 +63 beidou_alpha /
++6 beidou_cli，理由写在紧挨常量的注释里。

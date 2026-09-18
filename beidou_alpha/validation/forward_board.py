@@ -21,6 +21,12 @@
    `TAMPERED`，那一条作废而不是给出读数（FM-AM4：板上候选被换参数 → 撤板）。
 4. **板读数不进任何历史选择。** 这个模块不导出任何能喂给 `validate` / `book` 的东西，它的报告也
    单独成文。Scope Firewall 原话：「前向板读数不进任何历史选择」。
+5. **PASS 买到的是一份新预登记的资格，不是一次裁定。** 2026-09-18 补（Q-SY2 的前置 (a)）。在此
+   之前板的出口是空的——K-SY08 的原话：「板 PASS 只产生一条读数，没有后续契约」。一个没有出口的
+   观察机制是停车场：候选进来、年限到了、没有任何人被要求做任何事，而 `years_to_decide` 还会随着
+   别人上板继续变长。所以出口与入口一起写死，两个方向都写：过门走 `BOARD_PASS_CONTRACT` 的四步
+   （新预登记 → probe，**不解除任何 `reopen.yaml` 条件**），到点没过门按 `BOARD_EXIT_CONTRACT`
+   退役、不延期。每份读数都带 `next_step`，所以三年后读这块板的人不必去翻一份分析文档的第 7 节。
 
 **门为什么不直接用 `max_sharpe_quantile`。** 那是 D-028 的选择门，`n_trials <= 1` 时按约定返回
 0.0——没有选择就没有选择门，这在 `validate` 里是对的，因为显著性由别处的 OOS 门与 DSR 负责。板不同：
@@ -54,6 +60,57 @@ FORWARD_BOARD_STRATEGY = "forward_board"
 OBSERVING = "OBSERVING"  # 还没到可判的年数，或还没过门
 PASSES = "PASSES_BOARD_GATE"  # 过了按今天板大小算的门
 TAMPERED = "TAMPERED"  # 参数与上板时对不上，这一条作废
+
+
+#: 一份板读数**买到了什么**，按它的处境分。四条里没有一条是「裁定」。
+#:
+#: 这块东西 2026-09-18 才写下来（Q-SY2，操作者裁「要」的前置 (a)）。在那之前板 PASS 只产生一条
+#: 读数：K-SY08 的原话是「板 PASS 只产生一条读数，**没有后续契约**」。一个没有出口的观察机制是
+#: 停车场——候选进来、年限到了、然后没有任何人被要求做任何事，而 `years_to_decide` 会随着别人上板
+#: 继续变长。所以出口和入口一起写死，两个方向都写：过门要走哪四步，没过门要退役。
+BOARD_PASS_CONTRACT = (
+    "过了按今天板大小算的门。**这不是裁定**，它买到的是「一份新预登记的资格」，四步缺一不可：\n"
+    "(1) 新预登记按 docs/PREREGISTRATION.md 七项写，假设必须是**前向的**"
+    "（「这个板位自 entered_at 起交付了 X」），不得回头再搜历史网格；\n"
+    "(2) 功效读数（模板第 5 项）用**板自己的 N** 与 `board_threshold`，不是 validate 的桶；\n"
+    "(3) 申请的是 **probe 位**（`Policy.max_concurrent_probes = 2`），不是主书。probe 要 registry 里"
+    "一个 `probe` 块（D-019 / D-029：accepted_by / accepted_on / reason / review_after_days / stop）"
+    "与一份被引用的报告——**板读数不是那份报告**，所以仍要一次按正常规则计费的 validate；\n"
+    "(4) 原族 `governance/reopen.yaml` 的重开条件**不因板 PASS 而解除**。板 PASS 是向操作者提出"
+    "重开的**理由**，由 `check: operator` 裁，不是自动重开。"
+)
+
+#: 到点而没过门：退役，不延期。
+BOARD_EXIT_CONTRACT = (
+    "到点了（`long_enough` 为真）而没过门：按契约 `research forward retire` 退役这个板位。"
+    "**不延期、不换 `claimed_sharpe`、不换参数。** 延期是事后把判定年限改成「再等等看」，"
+    "而那个年限正是上板时钉死 claimed 要防的循环，只是换了个方向。"
+)
+
+#: 还没到点：读数存在，裁定不存在。
+BOARD_OBSERVING_CONTRACT = (
+    "还在观察。到 `years_to_decide` 之前，这条读数不构成任何裁定——今天在门上面也不算，那只是「今天恰好好看」。"
+)
+
+#: 参数对不上：这一条作废。
+BOARD_TAMPERED_CONTRACT = (
+    "参数与上板时对不上，这一条作废，不给读数（FM-AM4）。要重新观察就先 retire 再 add，"
+    "重上**再计一笔**——旧的那次观察不退钱。"
+)
+
+
+def next_step(*, verdict: str, long_enough: bool) -> str:
+    """一条读数之后**谁该做什么**。永远有一句，永远不是空的。
+
+    读数带 `verdict` 与 `years_to_decide` 已经挡住了「把板当排行榜读」；这一句挡的是另一件事——
+    读完之后没有人知道该做什么，于是什么都不做。三年后读这块板的人（可能不是今天这个人）要能
+    从 artefact 本身读到出口，而不是去翻一份分析文档的第 7 节。
+    """
+    if verdict == TAMPERED:
+        return BOARD_TAMPERED_CONTRACT
+    if verdict == PASSES:
+        return BOARD_PASS_CONTRACT
+    return BOARD_EXIT_CONTRACT if long_enough else BOARD_OBSERVING_CONTRACT
 
 
 @dataclass(frozen=True)
@@ -407,6 +464,7 @@ def forward_reading(
                 "entered_at": entry.entered_at,
                 "verdict": TAMPERED,
                 "reason": reason,
+                "next_step": next_step(verdict=TAMPERED, long_enough=False),
             }
 
     forward = forward_slice(net.dropna(), entry.entered_at)
@@ -424,6 +482,8 @@ def forward_reading(
     observed_years = n_obs / bars_per_year if bars_per_year > 0 else 0.0
 
     passes = sharpe_period is not None and math.isfinite(threshold) and sharpe_period > threshold
+    long_enough = years is not None and observed_years >= years
+    verdict = PASSES if (passes and long_enough) else OBSERVING
     return {
         "candidate": entry.candidate,
         "param_key": entry.param_key,
@@ -439,8 +499,11 @@ def forward_reading(
         "years_to_decide": years,
         # 到点了没有，与过门没过门是两件事，分开记：一个候选可以今天就在门上面，而它要到
         # `years_to_decide` 才有足够的观察让那件事不是噪声。
-        "long_enough": years is not None and observed_years >= years,
-        "verdict": PASSES if (passes and years is not None and observed_years >= years) else OBSERVING,
+        "long_enough": long_enough,
+        "verdict": verdict,
+        # 读完之后谁该做什么。挡的不是「把板当排行榜读」（`verdict` 与 `years_to_decide` 已经挡住
+        # 了那个），是另一件事：读完没人知道该做什么，于是什么都不做。
+        "next_step": next_step(verdict=verdict, long_enough=long_enough),
     }
 
 

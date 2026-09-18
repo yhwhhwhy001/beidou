@@ -27,6 +27,7 @@ import click
 
 from beidou_alpha.validation.forward_board import (
     FORWARD_BOARD_STRATEGY,
+    PASSES,
     BoardEntry,
     Retirement,
     already_on_board,
@@ -383,6 +384,7 @@ def forward_status(
     for reading in readings:
         if reading.get("verdict") == "TAMPERED":
             out_lines.append(f"  {reading['candidate']} {reading['param_key']}  作废：{reading['reason']}")
+            out_lines.append(f"    → {reading['next_step']}")
             continue
         # 一个**今天刚上板**的候选前向窗口是空的，所以这三个都可能是 None，而那是正常状态不是异常：
         # 板位在上板那一刻就成立，读数要等下一根 bar。直接格式化 None 会让日任务在上板当天崩掉。
@@ -394,6 +396,10 @@ def forward_status(
             f"前向 {reading['years_forward']:.2f} 年  S={sharpe_text}  "
             f"门={gate_text}  要看 {years_text} 年  {reading['verdict']}"
         )
+        # 契约只在**要求有人动手**的时候印出来。一条还在观察的板位每天印四步契约是噪声，而噪声
+        # 掩盖信号是这块板自己记过的那类错误（板读数换目录那一条）。
+        if reading["verdict"] == PASSES or reading["long_enough"]:
+            out_lines.append(f"    → {reading['next_step']}")
     for line in out_lines:
         click.echo(line)
 
