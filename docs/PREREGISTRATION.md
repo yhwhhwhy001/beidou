@@ -84,6 +84,43 @@ ledger，而且会把同桶所有候选的门再抬高一点。
 - **`oos_is_full_sample_tail: True` 时样本外是全样本尾巴**（D-043），封顶 WEAK_PASS。
   固定配置的样本外永远是尾巴，重跑一个不会分歧的网格是白花笔数。
 
+---
+
+## 从前向板 PASS 走到 probe（2026-09-18 新增，Q-SY2 的前置 (a)）
+
+板 PASS 之前没有出口。K-SY08 的原话：「板 PASS 只产生一条读数，**没有后续契约**」。
+没有出口的观察机制是停车场——候选进来、年限到了、没有任何人被要求做任何事，
+而 `years_to_decide` 还会随着别人上板继续变长。出口与入口一起写死，两个方向都写。
+
+### 过门：四步，缺一不可
+
+1. **写一份新预登记**，按上面七项。假设必须是**前向的**：「这个板位自 `entered_at` 起交付了 X」。
+   **不得回头再搜历史网格**——那会同时触发原族的 reopen 条件与选择污染。
+2. **功效读数用板自己的 N** 与 `board_threshold`，不是 validate 的桶。板的门是
+   `max(选择门, 单边 95% 临界值)`，与 D-028 的桶不是一回事。
+3. **申请的是 probe 位**（`Policy.max_concurrent_probes = 2`），不是主书。probe 要 registry 里一个
+   `probe` 块（D-019 / D-029：`accepted_by` / `accepted_on` / `reason` / `review_after_days` / `stop`），
+   以及**一份被引用的报告**。**板读数不是那份报告**——`forward_board` 不导出任何能喂给
+   `validate` / `book` 的东西（不变式 4）。所以仍然要一次按正常规则计费的 `validate`。
+   板买到的不是那一笔的豁免，是「这一笔值不值得花」的证据。
+4. **原族的 `reopen.yaml` 条件不因板 PASS 而解除。** 板 PASS 是向操作者提出重开的**理由**，
+   由 `check: operator` 裁，不是自动重开。写死这一条是因为不写的话板就是绕过 reopen 的后门。
+
+### 到点没过门：退役，不延期
+
+`long_enough` 为真而 `verdict` 仍是 `OBSERVING`，就 `research forward retire` 退役这个板位。
+**不延期、不换 `claimed_sharpe`、不换参数。** 延期是事后把判定年限改成「再等等看」，
+而那个年限正是上板时钉死 claimed 要防的循环，只是换了个方向。
+
+退役**不退门**：`census` 数的是曾经上过板的板位数，退役的也算。看过就是看过。
+
+### 这四条住在哪
+
+`beidou_alpha/validation/forward_board.py` 的 `BOARD_PASS_CONTRACT` / `BOARD_EXIT_CONTRACT`，
+并由 `forward_reading` 写进**每一份**读数的 `next_step` 字段。
+`research forward status` 只在要求有人动手时把它印出来（PASS 或到点），其余时候不印——
+每天给一条还在观察的板位印四步契约是噪声。
+
 ## 相关
 
 `docs/ARCHITECTURE.md`（D-020 / D-028 / D-043 的实现位置）、`governance/reopen.yaml`（重开条件）、
