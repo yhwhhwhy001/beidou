@@ -55,3 +55,8 @@ scratchpad/*/
 # never having existed.  What happens when two machines write them is AR-17's question, not a reason
 # to keep them untracked on the one machine there is.
 governance/ENABLED
+
+# 候选前向板的日读数。派生物，不是证据：板文件（`reports/research/forward_board.jsonl`）加数据就能
+# 完全复现，而 launchd 每天写一份。`reports/research/` 里的报告是计过费的证据，要进版本库；这些不是。
+# 不 ignore 的代价很具体：一年 365 个未跟踪文件把 `git status` 淹掉，掩盖真正的新证据。
+reports/forward-board/

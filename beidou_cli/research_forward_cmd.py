@@ -28,6 +28,7 @@ import click
 from beidou_alpha.validation.forward_board import (
     FORWARD_BOARD_STRATEGY,
     BoardEntry,
+    Retirement,
     already_on_board,
     board_param_key,
     board_report,
@@ -35,7 +36,9 @@ from beidou_alpha.validation.forward_board import (
     claimed_sharpe_from,
     forward_reading,
     full_sample_tail,
+    live_entries,
     read_board,
+    read_retirements,
 )
 from beidou_alpha.validation.ledger import TrialRecord, resolve_ledger_path
 from beidou_alpha.validation.pipeline import score_book
@@ -54,6 +57,11 @@ from beidou_shared.config import load_yaml
 
 #: 板文件。与 ledger 同一个目录，因为它们是同一件事的两半：板是名册，ledger 是账单。
 DEFAULT_BOARD = "reports/research/forward_board.jsonl"
+
+#: 板读数写哪。**不进 `reports/research/`**：那里放的是计过费的证据，而板读数是可从板与数据
+#: 完全复现的派生物，日任务每天写一份。混在一起，一年 365 个未跟踪文件会把 `git status` 淹掉，
+#: 掩盖真正的新证据——而「一层噪声掩盖另一层的信号」正是这个仓库付过学费的那类错误。
+DEFAULT_BOARD_REPORTS = "reports/forward-board"
 
 
 @research.group("forward")
@@ -127,7 +135,11 @@ def forward_add(
 ) -> None:
     """把一个候选放上前向板：钉死假设，计一笔，此后只观察。"""
     board_file = _board_path(board)
-    existing = read_board(board_file.read_text(encoding="utf-8").splitlines() if board_file.exists() else [])
+    board_lines = board_file.read_text(encoding="utf-8").splitlines() if board_file.exists() else []
+    existing = read_board(board_lines)
+    # 退役过的板位可以重上——那正是「更正一个钉错的 claimed_sharpe」的路。重上要**再计一笔**：
+    # 旧的那次观察不退钱，新的这次也是一次观察，两次都留在门的 N 里。
+    still_live = live_entries(board_lines)
 
     evidence_path = Path(evidence)
     if not evidence_path.exists():
@@ -169,12 +181,14 @@ def forward_add(
         evidence=str(evidence_path),
         evidence_sha256=_sha256(evidence_path),
         claimed_is_full_sample_tail=is_tail,
+        evidence_verdict=str(report.get("verdict", "")),
         note=note,
     )
 
-    if already_on_board(existing, candidate):
+    if already_on_board(still_live, candidate):
         click.echo(f"已在板上（{candidate.param_key}），不重复计费。板上现有 {census(existing)} 个板位。")
         return
+    superseding = already_on_board(existing, candidate)
 
     wanted = 1
     if charge != wanted:
@@ -207,19 +221,71 @@ def forward_add(
     with board_file.open("a", encoding="utf-8") as handle:
         handle.write(candidate.to_json() + "\n")
 
-    click.echo(f"上板：{strategy} {candidate.param_key} universe={universe_mode}")
+    verb = "重上（更正一个退役的板位）" if superseding else "上板"
+    click.echo(f"{verb}：{strategy} {candidate.param_key} universe={universe_mode}")
     tail_note = "，**而它是一条全样本尾巴，年限建在乐观读数上**" if is_tail else ""
     click.echo(f"  声称 Sharpe {claimed:.4f}（读自 {evidence_path} 的 {where}{tail_note}）")
     click.echo(
         f"  计费 {'1 笔' if charged else '0 笔（同一笔已在账上）'} → {ledger_path}（桶 {FORWARD_BOARD_STRATEGY}）"
     )
-    click.echo(f"  板上现有 {census([*existing, candidate])} 个板位")
+    # 门的 N 按**不同的假设**数，所以重上同一个板位不会让它变大——重新钉一次声称值不是一个新候选。
+    # 但它是一次被行使的自由度，所以照样计一笔：ledger 里那行是「谁在什么时候改了这个板位的声称值」
+    # 的审计痕迹，而 N 管的是多重检验。两者本来就不该相等。
+    click.echo(f"  在板 {len(still_live) + 1} 个；门按曾经上过板的 {census([*existing, candidate])} 个不同板位算")
 
 
 # `status` **不用** `_common_options`，因为那里面 `--strategy` 是必填的，而读板根本不需要它：
 # 每个板位的策略、参数与 universe 都在板条目里，那正是上板时钉死的东西。照抄 `_common_options`
 # 的代价是具体的——`deploy/run_forward_board.sh` 就是不带 `--strategy` 调它的，于是日任务每天失败，
 # 而失败的方式是 click 的用法错误，看起来像脚本写错而不是命令定义错。
+@research_forward.command("retire")
+@click.option("--candidate", required=True, help="板位的策略 id")
+@click.option("--param-key", required=True, help="板位的参数摘要（`forward status` 会打出来）")
+@click.option("--universe", required=True, help="板位的 universe")
+@click.option("--reason", required=True, help="为什么撤——这句话会跟着退役记录留在板上")
+@click.option("--board", default=DEFAULT_BOARD, show_default=True, help="板文件（append-only）")
+def forward_retire(candidate: str, param_key: str, universe: str, reason: str, board: str) -> None:
+    """把一个板位从**报告**里撤下来。**不退钱，也不降低门的 N。**
+
+    「看过就是看过」：那一笔买的是一次观察的权利，撤回观察不能退多重检验的代价。所以退役之后
+    `forward status` 不再读这个板位，而门的 N 仍按**曾经**上过板的数目算。
+
+    唯一正当的用途是**更正**——一个板位的 `claimed_sharpe` 钉错了，换一个重上，而旧的那次观察照样
+    计在 N 里。想靠退掉表现差的板位来降低其他候选的门，这条路是堵死的。
+    """
+    board_file = _board_path(board)
+    if not board_file.exists():
+        raise click.ClickException(f"板文件不存在：{board_file}")
+    lines = board_file.read_text(encoding="utf-8").splitlines()
+    entries = read_board(lines)
+    already = read_retirements(lines)
+
+    matches = [e for e in entries if (e.candidate, e.param_key, e.universe) == (candidate, param_key, universe)]
+    if not matches:
+        raise click.ClickException(
+            f"板上没有 {candidate} / {param_key} / {universe}。现有板位："
+            + ", ".join(f"{e.candidate}/{e.param_key}/{e.universe}" for e in entries)
+        )
+    target = matches[-1]
+    if target.identity() in {r.identity() for r in already}:
+        click.echo(f"已经退役过了（{target.param_key}），不重复记。")
+        return
+
+    record = Retirement(
+        candidate=target.candidate,
+        param_key=target.param_key,
+        universe=target.universe,
+        construction_digest=target.construction_digest,
+        retired_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        reason=reason,
+    )
+    with board_file.open("a", encoding="utf-8") as handle:
+        handle.write(record.to_json() + "\n")
+    click.echo(f"退役：{target.candidate} {target.param_key} {target.universe}")
+    click.echo(f"  理由：{reason}")
+    click.echo(f"  门的 N 不变，仍按曾经上过板的 {census(entries)} 个算——看过就是看过。")
+
+
 @research_forward.command("status")
 @click.option("--root", default=".beidou/data", show_default=True)
 @click.option("--symbols", default="", help="comma-separated; default = selected universe or all stored")
@@ -231,7 +297,7 @@ def forward_add(
 @click.option("--costs", "costs_path", default="config/costs.yaml", show_default=True)
 @click.option("--execution", type=click.Choice(["open_to_close", "close_to_close"]), default="open_to_close")
 @click.option("--funding/--no-funding", default=True, show_default=True)
-@click.option("--out", default="reports/research", show_default=True)
+@click.option("--out", default=DEFAULT_BOARD_REPORTS, show_default=True, help="板读数写哪（不是 reports/research）")
 @click.option("--min-history", default=None, type=int, help="bars a symbol must have before it is tradable")
 @click.option("--min-tenure", default=0, show_default=True, help="pit only: refreshes before a symbol is tradable")
 @click.option("--grids", default="", help="JSON of enumerate_candidates grids, for mined ids on the board")
@@ -262,16 +328,24 @@ def forward_status(
     if not board_file.exists():
         click.echo(f"板是空的（{board_file} 不存在）。`research forward add` 放第一个候选上去。")
         return
-    entries = read_board(board_file.read_text(encoding="utf-8").splitlines())
+    lines = board_file.read_text(encoding="utf-8").splitlines()
+    entries = read_board(lines)
+    retired = read_retirements(lines)
     if not entries:
         click.echo("板上没有可读的条目。")
         return
 
+    # 门的 N 数的是**曾经**上过板的全部，退役的也算——看过就是看过，撤回观察不能退多重检验的代价。
+    # 报告只读还在板上的那些。
     n = census(entries)
+    live = live_entries(lines)
+    if not live:
+        click.echo(f"板上 {n} 个板位全部已退役（门的 N 仍按 {n} 算）。")
+        return
     profile_payload = load_yaml(profile)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     readings: list[dict[str, Any]] = []
-    for item in entries:
+    for item in live:
         chosen = _resolve_symbols(root, symbols, interval, item.universe)
         panel = _load(root, chosen, interval, start, end, funding)
         membership = _membership(root, item.universe, panel, min_tenure)
@@ -300,26 +374,28 @@ def forward_status(
     report["board"] = str(board_file)
     # 板读数单独成文，不进任何 validate / book 报告。Scope Firewall 原话：
     # 「前向板读数不进任何历史选择」——一份混在一起的报告，迟早会有人拿板上的排序去挑候选。
-    lines = [
-        f"板上 {report['n_on_board']} 个板位；到得了判定年数的 {report['decidable']} 个；"
+    report["retired"] = len(retired)
+    report["n_for_the_gate"] = n
+    out_lines = [
+        f"板上 {report['n_on_board']} 个在板（门按曾经的 {n} 个算，已退役 {len(retired)} 个）；到得了判定年数的 {report['decidable']} 个；"
         f"过门的 {report['passing']} 个；作废的 {report['tampered']} 个。"
     ]
     for reading in readings:
         if reading.get("verdict") == "TAMPERED":
-            lines.append(f"  {reading['candidate']} {reading['param_key']}  作废：{reading['reason']}")
+            out_lines.append(f"  {reading['candidate']} {reading['param_key']}  作废：{reading['reason']}")
             continue
         # 一个**今天刚上板**的候选前向窗口是空的，所以这三个都可能是 None，而那是正常状态不是异常：
         # 板位在上板那一刻就成立，读数要等下一根 bar。直接格式化 None 会让日任务在上板当天崩掉。
         sharpe_text = "—" if reading["sharpe_annual"] is None else f"{reading['sharpe_annual']:.3f}"
         gate_text = "—" if reading["threshold_annual"] is None else f"{reading['threshold_annual']:.3f}"
         years_text = "永远不够" if reading["years_to_decide"] is None else f"{reading['years_to_decide']:.2f}"
-        lines.append(
+        out_lines.append(
             f"  {reading['candidate']} {reading['param_key']} {reading['universe']}  "
             f"前向 {reading['years_forward']:.2f} 年  S={sharpe_text}  "
             f"门={gate_text}  要看 {years_text} 年  {reading['verdict']}"
         )
-    for line in lines:
+    for line in out_lines:
         click.echo(line)
 
-    path, digest = _write(out, f"forward-board-{_stamp()}", report, "\n".join(["# 候选前向板", "", *lines]))
+    path, digest = _write(out, f"forward-board-{_stamp()}", report, "\n".join(["# 候选前向板", "", *out_lines]))
     click.echo(f"report: {path} sha256={digest}")
