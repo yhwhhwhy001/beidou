@@ -45,21 +45,42 @@ key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")  # 错：缺了会带着空�
 
 ---
 
-## 二、三层拦截，以及每一层能被怎么绕过
+## 二、四层拦截，以及每层真实的覆盖范围
 
-诚实地写清楚每层的边界，比说"我们有防护"有用。
+诚实地写清楚每层的边界，比说"我们有防护"有用。**尤其是这一条：GitHub 的 push
+protection 认不出 Binance 的密钥。**
 
-| 层 | 位置 | 什么时候响 | 怎么被绕过 |
-|---|---|---|---|
-| 1. pre-commit hook | 本机 `.githooks/pre-commit` | `git commit` 时扫暂存区，毫秒级 | `git commit --no-verify` 一个开关 |
-| 2. GitHub push protection | GitHub 服务端 | `git push` 时扫推送内容 | **绕不过**，不在本机 |
-| 3. CI 的 Secrets 门 | `.github/workflows/ci.yml` | 每次 PR 与 main 推送，扫**全部历史** | 改 workflow（会留在 diff 里） |
+| 层 | 位置 | 什么时候响 | 对 Binance 密钥 | 怎么被绕过 |
+|---|---|---|---|---|
+| 1. pre-commit | 本机 | `git commit` 扫暂存区 | ✅ 有效 | `commit --no-verify` |
+| 2. pre-push | 本机 | `git push` 扫将要推送的全部 commit | ✅ 有效 | `push --no-verify` |
+| 3. GitHub push protection | 服务端 | `git push` 时 | ❌ **无效** | 绕不过，但也拦不住它 |
+| 4. CI 的 Secrets 门 | Actions | PR 与 main push，扫**全历史** | ⚠️ **事后** | 改 workflow |
 
-第 1 层挡的是手滑，不是恶意。它可以被绕过，这是设计——一个不能绕过的本地 hook 会在
-第一次误报时把人逼到 `--no-verify` 常态化。真正挡住的是第 2 层：它在 GitHub 那边，
-本机做什么都影响不到它。
+### 第 3 层为什么对 Binance 无效
 
-第 3 层扫全历史而不是只扫这次改动，因为**密钥进了历史，把文件删掉不会让它消失**。
+2026-09-19 核实：**Binance 不在 GitHub secret scanning 的 partner pattern 列表里**。
+能自己加模式的 custom patterns 要求仓库属于**组织**并启用付费的 Secret Protection
+（$19/月/committer）。本仓库是个人账户下的公开仓库，两条都不满足。
+
+所以第 3 层拦得住 GitHub token、AWS、OpenAI、Slack、Stripe 这些 partner pattern，
+**拦不住本仓库唯一真正怕丢的那个东西**。它仍然有价值——它是唯一绕不过的一层——
+但不要指望它接住 Binance 的 key。
+
+### 由此得到的实际结论
+
+**Binance 密钥在"进入公开仓库之前"的拦截，只剩本机那两个 hook，而它们都能被
+`--no-verify` 绕过。** 第 4 层是事后的：CI 在推送之后才跑，它红的时候密钥已经躺在
+公开仓库里、已经可以被任何人读到了。
+
+这不是设计缺陷，是可用工具的边界。它导出的要求很具体：**`--no-verify` 在这个仓库里
+不是一个日常开关。** 用它之前先想清楚绕过的是哪一层，以及后面有没有网。
+
+第 1 层与第 2 层的分工：pre-commit 只看这一次的暂存区；pre-push 看**将要进入远端的
+全部 commit**——用 `--no-verify` 提交过的、从别处 cherry-pick 来的，pre-commit 都没
+见过。
+
+第 4 层扫全历史而不是只扫这次改动，因为**密钥进了历史，把文件删掉不会让它消失**。
 只扫工作树的检查会对着一个仍然公开可读的密钥报平安。
 
 ### 新 clone 的第一件事
@@ -98,6 +119,9 @@ ledger 的 `param_key`，9 处是 sha256 文件摘要，2 处是 SSH 公钥指�
 
 `tests/architecture/test_secret_scanning_is_alive.py` 是这件事的刹车：allowlist 再怎么
 加，一个随机生成的 Binance 形态必须还能被抓出来。那个测试红了，说明口子开得太大了。
+
+这条刹车在这个仓库里比一般项目重要：上面第二节说清楚了，GitHub 那层接不住 Binance 的
+密钥，所以 allowlist 放宽的代价没有别的东西替你兜。
 
 ---
 

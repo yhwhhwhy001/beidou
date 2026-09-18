@@ -23,8 +23,25 @@
 凭据只有一个位置：`~/Library/Application Support/beidou/env.sh`（`chmod 600`），
 由 `deploy/run_live.sh` 读。代码里取凭据只有一种写法——从环境读，缺了就炸，**不带默认值**。
 
-机械上有三层挡着（pre-commit hook / GitHub push protection / CI 的 Secrets 门），
-但第一层能被 `--no-verify` 绕过，所以它们是网不是墙。**新 clone 的第一件事**：
+机械上有四层，但**对 Binance 密钥真正管用的只有本机那两个 hook**（pre-commit / pre-push），
+而它们都能被 `--no-verify` 绕过：
+
+| 层 | 对 Binance 密钥 |
+|---|---|
+| pre-commit（本机，扫暂存区） | ✅ |
+| pre-push（本机，扫将要推送的全部 commit） | ✅ |
+| GitHub push protection（服务端） | ❌ **无效** |
+| CI 的 Secrets 门（扫全历史） | ⚠️ **事后**，红的时候密钥已经公开可读 |
+
+第三层为什么无效，2026-09-19 核实过：**Binance 不在 GitHub secret scanning 的 partner
+pattern 列表里**，而能自己加模式的 custom patterns 要求仓库属于**组织**并启用付费的
+Secret Protection（$19/月/committer）——个人账户下的公开仓库两条都不满足。它拦得住
+GitHub token、AWS、OpenAI 这些，拦不住本仓库唯一真正怕丢的那个。
+
+所以：**`--no-verify` 在这个仓库里不是日常开关。** 用它之前先想清楚绕过的是哪一层，
+以及后面有没有网。
+
+**新 clone 的第一件事**：
 
 ```bash
 brew install gitleaks && bash deploy/install-hooks.sh

@@ -20,6 +20,14 @@ chmod +x .githooks/* 2>/dev/null || true
 
 echo "hooks 已指向 .githooks/（core.hooksPath）"
 echo "  当前值: $(git config core.hooksPath)"
+for h in .githooks/*; do
+    [ -f "$h" ] || continue
+    if [ -x "$h" ]; then
+        echo "  ✓ $(basename "$h")"
+    else
+        echo "  ✗ $(basename "$h") 没有可执行位——git 会静默跳过它"
+    fi
+done
 
 if command -v gitleaks >/dev/null 2>&1; then
     echo "  gitleaks: $(gitleaks version 2>&1 | head -1)"

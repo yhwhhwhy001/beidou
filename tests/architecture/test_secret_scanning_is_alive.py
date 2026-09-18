@@ -150,17 +150,40 @@ def test_repository_hash_shapes_do_not_false_positive(name: str, text: str) -> N
     assert findings == [], f"{name} 的哈希形态被误报成密钥：{findings}\n基线必须是零，否则这道门会被当成噪声忽略掉。"
 
 
-def test_the_pre_commit_hook_is_installed_and_executable() -> None:
-    """本地拦截层在仓库里，而且是可执行的。
+@pytest.mark.parametrize("name", ["pre-commit", "pre-push"])
+def test_the_local_hooks_are_present_and_executable(name: str) -> None:
+    """本地两层拦截都在仓库里，而且是可执行的。
 
-    `.githooks/pre-commit` 不可执行时 git 会**静默跳过**它——不报错，不提示，
-    看起来和「扫描通过」一模一样。
+    不可执行时 git 会**静默跳过** hook——不报错，不提示，看起来和「扫描通过」
+    一模一样。
+
+    这两层比一般项目重要：见 `test_the_docs_record_that_github_cannot_catch_binance_keys`，
+    服务端那层接不住 Binance 的密钥，所以本机这两个是它进入公开仓库前仅有的拦截。
     """
-    hook = ROOT / ".githooks" / "pre-commit"
-    assert hook.exists(), "`.githooks/pre-commit` 不在了，本地这一层没了"
+    hook = ROOT / ".githooks" / name
+    assert hook.exists(), f"`.githooks/{name}` 不在了，本地少了一层"
     assert hook.stat().st_mode & 0o111, (
-        "`.githooks/pre-commit` 没有可执行位。git 会静默跳过它，"
-        "看起来与「扫描通过」无法区分。修：chmod +x .githooks/pre-commit"
+        f"`.githooks/{name}` 没有可执行位。git 会静默跳过它，"
+        f"看起来与「扫描通过」无法区分。修：chmod +x .githooks/{name}"
+    )
+
+
+def test_the_docs_record_that_github_cannot_catch_binance_keys() -> None:
+    """这个限制必须留在文档里，因为它反直觉且代价很高。
+
+    2026-09-19 核实：Binance **不在** GitHub secret scanning 的 partner pattern
+    列表里，而 custom patterns 要求仓库属于组织并启用付费的 Secret Protection。
+    个人账户下的公开仓库两条都不满足。
+
+    为什么给一句文档写测试：这条限制不写出来，读者的默认假设恰好是相反的
+    （「开了 push protection 就有人兜底了」），而那个假设会直接导出
+    「`--no-verify` 一下没关系」。它在任何一次文档重写里都可能被当成啰嗦删掉。
+    """
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert "partner pattern" in security, (
+        "SECURITY.md 不再说明 GitHub 的 push protection 认不出 Binance 密钥。\n"
+        "这条删不得：少了它，读者会以为服务端有人兜底，而实际上 Binance 密钥\n"
+        "进入公开仓库之前只有本机那两个 hook 拦得住。"
     )
 
 
