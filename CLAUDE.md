@@ -7,14 +7,31 @@
 1. 从最新的 `origin/main` 开分支
 2. 本地先过四道门（见下），全绿再推
 3. 开 PR，等 CI
-4. **CI 全绿后直接合并**：`gh pr merge <n> --merge`。用 merge commit 不用 squash，与既有历史一致。**不要停下来请求授权**——操作者 2026-09-16 明确要求不再逐个确认
+4. **先看 CI 跑没跑起来，再看它绿不绿**（2026-09-18 补充）：
+
+   - **有 Actions 额度**（CI 真的跑了）→ **全绿后直接合并**：`gh pr merge <n> --merge`。用 merge commit
+     不用 squash，与既有历史一致。**不要停下来请求授权**——操作者 2026-09-16 明确要求不再逐个确认
+   - **没有 Actions 额度**（job 根本没启动）→ **不自行合并，由操作者人工合并**。见下面第三条停下来说话的情况
 5. **合完立刻删分支**，顺序不能反：先 `git worktree remove <path>`（分支还被 checkout 着时删不掉），再 `git branch -d <branch>`。远端那份由仓库的 `delete_branch_on_merge: true` 自动删，不用管
 
    操作者 2026-09-17 要求把这一步写死。当时本地积了 4 个 `: gone` 的残留分支（#17 / #18 / #20 / #21 留下的），远端早已自动清掉，只有本地没人收。
 
-只有两种情况先停下来说话，而且都是**报告发现**而不是请求授权：
+只有三种情况先停下来说话，而且都是**报告发现**而不是请求授权：
 
 - **CI 红了**——去修，不是去问。修完推同一个分支，CI 重跑，绿了照规则合
+- **CI 跑不起来（Actions 额度用完）**——**这不是「CI 红了」，不要去修**。判据是 job **未启动**：
+  `verify` 3–4 秒结束、零步骤执行，且 `gh run view <id>` 的 ANNOTATIONS 里写着
+  「The job was not started because recent account payments have failed or your spending limit needs
+  to be increased」。这种状态下推任何提交都只会再得到一次 3 秒失败——**没有可推的修复**。做三件事：
+  (1) 不自行合并，上面第 4 条的前置条件不成立；(2) 在收尾里报告，并把本地四道门的读数摆出来；
+  (3) **合并之后在 main 上跑一遍完整四道门**——CI 缺席时它是唯一的机械检查，别让改动落在无人读的
+  绿灯上。合并由操作者手动做。
+
+  **为什么它要单独一条**：2026-09-18 撞上时，「CI 红了」那一条把人引向「去修」，而这里没有东西可修。
+  当天的读数：本月 420 次 run、均值 6.4 分钟 ≈ **2,690 分钟**，而 Free plan 私有仓库是
+  **2,000 分钟/月**。分界点在 11:41:37Z（PR #70，success 5m33s）与 12:09:36Z（main 的 push，
+  failure 4s）之间——**在那之后连 main 自己的 CI 也是红的，而它红的原因同样不在代码里**，别被它吓到。
+  额度恢复要操作者去 Billing 页面提额或修付款方式，那是付款相关的动作，不由 agent 做。
 - **这个 PR 不该合**——内容已被 main 取代，或合并会造成倒退。把证据摆出来。2026-09-16 的 #15 与 #16 就是：两个都落后 main 数百个 commit，#16 合并会倒退 6,096 行
 
 不用 GitHub auto-merge 的原因：本仓库是 Free plan 的 private repo，branch protection 与 rulesets 都返回 403，没有 required status checks，auto-merge 无从触发。桌面版那个开关只是同一功能的前端，同样开不起来。
