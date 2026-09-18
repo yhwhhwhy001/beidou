@@ -13751,8 +13751,13 @@ DSR p 0.81，D-018 组合层 ACCEPT，作为探针书上线）。
 
 ### 1. 假设
 
-residual 以 1/3 风险预算作为 sleeve 加在 tsmom 主书之上，D-018 的三条同时成立：
-`delta_oos_sharpe >= 0.10`、等风险 `oos_mdd_worsening <= 0.01`、`fold_win_rate >= 0.6`。
+residual 以 1/3 风险预算作为 sleeve 加在 tsmom 主书之上，D-018 的**六条**同时成立。
+
+**[跑前更正，2026-09-19]** 本节初稿写「三条」，那是 `marginal_checks()` 读的三条；`book_verdict`
+实际读六条（`594a12f9` 那份报告的 `checks` 块逐字为证）：`delta_oos_sharpe >= 0.10`、等风险
+`oos_mdd_worsening <= 0.01`、`fold_win_rate >= 0.6`、`cost_x2_sharpe`、`cpcv_negative`、
+`robustness_delta`。更正写在批准之后、运行之前，因为一份漏写三条判据的预登记，在结果出来之后
+就分不清是「本来就要判」还是「事后补上」。
 
 ### 2. 这是「新信息」还是「新网格」
 
@@ -13763,15 +13768,24 @@ residual 以 1/3 风险预算作为 sleeve 加在 tsmom 主书之上，D-018 的
 ### 3. 协议
 
 ```
-beidou research book --main tsmom --sleeve residual --fraction 0.3333333333333333
+beidou research book --main tsmom --sleeve residual \
+  --fraction 0.3333333333333333 --universe pit --robustness static
 ```
 
-双 universe（pit 与 static）各跑一次，`--sensitivity` 用默认的 0.2,0.5（**仅作上下文，不是决策
-输入，不计 ledger**）。`--to` 不钉。registry 参数，不传 `--sleeve-params`。
+**[跑前更正，2026-09-19]** 初稿写「双 universe 各跑一次」——错的。`--robustness` 是一个参数，
+双 universe 是**一次**运行：主 universe 判 D-018，第二个 universe 上 sleeve 只需「不减 OOS
+Sharpe」（`robustness_delta`）。`594a12f9` 那次就是 `universe_mode: pit` / `robustness_universe:
+static`，照它跑，不自创。
+
+其余全用默认，逐项列出免得事后含糊：`--sensitivity 0.2,0.5`（**仅作上下文，不是决策输入，不计
+ledger**）、`--folds 5`、`--min-train 4000`、`--purge 50`、`--cpcv-groups 6`、`--funding`、
+`--sleeve-max-gross` 取 profile 值（本 profile 未设 → 代码默认 **0**，即关闭；P30 的 sleeve cap
+不参与本次）、`--prior-trials 0`。`--to` 不钉。registry 参数，不传 `--sleeve-params`。
 
 ### 4. 计费与桶
 
-**2 笔**（pit + static 各一），进 `residual` 桶。该桶 N **17 → 19**，单书 family gate 门
+**2 笔**——sleeve 自己在两个 universe 上各一笔的 standalone 记录（`594a12f9` 那次的两行逐字
+为证：同一 `run_id`，symbols 205 与 17）。进 `residual` 桶。该桶 N **17 → 19**，单书 family gate 门
 1.2046 → **1.2205**。本次判据不读那道门，但笔数照付，且它会让 residual 未来任何单书重测更难——
 这是这次运行的真实代价，写在这里而不是事后。
 
@@ -13794,7 +13808,7 @@ beidou research book --main tsmom --sleeve residual --fraction 0.333333333333333
 
 ### 6. 判定规则（数字出来之后一个字不改）
 
-- **ACCEPT**：三条同时通过。
+- **ACCEPT**：**六条**同时通过（见第 1 节的跑前更正）。
 - **REJECT**：任一不过。**不重跑、不换 fraction、不改 `--sensitivity` 里的数去当主判据、不申诉门。**
 - `fraction` 只有预登记的这一个值。`--sensitivity` 的 0.2/0.5 若比 1/3 好看，**不得据以改判**——
   那正是这道 `no grid` 设计要挡的东西。
