@@ -29,6 +29,13 @@ from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore
 from beidou_governance.policy import policy_digest
 from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
+from beidou_live.benchmark import (
+    beta_decomposition,
+    foreign_bars,
+    pit_benchmark,
+    series_from_cycles,
+    signal_state,
+)
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
     account_kill_switches,
@@ -59,6 +66,8 @@ from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
 from beidou_live.reports import (
     PREREGISTRATION_EFFECTIVE_FROM,
+    _store_closes,
+    beta_markdown,
     daily_alerts,
     daily_markdown,
     daily_payload,
@@ -1033,6 +1042,61 @@ def report_weekly(
     click.echo(f"已写入 {directory / f'{chosen}.md'}")
 
 
+@report.command("beta")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
+@click.option("--strategy", default="tsmom", show_default=True, help="whose contributions to read")
+@click.option("--data-root", default=".beidou/data", show_default=True)
+@click.option("--out", default=None, help="write the markdown/json here (default: stdout only)")
+def report_beta(profile: str, paper: bool, strategy: str, data_root: str, out: str | None) -> None:
+    """D-045: how much of the live book's return was the market's, and how much was the signal's."""
+    payload = load_profile(profile)
+    store = _store_for(payload, paper)
+    series = series_from_cycles(list(store.read_jsonl(store.cycles_path)))
+    bars = series["bars"]
+    if len(bars) < 2:
+        raise click.ClickException("周期记录里还没有两根带 usdt_equity 的 bar，无法分解")
+    # `closes` is newer than the loop, so the archive fills in the bars that predate it.  A symbol the
+    # archive does not have is not an error here - `pit_benchmark` counts what it had to skip.
+    prices = {symbol: dict(points) for symbol, points in series["prices"].items()}
+    loader = _store_closes(data_root, _interval(payload))
+    for symbol in {s for names in series["universe"].values() for s in names}:
+        try:
+            closes = loader(symbol)
+        except Exception:  # a missing or half-written parquet is a gap here, not a failure
+            continue
+        archived = prices.setdefault(symbol, {})
+        for stamp, price in zip(closes.index.astype("int64"), closes.astype(float), strict=True):
+            archived.setdefault(int(stamp), float(price))
+    benchmark = pit_benchmark(bars, series["universe"], prices)
+    excluded = foreign_bars(list(store.read_jsonl(store.attribution_path)))
+    decomposition = beta_decomposition(
+        series["equity"], benchmark["level"], series["exposure"], excluded_bars=excluded, bars=bars
+    )
+    data = {
+        "window": {
+            "from": datetime.fromtimestamp(bars[0] / 1000, UTC).isoformat(),
+            "to": datetime.fromtimestamp(bars[-1] / 1000, UTC).isoformat(),
+            "days": (bars[-1] - bars[0]) / 86_400_000,
+            "cycles": len(bars),
+        },
+        "benchmark": {k: v for k, v in benchmark.items() if k != "level"},
+        "signal": signal_state(list(store.read_jsonl(store.cycles_path)), strategy, bars),
+        "decomposition": decomposition,
+    }
+    markdown = beta_markdown(data)
+    click.echo(markdown)
+    if out:
+        directory = Path(out)
+        directory.mkdir(parents=True, exist_ok=True)
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        (directory / f"beta-{today}.md").write_text(markdown, encoding="utf-8")
+        (directory / f"beta-{today}.json").write_text(
+            json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
+        )
+        click.echo(f"已写入 {directory / f'beta-{today}.md'}")
+
+
 __all__ = [
     "live_alert_test",
     "live_flatten",
@@ -1040,6 +1104,7 @@ __all__ = [
     "live_run",
     "live_status",
     "live_verify",
+    "report_beta",
     "report_daily",
     "report_weekly",
 ]

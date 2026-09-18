@@ -2686,3 +2686,88 @@ def _fmt_num(value: Any) -> str:
 
 def _fmt_pct(value: Any) -> str:
     return "n/a" if value is None else f"{100.0 * float(value):.2f}%"
+
+
+def _beta_regression_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """One regression's readout.  The t printed is Newey-West, never OLS (see `benchmark` for why)."""
+    return {
+        "beta": _fmt_num(block.get("beta")),
+        "beta_t (NW)": _fmt_num(block.get("beta_t")),
+        "alpha": f"{_fmt_num(block.get('alpha_bps_per_hour'))} bps/h",
+        "alpha_t (NW)": _fmt_num(block.get("alpha_t")),
+        "alpha annualised": (
+            _fmt_pct(block.get("alpha_annualised"))
+            if block.get("alpha_annualised") is not None
+            else "不年化（|t| < 2，年化会把噪声放大三个数量级）"
+        ),
+        "R^2": _fmt_num(block.get("r2")),
+        "市场部分": _fmt_pct(block.get("market_part")),
+        "残差部分": _fmt_pct(block.get("residual_part")),
+    }
+
+
+def beta_markdown(payload: dict[str, Any]) -> str:
+    """`beidou report beta` (D-045): the market's share of the live book's return.
+
+    The signal section comes BEFORE the regressions on purpose.  When every contribution is +1 the
+    book is the constant-long comparator and no split of the return can attribute anything to the
+    signal; a reader who meets the beta number first will have already formed a view by the time they
+    reach that fact.
+    """
+    decomposition = payload.get("decomposition") or {}
+    signal = payload.get("signal") or {}
+    if not decomposition.get("measured"):
+        sections: list[tuple[str, Any]] = [
+            ("Window", payload.get("window") or {}),
+            ("无法分解", {"reason": decomposition.get("reason", "unknown")}),
+        ]
+        return render_markdown("Live beta decomposition", sections)
+    all_long = signal.get("all_long_share")
+    return render_markdown(
+        "Live beta decomposition (D-045)",
+        [
+            ("Window", payload.get("window") or {}),
+            (
+                # First, because it bounds what the rest can mean.
+                "Signal state",
+                {
+                    "bars": signal.get("bars"),
+                    "全多头的 bar": f"{signal.get('all_long_bars')} ({_fmt_pct(all_long)})",
+                    "空头持仓数": signal.get("short_positions"),
+                    "信号取值": json_dumps(signal.get("values") or {}),
+                    "读法": (
+                        "全多头的 bar 上这本书按定义等于 constant_long，那些 bar 里的收益不可能来自信号"
+                        if (all_long or 0) > 0
+                        else "信号在窗口内一直有多空区分"
+                    ),
+                }
+                if signal.get("measured")
+                else {"measured": "no", "reason": signal.get("reason")},
+            ),
+            (
+                "Returns",
+                {
+                    "策略（USDT 权益，A-GB01）": _fmt_pct(decomposition.get("strategy_return")),
+                    "PIT 等权基准": _fmt_pct(decomposition.get("benchmark_return")),
+                    "净敞口 均值/峰值": f"{_fmt_num(decomposition.get('exposure_mean'))}x / "
+                    f"{_fmt_num(decomposition.get('exposure_max'))}x",
+                    "bars": decomposition.get("bars"),
+                    "剔除的 bar (D-032)": decomposition.get("excluded_bars"),
+                },
+            ),
+            (
+                "Basket (point-in-time)",
+                {
+                    "每根 bar 的币数": _fmt_num((payload.get("benchmark") or {}).get("symbols_per_bar")),
+                    "因缺价跳过的 symbol-bar": (payload.get("benchmark") or {}).get("prices_missing"),
+                },
+            ),
+            ("Constant beta", _beta_regression_lines(decomposition.get("constant") or {})),
+            (
+                # The one that survives the operator moving `vol_target`; the gap to the block above
+                # is the size of the error a constant-beta reading makes on this book.
+                "Conditional (exposure x market)",
+                _beta_regression_lines(decomposition.get("conditional") or {}),
+            ),
+        ],
+    )

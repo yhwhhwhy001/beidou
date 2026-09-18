@@ -1,0 +1,312 @@
+"""Is the live book's return the market's, or the signal's?  (D-045)
+
+The question this answers came from the operator on 2026-09-19, and the first four answers this
+repository produced to it were all different -- not because the arithmetic changed but because the
+benchmark did.  Each trap below cost a wrong answer before it was found, so each one is a rule here
+rather than a caller's option.
+
+**The benchmark has to be point-in-time.**  A fixed basket -- "the symbols that have a price for the
+whole window" -- silently drops every symbol that left the universe partway through.  Measured
+2026-09-07..09-18: that rule dropped AKEUSDT, CYSUSDT and TUTUSDT, and AKEUSDT was *up 26.4%* over the
+part of the window it was held.  The fixed basket read +3.43% where the point-in-time basket reads
++11.31%, i.e. it understated the market by 7.88pp and handed the whole difference to alpha.  A
+benchmark built with hindsight about who survived is not a benchmark.
+
+**The t has to be Newey-West.**  Hourly equity is strongly autocorrelated and OLS does not know it.
+Same window: OLS put alpha at t=1.83, NW(48h) at t=0.61.  The first number is an artefact of treating
+257 overlapping hours as 257 independent draws.
+
+**Beta is not constant when the operator changes `vol_target`.**  On 2026-09-14 (`96d659ae`) it went
+0.30 -> 0.60 and net exposure went 0.9x -> 2.0x.  A constant-beta regression cannot see that, so it
+books the extra exposure as alpha -- which is exactly what "the alpha is concentrated in the last three
+days" meant in the first pass.  `conditional` below multiplies the market return by the exposure the
+loop actually carried into each bar, which is the same regression with the operator's decision taken
+out of the residual.
+
+**The signal's own state decides whether an alpha term is even meaningful.**  `contributions` takes
+values in {+1, -1} (5,379 / 514 over 09-04..09-18), so the book's entire discretion is which side each
+symbol is on.  From 09-16 onward every one of the 17 symbols is +1: over those bars the book IS the
+constant-long comparator, and no decomposition can find signal alpha in a stretch where the signal made
+no distinction.  `signal_state` reports this because a reader who does not have it will read a beta
+number as though a choice had been made.
+
+Pure functions.  The CLI does the I/O, and nothing here writes.  This measures; it changes nothing and
+gates nothing -- 11 days cannot settle whether the book has alpha (M-G06's window runs to 2028-03-17),
+and a report that pretended otherwise would be the failure this repository keeps finding.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping, Sequence
+from itertools import pairwise
+from typing import Any
+
+import numpy as np
+
+HOURS_PER_YEAR = 24 * 365
+# Bandwidth for the Newey-West correction, in bars.  48 rather than a rule-of-thumb n^(1/4) (which
+# gives 4 here) because the autocorrelation being corrected for is a two-day trend, not a one-bar
+# echo: t falls 1.83 -> 0.61 between them and stops moving after 48 (NW(72h) reads 0.61 as well).
+NW_LAGS = 48
+MIN_BARS = 48  # two days; below this the regression is describing noise and says so instead
+SIGNIFICANT_T = 2.0  # below this an alpha estimate is not annualised; see `_regression`
+
+
+def _design(x: Sequence[float]) -> Any:
+    return np.column_stack([np.ones(len(x)), np.asarray(x, dtype=float)])
+
+
+def _nw_se(x: Sequence[float], resid: Any, lags: int) -> tuple[float, float]:
+    """Newey-West standard errors for the intercept and slope of ``y ~ 1 + x``, Bartlett weights.
+
+    Returns ``(se_intercept, se_slope)``, or ``(inf, inf)`` when the design is degenerate -- the
+    callers turn that into a refusal rather than into a t of zero.
+    """
+    design = _design(x)
+    n = len(resid)
+    if n <= 2 or np.linalg.matrix_rank(design) < 2:
+        return math.inf, math.inf
+    inverse = np.linalg.inv(design.T @ design)
+    scores = resid[:, None] * design
+    meat = scores.T @ scores
+    for lag in range(1, min(lags, n - 1) + 1):
+        gamma = scores[lag:].T @ scores[:-lag]
+        meat = meat + (1.0 - lag / (lags + 1)) * (gamma + gamma.T)
+    se = np.sqrt(np.diag(inverse @ meat @ inverse))
+    return float(se[0]), float(se[1])
+
+
+def _compound(logs: Sequence[float]) -> float:
+    return math.expm1(sum(logs))
+
+
+def pit_benchmark(
+    bars: Sequence[int],
+    universe: Mapping[int, Sequence[str]],
+    prices: Mapping[str, Mapping[int, float]],
+) -> dict[str, Any]:
+    """Equal-weight long basket rebuilt every bar from the universe the loop actually held.
+
+    A symbol contributes to a bar's return only when it was in the universe at BOTH ends of that bar
+    and has a price at both, so a symbol entering or leaving never shows up as a jump.  The count of
+    symbols that had to be skipped for want of a price is reported, not absorbed: a basket quietly
+    thinning out is the fixed-basket bug wearing a different hat.
+    """
+    level = [1.0]
+    used: list[int] = []
+    skipped = 0
+    for prev, cur in pairwise(bars):
+        held = set(universe.get(prev) or ()) & set(universe.get(cur) or ())
+        rets = []
+        for symbol in sorted(held):
+            series = prices.get(symbol) or {}
+            p0, p1 = series.get(prev), series.get(cur)
+            if p0 is None or p1 is None or p0 <= 0:
+                skipped += 1
+                continue
+            rets.append(p1 / p0 - 1.0)
+        used.append(len(rets))
+        level.append(level[-1] * (1.0 + (sum(rets) / len(rets) if rets else 0.0)))
+    return {
+        "level": level,
+        "symbols_per_bar": (sum(used) / len(used)) if used else 0.0,
+        "prices_missing": skipped,
+    }
+
+
+def signal_state(
+    rows: Sequence[Mapping[str, Any]], strategy: str = "tsmom", bars: Sequence[int] = ()
+) -> dict[str, Any]:
+    """How much distinction the signal was making, over the SAME bars the decomposition used.
+
+    `bars` is not optional in practice.  `contributions` appears on cycles older than the first one
+    carrying `collateral.usdt_equity`, so reading every row puts a longer window in this table than
+    in the one above it (356 vs 259 on 2026-09-19) and dilutes the share that matters.
+
+    `all_long_bars` is the one a reader needs first.  Over those bars the book is the constant-long
+    comparator by construction, so any "alpha" a regression reports for them is a statement about the
+    portfolio construction or the universe, never about the signal.
+    """
+    values: dict[str, int] = {}
+    all_long = 0
+    counted = 0
+    shorts = 0
+    window = set(bars)
+    for row in rows:
+        if window and int(row.get("bar_open_ms") or 0) not in window:
+            continue
+        contributions = (row.get("contributions") or {}).get(strategy) or {}
+        if not contributions:
+            continue
+        counted += 1
+        short_here = 0
+        for raw in contributions.values():
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+            key = f"{value:+.1f}"
+            values[key] = values.get(key, 0) + 1
+            if value < 0:
+                short_here += 1
+        shorts += short_here
+        if short_here == 0:
+            all_long += 1
+    if not counted:
+        return {"measured": False, "reason": "no cycle carried this strategy's contributions"}
+    return {
+        "measured": True,
+        "bars": counted,
+        "all_long_bars": all_long,
+        "all_long_share": all_long / counted,
+        "short_positions": shorts,
+        "values": dict(sorted(values.items())),
+    }
+
+
+def series_from_cycles(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The five series a decomposition needs, keyed by bar, from what the loop already writes.
+
+    The equity line is `collateral.usdt_equity` -- the venue's own USDT `marginBalance` -- and not
+    total equity, because A-GB01 (2026-09-15) settled that the operator reads the USDT line and
+    because collateral repricing moves total equity without the book having traded.  Measured
+    09-07..09-18: collateral moved +13.38 U across 259 cycles while USDT equity moved +1,026.07.
+
+    Prices come from each cycle's own `closes`, so the benchmark is priced on the same clock the loop
+    traded on.  A caller with the parquet archive can fill in bars older than `closes` (the field is
+    newer than the loop); `pit_benchmark` skips any bar it still has no price for and says how many.
+
+    Exposure is the SIGNED sum of `targets`, rescaled from total equity to the USDT line so it is in
+    the same unit as the return series above.  Duplicate bars keep their last record: a restart writes
+    the same bar twice and the second one is the one that traded.
+    """
+    keep: dict[int, Mapping[str, Any]] = {}
+    for row in rows:
+        collateral = row.get("collateral") or {}
+        usdt = collateral.get("usdt_equity")
+        if isinstance(usdt, int | float) and float(usdt) > 0:
+            keep[int(row.get("bar_open_ms") or 0)] = row
+    bars = sorted(keep)
+    prices: dict[str, dict[int, float]] = {}
+    equity: list[float] = []
+    exposure: list[float] = []
+    universe: dict[int, list[str]] = {}
+    for bar in bars:
+        row = keep[bar]
+        collateral = row.get("collateral") or {}
+        usdt = float(collateral["usdt_equity"])
+        equity.append(usdt)
+        universe[bar] = list(row.get("universe") or ())
+        total = float(collateral.get("equity") or row.get("equity") or usdt)
+        weights = row.get("targets") or {}
+        net = sum(float(v) for v in weights.values() if isinstance(v, int | float))
+        exposure.append(net * total / usdt)
+        for symbol, price in (row.get("closes") or {}).items():
+            if isinstance(price, int | float) and float(price) > 0:
+                prices.setdefault(str(symbol), {})[bar] = float(price)
+    return {
+        "bars": bars,
+        "equity": equity,
+        "exposure": exposure,
+        "universe": universe,
+        "prices": prices,
+    }
+
+
+def foreign_bars(attribution: Sequence[Mapping[str, Any]]) -> list[int]:
+    """Bars whose P&L is not the book's, so the regression must not see them (D-032).
+
+    `foreign` lives on the attribution rows, not on the cycle records -- the split matters here
+    because reading it off the wrong file silently returns "none" and lets the operator's own trades
+    into the strategy's series.  The 2026-09-10T04:00Z flatten was the operator (RESEARCH_LOG, §12 Q4)
+    and put +268.83 U through one bar; three smaller ones follow it, +19.72 U being the largest.
+    """
+    out = []
+    for row in attribution:
+        total = ((row.get("foreign") or {}).get("total")) or 0.0
+        try:
+            if float(total) != 0.0:
+                out.append(int(row.get("bar_open_ms") or 0))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _regression(y: Sequence[float], x: Sequence[float], label: str) -> dict[str, Any]:
+    design = _design(x)
+    observed = np.asarray(y, dtype=float)
+    coefficients, *_ = np.linalg.lstsq(design, observed, rcond=None)
+    intercept, slope = float(coefficients[0]), float(coefficients[1])
+    resid = observed - design @ coefficients
+    se_a, se_b = _nw_se(x, resid, NW_LAGS)
+    ss_tot = float(((observed - observed.mean()) ** 2).sum())
+    ss_res = float((resid**2).sum())
+    market_part = slope * float(np.sum(x))
+    total = float(observed.sum())
+    return {
+        "label": label,
+        "beta": slope,
+        "beta_t": slope / se_b if se_b else None,
+        "alpha_bps_per_hour": intercept * 1e4,
+        "alpha_t": intercept / se_a if se_a else None,
+        # Annualised only when the estimate carries a signal.  11 days of noise at |t| < 2
+        # compounds to numbers like +1766% (measured 2026-09-19, t=0.73), and a reader who sees
+        # that number has been handed a decision the data did not make.
+        "alpha_annualised": (
+            math.expm1(intercept * HOURS_PER_YEAR) if se_a and abs(intercept / se_a) >= SIGNIFICANT_T else None
+        ),
+        "r2": 1.0 - ss_res / ss_tot if ss_tot > 0 else None,
+        "market_part": math.expm1(market_part),
+        "residual_part": math.expm1(total - market_part),
+    }
+
+
+def beta_decomposition(
+    strategy_level: Sequence[float],
+    benchmark_level: Sequence[float],
+    exposure: Sequence[float],
+    excluded_bars: Sequence[int] = (),
+    bars: Sequence[int] = (),
+) -> dict[str, Any]:
+    """Split the book's realised return into the market's part and what is left.
+
+    Two regressions, deliberately reported side by side.  `constant` is the textbook one and is the
+    number a reader will compare to other books.  `conditional` multiplies the market by the net
+    exposure the book carried into each bar, which is the only one of the two that survives an
+    operator changing `vol_target` mid-window -- and the difference between them is worth printing,
+    because it is the size of the mistake the textbook one makes here.
+
+    `exposure` is the exposure entering each bar, so it is one element shorter than the levels, or
+    equal length with the last element unused.  `excluded_bars` drops bars whose P&L is not the book's
+    (D-032 foreign fills: the operator's own 2026-09-10 flatten put +288.35 U through one bar).
+    """
+    if len(strategy_level) != len(benchmark_level):
+        return {"measured": False, "reason": "strategy and benchmark levels differ in length"}
+    drop = set(excluded_bars)
+    rs: list[float] = []
+    rm: list[float] = []
+    ex: list[float] = []
+    for i in range(1, len(strategy_level)):
+        if bars and bars[i] in drop:
+            continue
+        if strategy_level[i - 1] <= 0 or benchmark_level[i - 1] <= 0:
+            continue
+        rs.append(math.log(strategy_level[i] / strategy_level[i - 1]))
+        rm.append(math.log(benchmark_level[i] / benchmark_level[i - 1]))
+        ex.append(exposure[i - 1] if i - 1 < len(exposure) else 1.0)
+    if len(rs) < MIN_BARS:
+        return {"measured": False, "reason": f"needs {MIN_BARS} usable bars, has {len(rs)}"}
+    constant = _regression(rs, rm, "constant beta")
+    conditional = _regression(rs, [e * m for e, m in zip(ex, rm, strict=True)], "exposure x market")
+    return {
+        "measured": True,
+        "bars": len(rs),
+        "excluded_bars": len(drop),
+        "strategy_return": _compound(rs),
+        "benchmark_return": _compound(rm),
+        "exposure_mean": sum(ex) / len(ex),
+        "exposure_max": max(ex),
+        "constant": constant,
+        "conditional": conditional,
+    }
