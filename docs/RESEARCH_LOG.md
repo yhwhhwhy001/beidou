@@ -13510,3 +13510,79 @@ family gate 在 `governance/verdicts.jsonl` 里一直拿 **09-13 那份报告的
 证据门的旗标，一个是写治理记录。**我没有绕过它们**，把两条命令原样交给操作者执行。
 
 补丁与命令见本次 PR 的正文。
+
+## 2026-09-18 · D-041 桥上线，并用一次主动重启验证它真的起得来（重启 #54）
+
+接同日「重出的结果是 FAIL，两条指针都挡住启动」。那一节列了三件事，本节做完前两件。
+
+### 一、桥（`deploy/run_live.sh`）
+
+`--allow-unvalidated` 加在一个**会自己到期**的条件里，`BRIDGE_UNTIL="2026-10-13"`。到期后旗标不再传、
+严格的门自动回来——失败方向是安全的那一侧（不在不清门的证据上交易）。
+
+日期逻辑四个点都试过：`2026-09-19 → ACTIVE`、`2026-10-12 → ACTIVE`、**`2026-10-13 → EXPIRED`**、
+`2026-10-14 → EXPIRED`。**当天即失效，不是过一天。**
+
+作用域：只绕开 `live_cmd.py:303` 的启动拒绝。护栏、kill-switch、风险预算不动，
+`dataset:` 与 `evidence:` 每一行照样打印——见下面第三节的实证。
+
+### 二、治理记录
+
+`governance review af89b93562ba --disagree`。append-only：原始那行的 `review` 仍是空，新增一行带
+`reviewed_at 2026-09-18T16:08:44Z`。`verdicts.jsonl` 16 → 17 行。
+
+它**不解锁任何东西**。`verdicts.py` 开头写明这是 M-G05——分歧的**度量**，是「写死的规则能替代人在
+运行时的决策」这条假设的唯一证伪器。拿它当开关会毁掉它要度量的东西。
+
+### 三、重启 #54：谁、为什么、看到了什么
+
+**谁**：本会话，主动，目的是验证桥。不是崩溃，不是别的会话。
+
+**为什么要真重启**：`bash -n` 不算验证，这个仓库栽过四次。桥只有在一次真实启动里被加载过，
+才谈得上「在运行」。
+
+**窗口**：kickstart 于 **16:09:14Z**（整点后 9 分，安全窗口内）。上一个周期 16:00:28Z 跑的是 15:00
+那根 bar，下一根 17:00Z 收盘。**这次重启没有吃掉任何一根 bar 的退出检查**——15:00 的检查已在
+16:00:28 做完，17:00 那根时循环已在位。
+
+**前置**：两个构造测试
+`tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py` +
+`test_construction_identity.py`，**15 passed**。构造未变。
+
+**可观测事实**：
+
+| | 重启前 | 重启后 |
+| --- | --- | --- |
+| PID | 88298 | **22743** |
+| 进程已跑 | 1 天 0 时 01 分 | — |
+| `state.restarts` | 53 | **54** |
+| `state.restarted_at` | 2026-09-17T16:07:34Z | **2026-09-18T16:09:45Z** |
+
+`deploy/run_live.sh` 的 mtime 是 **16:08:25Z**，新进程启动于 **16:09:45Z**——**进程启动晚于文件改动，
+所以它加载的是带桥的那份**。（这是比较 mtime 与进程启动时刻，不是按时间相关性归因。）
+
+**日志里看到的**（`live.stdout.log` / `live.stderr.log` 的新增部分，逐行）：
+
+```
+SIGTERM received; finishing this cycle then stopping
+run_live.sh: D-041 bridge ACTIVE until 2026-10-13 - armed on evidence that does not clear its gate
+dataset: tsmom: dataset changed since this result was produced: membership.file ... membership.union: 211 -> 212
+dataset: tsmom: dataset store contents changed since this result was produced: universe.fingerprint ...
+dataset: flow: no dataset manifest recorded: this result's data provenance cannot be checked
+universe=[...17 个] interval=1h leverage=auto ... dry_run=False paper=False ...
+```
+
+**那条 BLOCKING 行一个字都没有被藏起来**，这正是桥要的：绕开拒绝，不绕开知情。最后一行说明
+循环**真的以 armed 起来了**，不是打印完就退。
+
+重启后第一个周期 `16:09:52Z`，`phase: SKIPPED`，bar 15:00——`--immediate` 认出这根已在 16:00:28
+处理过。目标仓位架构下重启幂等，这是它该有的样子。
+
+### 四、还没做完的第三件
+
+tsmom 的 FAIL 按 D-020 自己的节奏走，进 10-13 裁定包。在那之前：
+
+- `tests/live/test_dataset_gate.py` 那条是 `xfail(strict=True)`（PR #75），**桥不会让它变绿**——
+  桥让循环照样启动，「证据与数据一致」是另一个断言。它哪天意外通过，就是困局解除的信号。
+- 桥在 **2026-10-13** 当天自动失效。若那时 tsmom 仍不合格，armed 启动会失败。**那不是回归**，
+  是这座桥做它被造出来要做的最后一件事。
