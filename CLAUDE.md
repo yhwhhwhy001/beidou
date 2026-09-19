@@ -104,6 +104,9 @@ brew install gitleaks && bash deploy/install-hooks.sh
   换个仓库或者转公开都修不好。仍然是操作者去 Billing 页面的事。
 - **这个 PR 不该合**——内容已被 main 取代，或合并会造成倒退。把证据摆出来。2026-09-16 的 #15 与 #16 就是：两个都落后 main 数百个 commit，#16 合并会倒退 6,096 行
 
+**branch protection 与 auto-merge：2026-09-20 起都开着**（操作者当天裁定）。配置与用法在本节末尾。
+下面两段是它们此前为什么没开的历史，保留——那里的前提被自己更正过两次。
+
 不用 GitHub auto-merge 的原因（**2026-09-19 重写，原文的前提是错的**）：原文说「本仓库是 Free plan
 的 private repo，branch protection 与 rulesets 都返回 403」。仓库其实一直是 **public**，而 Free plan
 的公开仓库**可以**用 branch protection 与 rulesets——当天实测 rulesets 返回 `[]`、branch protection
@@ -116,9 +119,25 @@ brew install gitleaks && bash deploy/install-hooks.sh
 于是开不开 branch protection 与 auto-merge 变成一个**悬着的决定**——既不是做不到（那是 09-19
 更正掉的错前提），也不再有现成的理由不做。
 
-这个决定归操作者，agent 不自行开启 auto-merge。两条理由：它一旦打开就在无人读的时刻替人合并，
-而本文件第 4 条要求的「先看跑没跑起来」正是一个要人读的判断；另外下一节写死了开 PR 时要设哪几个
-`set_monitor` 开关，`auto_merge` 不在其中。
+**2026-09-20 操作者裁定：开。** 当天实配，读回核过：
+
+| 项 | 值 | 为什么 |
+|---|---|---|
+| `allow_auto_merge` | `true` | |
+| required status check | `verify`，`strict=false` | `strict=true` 要求分支必须含最新 main。本仓库常有多 session 并行，那会变成每次别人合并你就得 update 一轮 |
+| `enforce_admins` | **`false`** | **逃生口，见下** |
+| required reviews | 无 | 单人仓库，自己不能 approve 自己的 PR。要求 1 个 approval 等于永远合不了 |
+| force push / 删除 main | 禁止 | |
+
+**`enforce_admins=false` 不是偷懒，它是为了让上面第 4 条还能走。** 那一条写着「job 没启动 →
+不自行合并，由操作者人工合并」。如果对 admin 也强制，CI 跑不起来时**连操作者也合不了**——
+2026-09-18 那五个小时正是这种状态，而当时能靠人工合并脱身。把逃生口焊死，下一次同样的故障
+就从「CI 缺席」升级成「仓库冻结」。
+
+**agent 现在可以用 `gh pr merge <n> --auto --merge`。** 2026-09-19 那条顾虑（auto-merge 会在
+无人读的时刻替人合并）被 required status check 解掉了：CI 跑不起来时那道 check 永远不满足，
+auto-merge 就永远不触发，PR 停在那里等人，而不是被误合。它挡不住的只有「CI 绿但这个 PR 不该合」
+——那是上面第三条停下来说话的情况，判断权仍在开 PR 的人手里。
 
 ## CI 监控开关：开完 PR 立刻打开
 
