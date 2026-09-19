@@ -57,11 +57,14 @@ brew install gitleaks && bash deploy/install-hooks.sh
 1. 从最新的 `origin/main` 开分支
 2. 本地先过四道门（见下），全绿再推
 3. 开 PR，等 CI
-4. **先看 CI 跑没跑起来，再看它绿不绿**（2026-09-18 补充）：
+4. **先看 CI 跑没跑起来，再看它绿不绿**（2026-09-18 补充。**2026-09-20：CI 已恢复，常态是下面第一条**）：
 
-   - **有 Actions 额度**（CI 真的跑了）→ **全绿后直接合并**：`gh pr merge <n> --merge`。用 merge commit
+   - **CI 真的跑了** → **全绿后直接合并**：`gh pr merge <n> --merge`。用 merge commit
      不用 squash，与既有历史一致。**不要停下来请求授权**——操作者 2026-09-16 明确要求不再逐个确认
-   - **没有 Actions 额度**（job 根本没启动）→ **不自行合并，由操作者人工合并**。见下面第三条停下来说话的情况
+   - **job 根本没启动** → **不自行合并，由操作者人工合并**。见下面第三条停下来说话的情况
+
+   措辞从「有/没有 Actions 额度」改成「跑没跑起来」，因为归因错过两次而判据一次没错：
+   2026-09-19 已经更正过一次（不是分钟额度，是账户级付款），见下。判据只看 job 启没启动。
 5. **合完立刻删分支**，顺序不能反：先 `git worktree remove <path>`（分支还被 checkout 着时删不掉），再 `git branch -d <branch>`。远端那份由仓库的 `delete_branch_on_merge: true` 自动删，不用管
 
    操作者 2026-09-17 要求把这一步写死。当时本地积了 4 个 `: gone` 的残留分支（#17 / #18 / #20 / #21 留下的），远端早已自动清掉，只有本地没人收。
@@ -69,7 +72,18 @@ brew install gitleaks && bash deploy/install-hooks.sh
 只有三种情况先停下来说话，而且都是**报告发现**而不是请求授权：
 
 - **CI 红了**——去修，不是去问。修完推同一个分支，CI 重跑，绿了照规则合
-- **CI 跑不起来（Actions 额度用完）**——**这不是「CI 红了」，不要去修**。判据是 job **未启动**：
+- **CI 跑不起来（job 未启动）**——**这不是「CI 红了」，不要去修**。
+
+  > **2026-09-20 状态：这一条当前不适用。CI 已于 2026-09-18 恢复。** 分界在 `17:43:49Z`
+  > （main，failure）与 `17:55:13Z`（main，success）之间；09-19 全天 14 次 run 全部 success，
+  > 涵盖 main 与 #86 / #87 / #88 三个 PR。恢复的原因没有核过——付款那一侧不由 agent 看，
+  > 所以这里只记可观测的读数，不写归因。
+  >
+  > **下面的判据与做法保留原样**，因为它描述的是一种会再次发生的状态，而它的判据与做法都不随
+  > 这次恢复失效。撞上时按它走，不必先来问是不是又坏了。改动只有这条的标题：
+  > 「Actions 额度用完」→「job 未启动」，与上面第 4 条同一处更正——归因错过两次，判据一次没错。
+
+  判据是 job **未启动**：
   `verify` 3–4 秒结束、零步骤执行，且 `gh run view <id>` 的 ANNOTATIONS 里写着
   「The job was not started because recent account payments have failed or your spending limit needs
   to be increased」。这种状态下推任何提交都只会再得到一次 3 秒失败——**没有可推的修复**。做三件事：
@@ -95,9 +109,16 @@ brew install gitleaks && bash deploy/install-hooks.sh
 的公开仓库**可以**用 branch protection 与 rulesets——当天实测 rulesets 返回 `[]`、branch protection
 返回 404「Branch not protected」，都是"没配置"而不是"没权限"。
 
-所以今天不开 auto-merge 的理由只剩一条，而且是主动选的：**CI 当前跑不起来**（账户级付款问题，见上），
-没有能当 required status check 的绿灯，auto-merge 会退化成"无条件合并"。等 CI 恢复之后，开不开
-branch protection 是一个可以重新做的决定，不再是做不到。
+2026-09-19 写下这段时，不开 auto-merge 的理由只剩一条，而且是主动选的：**CI 当时跑不起来**，
+没有能当 required status check 的绿灯，auto-merge 会退化成"无条件合并"。
+
+**2026-09-20：那条理由也没了。** CI 自 2026-09-18 17:55Z 起正常，可以当 required status check。
+于是开不开 branch protection 与 auto-merge 变成一个**悬着的决定**——既不是做不到（那是 09-19
+更正掉的错前提），也不再有现成的理由不做。
+
+这个决定归操作者，agent 不自行开启 auto-merge。两条理由：它一旦打开就在无人读的时刻替人合并，
+而本文件第 4 条要求的「先看跑没跑起来」正是一个要人读的判断；另外下一节写死了开 PR 时要设哪几个
+`set_monitor` 开关，`auto_merge` 不在其中。
 
 ## CI 监控开关：开完 PR 立刻打开
 
