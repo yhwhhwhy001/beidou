@@ -57,11 +57,14 @@ brew install gitleaks && bash deploy/install-hooks.sh
 1. 从最新的 `origin/main` 开分支
 2. 本地先过四道门（见下），全绿再推
 3. 开 PR，等 CI
-4. **先看 CI 跑没跑起来，再看它绿不绿**（2026-09-18 补充）：
+4. **先看 CI 跑没跑起来，再看它绿不绿**（2026-09-18 补充。**2026-09-20：CI 已恢复，常态是下面第一条**）：
 
-   - **有 Actions 额度**（CI 真的跑了）→ **全绿后直接合并**：`gh pr merge <n> --merge`。用 merge commit
+   - **CI 真的跑了** → **全绿后直接合并**：`gh pr merge <n> --merge`。用 merge commit
      不用 squash，与既有历史一致。**不要停下来请求授权**——操作者 2026-09-16 明确要求不再逐个确认
-   - **没有 Actions 额度**（job 根本没启动）→ **不自行合并，由操作者人工合并**。见下面第三条停下来说话的情况
+   - **job 根本没启动** → **不自行合并，由操作者人工合并**。见下面第三条停下来说话的情况
+
+   措辞从「有/没有 Actions 额度」改成「跑没跑起来」，因为归因错过两次而判据一次没错：
+   2026-09-19 已经更正过一次（不是分钟额度，是账户级付款），见下。判据只看 job 启没启动。
 5. **合完立刻删分支**，顺序不能反：先 `git worktree remove <path>`（分支还被 checkout 着时删不掉），再 `git branch -d <branch>`。远端那份由仓库的 `delete_branch_on_merge: true` 自动删，不用管
 
    操作者 2026-09-17 要求把这一步写死。当时本地积了 4 个 `: gone` 的残留分支（#17 / #18 / #20 / #21 留下的），远端早已自动清掉，只有本地没人收。
@@ -69,7 +72,18 @@ brew install gitleaks && bash deploy/install-hooks.sh
 只有三种情况先停下来说话，而且都是**报告发现**而不是请求授权：
 
 - **CI 红了**——去修，不是去问。修完推同一个分支，CI 重跑，绿了照规则合
-- **CI 跑不起来（Actions 额度用完）**——**这不是「CI 红了」，不要去修**。判据是 job **未启动**：
+- **CI 跑不起来（job 未启动）**——**这不是「CI 红了」，不要去修**。
+
+  > **2026-09-20 状态：这一条当前不适用。CI 已于 2026-09-18 恢复。** 分界在 `17:43:49Z`
+  > （main，failure）与 `17:55:13Z`（main，success）之间；09-19 全天 14 次 run 全部 success，
+  > 涵盖 main 与 #86 / #87 / #88 三个 PR。恢复的原因没有核过——付款那一侧不由 agent 看，
+  > 所以这里只记可观测的读数，不写归因。
+  >
+  > **下面的判据与做法保留原样**，因为它描述的是一种会再次发生的状态，而它的判据与做法都不随
+  > 这次恢复失效。撞上时按它走，不必先来问是不是又坏了。改动只有这条的标题：
+  > 「Actions 额度用完」→「job 未启动」，与上面第 4 条同一处更正——归因错过两次，判据一次没错。
+
+  判据是 job **未启动**：
   `verify` 3–4 秒结束、零步骤执行，且 `gh run view <id>` 的 ANNOTATIONS 里写着
   「The job was not started because recent account payments have failed or your spending limit needs
   to be increased」。这种状态下推任何提交都只会再得到一次 3 秒失败——**没有可推的修复**。做三件事：
@@ -90,14 +104,40 @@ brew install gitleaks && bash deploy/install-hooks.sh
   换个仓库或者转公开都修不好。仍然是操作者去 Billing 页面的事。
 - **这个 PR 不该合**——内容已被 main 取代，或合并会造成倒退。把证据摆出来。2026-09-16 的 #15 与 #16 就是：两个都落后 main 数百个 commit，#16 合并会倒退 6,096 行
 
+**branch protection 与 auto-merge：2026-09-20 起都开着**（操作者当天裁定）。配置与用法在本节末尾。
+下面两段是它们此前为什么没开的历史，保留——那里的前提被自己更正过两次。
+
 不用 GitHub auto-merge 的原因（**2026-09-19 重写，原文的前提是错的**）：原文说「本仓库是 Free plan
 的 private repo，branch protection 与 rulesets 都返回 403」。仓库其实一直是 **public**，而 Free plan
 的公开仓库**可以**用 branch protection 与 rulesets——当天实测 rulesets 返回 `[]`、branch protection
 返回 404「Branch not protected」，都是"没配置"而不是"没权限"。
 
-所以今天不开 auto-merge 的理由只剩一条，而且是主动选的：**CI 当前跑不起来**（账户级付款问题，见上），
-没有能当 required status check 的绿灯，auto-merge 会退化成"无条件合并"。等 CI 恢复之后，开不开
-branch protection 是一个可以重新做的决定，不再是做不到。
+2026-09-19 写下这段时，不开 auto-merge 的理由只剩一条，而且是主动选的：**CI 当时跑不起来**，
+没有能当 required status check 的绿灯，auto-merge 会退化成"无条件合并"。
+
+**2026-09-20：那条理由也没了。** CI 自 2026-09-18 17:55Z 起正常，可以当 required status check。
+于是开不开 branch protection 与 auto-merge 变成一个**悬着的决定**——既不是做不到（那是 09-19
+更正掉的错前提），也不再有现成的理由不做。
+
+**2026-09-20 操作者裁定：开。** 当天实配，读回核过：
+
+| 项 | 值 | 为什么 |
+|---|---|---|
+| `allow_auto_merge` | `true` | |
+| required status check | `verify`，`strict=false` | `strict=true` 要求分支必须含最新 main。本仓库常有多 session 并行，那会变成每次别人合并你就得 update 一轮 |
+| `enforce_admins` | **`false`** | **逃生口，见下** |
+| required reviews | 无 | 单人仓库，自己不能 approve 自己的 PR。要求 1 个 approval 等于永远合不了 |
+| force push / 删除 main | 禁止 | |
+
+**`enforce_admins=false` 不是偷懒，它是为了让上面第 4 条还能走。** 那一条写着「job 没启动 →
+不自行合并，由操作者人工合并」。如果对 admin 也强制，CI 跑不起来时**连操作者也合不了**——
+2026-09-18 那五个小时正是这种状态，而当时能靠人工合并脱身。把逃生口焊死，下一次同样的故障
+就从「CI 缺席」升级成「仓库冻结」。
+
+**agent 现在可以用 `gh pr merge <n> --auto --merge`。** 2026-09-19 那条顾虑（auto-merge 会在
+无人读的时刻替人合并）被 required status check 解掉了：CI 跑不起来时那道 check 永远不满足，
+auto-merge 就永远不触发，PR 停在那里等人，而不是被误合。它挡不住的只有「CI 绿但这个 PR 不该合」
+——那是上面第三条停下来说话的情况，判断权仍在开 PR 的人手里。
 
 ## CI 监控开关：开完 PR 立刻打开
 
