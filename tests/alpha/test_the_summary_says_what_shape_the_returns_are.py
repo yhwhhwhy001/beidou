@@ -103,3 +103,19 @@ def test_a_symbol_that_never_traded_reports_a_shape_instead_of_a_nonsense() -> N
     summary = summarize_returns(flat, flat, pd.DataFrame({"X": np.zeros(200)}, index=index), HOURLY)
     assert (summary["skew"], summary["kurtosis"]) == (0.0, 3.0)
     assert summary["sortino"] is None
+
+
+def test_the_summary_states_the_rate_its_ratios_are_measured_against() -> None:
+    """0 is a choice here, and the 2026-09-08 ruling was that it must not be an unstated one.
+
+    Pinned as a value, not as presence: a report that stopped carrying the field, or started
+    carrying a different rate without every archived threshold being repriced, is the thing this
+    catches.  `sharpe` and `sortino` both use it, so the three have to agree.
+    """
+    index = pd.date_range("2026-01-01", periods=300, freq="h", tz="UTC")
+    net = pd.Series(np.random.default_rng(5).standard_normal(300) * 0.01, index=index)
+    summary = summarize_returns(net, net, pd.DataFrame({"X": np.full(300, 0.1)}, index=index), HOURLY)
+    assert summary["risk_free_rate"] == 0.0
+    # the ratios beside it are the raw-return ones, i.e. computed at exactly that rate
+    assert summary["annualized_sharpe"] == sharpe(net, HOURLY)
+    assert summary["sortino"] == sortino(net, HOURLY)

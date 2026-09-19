@@ -178,6 +178,16 @@ def summarize_returns(
         # was in the report.
         **dict(zip(("skew", "kurtosis"), moments(net), strict=True)),
         "sortino": sortino(net, bars_per_year),
+        # The rate both ratios above are measured against, stated in the artefact rather than only in
+        # `sharpe`'s docstring.  It is a constant and carries no information the code did not already
+        # have - which is the point: 0 is a CHOICE here, not an omission, and the 2026-09-08 audit's
+        # ruling was that what it must not be is unstated.  A docstring states it to whoever opens the
+        # module; a report is what gets quoted, compared across dates and handed to someone who never
+        # will.  On a USDⓈ-M perpetual book the equity sits at the venue as margin, so at this book's
+        # ~30% annualised volatility a 4% rate is worth about 0.13 of Sharpe.  Changing the value
+        # would silently reprice every archived report and every threshold in `verdict.py`; printing
+        # it changes nothing and makes the comparison to a funded benchmark the reader's to make.
+        "risk_free_rate": 0.0,
     }
 
 
