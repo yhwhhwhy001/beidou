@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
@@ -212,6 +213,27 @@ MINED_SEARCH_STRATEGY = "mined"
 PAIR_SEARCH_STRATEGY = "pairs_search"
 
 
+#: A mined candidate reaches the ledger under two spellings of one expression.  The search row writes
+#: the bare canonical hash; the same candidate validated on its own goes through
+#: `walk_forward.param_key`, which spreads `to_signal`'s default_params into
+#: `entry_threshold=0.2|expression=...|hash=<that same hash>`.  `ledger_scope` collects both buckets,
+#: so the companion count read one hypothesis as two.  Measured 2026-09-20 on the real ledger: four of
+#: the seven `mined_*` strategies reported 677 where the bucket holds 676.  The other three report 677
+#: correctly - their expressions predate the current search space, so they really are a 677th.
+_ALIASED_BY_HASH = re.compile(r"(?:^|\|)hash=([0-9a-f]{16})(?:\||$)")
+
+
+def hypothesis_key(param_key: str) -> str:
+    """The hypothesis a `param_key` is about.  Feeds `distinct_hypotheses` only, never a gate.
+
+    `n_trials` still charges both rows and `signature`'s fold is untouched: two runs are two trials
+    whatever they are about (D-024 decides that).  This stops only the companion count from
+    inheriting a spelling, which is the one number that claims to count hypotheses.
+    """
+    aliased = _ALIASED_BY_HASH.search(param_key)
+    return aliased.group(1) if aliased else param_key
+
+
 def ledger_scope(strategy: str) -> tuple[str, ...]:
     """Which ledger keys a strategy's DSR denominator draws from.
 
@@ -349,7 +371,8 @@ def dsr_inputs(
         # four counts beside it all count rows, so an artefact could say 2,731 four different ways and
         # never once say 676.  An analysis read the former as the latter and judged the miner on it;
         # nothing in any artefact could contradict the reading, which is the failure this closes.
-        "distinct_hypotheses": len({record.param_key for record in prior}),
+        # Counted per `hypothesis_key`, not per `param_key`: see its note for the two spellings.
+        "distinct_hypotheses": len({hypothesis_key(record.param_key) for record in prior}),
         # Which fold produced the counts above.  A fold nobody can see is a fold nobody can argue with.
         "range_end_granularity_days": int(range_end_granularity_days),
         "pooled_sharpes": len(pooled),
