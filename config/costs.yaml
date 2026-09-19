@@ -53,6 +53,23 @@ use_actual_funding: true  # backtests charge the historical funding rate on held
 # scales the taker fee too, and 5.0 bps is a contract constant that does not move when execution gets
 # worse.  `slippage_stress_gate` prices this grid with the fee held at `taker_fee_bps`.
 slippage_stress_bps: [2.0, 4.43, 5.5, 9.2]
+#
+# 2026-09-19，更正上面那段的读数而不是覆盖它。「x1 at +0.03 and x1.5 at -0.03 ... the gate is
+# crossed BETWEEN them」是写那天的读数，今天不成立了：门 `max_sharpe_quantile` 随 N 单调上升，
+# 而 N 是 append-only 的 ledger 桶。同一构造三次读数——
+#         N     门        x1 margin   x1.5 margin
+#       (写那段时)        +0.03       -0.03
+#       293   1.5701     +0.0105     -0.0496     (20260917T083033Z)
+#       303   1.5733     -0.0106     -0.0709     (20260918T154025Z)
+# **x1 自己现在就在门下面**，所以「门在两格之间被穿过」这句话已经不描述今天。
+#
+# 要紧的是别把这读成滑点变贵了。margin 走负来自两件事，都不是执行：N 从 242 涨到 303 把门抬了，
+# 数据窗口延长把 OOS 从 1.5919 挪到 1.5628。滑点档位之间的**相对**影响没变，加 4.43 这一格的理由
+# 也就没变——它仍然是实测中心，仍然落在别人会拿来内插的那两格之间。变的是它现在落在门的哪一侧，
+# 而那个问题的答案由 N 决定，不由这个文件决定。
+#
+# 归因不要从这张表自己读：重算只动 N（`governance gate`，日任务，2026-09-19 起），重跑动的是
+# N 加数据窗口。两者都真实，不是一回事。
 
 # DL-C1 / KILL-A (2026-09-08): the impact model, off by default.
 # Everything above charges the same bps for a 40 USDT order and a 4M one, which makes the whole
