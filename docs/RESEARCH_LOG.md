@@ -13889,3 +13889,157 @@ F4 维持 UNKNOWN，剩下两条路（等新数据、改标准）的前置条件
 **「缺一本低相关的书」这个命题，缺的不只是「相关性低」——residual 的 corr 只有 0.26 而它仍然
 是纯稀释。低相关是必要条件，不是充分条件，而本仓库至今没有一个候选同时满足低相关与站得住的
 单位风险收益。**
+
+## 2026-09-19 · 预登记：把 tsmom 放到一个各折真能分歧的 grid 上（**未跑，ledger 未动**）
+
+**写在跑之前。** 起因是一次 backtest-guard 审查:它把「headline OOS 是全样本 argmax 选出的
+配置在全样本尾巴上的读数」报成一条高危。这条已被 D-043 封顶并在每份报告里用
+`oos_is_full_sample_tail` 披露,机制上没有漏——本节买的不是披露,是把那个字段翻成 False 所
+需要的运行。
+
+### 0. 先纠一个定价错误,因为它决定了协议长什么样
+
+审查最初把修法定价成「用 `--select` 加预登记规则重跑,2 笔」。**`--select` 修不了这条。**
+`research_validate_cmd.py:293` 先调 `walk_forward_evaluate`,`best_key = _selected_key(select, …)`
+在 304 行——`select` 从不进入 walk-forward。而 `oos_is_full_sample_tail` 来自
+`walk_forward.py:152` 的 `consistent or len(param_keys) <= 1`,量的是**每折有没有选出不同的
+赢家**。`--select` 只改 `best_params` 这个报告字段的来源标注。
+
+`config/alpha_registry.yaml` 的注释其实早写对了:「摘掉这个上限只有一条路:在一个**真的有
+选择**的 grid 上重跑 validate——多个参数点,各折可以选出不同的赢家。」这一节就是照那句话做。
+
+### 1. 假设
+
+在 tsmom 的 16 格默认 grid(`horizons` 4 档 × `entry_threshold` 2 × `return_scale` 2 ×
+`vol_window` 1)上做 5 折 walk-forward,**至少有两折会选出不同的 `param_key`**,于是
+`selection_consistent` 为 False、`oos_is_full_sample_tail` 为 False。
+
+它可能是假的,而这正是要跑的原因。已知的对立证据:09-18 那次 2 格运行五折全选
+`crowding_window=72`(`chosen_params` 逐折记录在报告里)。那 2 格变的是 crowding 修正器,
+而这 16 格变的是 horizons / entry_threshold / return_scale——是不同的维度,不是同一次实验
+加密。
+
+### 2. 这是「新信息」还是「换网格直到过关」
+
+**都不是,而扩大 grid 在这套治理下是往自己脚上开枪,这一点就是它不是 p-hacking 的证明。**
+D-028 的门是 `max_sharpe_quantile(N, …)`,N 是 append-only 的 ledger 桶,按 √(2 ln N) 上升。
+16 笔把 N 从 303 推到 319,门从 1.5733 抬到 1.5792。而 tsmom 今天的 margin 已经是 **−0.0106**。
+所以本次运行的**先验预期是新报告更难通过,不是更容易**。
+
+一个「换网格直到过关」的人不会选一个把自己的门抬高 0.0059 的网格。
+
+### 3. 协议（跑之前钉死，跑完不改）
+
+```
+beidou research validate --strategy tsmom --interval 1h --universe pit \
+  --root /Users/maguannan/beidou/.beidou/data \
+  --charge 16 --prereg <本节所在 commit> --folds 5
+```
+
+**跑前更正(2026-09-19,未跑,ledger 仍未动)**:上面这条原本写的是 `--universe-mode pit`,
+而选项叫 `--universe`;`--root` 原本漏了,数据根在主 checkout 而这次跑在 worktree 里。一条
+跑不起来的命令写进预登记,等于把「按什么协议跑的」留给事后回忆——所以在这里改,不在事后改。
+`--prereg` 指向本次更正后的 commit。
+
+- grid:**不传 `--grid`,用 `DEFAULT_GRIDS["tsmom"]` 的 16 格**。显式声明 `--charge 16`。
+- 数据窗口:**不传 `--to`**,用到今天。与之对照的是 09-18 的 `20260918T154025Z`,它同样是
+  最新数据、同样 pit universe、同样 5 折,只差 grid 大小——所以两份之间只动了一个变量。
+- profile / interval / universe 全部与 registry 引用的证据同口径。
+
+### 4. 判据
+
+**主判据(这次运行成败的唯一标准)**:`walk_forward.oos_is_full_sample_tail`。
+
+- 转 **False** → 这次运行达到了目的。headline OOS 从此是一条真正的 walk-forward 混合,
+  D-043 的 cap 因此不再适用于这份新证据。
+- 仍为 **True** → 16 格不足以让各折分歧。结论是「这条缺陷在现有 grid 设计下重跑修不掉」,
+  **记下来并停止**,不再扩大 grid 去追它。16 笔是这个结论的价钱。
+
+**次判据(记录,不作为成败)**:新报告的 `verdict` 与 `oos_selection.margin`。按第 2 节的
+算术,FAIL 是先验预期而不是意外。
+
+### 5. 这次运行不做什么
+
+**不改 `config/alpha_registry.yaml`。** 无论结果如何,registry 指向哪份证据是另一次裁定。
+写死这条是因为后果不对称:新报告若 FAIL 而 registry 指向它,`registry.py` 的上线口径收
+`{PASS, WEAK_PASS}`,armed 启动会被拒,实盘停。构造另有冻结到 2026-10-13,现在拿到 FAIL
+也不能据此改构造。
+
+**不申诉门,不换判据,不因为结果不好而回来加格子。** 第 4 节的两个分支已经把两种结局都
+写完了。
+
+## 2026-09-19 · 结果:16 格重跑——主判据达成,而买到的答案不在那个字段上
+
+报告:`reports/research/tsmom-validation-20260919T081914Z.json`
+(sha256 `3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb`)
+预登记:上一节,`--prereg 73f3599e`,`--charge 16`,ledger 22,183 → 22,199 行(正好 +16)。
+
+### 1. 主判据:达成
+
+`walk_forward.oos_is_full_sample_tail` = **False**(`selection_consistent` 也是 False)。
+各折真的分歧了:
+
+| fold | horizons | return_scale |
+| --- | --- | --- |
+| 1 | [24, 72, 168] | 0.20 |
+| 2 | [24, 72, 168] | 0.20 |
+| 3 | [24, 72, 168] | 0.20 |
+| 4 | [168, 336, 720] | 0.30 |
+| 5 | [168, 336, 720] | 0.30 |
+
+对照 09-18 的 2 格运行:五折全选 `crowding_window=72`。所以假设(1 节)成立,16 格足以让
+walk-forward 真的做一次选择。D-043 的 cap 对这份新证据不再适用。
+
+### 2. 买到的答案,而它不是主判据
+
+**同一次运行内、同一个 ledger scope 下的两个数:**
+
+- `best_key_oos_sharpe` = **1.5292** —— 全样本 argmax 那个配置自己的 walk-forward OOS。
+  它就是 registry 今天在跑的配置(`horizons [168,336,720]`、`return_scale 0.2`,逐键核对过)。
+- `walk_forward.oos_sharpe` = **1.2306** —— 各折自己选的混合,也就是 headline。
+
+**差 0.2986。** 这是「真做一次选择」的代价,第一次被量出来。
+
+它的含义要说准:1.53 不是一个可实现的样本外读数——它是**事后**知道哪个配置会赢之后,
+回头读那个配置在测试段上的表现。1.23 才是一个选择程序能交付的。此前每一份
+`oos_is_full_sample_tail: True` 的报告,headline 都是前一种。**那个字段披露的正是这件事,
+而这 16 笔买的是它的大小。**
+
+逐折:`[1.555, 0.273, 1.071, 1.347, 1.903]`,`fold_consistency` 1.0(五折全正),
+`oos_t_stat` 2.76,`oos_max_drawdown` −40.7%。
+
+### 3. 更正预登记第 2 节:门没有涨,反而降了
+
+预登记写着「16 笔把 N 从 303 推到 319,门从 1.5733 抬到 1.5792」,并把「选一个抬高自己门
+的网格不是 p-hacking 的形状」当成这次运行不是申诉的证明。**那段算术是错的。**
+
+实测:N = **167**,门 = **1.5129**(09-18 是 N 303 / 门 1.5733)。原因是 N 不是一个随
+ledger 单调累加的计数——`dsr_inputs` 的 `current_context` 里含 `_search_space_version`,
+**换 grid 就换了 ledger scope**,分母是那个 scope 里的行。两次运行的 N 因此不可直接相减。
+
+那么「不是 p-hacking」这句还成不成立?**成立,但理由换成实测的**:这次运行把 margin 从
+−0.0106 推到 **−0.2823**,OOS 从 1.5628 推到 1.2306。它让结论更坏,不是更好。事前的算术
+论证错了,事后的读数替它把话说完。
+
+**教训写下来**:预登记里凡是引用一个数的推断,要么先算给自己看,要么写成「待测」。上面
+那段读起来像一条已验证的性质,其实是一次没做的减法。
+
+### 4. 次判据(记录,不作为成败)
+
+`VERDICT: FAIL` —— `oos_sharpe 1.23 < 门 1.51 at 167 trials, p_family=0.3597`。
+`dsr p=0.37`,`pbo=0.05`,`cpcv mean 1.60 / q05 1.20 / negative 0.00`。
+`grid of 16 is worth 6.00 independent trials`(报告,门的分母仍用原始 ledger 计数)。
+该门的功效:SR1.0 → 12.3%,SR1.5 → 48.8%,SR2.0 → 86.5%。
+
+### 5. 按预登记第 5 节:registry 不动
+
+`config/alpha_registry.yaml` 一行未改,仍指向 `20260913T182325Z`(WEAK_PASS)。这份新报告
+是 FAIL,而 `registry.py` 的上线口径收 `{PASS, WEAK_PASS}`——指过去会让 armed 启动被拒、
+实盘停。构造另有冻结到 2026-10-13,现在拿到 FAIL 也不能据此改构造。
+
+**要不要换指针是另一次裁定**,而它现在有了一份此前没有的输入:换过去会停实盘,不换则
+registry 继续引用一份「没做过选择」的证据。两边的代价第一次都在桌面上。
+
+### 6. 不做的事
+
+按预登记第 5 节:不申诉门,不换判据,不回来加格子。16 笔已花,结论已记,这条线到此为止。
