@@ -21,14 +21,29 @@ import yaml
 from beidou_alpha.registry import parse_registry
 from beidou_governance.promote import APPLY, NOOP, ROLLBACK, apply, closed, digest_of, plan, read_log
 from beidou_live.config import registry_evidence_problems
+from tests.shipped_evidence import unexempted
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _real_gate(profile: dict) -> object:
+    """The shipped `registry_evidence_problems`, minus the one knowingly-accepted problem.
+
+    Still the REAL gate, which is this file's design: `_corrupt` below breaks a digest and the gate has
+    to refuse that, and it does.  What `unexempted` drops is one exact string
+    (`tests/shipped_evidence.py`), so the drill keeps testing the TRANSACTION machinery instead of
+    re-deciding whether the operator may point tsmom at FAIL evidence.
+
+    Worth being blunt about what this does not change: in production `governance apply` really is
+    blocked while that problem stands - even a comment-only edit rolls back, because the gate reads the
+    file and the file does not clear.  That is the gate working as designed and it is a real cost of the
+    2026-09-19 pointer move, recorded here and in `tests/shipped_evidence.py` rather than engineered
+    around.  It lifts when the pointer cites evidence that clears, or on 2026-10-13, whichever is first.
+    """
+
     def gate(path: Path) -> list[str]:
         registry = parse_registry(yaml.safe_load(path.read_text(encoding="utf-8")))
-        return registry_evidence_problems(registry, profile)
+        return unexempted(registry_evidence_problems(registry, profile))
 
     return gate
 
@@ -61,8 +76,14 @@ def _shipped(tmp_path: Path) -> tuple[Path, Path, dict]:
     # the config, the field, or the armed loop that would refuse to start.  The pair is owned by
     # `tests/alpha/test_evidence_gate.py::test_the_shipped_registry_runs_what_its_evidence_validated`;
     # this line only keeps the drill from answering for it.
+    # 2026-09-19: minus the one problem the operator knowingly accepted when tsmom's pointer moved to
+    # FAIL evidence.  The ownership sentence above still holds - this line does not decide anything, it
+    # reads the same exemption `test_evidence_gate.py` reads, from `tests/shipped_evidence.py`, and it
+    # expires on the same day.  A drill must not answer for that decision either way.
     problems = registry_evidence_problems(parse_registry(yaml.safe_load(registry.read_text(encoding="utf-8"))), profile)
-    assert problems == [], f"the shipped registry and profile disagree before the drill even starts: {problems}"
+    assert unexempted(problems) == [], (
+        f"the shipped registry and profile disagree before the drill even starts: {problems}"
+    )
 
     return registry, tmp_path / "transactions.jsonl", profile
 
