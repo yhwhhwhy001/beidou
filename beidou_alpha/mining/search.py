@@ -17,6 +17,8 @@ Validating a mined candidate without it is not a shortcut; it is a different, wr
 from __future__ import annotations
 
 import hashlib
+import json
+from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations, product
@@ -75,6 +77,67 @@ class Candidate:
             "complexity": self.complexity,
             "lookback": self.lookback,
         }
+
+
+#: An expression's SHAPE: magnitudes dropped, operator kinds and discriminating parameters kept.  676
+#: candidates are 61 shapes (measured 2026-09-20).  This is the distribution-level reading Q4's ruling
+#: leaves open - it says how much of the space is one mechanism re-parameterised and names no
+#: candidate, so it is "free to count" rather than the ranked shortlist "free to look" would be.
+#:
+#: A BLACKLIST of magnitude field names, never a whitelist of discriminating ones, and the direction is
+#: the point: a field nobody lists here is kept, so a new parameter can at worst split one shape into
+#: several.  A whitelist would fail the other way and quietly fold two mechanisms into one.  The only
+#: numeric field that discriminates today is `moment.order` - 3 is skewness, 4 is kurtosis - and the
+#: first version of this key, built on `describe()` text, folded exactly that pair together.
+_MAGNITUDE_FIELDS = frozenset({"days", "horizon", "scale", "weight", "window"})
+
+#: Nodes whose operands commute.  `canonical()` already sorts them, but it sorts on the constants, so
+#: dropping the constants leaves the order arbitrary and has to be re-established.  Measured: without
+#: this, `funding/vol * ret/vol` and `ret/vol * funding/vol` are two shapes, and the space reads as 85
+#: shapes instead of 61 - 24 of them one mechanism written in both orders.
+_COMMUTATIVE = frozenset({"mul", "sum"})
+
+
+def structural_key(expr: Expr) -> str:
+    """The shape `expr` is one parameterisation of.
+
+    Taken off `signature()` rather than the `describe()` text.  The text is what a person reads, and a
+    regex over it cannot put a commutative product back in order, which is how the first version
+    counted 85: `a * b` and `b * a` are the same mechanism and were two shapes.  The tree knows.
+    """
+    return json.dumps(_shape(expr.canonical().signature()), sort_keys=True, separators=(",", ":"))
+
+
+def _shape(node: object) -> object:
+    if not isinstance(node, dict):
+        return node
+    shaped: dict[str, object] = {"k": node["k"]}
+    if "p" in node:
+        parameters = node["p"]
+        assert isinstance(parameters, Mapping)
+        shaped["p"] = {name: ("N" if name in _MAGNITUDE_FIELDS else value) for name, value in parameters.items()}
+    if "c" in node:
+        children = node["c"]
+        assert isinstance(children, list)
+        kids = [_shape(child) for child in children]
+        shaped["c"] = sorted(kids, key=_ordering) if node["k"] in _COMMUTATIVE else kids
+    if "t" in node:  # `sum` carries weighted terms; the weight is a magnitude like any other
+        terms = node["t"]
+        assert isinstance(terms, list)
+        shaped["t"] = sorted((["N", _shape(child)] for _, child in terms), key=_ordering)
+    return shaped
+
+
+def _ordering(node: object) -> str:
+    return json.dumps(node, sort_keys=True, separators=(",", ":"))
+
+
+def structural_families(candidates: Sequence[Candidate]) -> dict[str, int]:
+    """How many parameterisations each shape holds.  Distribution-level: no candidate, no ranking."""
+    families: Counter[str] = Counter()
+    for candidate in candidates:
+        families[structural_key(candidate.expr)] += 1
+    return dict(families)
 
 
 @dataclass(frozen=True)
