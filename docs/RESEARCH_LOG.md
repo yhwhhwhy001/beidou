@@ -13931,9 +13931,15 @@ D-028 的门是 `max_sharpe_quantile(N, …)`,N 是 append-only 的 ledger 桶,�
 ### 3. 协议（跑之前钉死，跑完不改）
 
 ```
-beidou research validate --strategy tsmom --interval 1h --universe-mode pit \
+beidou research validate --strategy tsmom --interval 1h --universe pit \
+  --root /Users/maguannan/beidou/.beidou/data \
   --charge 16 --prereg <本节所在 commit> --folds 5
 ```
+
+**跑前更正(2026-09-19,未跑,ledger 仍未动)**:上面这条原本写的是 `--universe-mode pit`,
+而选项叫 `--universe`;`--root` 原本漏了,数据根在主 checkout 而这次跑在 worktree 里。一条
+跑不起来的命令写进预登记,等于把「按什么协议跑的」留给事后回忆——所以在这里改,不在事后改。
+`--prereg` 指向本次更正后的 commit。
 
 - grid:**不传 `--grid`,用 `DEFAULT_GRIDS["tsmom"]` 的 16 格**。显式声明 `--charge 16`。
 - 数据窗口:**不传 `--to`**,用到今天。与之对照的是 09-18 的 `20260918T154025Z`,它同样是
