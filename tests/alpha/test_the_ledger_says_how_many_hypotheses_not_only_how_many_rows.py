@@ -19,16 +19,26 @@ exists: a number nobody can see is a number nobody can argue with.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
 from beidou_alpha.validation.ledger import (
     LEDGER_ENV,
+    MINED_SEARCH_STRATEGY,
     TrialRecord,
     dsr_inputs,
+    hypothesis_key,
     ledger_redirection,
+    ledger_scope,
+    parse_ledger,
     resolve_ledger_path,
 )
+
+#: The real ledger, reached without `resolve_ledger_path` on purpose: `conftest.isolated_trials_ledger`
+#: is autouse and points that at a throwaway file, so a test asking it for the archive gets an empty
+#: one and passes while measuring nothing.
+REAL_LEDGER = Path(__file__).resolve().parents[2] / "reports" / "research" / "trials.jsonl"
 
 FOLD_DAYS = 7  # caliber 4's granularity; production reads Policy, tests pin it
 
@@ -82,6 +92,64 @@ def test_distinct_hypotheses_counts_param_keys_not_rows() -> None:
     prior = [_row("a"), _row("a", range_end="2026-09-08"), _row("b"), _row("c")]
 
     assert dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=FOLD_DAYS)["distinct_hypotheses"] == 3
+
+
+def test_one_expression_spelled_two_ways_is_one_hypothesis() -> None:
+    """The search row and the candidate's own validation row are the same expression.
+
+    Measured on the real ledger 2026-09-20, before this: every one of the seven `mined_*` strategies
+    reported 677, and for four of them the bucket holds 676 - their own hash is already in it.
+    """
+    prior = [
+        _row("00f951c68c4d55fa"),
+        _row("entry_threshold=0.2|expression=cs_rank(z(ret(720), 336))|hash=00f951c68c4d55fa"),
+    ]
+
+    out = dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=FOLD_DAYS)
+
+    assert out["ledger_trials"] == 2, "two rows are still two trials: the gate's caliber is untouched"
+    assert out["distinct_hypotheses"] == 1, "but they are one expression, and the companion count says so"
+
+
+def test_a_hash_field_that_is_not_a_canonical_hash_does_not_fold() -> None:
+    """The fold is keyed on the shape `to_signal` writes, not on the word `hash`."""
+    assert hypothesis_key("hash=not-a-hash") == "hash=not-a-hash"
+    assert hypothesis_key("hash=00f951c6") == "hash=00f951c6", "8 hex digits is not the 16 it writes"
+    assert hypothesis_key("window=48|trailing_hash=00f951c68c4d55fa") == "window=48|trailing_hash=00f951c68c4d55fa"
+    assert hypothesis_key("00f951c68c4d55fa") == "00f951c68c4d55fa", "a bare hash is already the identity"
+
+
+def test_the_real_ledger_stops_counting_a_mined_candidate_twice() -> None:
+    """Reads the archive this repo actually ships, not a fixture shaped like it.
+
+    Asserted as a relationship rather than a literal, because the ledger is append-only and grows:
+    a `mined_<hash>` whose hash is already a bare row in the search bucket must not add a hypothesis.
+    """
+    if not REAL_LEDGER.exists():  # pragma: no cover - the archive is tracked, so this is a safety net
+        pytest.skip("the tracked ledger is missing")
+    lines = REAL_LEDGER.read_text().splitlines()
+    bare = {record.param_key for record in parse_ledger(lines, MINED_SEARCH_STRATEGY)}
+
+    checked = 0
+    for strategy in sorted(_mined_candidates(lines)):
+        digest = strategy.removeprefix("mined_")
+        if digest not in bare:
+            continue  # its expression predates the current search space; it really is one more
+        prior = parse_ledger(lines, ledger_scope(strategy))
+        out = dsr_inputs(prior, {}, 8760.0, range_end_granularity_days=FOLD_DAYS)
+        assert out["distinct_hypotheses"] == len(bare), (
+            f"{strategy}'s own expression is already in the {MINED_SEARCH_STRATEGY} bucket, "
+            f"so the bucket's {len(bare)} is the whole count"
+        )
+        checked += 1
+
+    assert checked >= 4, f"only {checked} aliased candidates found; 2026-09-20 measured four"
+
+
+def _mined_candidates(lines: list[str]) -> set[str]:
+    """Every `mined_<hash>` strategy the ledger holds, read off the file rather than listed here."""
+    records = (TrialRecord.from_json(line) for line in lines)
+    return {r.strategy for r in records if r is not None and r.strategy.startswith(f"{MINED_SEARCH_STRATEGY}_")}
 
 
 def test_an_empty_ledger_has_no_hypotheses() -> None:
