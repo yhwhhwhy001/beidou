@@ -13889,3 +13889,75 @@ F4 维持 UNKNOWN，剩下两条路（等新数据、改标准）的前置条件
 **「缺一本低相关的书」这个命题，缺的不只是「相关性低」——residual 的 corr 只有 0.26 而它仍然
 是纯稀释。低相关是必要条件，不是充分条件，而本仓库至今没有一个候选同时满足低相关与站得住的
 单位风险收益。**
+
+## 2026-09-19 · 预登记：把 tsmom 放到一个各折真能分歧的 grid 上（**未跑，ledger 未动**）
+
+**写在跑之前。** 起因是一次 backtest-guard 审查:它把「headline OOS 是全样本 argmax 选出的
+配置在全样本尾巴上的读数」报成一条高危。这条已被 D-043 封顶并在每份报告里用
+`oos_is_full_sample_tail` 披露,机制上没有漏——本节买的不是披露,是把那个字段翻成 False 所
+需要的运行。
+
+### 0. 先纠一个定价错误,因为它决定了协议长什么样
+
+审查最初把修法定价成「用 `--select` 加预登记规则重跑,2 笔」。**`--select` 修不了这条。**
+`research_validate_cmd.py:293` 先调 `walk_forward_evaluate`,`best_key = _selected_key(select, …)`
+在 304 行——`select` 从不进入 walk-forward。而 `oos_is_full_sample_tail` 来自
+`walk_forward.py:152` 的 `consistent or len(param_keys) <= 1`,量的是**每折有没有选出不同的
+赢家**。`--select` 只改 `best_params` 这个报告字段的来源标注。
+
+`config/alpha_registry.yaml` 的注释其实早写对了:「摘掉这个上限只有一条路:在一个**真的有
+选择**的 grid 上重跑 validate——多个参数点,各折可以选出不同的赢家。」这一节就是照那句话做。
+
+### 1. 假设
+
+在 tsmom 的 16 格默认 grid(`horizons` 4 档 × `entry_threshold` 2 × `return_scale` 2 ×
+`vol_window` 1)上做 5 折 walk-forward,**至少有两折会选出不同的 `param_key`**,于是
+`selection_consistent` 为 False、`oos_is_full_sample_tail` 为 False。
+
+它可能是假的,而这正是要跑的原因。已知的对立证据:09-18 那次 2 格运行五折全选
+`crowding_window=72`(`chosen_params` 逐折记录在报告里)。那 2 格变的是 crowding 修正器,
+而这 16 格变的是 horizons / entry_threshold / return_scale——是不同的维度,不是同一次实验
+加密。
+
+### 2. 这是「新信息」还是「换网格直到过关」
+
+**都不是,而扩大 grid 在这套治理下是往自己脚上开枪,这一点就是它不是 p-hacking 的证明。**
+D-028 的门是 `max_sharpe_quantile(N, …)`,N 是 append-only 的 ledger 桶,按 √(2 ln N) 上升。
+16 笔把 N 从 303 推到 319,门从 1.5733 抬到 1.5792。而 tsmom 今天的 margin 已经是 **−0.0106**。
+所以本次运行的**先验预期是新报告更难通过,不是更容易**。
+
+一个「换网格直到过关」的人不会选一个把自己的门抬高 0.0059 的网格。
+
+### 3. 协议（跑之前钉死，跑完不改）
+
+```
+beidou research validate --strategy tsmom --interval 1h --universe-mode pit \
+  --charge 16 --prereg <本节所在 commit> --folds 5
+```
+
+- grid:**不传 `--grid`,用 `DEFAULT_GRIDS["tsmom"]` 的 16 格**。显式声明 `--charge 16`。
+- 数据窗口:**不传 `--to`**,用到今天。与之对照的是 09-18 的 `20260918T154025Z`,它同样是
+  最新数据、同样 pit universe、同样 5 折,只差 grid 大小——所以两份之间只动了一个变量。
+- profile / interval / universe 全部与 registry 引用的证据同口径。
+
+### 4. 判据
+
+**主判据(这次运行成败的唯一标准)**:`walk_forward.oos_is_full_sample_tail`。
+
+- 转 **False** → 这次运行达到了目的。headline OOS 从此是一条真正的 walk-forward 混合,
+  D-043 的 cap 因此不再适用于这份新证据。
+- 仍为 **True** → 16 格不足以让各折分歧。结论是「这条缺陷在现有 grid 设计下重跑修不掉」,
+  **记下来并停止**,不再扩大 grid 去追它。16 笔是这个结论的价钱。
+
+**次判据(记录,不作为成败)**:新报告的 `verdict` 与 `oos_selection.margin`。按第 2 节的
+算术,FAIL 是先验预期而不是意外。
+
+### 5. 这次运行不做什么
+
+**不改 `config/alpha_registry.yaml`。** 无论结果如何,registry 指向哪份证据是另一次裁定。
+写死这条是因为后果不对称:新报告若 FAIL 而 registry 指向它,`registry.py` 的上线口径收
+`{PASS, WEAK_PASS}`,armed 启动会被拒,实盘停。构造另有冻结到 2026-10-13,现在拿到 FAIL
+也不能据此改构造。
+
+**不申诉门,不换判据,不因为结果不好而回来加格子。** 第 4 节的两个分支已经把两种结局都
+写完了。
