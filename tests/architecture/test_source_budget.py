@@ -3507,7 +3507,44 @@ CEILING = {
     # 把它写进**每一份**读数的 `next_step`，所以三年后读这块板的人（可能不是今天这个人）不必去翻
     # 一份分析文档的第 7 节。这与本页记过的三条 `_*_note` 同形——一条只能靠读实现才拿得到的判读，
     # 不是对读报告的人的披露。
-    "beidou_alpha": 10_343,
+    # +107 beidou_alpha，2026-09-19(10_343 -> 10_450)：一次外部审查(backtest-guard)找出来的两个
+    # 缺口，都在「证据与被交易的东西之间」这条链上。三处，逐项说清各自换来什么。
+    #
+    # **+43 `registry.py`：启动门第一次比对 `verdict`。** 它读的一直是 registry YAML 里人手打的
+    # 那个字符串，从不看它刚校验过 digest 的那份报告写的是什么。同一个函数里 probe 那条分支
+    # (`_probe_problems`) 从 D-029 起就在比 `book_verdict` 了——所以这不是加新规矩，是把已经存在
+    # 的那半边补齐。
+    #
+    # 用真实产物量过，不是编的 fixture(编一个就等于替这个函数写它自己要建立的契约)：把 tsmom 的
+    # entry 指向 `tsmom-validation-20260918T154025Z.json`(磁盘上写着 `verdict: FAIL`)、YAML 声称
+    # `WEAK_PASS`，`evidence_problems` 返回空——digest 对上了，params 对上了，construction 对上了，
+    # 只有 FAIL 这两个字从头到尾没人读。如实写 FAIL 反而是唯一能拿到那句拒绝的写法。
+    #
+    # 判据是「只许更严」而不是「必须相等」，而这不是宽容是必须：D-043 把「从没真做过选择」的证据
+    # 封顶在 WEAK_PASS，被它翻过来的十份报告早已写完并被 digest 钉死，其中就有实盘 registry 引用的
+    # `tsmom-validation-20260913T182325Z.json`——磁盘上 PASS，registry 里 WEAK_PASS，而 registry
+    # 是对的。要求相等等于因为它比自己的证据更诚实而拒掉在飞的那套。
+    #
+    # **+77 `metrics.py` / -13 `multiple_testing.py`：报告第一次说收益长什么形状。** `summarize_returns`
+    # 原本只报 Sharpe、MDD、hit_rate，而一个 Sharpe 分不出趋势跟踪和卖波动率——两者都能印 1.6，其中
+    # 一个会在一个下午把一年的收益还回去。`moments` 从 `multiple_testing` 搬到这里(不是抄一份：
+    # DSR 从写出来那天就在读这两个矩，数早就在算、也早就在被用，只是从没到过读报告的人手上；旧地址
+    # 靠 import 保住，`multiple_testing.moments` 还是同一个对象)，另加 `sortino`。
+    #
+    # 搬的过程中撞上 `moments` 自己的一个缺陷，顺手修了，因为这次改动正好把它的暴露面放大到每份
+    # 报告的每个标的：`variance <= 0` 是一个不带容差的浮点比较，而 `np.full(10, 0.01)` 的均值差一个
+    # ulp、centered 落在 1.73e-18、variance 3.0e-36，于是 skew 算出来是**恰好 1.0**。触不触发取决于
+    # 那个值的二进制表示——0.1 和 1.0 正好精确对消所以没事，0.01 就中招。答案取决于这个的东西不配叫
+    # 判据。DSR 独占它的时候无害(常数收益序列的 deflated Sharpe 本来也不值一读)，进了 `per_symbol`
+    # 就不是了：一个从没交易过的标的，净收益序列正是常数。
+    #
+    # 换来的读数(2026-09-19，**裸 ensemble**：tsmom / pit universe / 1h / 2025-09..2026-09，不带
+    # guards 不带 exit overlay，**不是循环持有的那本书**——这个区分就是 `layers` 存在的理由)：
+    # Sharpe 2.35、Sortino 3.51、skew +1.08、kurtosis 23.0、hit_rate 0.512、最大回撤 -25.1%。
+    # 正偏加上接近一半的胜率是趋势跟踪的形状:输得小而频繁、赢得大而稀少。真正要抓的是它的反面——
+    # 高胜率、**负**偏、Sortino 低于 Sharpe，那是披着趋势外衣的卖波动率。这些没一条能从 Sharpe 推出来，
+    # 而在此之前报告里一条都没有。
+    "beidou_alpha": 10_450,
 }
 
 

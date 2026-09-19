@@ -7,12 +7,20 @@ that validated something else - the KILL-027 failure one level up.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from beidou_alpha.registry import StrategyEntry, evidence_params, evidence_problems, param_problems
+from beidou_alpha.registry import (
+    StrategyEntry,
+    evidence_params,
+    evidence_problems,
+    param_problems,
+    verdict_problems,
+)
 from beidou_alpha.signals import get_signal
 from beidou_live.composition import load_registry
 from beidou_live.config import registry_evidence_problems
@@ -212,3 +220,84 @@ def test_a_reject_may_not_run_as_the_main_book() -> None:
         probe=_probe(),
     )
     assert any("non-main probe book" in p for p in _check(main, _book_report()))
+
+
+# --- the verdict itself, checked against the report it is written next to ------------------------
+#
+# Real archived reports on purpose.  A fixture here would state the contract these tests are meant
+# to hold the code to, which is the failure `fixtures-you-invent-test-a-contract-that-does-not-exist`
+# names: the shapes below are only interesting because the repository actually produced them.
+D043_REPORT = "reports/research/tsmom-validation-20260913T182325Z.json"  # PASS on disk, WEAK_PASS in the registry
+FAILED_REPORT = "reports/research/tsmom-validation-20260918T154025Z.json"  # FAIL on disk
+
+
+def _archived(relative: str) -> dict[str, Any]:
+    return json.loads((ROOT / relative).read_text(encoding="utf-8"))
+
+
+def test_the_two_archived_reports_still_say_what_these_tests_assume() -> None:
+    """Pin the premise, so a re-run of either report fails HERE instead of silently voiding the cases below."""
+    assert _archived(D043_REPORT)["verdict"] == "PASS"
+    assert _archived(FAILED_REPORT)["verdict"] == "FAIL"
+
+
+def test_a_registry_may_be_stricter_than_its_evidence() -> None:
+    """D-043's shape, and the shipped pair: the archive says PASS, the registry says WEAK_PASS.
+
+    Equality would refuse this, which is why the rule is an ordering.  The report is digest-anchored
+    and cannot be rewritten to carry the cap, so the registry is the only place the correction fits.
+    """
+    entry = StrategyEntry("tsmom")
+    assert verdict_problems(entry, _archived(D043_REPORT), "WEAK_PASS") == []
+    assert verdict_problems(entry, _archived(D043_REPORT), "PASS") == []
+
+
+def test_a_registry_may_not_be_more_permissive_than_its_evidence() -> None:
+    """The gap measured 2026-09-19: a FAIL report under a WEAK_PASS registry passed every other check."""
+    entry = StrategyEntry("tsmom")
+    report = _archived(FAILED_REPORT)
+    for claimed in ("PASS", "WEAK_PASS"):
+        problems = verdict_problems(entry, report, claimed)
+        assert len(problems) == 1, claimed
+        assert claimed in problems[0] and "FAIL" in problems[0]
+    # declared honestly there is nothing for THIS check to say; `evidence_problems` refuses it elsewhere
+    assert verdict_problems(entry, report, "FAIL") == []
+
+
+def test_the_whole_gate_refuses_a_misdeclared_verdict_end_to_end() -> None:
+    """Through `evidence_problems`, with a real digest - the path the startup gate takes.
+
+    Without the cross-check every other gate passes: the digest matches because the report was not
+    edited, the params match because they are the same configuration, and the construction matches
+    because it is the same book.  Only the verdict disagrees, and only with the report.
+    """
+    digest = hashlib.sha256((ROOT / FAILED_REPORT).read_bytes()).hexdigest()
+    entry = StrategyEntry("tsmom", evidence={"report": FAILED_REPORT, "sha256": digest, "verdict": "WEAK_PASS"})
+    problems = evidence_problems(
+        entry,
+        exists=lambda path: (ROOT / path).exists(),
+        sha256_of=lambda path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest(),
+        read_report=_archived,
+    )
+    assert len(problems) == 1 and "may only be stricter" in problems[0]
+
+
+def test_an_unreadable_or_absent_verdict_is_skipped_not_guessed() -> None:
+    """Same rule as every other cross-check here: what a report does not record, this does not judge.
+
+    A book report is the case that matters - its finding lives in `book_verdict` and is checked on
+    the probe path, so this must not also refuse it for having no signal-level verdict.
+    """
+    entry = StrategyEntry("tsmom")
+    assert verdict_problems(entry, {"kind": "validation"}, "PASS") == []
+    assert verdict_problems(entry, {"kind": "book", "book_verdict": "ACCEPT"}, "ACCEPT") == []
+    assert verdict_problems(entry, {"verdict": "SOMETHING_NEW"}, "PASS") == []
+
+
+def test_the_shipped_registry_passes_the_new_check() -> None:
+    """The guard against shipping a rule that refuses the configuration currently holding positions."""
+    problems = registry_evidence_problems(
+        load_registry(ROOT / "config" / "alpha_registry.yaml"),
+        load_yaml(ROOT / "config" / "live.demo.yaml"),
+    )
+    assert problems == [], problems

@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from beidou_alpha.validation.metrics import normal_cdf, normal_ppf
+from beidou_alpha.validation.metrics import moments, normal_cdf, normal_ppf
 
 EULER_GAMMA = 0.5772156649015329
 
@@ -114,19 +114,6 @@ def sharpe_per_period(returns: np.ndarray) -> float | None:
         return None
     std = float(np.std(values, ddof=1))
     return float(np.mean(values) / std) if std > 0 else None
-
-
-def moments(returns: np.ndarray) -> tuple[float, float]:
-    """(skewness, kurtosis) with kurtosis of a normal = 3."""
-    values = np.asarray(returns, dtype=float)
-    values = values[np.isfinite(values)]
-    if values.size < 4:
-        return 0.0, 3.0
-    centered = values - values.mean()
-    variance = float(np.mean(centered**2))
-    if variance <= 0:
-        return 0.0, 3.0
-    return float(np.mean(centered**3) / variance**1.5), float(np.mean(centered**4) / variance**2)
 
 
 @dataclass(frozen=True)

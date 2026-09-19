@@ -14,6 +14,9 @@ PROBE_VERDICT = "ACCEPT"  # a book-level finding from `research book` (D-018); n
 # A probe book may also cite a REJECT, but only when the registry says so out loud (D-029): the alternative
 # observed on 2026-09-04 was a probe running against a report whose universe no longer existed on disk.
 PROBE_VERDICTS: frozenset[str] = frozenset({PROBE_VERDICT, "REJECT"})
+# Signal-level verdicts, MOST PERMISSIVE FIRST.  `evidence_problems` admits the first two to live
+# use (D-020), so a registry naming one of them makes a claim its cited report has to support.
+SIGNAL_VERDICTS: tuple[str, ...] = ("PASS", "WEAK_PASS", "FAIL")
 
 
 @dataclass(frozen=True)
@@ -339,6 +342,45 @@ def param_problems(
     return [f"{entry.id}: registry params differ from the cited evidence ({detail})"]
 
 
+def verdict_problems(entry: StrategyEntry, report: Mapping[str, Any], declared: str) -> list[str]:
+    """The registry may be STRICTER than the report it cites, never more permissive.
+
+    This branch is the one field the startup gate actually refuses on, and it was the only one in
+    this file nothing compared.  `_probe_problems` has checked the declared verdict against the
+    report's `book_verdict` since D-029; the signal-level path read `entry.evidence["verdict"]` - a
+    string a human types - and never opened the report beside it.  The digest proves the report was
+    not edited and `construction_problems` proves the construction still matches, which is exactly
+    what makes the gap easy to miss: everything around the verdict is checked.
+
+    Measured 2026-09-19 against real artefacts rather than a fixture, because a fixture here would
+    have tested the contract this function is adding.  Pointing tsmom's entry at
+    `reports/research/tsmom-validation-20260918T154025Z.json` (`verdict: FAIL` on disk) while the
+    registry said `WEAK_PASS` returned no problems at all: digest matched, params matched,
+    construction matched, and `FAIL` never got read.  Declaring `FAIL` honestly was the only way to
+    get the refusal that verdict is there to produce.
+
+    Why an ordering and not equality.  D-043 (2026-09-17) caps evidence in which no selection was
+    ever exercised at WEAK_PASS, and the ten reports it flipped were already written and
+    digest-anchored - `tsmom-validation-20260913T182325Z.json` among them, the one the live registry
+    cites, which says PASS on disk while the registry correctly says WEAK_PASS.  Equality would
+    refuse the shipped pair for being more honest than its own evidence.  An ordering admits that
+    correction and refuses its inverse, which is the asymmetry D-043 already relies on.
+
+    Absent is skipped, the same way `construction_problems` skips a report with no `portfolio` block:
+    a report with no `verdict`, or one whose verdict this tuple does not know (a book report's
+    `book_verdict` lives on the probe path), is left to the checks that can read it.
+    """
+    reported = str(report.get("verdict", "")).upper()
+    if declared not in SIGNAL_VERDICTS or reported not in SIGNAL_VERDICTS:
+        return []
+    if SIGNAL_VERDICTS.index(declared) >= SIGNAL_VERDICTS.index(reported):
+        return []
+    return [
+        f"{entry.id}: registry declares verdict {declared} but the cited evidence records {reported}; "
+        f"a registry may only be stricter than the report it cites ({SIGNAL_VERDICTS} worst-last)"
+    ]
+
+
 def evidence_problems(
     entry: StrategyEntry,
     exists: Callable[[str], bool],
@@ -375,6 +417,7 @@ def evidence_problems(
         problems.append(f"{entry.id}: evidence verdict {verdict} does not allow live use")
     if read_report is not None and report_ok:
         report = read_report(path)
+        problems.extend(verdict_problems(entry, report, verdict))
         if canonical_params is not None:
             problems.extend(param_problems(entry, report, canonical_params))
         problems.extend(construction_problems(entry, report, live_portfolio, live_overlays))
