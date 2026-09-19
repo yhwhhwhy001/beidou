@@ -42,6 +42,23 @@
 # evidence sha256 - and this one was checked by a sentence.  `tests/cli/test_the_shadow_cannot_touch_the_armed_loop.py`
 # now holds the identity itself: the candidate must differ from the armed registry by comments alone.
 # ----------------------------------------------------------------------------------------------------
+#
+# 2026-09-19,又一次按上面那句承诺同步,而这一次同步过来的东西要说清楚。armed registry 的
+# tsmom 指针换到了 `tsmom-validation-20260919T081914Z.json`,verdict **FAIL**(理由写在 armed
+# 那份文件的 evidence 块旁边:两个可用指针都过不了 armed 启动,只是挡在不同的门上,而这一个
+# 至少 dataset 是对的、verdict 是诚实的)。
+#
+# **后果,写给读 canary 结果的人。** 这个 POSITIVE CONTROL 从今天起也带着一条
+# `tsmom: evidence verdict FAIL does not allow live use`,直到 `deploy/run_live.sh` 的 D-041
+# bridge 在 2026-10-13 过期。canary 是 DEPLOYMENT 健康检查不是 alpha 过滤器(KILL-AR-04),
+# 它问的是「这套部署起不起得来、跑不跑得动」,不是「这份证据过不过门」——所以它仍然是有效的
+# 控制。但「一个应该通过的 registry,通过了」这句话在这段时间里要读成:**在同一条被明示豁免
+# 的 evidence 问题之下**通过。豁免只此一条、按字符串精确匹配,定义在
+# `tests/shipped_evidence.py`,到期自动失效。
+#
+# 不这么同步的另一条路是删掉上面的 NOTHING ELSE 声称,把本文件变成一个真正的 promotion
+# candidate。那不是今天发生的事——指针换了,构造一个字节没动(`registry_digest` 逐位不变,
+# 核过),所以它仍然是 armed 的副本,而不是一个候选。
 # Strategies the live loop is allowed to run.  A strategy may only be enabled
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
@@ -345,10 +362,54 @@ strategies:
     # DL-R4 的标注同样仍在：两臂全折同选，这个 OOS 是一条全样本序列的尾巴。
     # 预登记物证：`--prereg 96d659ae`（commit 时间写进了报告的 preregistration 块）。但那条预登记
     # 本身是**补记**的，日志同日条目第一句就写了这件事；下游不得援引「预登记的选择规则」。
+    # 2026-09-17（D-043）：PASS -> WEAK_PASS。判定规则没有放松，是补上了一个一直算得出、一直印
+    # 得出、却没有任何判定代码读过的字段：这份报告的 `oos_is_full_sample_tail` 是 true。
+    # 上面第 301 行三天前就把这件事写成中文了——「两臂全折同选，这个 OOS 是一条全样本序列的尾巴」。
+    # 人知道，报告知道，`research validate` 还把这句话打到终端上；只有 `decide` 看不见，于是
+    # registry 可以写一个报告自己已经限定过的 PASS。补的是那一条读取路径，不是一条新门槛。
+    #
+    # 三件事没有变，写在这里免得下一个读者把降级当成降配置：
+    #   * 循环照常跑。`registry.py:369` 允许 WEAK_PASS 上线，启动门读这个字符串、不重算。
+    #   * 权重、参数、构造一个都没动；`registry_digest` 不含 evidence 块，指纹不变。
+    #   * 数字一个都没变。变的是这个数字被允许支撑多强的结论。
+    #
+    # 摘掉这个上限只有一条路：在一个**真的有选择**的 grid 上重跑 validate——多个参数点，各折可以
+    # 选出不同的赢家。那才是 walk-forward 声称在测量的东西。在那之前 WEAK_PASS 是实话。
+    #
+    # **2026-09-19：那条路走完了,指针换到它的结果。** 上面那段写「摘掉这个上限只有一条路——
+    # 在一个真的有选择的 grid 上重跑」。16 格跑了(PR #84,预登记 73f3599e,`--charge 16`,
+    # ledger 22,183 -> 22,199),`oos_is_full_sample_tail` 确实转了 False:fold 1-3 选
+    # `horizons [24,72,168] / return_scale 0.20`,fold 4-5 选 `[168,336,720] / 0.30`。
+    #
+    # 拿到的答案不在那个字段上,在它的大小:同一次运行、同一 ledger scope 下,全样本 argmax
+    # 那个配置(**就是下面 params 里跑的这个**)自己的 walk-forward OOS 是 **1.5292**,而各折
+    # 自己选的混合是 **1.2306**。差 **0.2986**,这是「真做一次选择」的代价。1.53 不是可实现的
+    # 样本外读数——它是事后知道谁会赢之后回头读的;1.23 才是一个选择程序能交付的。
+    #
+    # **换指针换掉的是哪道门,不是能不能启动。** 实测(2026-09-19)两个指针都过不了 armed 启动,
+    # 只是挡在不同的门上:
+    #   09-13 (WEAK_PASS)  evidence 通过,`registry_dataset_problems` 挡——membership 表已重建
+    #                      (union 211 -> 212、refreshes 2042 -> 2056),那份证据不再描述磁盘上的数据
+    #   09-19 (FAIL)       dataset 通过——它就是在今天这张表上跑的;evidence 挡在诚实的 FAIL 上
+    # `live_cmd.py:312` 是 `if problems or dataset.blocking:`,两道门任一响都进同一个 `raise`,
+    # 所以「要不要 `--allow-unvalidated`」这件事不变。`deploy/run_live.sh` 的 D-041 bridge 到
+    # 2026-10-13 为止无条件加它,launchd 的循环因此照跑;手动 `live run --armed` 没有 bridge,
+    # 换之前就已经起不来了,换之后还是。
+    #
+    # 那为什么还要换:**记账记准**。指着 09-19,dataset 是对的、verdict 是诚实的;指着 09-13,
+    # 是一份「从没做过选择」的证据配一张已经不存在的数据表。两边都不能 armed 启动的前提下,
+    # 选后者没有任何东西可换。
+    #
+    # **2026-10-13 之后**:bridge 过期,strict gate 回来,而两个指针都不通(`run_live.sh` 在
+    # 09-18 就写下了这个结论)。要过,得有一份 dataset 和 evidence 同时成立的证据——16 格那次
+    # 给它标了距离:真做选择的 OOS 1.23,门 1.51,差的不是 0.01 是 0.28。
+    #
+    # 构造未变:`evidence` 块不进 `registry_digest`,指纹逐位不动(改动前后都核过),所以
+    # M-010 的 30 天窗口不重置,`realised_vol` 的单构造窗口也不断。
     evidence:
-      report: reports/research/tsmom-validation-20260913T182325Z.json
-      sha256: cff07c6777295defce2acf7b045544f633c2f62c5ef766391eab4950236ef951
-      verdict: WEAK_PASS
+      report: reports/research/tsmom-validation-20260919T081914Z.json
+      sha256: 3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
+      verdict: FAIL
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
     # 它的 30 天滚动归因盈亏既没有被约束，也从来没有被计算过。规则看不见的东西，规则就管不住。

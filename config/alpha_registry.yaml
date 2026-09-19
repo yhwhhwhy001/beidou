@@ -314,10 +314,41 @@ strategies:
     #
     # 摘掉这个上限只有一条路：在一个**真的有选择**的 grid 上重跑 validate——多个参数点，各折可以
     # 选出不同的赢家。那才是 walk-forward 声称在测量的东西。在那之前 WEAK_PASS 是实话。
+    #
+    # **2026-09-19：那条路走完了,指针换到它的结果。** 上面那段写「摘掉这个上限只有一条路——
+    # 在一个真的有选择的 grid 上重跑」。16 格跑了(PR #84,预登记 73f3599e,`--charge 16`,
+    # ledger 22,183 -> 22,199),`oos_is_full_sample_tail` 确实转了 False:fold 1-3 选
+    # `horizons [24,72,168] / return_scale 0.20`,fold 4-5 选 `[168,336,720] / 0.30`。
+    #
+    # 拿到的答案不在那个字段上,在它的大小:同一次运行、同一 ledger scope 下,全样本 argmax
+    # 那个配置(**就是下面 params 里跑的这个**)自己的 walk-forward OOS 是 **1.5292**,而各折
+    # 自己选的混合是 **1.2306**。差 **0.2986**,这是「真做一次选择」的代价。1.53 不是可实现的
+    # 样本外读数——它是事后知道谁会赢之后回头读的;1.23 才是一个选择程序能交付的。
+    #
+    # **换指针换掉的是哪道门,不是能不能启动。** 实测(2026-09-19)两个指针都过不了 armed 启动,
+    # 只是挡在不同的门上:
+    #   09-13 (WEAK_PASS)  evidence 通过,`registry_dataset_problems` 挡——membership 表已重建
+    #                      (union 211 -> 212、refreshes 2042 -> 2056),那份证据不再描述磁盘上的数据
+    #   09-19 (FAIL)       dataset 通过——它就是在今天这张表上跑的;evidence 挡在诚实的 FAIL 上
+    # `live_cmd.py:312` 是 `if problems or dataset.blocking:`,两道门任一响都进同一个 `raise`,
+    # 所以「要不要 `--allow-unvalidated`」这件事不变。`deploy/run_live.sh` 的 D-041 bridge 到
+    # 2026-10-13 为止无条件加它,launchd 的循环因此照跑;手动 `live run --armed` 没有 bridge,
+    # 换之前就已经起不来了,换之后还是。
+    #
+    # 那为什么还要换:**记账记准**。指着 09-19,dataset 是对的、verdict 是诚实的;指着 09-13,
+    # 是一份「从没做过选择」的证据配一张已经不存在的数据表。两边都不能 armed 启动的前提下,
+    # 选后者没有任何东西可换。
+    #
+    # **2026-10-13 之后**:bridge 过期,strict gate 回来,而两个指针都不通(`run_live.sh` 在
+    # 09-18 就写下了这个结论)。要过,得有一份 dataset 和 evidence 同时成立的证据——16 格那次
+    # 给它标了距离:真做选择的 OOS 1.23,门 1.51,差的不是 0.01 是 0.28。
+    #
+    # 构造未变:`evidence` 块不进 `registry_digest`,指纹逐位不动(改动前后都核过),所以
+    # M-010 的 30 天窗口不重置,`realised_vol` 的单构造窗口也不断。
     evidence:
-      report: reports/research/tsmom-validation-20260913T182325Z.json
-      sha256: cff07c6777295defce2acf7b045544f633c2f62c5ef766391eab4950236ef951
-      verdict: WEAK_PASS
+      report: reports/research/tsmom-validation-20260919T081914Z.json
+      sha256: 3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
+      verdict: FAIL
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
     # 它的 30 天滚动归因盈亏既没有被约束，也从来没有被计算过。规则看不见的东西，规则就管不住。
