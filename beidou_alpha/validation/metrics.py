@@ -67,6 +67,64 @@ def max_drawdown(returns: pd.Series | np.ndarray) -> float:
     return float(max(drawdown.min(), -1.0)) if drawdown.size else 0.0
 
 
+def moments(returns: pd.Series | np.ndarray) -> tuple[float, float]:
+    """(skewness, kurtosis) with kurtosis of a normal = 3.
+
+    Lived in `multiple_testing` until 2026-09-19, where the DSR was its only caller.  Moved here
+    rather than copied: `summarize_returns` needs the same two numbers, `multiple_testing` already
+    imports from this module, and a second implementation of a moment is a second set of edge cases
+    for `size < 4` and a zero variance.  The old address still resolves - `multiple_testing` imports
+    the name, so `multiple_testing.moments` is the same object it always was.
+    """
+    values = np.asarray(returns, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 4:
+        return 0.0, 3.0
+    mean = float(values.mean())
+    centered = values - mean
+    variance = float(np.mean(centered**2))
+    # `variance <= 0` alone is a bare float comparison, and it let a constant series through.
+    # `np.full(10, 0.01)` does not centre to zero - the mean is off by one ulp, so `centered` is
+    # 1.73e-18, `variance` is 3.0e-36, and skew comes out as 5.22e-54 / 5.22e-54 = exactly 1.0.
+    # Measured 2026-09-19: `full(0.01)` and a 10-element list of 0.01 both returned (1.0, 1.0) while
+    # `full(0.1)` and `full(1.0)` returned (0.0, 3.0), because whether the residual is zero depends
+    # on the value's binary representation.  A criterion whose answer turns on that is not one.
+    #
+    # Harmless while the DSR was the only caller - a constant return series has no deflated Sharpe
+    # worth reading either way - and not harmless now that `summarize_returns` puts these two in
+    # every report, per symbol.  The tolerance is the size of the residual it has to see past:
+    # centring leaves about `eps * |mean|` behind, so anything at that scale is the arithmetic
+    # talking, not the distribution.  16 is headroom, not a measurement.
+    spread = math.sqrt(variance) if variance > 0 else 0.0
+    if spread <= 16.0 * float(np.finfo(float).eps) * max(abs(mean), 1.0):
+        return 0.0, 3.0
+    return float(np.mean(centered**3) / variance**1.5), float(np.mean(centered**4) / variance**2)
+
+
+def sortino(returns: pd.Series | np.ndarray, bars_per_year: float) -> float | None:
+    """mean / downside deviation * sqrt(bars_per_year), at the same 0 target `sharpe` uses.
+
+    The denominator is the target semi-deviation `sqrt(mean(min(r, 0)^2))` - every bar in the mean,
+    positive ones contributing zero - not the standard deviation of the losing bars alone.  The two
+    disagree by `sqrt(n_losing / n)` and only the first is Sortino; the second flatters a book that
+    loses rarely, which is exactly the shape this ratio is reported to expose.
+
+    Target 0, for the reason `sharpe` states one screen up and not as a separate choice: a Sortino
+    on an excess return beside a Sharpe on a raw one would be two rulers in one table.
+
+    None when nothing was lost.  An undefined ratio is not an infinite one, and a book whose worst
+    bar is zero is either a stub or a bug - `hit_rate` above returns None on the same reasoning.
+    """
+    values = np.asarray(returns, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 2:
+        return None
+    downside = float(np.sqrt(np.mean(np.minimum(values, 0.0) ** 2)))
+    if downside <= 0:
+        return None
+    return float(np.mean(values) / downside * math.sqrt(bars_per_year))
+
+
 def hit_rate(returns: pd.Series | np.ndarray) -> float | None:
     values = np.asarray(returns, dtype=float)
     active = values[np.isfinite(values) & (values != 0.0)]
@@ -101,6 +159,35 @@ def summarize_returns(
         "nonzero_target_bars": int((exposure > 1e-12).sum()),
         "hit_rate": hit_rate(net),
         "cost_share_of_gross": _cost_share(gross, net),
+        # Distribution shape, reported and never gated.  A Sharpe cannot tell a trend book from a
+        # short-volatility one, and that is the single most expensive thing a headline number can
+        # hide: both can print 1.6 while one of them returns a year of gains in an afternoon.  The
+        # DSR has read these same two moments since it was written (`deflated_sharpe_ratio` calls
+        # `moments` on the candidate's own returns), so the numbers were already being COMPUTED and
+        # acted on - they just never reached the reader of the report.
+        #
+        # What they say about this book, measured 2026-09-19 on the BARE ensemble (tsmom, pit
+        # universe, 1h, 2025-09..2026-09, no guards and no exit overlay - not the book the loop
+        # holds, and the distinction is the one `layers` exists to record): Sharpe 2.35, Sortino
+        # 3.51, skew +1.08, kurtosis 23.0, hit_rate 0.512, max drawdown -25.1%.  Positive skew with
+        # a hit rate near half is a trend book - it loses small and often, and wins large and
+        # rarely.  A short-volatility book wearing a trend book's Sharpe is the inverse and the
+        # thing worth catching: high hit rate, NEGATIVE skew, Sortino below Sharpe.  Here
+        # Sortino/Sharpe is 1.49 against the 1.41 a symmetric series would give, which is the same
+        # fact read a second way.  None of that is inferable from a Sharpe, and until now none of it
+        # was in the report.
+        **dict(zip(("skew", "kurtosis"), moments(net), strict=True)),
+        "sortino": sortino(net, bars_per_year),
+        # The rate both ratios above are measured against, stated in the artefact rather than only in
+        # `sharpe`'s docstring.  It is a constant and carries no information the code did not already
+        # have - which is the point: 0 is a CHOICE here, not an omission, and the 2026-09-08 audit's
+        # ruling was that what it must not be is unstated.  A docstring states it to whoever opens the
+        # module; a report is what gets quoted, compared across dates and handed to someone who never
+        # will.  On a USDⓈ-M perpetual book the equity sits at the venue as margin, so at this book's
+        # ~30% annualised volatility a 4% rate is worth about 0.13 of Sharpe.  Changing the value
+        # would silently reprice every archived report and every threshold in `verdict.py`; printing
+        # it changes nothing and makes the comparison to a funded benchmark the reader's to make.
+        "risk_free_rate": 0.0,
     }
 
 
