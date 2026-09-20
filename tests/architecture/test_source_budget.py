@@ -3052,7 +3052,45 @@ CEILING = {
     # both inside the construction fingerprint frozen to 2026-10-13.  Moving those resizes every
     # position and resets M-010, M-G06 and `realised_vol`.  A test pins it by asserting `clamp_book`'s
     # signature has nowhere to pass a collateral share.
-    "beidou_live": 10_402,
+    # 2026-09-20（不编号，同上）。+156 beidou_live，10_402 -> 10_558，抬到 10_600。
+    #
+    # 这是上面那格（M-007 的分母）的同一次更正，换一个仪表。那格改的是「保证金占用除以什么」，
+    # 这格改的是「回撤除以什么」——论据一模一样：抵押品开不了仓，所以一个一半开不了仓的权益的
+    # 百分比，不是关于这本书风险的读数。操作者 2026-09-20 裁定。
+    #
+    # 它推翻的是一个**主动做过的决定**，不是一次疏忽。A-GB01（2026-09-15）明确写过：在 USDT 序列
+    # 上另立高水位「would be a FOURTH ruler on a page whose problem is that it already carries
+    # three」，所以两个分子都留在总权益上，只动分母。这行留下的东西就是
+    # `giveback_since_hwm_in_usdt_pct`——总权益的回吐除以 USDT 的底，量在两条序列之间。
+    #
+    # 这 156 行买到什么（2026-09-20 实测，实盘记录 298 根 bar）：
+    #
+    # | 读数                                    | 值     |
+    # |----------------------------------------|--------|
+    # | `drawdown_state`（总权益，历史最大）      |  5.92% |
+    # | `drawdown_vs_hwm_pct`（总权益，当前）     |  3.33% |
+    # | `giveback_since_hwm_in_usdt_pct`（混口径）|  6.58% |
+    # | 新的，当前                               |  6.00% |
+    # | 新的，历史最大                            | 11.40% |
+    #
+    # 混口径那个不只是不精确：两条序列的高水位差了 13 小时（总权益 09-19T05:00Z，USDT 09-19T18:00Z），
+    # 它的分子和分母不在同一时刻上。而且分子本身也不同——总权益那一跌里有一部分是抵押品被重估的。
+    # 深处更要紧：09-16T02:00Z 新尺子读 11.40% 的那一刻，页面印的是 5.92%。
+    #
+    # 花在哪：`usdt_drawdown_state` 100 行（其中 42 行 docstring，记的是上面这张表和它推翻的决定）、
+    # `_tradable_drawdown_line` 23 行、`risk_budget_status` 里接进去 8 行（含一段说明它为什么**不**
+    # 进 `unreadable`——那张表驱动 BLIND，而 BLIND 说的是「一道门没答上」，这个仪表不是门）、
+    # 其余是 `_noise_scale_lines` 改标签与 docstring 记下这次推翻。
+    #
+    # 这格**不动判据**，界线和上面那格逐字同一条：`Policy.drawdown_ladder` 的两档
+    # （`deescalate_at` 0.49 / `rollback_at` 0.70）由 `budget` 推导，而 budget 是操作者按总权益
+    # 声明的。换分母要重跑 D-035 的 bootstrap（`scratchpad/p32f_usdt_denominated_budget.py`），
+    # 那是一次风险裁定，不是一次报告更正。新函数只把换算后的两档印出来
+    # （`rungs_in_this_denominator`：91% / 130%），让那次裁定手里有数——和
+    # `attributed_drawdown_state.equity_over_peak` 同一个形状。
+    #
+    # 留 42 行（10_558 -> 10_600），理由与上面两格逐字相同，不重述。
+    "beidou_live": 10_600,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

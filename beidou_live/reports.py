@@ -1266,11 +1266,37 @@ def drift_check(
     }
 
 
+def _tradable_drawdown_line(block: Mapping[str, Any]) -> str:
+    """`usdt_drawdown_state` in one line: today, the worst ever, and where the rungs land in this unit.
+
+    The rung conversion is on the page rather than in a footnote because it is the part that cannot be
+    guessed from the percentage: at 1.86x the shipped `rollback_at` converts to above 100%, i.e. the
+    tradable money would have to go past zero.  That is not a defect in the ladder - it is calibrated on
+    the whole capital, under cross margin, where collateral does absorb losses - but it is the number the
+    2026-09-20 ruling needs, and no instrument printed it.
+    """
+    if not block.get("enforced"):
+        return f"not enforced ({block.get('why', 'no reason recorded')})"
+    rungs = block.get("rungs_in_this_denominator") or {}
+    tail = (
+        f"；同一梯在这个分母下 = de-escalate {rungs['deescalate_at']:.0%} / rollback {rungs['rollback_at']:.0%}"
+        if rungs
+        else ""
+    )
+    return (
+        f"当前 {block['value']:.2%}，历史最大 {block['max_drawdown']:.2%}"
+        f"（{block.get('deepest_at') or 'n/a'}）；"
+        f"HWM {block.get('peak', 0.0):.2f} U @ {block.get('peak_at') or 'n/a'}"
+        f"，同一笔亏损在这里读数是总权益口径的 {block.get('vs_total_equity') or float('nan'):.2f} 倍{tail}"
+    )
+
+
 def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     """One readable line per metric; a metric that could not be computed says why instead of showing 0."""
     if not block:
         return {"none": 0}
     drawdown = block.get("drawdown") or {}
+    tradable = block.get("usdt_drawdown") or {}
     volatility = block.get("realised_vol") or {}
     slippage = block.get("slippage") or {}
     guards = block.get("guards") or {}
@@ -1284,6 +1310,11 @@ def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "status": block.get("status"),
         "drawdown": f"{drawdown.get('value', 0.0):.2%} of the {drawdown.get('rollback_at', 0.0):.0%} budget"
         + (f" -> {drawdown['action']}" if drawdown.get("action") else ""),
+        # Immediately under it, because the line above is the SAME account on a denominator half of
+        # which cannot trade, and a reader who sees only one of the two has the wrong number either way.
+        # Current first: "回撤是多少" was asked on 2026-09-20 and answered with the line above, which is
+        # the deepest reading ever and not today's.
+        "drawdown (可动用 USDT)": _tradable_drawdown_line(tradable),
         "realised vol": number(volatility, "{:.1%}") + f" band {volatility.get('band')}",
         "slippage": number(slippage, "{:.2f} bps") + f" limit {slippage.get('limit')} bps",
         "guards": f"pause {guards.get('daily_loss_pause_bars')} / capped {guards.get('gross_capped_bars')} bars"
@@ -2726,6 +2757,13 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     rather than left implicit so each percentage can be divided back by hand - which is the only way to see
     that `giveback_since_hwm_in_usdt_pct` and `drawdown_vs_hwm_pct (equity)` share a numerator and differ
     by hwm/usdt_equity, not by the collateral share.  No ROE line - `noise_scale`'s docstring says why.
+
+    2026-09-20: the operator ruled that the drawdown they read is the one the TRADABLE money suffered -
+    numerator and denominator both - which is the fourth ruler `noise_scale` deliberately refused to
+    build.  It now exists, in `risk_budget.usdt_drawdown_state`, and this block did not change except in
+    one label: `giveback_since_hwm_in_usdt_pct` says out loud that it mixes two series, and points at the
+    reading that does not.  Not recomputed here, because a conversion that stops being read as a
+    measurement is doing its job; the failure was never the arithmetic, it was the name.
     """
     return {
         "design_daily_sigma_u": _fmt_num(block.get("design_daily_sigma_u")),
@@ -2741,7 +2779,14 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "ladder_drawdown_pct (R8, attributed)": _fmt_pct(block.get("ladder_drawdown_pct")),
         "usdt_equity_u (A-GB01 denominator)": _fmt_num(block.get("usdt_equity_u")),
         "design_daily_sigma_in_usdt_pct": _fmt_pct(block.get("design_daily_sigma_in_usdt_pct")),
-        "giveback_since_hwm_in_usdt_pct": _fmt_pct(block.get("giveback_since_hwm_in_usdt_pct")),
+        # Renamed 2026-09-20, not recomputed: the number is a conversion and stays one, but its old
+        # label let it be read as "the drawdown of my USDT" - which it is not, and which the P13 block
+        # now prints properly.  Numerator from the total-equity high, denominator from USDT, and on
+        # 2026-09-20 those two highs were 13 hours apart.
+        "giveback_since_hwm_in_usdt_pct (混口径，非 USDT 自己的回撤)": _fmt_pct(
+            block.get("giveback_since_hwm_in_usdt_pct")
+        ),
+        "→ USDT 自己的回撤见 Risk budget (P13) 的 drawdown (可动用 USDT)": "",
         "expected_exits_so_far": _fmt_num(block.get("expected_exits_so_far")),
         "exits_so_far": block.get("exits_so_far"),
     }
