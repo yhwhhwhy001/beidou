@@ -58,9 +58,14 @@ from beidou_shared.config import load_yaml
 BUDGET, BLOCK, SEED = 0.70, 168, 20260904
 
 
-def rescaled(k: float) -> tuple[tuple[float, float], ...]:
-    """The shipped rule transcribed to the -70% budget (P32c's E-010), not a new rule."""
-    return ((-0.70 * BUDGET, 0.75 * k), (-1.00 * BUDGET, 0.50 * k))
+def rescaled(k: float, budget: float = BUDGET) -> tuple[tuple[float, float], ...]:
+    """The shipped rule transcribed to a declared budget (P32c's E-010), not a new rule.
+
+    `budget` became a parameter on 2026-09-20 so `p32f` can ask the same rule what it produces when the
+    budget is declared in tradable USDT.  The default is unchanged and so is every number this file
+    prints: the rule was always a function of the budget, it just had only one caller.
+    """
+    return ((-0.70 * budget, 0.75 * k), (-1.00 * budget, 0.50 * k))
 
 
 #: The rungs as they stood BEFORE policy 0.3.3 - calibrated at k=0.30 against a 50% budget and left
@@ -149,7 +154,13 @@ def ladder(mark: np.ndarray, realised: np.ndarray, policy: Policy, ruler: str) -
     return out, scalars
 
 
-def main(mode: str, draws: int) -> None:
+def panel_series(mode: str) -> tuple[np.ndarray, np.ndarray]:
+    """(mark-to-market returns, realised returns) for one universe, as every arm below consumes them.
+
+    Extracted from `main` on 2026-09-20 so `p32f` runs the same panel through the same model rather
+    than building a second one beside it - the failure this whole `p32*` family is named after.  Pure
+    move: `main` calls it and prints what it printed.
+    """
     profile = load_yaml("config/live.demo.yaml")
     registry = load_registry(Path("config/alpha_registry.yaml"))
     panel = _load(DATA, _resolve_symbols(DATA, "", "1h", mode), "1h", None, None, True)
@@ -169,6 +180,11 @@ def main(mode: str, draws: int) -> None:
         np.nan_to_num(result.asset_returns.to_numpy(dtype=float), nan=0.0),
         np.nan_to_num(result.costs.to_numpy(dtype=float), nan=0.0),
     )
+    return mark, realised
+
+
+def main(mode: str, draws: int) -> None:
+    mark, realised = panel_series(mode)
     n = len(mark)
     blocks = n // BLOCK
     years = (blocks * BLOCK) / 8760.0
