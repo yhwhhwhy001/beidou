@@ -223,6 +223,108 @@ def drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) 
     }
 
 
+def usdt_drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
+    """The drawdown of the money that can actually trade: USDT equity against its OWN high-water mark.
+
+    A fourth ruler on a page whose stated problem was that it already carried three, and the decision it
+    overturns said exactly that: on 2026-09-15 a high-water mark recomputed on the USDT series "would be
+    a FOURTH ruler" (`reports.giveback_check`), so A-GB01 kept both numerators on total equity and moved
+    only the denominator.  What that bought is `giveback_since_hwm_in_usdt_pct`: a total-equity giveback
+    over a USDT base, measured on neither series.
+
+    Operator ruling, 2026-09-20 - the drawdown that matters is the one the tradable capital suffered,
+    numerator and denominator both.  Collateral cannot open a position, which is the argument that
+    already moved M-007's denominator; a percentage of an equity half of which cannot trade is not a
+    reading about this book's risk.
+
+    The four readings on the day this was added, all of the same account:
+
+    ==============================================  =======
+    `drawdown_state` (total equity, historical max)   5.92%
+    `drawdown_vs_hwm_pct` (total equity, current)     3.33%
+    `giveback_since_hwm_in_usdt_pct` (mixed)          6.58%
+    this, current                                     6.00%
+    this, historical max                             11.40%
+    ==============================================  =======
+
+    The mixed reading is not merely imprecise.  The two series have DIFFERENT high-water marks - 13 hours
+    apart on 2026-09-20, total equity 12,368.22 and USDT 6,647.18 - so its numerator and its denominator
+    are not measured from the same moment.  And the gap is not cosmetic at depth: at 2026-09-16T02:00Z,
+    where this ruler reads its historical max of 11.40%, the page printed 5.92%.
+
+    `value` is CURRENT and `max_drawdown` is the deepest ever, both positive.  Stated because the two
+    functions above disagree about which one `value` means - `drawdown_state` reports the historical max
+    there and `attributed_drawdown_state` the current distance, negative - and that disagreement is how
+    "回撤是多少" was answered with 5.92% when the question was about today.
+
+    Reported, never acted on.  `rungs_in_this_denominator` says what P13's ladder would be asking for if
+    the budget were declared in this unit, so that ruling can be made with the number in hand rather than
+    after the fact - the shape `attributed_drawdown_state.equity_over_peak` already keeps, and for the
+    same reason: moving a rung changes when the book de-risks, which is a risk decision and not a
+    reporting one.  The conversion assumes the loss lands in USDT, which is what settlement does and what
+    the record shows: over the 269 cycles carrying both readings, 5.25% of the summed absolute equity
+    moves were the collateral line moving (range 62.09 U, 1.09% of its mean, against BTC's own 7.28%).
+    """
+    peak = current_dd = max_dd = 0.0
+    usdt: float | None = None
+    peak_at = deepest_at = baseline_at = None
+    bars = 0
+    for row in rows:
+        value = (row.get("collateral") or {}).get("usdt_equity")
+        if not isinstance(value, int | float) or value <= 0:
+            continue
+        usdt = float(value)
+        if (row.get("external_flows") or {}).get("rebaselined"):
+            peak = usdt
+            baseline_at = str(row.get("at") or "")
+        bars += 1
+        if baseline_at is None:
+            baseline_at = str(row.get("at") or "")
+        if usdt >= peak:
+            peak, peak_at = usdt, str(row.get("at") or "")
+        current_dd = 0.0 if peak <= 0 else 1.0 - usdt / peak
+        if current_dd > max_dd:
+            max_dd, deepest_at = current_dd, str(row.get("at") or "")
+    if usdt is None:
+        return {
+            "enforced": False,
+            "why": "没有周期记录 collateral.usdt_equity，可动用资金没有序列可以量",
+            "value": None,
+            "max_drawdown": None,
+            "bars": 0,
+        }
+    # How much deeper the same loss reads here than on total equity, from each series' OWN peak - which
+    # is the whole difference between this ruler and the mixed one.  1.86 on 2026-09-20.
+    total_peak = max(
+        (float(row["equity"]) for row in rows if isinstance(row.get("equity"), int | float) and row["equity"] > 0),
+        default=0.0,
+    )
+    factor = (total_peak / peak) if peak > 0 and total_peak > 0 else None
+    return {
+        "enforced": True,
+        "value": current_dd,
+        "max_drawdown": max_dd,
+        "equity": usdt,
+        "peak": peak,
+        "peak_at": peak_at,
+        "deepest_at": deepest_at,
+        "baseline_at": baseline_at,
+        "bars": bars,
+        "vs_total_equity": factor,
+        # What the shipped rungs ask for once converted, and the reason this block exists: at 1.86 the
+        # rollback rung sits ABOVE a total loss of the tradable money, so in this denominator it cannot
+        # be reached by the book alone.  Not a defect in the ladder - it is calibrated on the operator's
+        # whole capital, under cross margin, where the collateral really does absorb losses - but it is
+        # the number the ruling needs, and nothing printed it.
+        "rungs_in_this_denominator": None
+        if factor is None
+        else {
+            "deescalate_at": params.deescalate_at * factor,
+            "rollback_at": params.rollback_at * factor,
+        },
+    }
+
+
 def attributed_drawdown_state(
     rows: Sequence[Mapping[str, Any]],
     attribution: Sequence[Mapping[str, Any]],
@@ -639,6 +741,13 @@ def risk_budget_status(
     # path was 1.30% below its mark and the attributed path 0.23%, a factor of 5.6 on the same record.
     # R8 acts on the second one; this block is where a reader can see why that choice is not cosmetic.
     attributed = attributed_drawdown_state(rows, attribution, params)
+    # The third, added 2026-09-20 by the ruling in `usdt_drawdown_state`.  Deliberately NOT added to
+    # `unreadable` below: that list drives BLIND, which says a GATE could not be answered, and this
+    # metric gates nothing.  Letting a reporting-only reading turn the whole block BLIND would make the
+    # status mean "something here is unreadable" instead of "a threshold went unchecked", which is the
+    # same erosion in the other direction - a status that fires on things nobody acts on gets ignored
+    # on the day it fires on something somebody must.
+    tradable = usdt_drawdown_state(rows, params)
     volatility = realised_vol(rows, params)
     slippage = slippage_bps(
         trades, params, latest_ms=_latest_ms(rows), books=books_by_symbol(rows[-1] if rows else None)
@@ -681,6 +790,7 @@ def risk_budget_status(
         "unreadable": unreadable,
         "drawdown": drawdown,
         "attributed_drawdown": attributed,
+        "usdt_drawdown": tradable,
         "realised_vol": volatility,
         "slippage": slippage,
         "guards": guards,
@@ -698,4 +808,5 @@ __all__ = [
     "realised_vol",
     "risk_budget_status",
     "slippage_bps",
+    "usdt_drawdown_state",
 ]
