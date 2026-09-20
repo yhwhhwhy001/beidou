@@ -74,10 +74,20 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     2026-09-19, and with no entry that choice would have expired on 2026-10-13 into nobody remembering it had
     been a choice.  `check: date_after` because the date is the only part a machine can answer; the entry's
     own `condition` says in as many words that the date is necessary and not sufficient.
+
+    2026-09-20 raised it 21 -> 22 for `drawdown-budget-denominator`, the second entry of that widened
+    kind and the sibling of the one above: same freeze, same 2026-10-13, and they have to be ruled
+    together.  What it holds is a ruling made AGAINST the operator's own correction - they were right
+    that the drawdown they budget is the tradable money's, and the reporting side was changed to match
+    (PR #93), but re-running D-035's bootstrap says re-denominating the LADDER buys nothing: about 13pp
+    of CAGR for a budget still breached in 94.5% of draws.  That is exactly the shape that expires into
+    nobody remembering, because the visible outcome is "nothing changed" - and the entry is what says
+    the nothing was measured.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 21, (
-        f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, EXP-SL1's, and RISK-G11's denominator"
+    assert len(entries) == 22, (
+        f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, EXP-SL1's, "
+        "and the two denominators (RISK-G11's and P13's drawdown budget)"
     )
 
 
