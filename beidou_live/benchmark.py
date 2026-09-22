@@ -161,11 +161,25 @@ def signal_state(
     `all_long_bars` is the one a reader needs first.  Over those bars the book is the constant-long
     comparator by construction, so any "alpha" a regression reports for them is a statement about the
     portfolio construction or the universe, never about the signal.
+
+    `short_positions` counts (bar, symbol) PAIRS over the whole window, not positions held now, and
+    2026-09-22 showed that the distinction is not pedantic: the operator read "空头持仓数 394" as a
+    standing position count and asked why it was frozen.  It was frozen because the count is
+    cumulative and had simply stopped growing - the last negative signal was 2026-09-16T00:00Z, when
+    the only two shorts (CYSUSDT, TUTUSDT) left the universe on a 30-day-volume re-rank rather than on
+    a signal flip.  So `shorts_last_bar` is reported beside it, and the report labels the cumulative
+    one for what it is.
+
+    Neither number can say how CLOSE the signal is to a short, and nothing here should be read that
+    way: the live `conviction_mode` is `sign` (H-001), so every actionable score arrives here already
+    replaced by +1 or -1.  The margin lives in the raw score against `entry_threshold`, which this
+    record does not carry.
     """
     values: dict[str, int] = {}
     all_long = 0
     counted = 0
     shorts = 0
+    shorts_last_bar = 0
     window = set(bars)
     for row in rows:
         if window and int(row.get("bar_open_ms") or 0) not in window:
@@ -185,6 +199,9 @@ def signal_state(
             if value < 0:
                 short_here += 1
         shorts += short_here
+        # Overwritten each iteration, so it holds the LAST counted bar's tally when the walk ends.
+        # The rows arrive in order and a duplicate bar's later record is the one that stood.
+        shorts_last_bar = short_here
         if short_here == 0:
             all_long += 1
     if not counted:
@@ -194,7 +211,10 @@ def signal_state(
         "bars": counted,
         "all_long_bars": all_long,
         "all_long_share": all_long / counted,
+        # Cumulative over the window - (bar, symbol) pairs, not positions.  The report labels it so.
         "short_positions": shorts,
+        # What is actually short right now, which is the question "空头持仓数" reads as.
+        "shorts_last_bar": shorts_last_bar,
         "values": dict(sorted(values.items())),
     }
 

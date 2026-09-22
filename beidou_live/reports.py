@@ -2870,7 +2870,12 @@ def beta_markdown(payload: dict[str, Any]) -> str:
                 {
                     "bars": signal.get("bars"),
                     "全多头的 bar": f"{signal.get('all_long_bars')} ({_fmt_pct(all_long)})",
-                    "空头持仓数": signal.get("short_positions"),
+                    # Renamed 2026-09-22: it counts (bar, symbol) pairs over the window, and read as
+                    # a standing position count it produced the question "空头为什么冻在 394" - the
+                    # answer being that a cumulative count stops growing, which is not the same event
+                    # as a position being closed.  Both numbers now, each saying which it is.
+                    "空头信号 bar·标的数（窗口累计）": signal.get("short_positions"),
+                    "当前空头标的数（最后一根 bar）": signal.get("shorts_last_bar"),
                     "信号取值": json_dumps(signal.get("values") or {}),
                     "读法": (
                         "全多头的 bar 上这本书按定义等于 constant_long，那些 bar 里的收益不可能来自信号"
