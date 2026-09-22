@@ -32,7 +32,7 @@ from beidou_live.benchmark import (
     series_from_cycles,
     signal_state,
 )
-from beidou_live.reports import _beta_regression_lines
+from beidou_live.reports import _beta_regression_lines, beta_markdown
 
 ROOT = Path(__file__).resolve().parents[2]
 HOUR = 3_600_000
@@ -353,3 +353,81 @@ def test_the_readout_says_which_bandwidth_produced_the_t() -> None:
     assert f"{NW_LAGS} bar" in _beta_regression_lines(long_block)["NW 带宽"]
     assert "被夹住" not in _beta_regression_lines(long_block)["NW 带宽"]
     assert "被夹住" in _beta_regression_lines(short_block)["NW 带宽"]
+
+
+# --- the sixth: a cumulative count read as a standing one ---------------------------------------------
+
+
+def _row(bar: int, values: dict[str, float]) -> dict:
+    return {"bar_open_ms": bar, "contributions": {"tsmom": values}}
+
+
+def test_the_short_count_is_cumulative_and_the_current_one_is_reported_beside_it() -> None:
+    """2026-09-22: "空头持仓数 394" was read as a standing count, and the answer to "why frozen" is
+    that a cumulative count stops growing - which is not the same event as a position being closed."""
+    bars = _bars(3)
+    rows = [
+        _row(bars[0], {"A": -1.0, "B": -1.0, "C": 1.0}),
+        _row(bars[1], {"A": -1.0, "B": 1.0, "C": 1.0}),
+        _row(bars[2], {"A": 1.0, "B": 1.0, "C": 1.0}),
+    ]
+
+    state = signal_state(rows, "tsmom", bars)
+
+    assert state["short_positions"] == 3, "2 + 1 + 0 pairs over the window"
+    assert state["shorts_last_bar"] == 0, "and nothing is short now"
+
+
+def test_a_frozen_cumulative_count_does_not_mean_a_short_is_still_held() -> None:
+    """The exact shape of the live record: the count stops moving because the signals stopped, and a
+    reader of the cumulative number alone cannot tell that from a position that never closed."""
+    bars = _bars(4)
+    rows = [_row(bars[0], {"A": -1.0})] + [_row(b, {"A": 1.0}) for b in bars[1:]]
+
+    state = signal_state(rows, "tsmom", bars)
+
+    assert state["short_positions"] == 1
+    assert state["shorts_last_bar"] == 0
+    assert state["all_long_bars"] == 3
+
+
+def test_a_short_that_is_still_open_shows_up_in_the_current_count() -> None:
+    """Both directions, or the new field is indistinguishable from one that is always zero."""
+    bars = _bars(2)
+    rows = [_row(bars[0], {"A": 1.0, "B": 1.0}), _row(bars[1], {"A": -1.0, "B": -1.0})]
+
+    state = signal_state(rows, "tsmom", bars)
+
+    assert state["shorts_last_bar"] == 2
+    assert state["all_long_bars"] == 1
+
+
+def test_the_report_says_which_count_is_which() -> None:
+    """The rename is the fix; printing both under one ambiguous label would not be.
+
+    The decomposition is a real `beta_decomposition` product rather than an invented dict, because
+    `beta_markdown` short-circuits to a refusal page when it is not measured - and a test that fed it
+    a hand-written payload would have asserted against a page the command never renders.
+    """
+    n = MIN_BARS * 4
+    bars = _bars(n + 1)
+    rng = random.Random(20260922)
+    levels = [1.0]
+    market = [1.0]
+    for _ in range(n):
+        levels.append(levels[-1] * math.exp(0.0002 + rng.gauss(0.0, 0.005)))
+        market.append(market[-1] * math.exp(rng.gauss(0.0, 0.005)))
+    rows = [_row(bars[0], {"A": -1.0})] + [_row(b, {"A": 1.0}) for b in bars[1:]]
+
+    text = beta_markdown(
+        {
+            "window": {},
+            "benchmark": {},
+            "signal": signal_state(rows, "tsmom", bars),
+            "decomposition": beta_decomposition(levels, market, [1.0] * n, bars=bars),
+        }
+    )
+
+    assert "窗口累计" in text
+    assert "当前空头标的数" in text
+    assert "空头持仓数" not in text, "the ambiguous label is gone, not merely joined"
