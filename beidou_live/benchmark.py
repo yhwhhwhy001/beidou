@@ -51,30 +51,64 @@ HOURS_PER_YEAR = 24 * 365
 NW_LAGS = 48
 MIN_BARS = 48  # two days; below this the regression is describing noise and says so instead
 SIGNIFICANT_T = 2.0  # below this an alpha estimate is not annualised; see `_regression`
+# The bandwidth cannot be a fixed 48 on every window, and the two constants above being the SAME
+# NUMBER is how that stayed hidden: a window that just clears `MIN_BARS` ran a Bartlett kernel whose
+# span was the entire sample.  Newey-West's asymptotics need the bandwidth to grow slower than n, and
+# at lags/n near 1 the long-lag autocovariance terms are estimated off a handful of products each -
+# the estimator stops correcting and starts inventing.
+#
+# Measured 2026-09-22 on the live series (349 usable bars), by taking the last n of it and reading the
+# alpha t at four bandwidths.  The question is not which is "right" - it is where they stop agreeing:
+#
+#     n     48/n   t@48   t@n/4   t@n/8   t@OLS
+#     48    1.00   5.30    2.52    2.19    2.45
+#     80    0.60   3.23    2.17    1.85    2.19
+#    140    0.34   2.76    2.71    2.90    3.14
+#    192    0.25   0.08    0.08    0.09    0.12
+#    349    0.14   0.34    0.39    0.34    0.44
+#
+# At 0.25 and below the four readings agree to within 0.05.  Above it they diverge, and `t@48` is the
+# largest every time - i.e. the unclamped bandwidth is the ALPHA-CLAIMING direction, which is the one
+# that has to be defended against.  The concrete near-miss: a 55-bar window read alpha t = 5.49 at
+# NW(48) and 2.23 at OLS, because the correction SHRANK the standard error threefold instead of
+# widening it.
+#
+# So the ceiling is the measured boundary, not a rule of thumb.  What it costs is stated rather than
+# hidden: under about 4 x 48 = 192 bars the correction can no longer reach the two-day trend `NW_LAGS`
+# was sized for, and `_regression` says so in `nw_covers_intended_horizon` instead of returning a
+# number that looks like the long-window one.
+MAX_LAG_SHARE = 0.25
 
 
 def _design(x: Sequence[float]) -> Any:
     return np.column_stack([np.ones(len(x)), np.asarray(x, dtype=float)])
 
 
-def _nw_se(x: Sequence[float], resid: Any, lags: int) -> tuple[float, float]:
+def _nw_se(x: Sequence[float], resid: Any, lags: int) -> tuple[float, float, int]:
     """Newey-West standard errors for the intercept and slope of ``y ~ 1 + x``, Bartlett weights.
 
-    Returns ``(se_intercept, se_slope)``, or ``(inf, inf)`` when the design is degenerate -- the
-    callers turn that into a refusal rather than into a t of zero.
+    Returns ``(se_intercept, se_slope, lags_used)``, or ``(inf, inf, 0)`` when the design is
+    degenerate -- the callers turn that into a refusal rather than into a t of zero.
+
+    `lags_used` is the third return value rather than something the caller recomputes, because it can
+    differ from `lags`: `MAX_LAG_SHARE` clamps the bandwidth to a quarter of the sample, and a
+    correction that silently ran at a different width than the one named in the constant is the same
+    class of defect as a percentage whose numerator and denominator come from two different series.
+    The Bartlett weights use the bandwidth actually in force, so the kernel stays a proper one.
     """
     design = _design(x)
     n = len(resid)
     if n <= 2 or np.linalg.matrix_rank(design) < 2:
-        return math.inf, math.inf
+        return math.inf, math.inf, 0
+    used = max(0, min(lags, int(n * MAX_LAG_SHARE), n - 1))
     inverse = np.linalg.inv(design.T @ design)
     scores = resid[:, None] * design
     meat = scores.T @ scores
-    for lag in range(1, min(lags, n - 1) + 1):
+    for lag in range(1, used + 1):
         gamma = scores[lag:].T @ scores[:-lag]
-        meat = meat + (1.0 - lag / (lags + 1)) * (gamma + gamma.T)
+        meat = meat + (1.0 - lag / (used + 1)) * (gamma + gamma.T)
     se = np.sqrt(np.diag(inverse @ meat @ inverse))
-    return float(se[0]), float(se[1])
+    return float(se[0]), float(se[1]), used
 
 
 def _compound(logs: Sequence[float]) -> float:
@@ -239,7 +273,13 @@ def _regression(y: Sequence[float], x: Sequence[float], label: str) -> dict[str,
     coefficients, *_ = np.linalg.lstsq(design, observed, rcond=None)
     intercept, slope = float(coefficients[0]), float(coefficients[1])
     resid = observed - design @ coefficients
-    se_a, se_b = _nw_se(x, resid, NW_LAGS)
+    se_a, se_b, nw_lags = _nw_se(x, resid, NW_LAGS)
+    # Whether the correction could reach the autocorrelation it was sized for.  `NW_LAGS` is 48
+    # because the thing being corrected is a two-day trend; a window short enough to be clamped gets
+    # a kernel that cannot see two days, so its standard error is answering a narrower question than
+    # the constant's name claims.  Carried with the number rather than left for the reader to derive
+    # from `bars`, for the same reason `attributed_drawdown_state` carries `ruler`.
+    covers = nw_lags >= NW_LAGS
     ss_tot = float(((observed - observed.mean()) ** 2).sum())
     ss_res = float((resid**2).sum())
     market_part = slope * float(np.sum(x))
@@ -250,11 +290,23 @@ def _regression(y: Sequence[float], x: Sequence[float], label: str) -> dict[str,
         "beta_t": slope / se_b if se_b else None,
         "alpha_bps_per_hour": intercept * 1e4,
         "alpha_t": intercept / se_a if se_a else None,
-        # Annualised only when the estimate carries a signal.  11 days of noise at |t| < 2
-        # compounds to numbers like +1766% (measured 2026-09-19, t=0.73), and a reader who sees
-        # that number has been handed a decision the data did not make.
+        # Which bandwidth actually produced `alpha_t` and `beta_t`, and whether it was the one
+        # `NW_LAGS` names.  See `MAX_LAG_SHARE` for what a clamped window costs.
+        "nw_lags": nw_lags,
+        "nw_lags_requested": NW_LAGS,
+        "nw_covers_intended_horizon": covers,
+        # Annualised only when the estimate carries a signal AND the correction behind that signal
+        # reached the horizon it was sized for.  Two separate refusals, and the second was added
+        # 2026-09-22 after the first one alone let a 55-bar window read t = 5.49: |t| >= 2 is a
+        # question about the estimate, `covers` is a question about the ruler that produced it, and
+        # a ruler that could not see the autocorrelation it exists to correct does not get to clear
+        # a significance bar.  11 days of noise at |t| < 2 compounds to numbers like +1766%
+        # (measured 2026-09-19, t=0.73), and a reader who sees that number has been handed a
+        # decision the data did not make.
         "alpha_annualised": (
-            math.expm1(intercept * HOURS_PER_YEAR) if se_a and abs(intercept / se_a) >= SIGNIFICANT_T else None
+            math.expm1(intercept * HOURS_PER_YEAR)
+            if se_a and covers and abs(intercept / se_a) >= SIGNIFICANT_T
+            else None
         ),
         "r2": 1.0 - ss_res / ss_tot if ss_tot > 0 else None,
         "market_part": math.expm1(market_part),
