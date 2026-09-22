@@ -3340,7 +3340,23 @@ CEILING = {
     # It reads the cycle and attribution rows, fills prices the loop's own `closes` does not reach back
     # far enough for out of the parquet archive (that field is newer than the loop: 141 bars against
     # 259 on 2026-09-19, and the gap closes on its own), and renders.  No arithmetic lives here.
-    "beidou_cli": 7_670,
+    # +43 beidou_cli，2026-09-23（7_670 -> 7_713）：GAP-SF02，`validate` 的报告带上分 regime 的夏普。
+    # 操作者 2026-09-17 对 Q-SF3 答「三条都做」，当天那一节只执行了诊断。09-23 的清点把它列为 G5。
+    #
+    # 43 行是什么。`research_validate_cmd.py` +29：import 4 行，算基准波动率 2 行加 7 行注释，
+    # `stability` 块 12 行（`regime_split_basis` 的五条口径占 9 行），Markdown 一节 4 行。
+    # `research_report.py` +14 是 `_regime_rows`，把表印成平铺的行。平铺的理由同 `_power_rows`：
+    # `render_markdown` 会把嵌套 dict 印成一格，等于没印。
+    #
+    # 为什么值。`regime_split_sharpes` 写好以来零调用者，没有一份报告带过非日历状态的条件夏普。
+    # 2026-09-17 的分析就是这样把「没有报告」读成了「所有状态下都 ≤ 0」（`analysis-calibration.md`）。
+    # basis 五条占了一多半行数，它们是这张表能被读对的前提：标签只读到 t-1 的基准，这是因果；切点
+    # 是本样本自己的三分位，所以它是描述，不是一条能交易的规则；分档与日历部分重叠，真实 pit 面板上
+    # 2021 年 71.7% 的 bar 落在 high、2023 年 67.5% 落在 low，所以要对着 `time_split_sharpes` 读。
+    #
+    # 只报告，不判定。`verdict.decide` 不读 `stability`。一条测试遍历全部归档的 validation 报告，
+    # 两个方向注入敌意值，verdict 与 reasons 一个字都不能动。
+    "beidou_cli": 7_713,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3656,7 +3672,25 @@ CEILING = {
     # 留 44 行（10_546 -> 10_590），理由与上面那格逐字相同，不重述：抬到齐平就是把 headroom 设成
     # 零，下一次改动的作者面前只剩再抬一次或者把注释 golf 掉。这次尤其如此——上面说的那 21 行
     # 注释，正是零 headroom 下最先被拿去换地方的东西，而它们记的恰好是一次「先量后改」的结论。
-    "beidou_alpha": 10_590,
+    # 2026-09-23（不编号）。+53 beidou_alpha，10_546 -> 10_599，抬到 10_640。GAP-SF02，与 beidou_cli
+    # 那格 +43 是同一次改动的两半。
+    #
+    # +40 `validation/stability.py`：`REGIME_VOL_WINDOW_DAYS`、`trailing_benchmark_vol`，以及
+    #     `regime_split_sharpes` 每档多报 bar 数与波动率区间。`trailing_benchmark_vol` 的正文两行，
+    #     其余是因果论证：net 的第 t 根是第 t-1 根收盘时决定的仓位赚的，所以标签只能读到 t-1。
+    #     不移这一位，一根暴跌的 bar 会把自己标成高波动，表就有一部分是按结果分的。
+    # +13 `backtest.py`：`benchmark_returns` 多一个可选的 `membership`。默认 None，
+    #     `research backtest` 与 `decompose` 的读数一位不动。
+    #
+    # `membership` 是量过才加的。真实 pit 面板上（OOS 46,110 根 bar，2021-06..2026-09），全部有价
+    # 符号的等权基准每根 bar 纳入的符号数，从 2021 年中位 69 逐年涨到 2026 年 203；当期成员始终
+    # 15–20 个。两种口径的 30 天波动率相关 0.92，三分位标签一致率 81.8%：约每五根 bar 就有一根，
+    # 换个基准就换一档。成员口径就是实盘 `pit_benchmark`（D-045）的规则。它还让分档不那么像日历
+    # 切分：2026 年落在 low 的比例从 91.0% 降到 60.3%。
+    #
+    # 留 41 行（10_599 -> 10_640），理由与 2026-09-17 那格逐字相同，不重述。2026-09-20 留下的 44 行
+    # 正是被这一次用掉的，那就是它存在的意义。
+    "beidou_alpha": 10_640,
 }
 
 

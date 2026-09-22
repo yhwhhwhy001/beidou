@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -86,13 +87,52 @@ def slippage_stress(net_by_slippage: Mapping[float, pd.Series], bars_per_year: f
     return {f"slip{level:g}": sharpe(series, bars_per_year) for level, series in sorted(net_by_slippage.items())}
 
 
+# Thirty days: the window this repository already reads volatility over outside the signals - the
+# impact model's sigma (`costs.yaml: vol_window_bars: 720`, 30 days of 1h bars) and the live risk
+# budget's realised vol (`live.demo.yaml: vol_window_days: 30`).  Chosen, not tuned, and deliberately
+# not a CLI option: a window picked by looking at which one splits a strategy most flatteringly is a
+# search, and this table is a description.
+REGIME_VOL_WINDOW_DAYS = 30
+
+
+def trailing_benchmark_vol(
+    benchmark: pd.Series, bars_per_year: float, window_days: float = REGIME_VOL_WINDOW_DAYS
+) -> pd.Series:
+    """Annualised rolling volatility of ``benchmark``, shifted one bar: the value at t reads bars <= t-1.
+
+    The shift is the causality.  A net return is indexed by the bar it was EARNED over, from a position
+    decided at the previous bar's close (`run_backtest` executes ``weights.shift(1)``), so an unshifted
+    label on bar t would contain that bar's own benchmark move: a crash bar would label itself high-vol
+    and the split would be partly by outcome.  Shifted, the label is what was on the screen when the
+    position was chosen.  ``min_periods`` is a quarter of the window, the floor `impact_costs` uses.
+    """
+    window = max(2, round(window_days * bars_per_year / 365.0))
+    return benchmark.rolling(window, min_periods=max(2, window // 4)).std().shift(1) * math.sqrt(bars_per_year)
+
+
 def regime_split_sharpes(
     net: pd.Series, benchmark_vol: pd.Series, bars_per_year: float, n_buckets: int = 3
-) -> dict[str, float | None]:
-    """Sharpe by trailing benchmark-volatility tercile (low/mid/high)."""
+) -> dict[str, dict[str, Any]]:
+    """Sharpe by trailing benchmark-volatility tercile (low/mid/high), with each tercile's bars and vol range.
+
+    Equal-count terciles of ``benchmark_vol`` over the bars being split.  The STATE is ex-ante when the
+    vol is (`trailing_benchmark_vol`); the CUT POINTS are not - they are this sample's own terciles - so
+    the table says where the sample earned, not what a gate on it would have earned.  The range is kept
+    so that "high" carries a number: market volatility trends over years, a tercile's level moves with
+    the window a report covers, and two reports' "high" rows are comparable only if that is visible.
+    """
     aligned = pd.concat([net, benchmark_vol], axis=1, join="inner").dropna()
     if len(aligned) < n_buckets * 10:
         return {}
-    buckets = pd.qcut(aligned.iloc[:, 1].rank(method="first"), n_buckets, labels=False)
+    returns, vol = aligned.iloc[:, 0], aligned.iloc[:, 1]
+    buckets = pd.qcut(vol.rank(method="first"), n_buckets, labels=False)
     labels = ["low", "mid", "high"] if n_buckets == 3 else [str(i) for i in range(n_buckets)]
-    return {labels[int(b)]: sharpe(aligned.iloc[:, 0][buckets == b], bars_per_year) for b in sorted(set(buckets))}
+    return {
+        labels[int(b)]: {
+            "sharpe": sharpe(returns[buckets == b], bars_per_year),
+            "bars": int((buckets == b).sum()),
+            "vol_from": float(vol[buckets == b].min()),
+            "vol_to": float(vol[buckets == b].max()),
+        }
+        for b in sorted(set(buckets))
+    }

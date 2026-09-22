@@ -16,7 +16,7 @@ import click
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.backtest import BacktestResult, CostModel, run_backtest
+from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
 from beidou_alpha.registry import StrategyEntry, evidence_construction_digest
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
@@ -38,11 +38,14 @@ from beidou_alpha.validation.multiple_testing import (
 )
 from beidou_alpha.validation.pipeline import layers_applied, score_book
 from beidou_alpha.validation.stability import (
+    REGIME_VOL_WINDOW_DAYS,
     cost_stress,
     parameter_neighborhood,
+    regime_split_sharpes,
     slippage_levels,
     slippage_stress,
     time_split_sharpes,
+    trailing_benchmark_vol,
 )
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import param_key, walk_forward_evaluate, walk_forward_folds
@@ -98,6 +101,7 @@ from beidou_cli.research_report import (
     _grid_table,
     _pbo_note,
     _power_rows,
+    _regime_rows,
     _stamp,
     _write,
 )
@@ -471,6 +475,15 @@ def research_validate(
     # break comparability with every report back to the August 2026 baseline).
     other_execution = "close_to_close" if execution == "open_to_close" else "open_to_close"
     comparison = run_backtest(panel, best_weights, cost, execution=other_execution, guards=book_guards).summary()  # type: ignore[arg-type]
+    # GAP-SF02 (docs/analysis/2026-09-17-strategy-factor-belief-deep-analysis.md).  Until this block every
+    # split a report made of its returns was by calendar - folds, `time_split_sharpes`, the window q10 -
+    # and on 2026-09-17 "no report shows it earning in any state" was read as "it earns in no state"
+    # (analysis-calibration.md).  The benchmark is held to the run's own `membership`, so the state is
+    # the volatility of what the book could hold; it is taken over the whole panel rather than
+    # `common_index`, so the first OOS bar's label has its full trailing window behind it.  Reported
+    # only: `decide` never reads it.
+    bench = benchmark_returns(panel, execution, panel.symbols, membership)  # type: ignore[arg-type]
+    regime_vol = trailing_benchmark_vol(bench, bpy, REGIME_VOL_WINDOW_DAYS)
     report: dict[str, Any] = {
         "kind": "validation",
         "strategy": strategy,
@@ -566,6 +579,18 @@ def research_validate(
         "multiple_testing": mt,
         "stability": {
             "time_split_sharpes": time_split_sharpes(wf.oos_returns, 4, bpy),
+            "regime_split_sharpes": regime_split_sharpes(wf.oos_returns, regime_vol, bpy),
+            # What the three rows were computed from, in the artefact: "it happened to be 30 days" and
+            # "the report says 30 days" are different facts (the `embargo` key's lesson, 2026-09-13).
+            "regime_split_basis": {
+                "series": "walk_forward oos_returns, the series time_split_sharpes splits",
+                "state": "annualised std, over vol_window_days, of benchmark_returns: equal-weight, zero cost, "
+                "over the symbols the book could hold at each bar (pit members; every panel symbol if static)",
+                "vol_window_days": REGIME_VOL_WINDOW_DAYS,
+                "label_on_bar_t_reads": "benchmark bars through t-1: what was known when bar t's position was decided",
+                "cut_points": "this sample's own terciles: the state is ex-ante, the cut points are not.  Volatility "
+                "trends over years, so a tercile is partly a calendar period: read it against time_split_sharpes",
+            },
             "parameter_neighborhood": neighbourhood,
         },
         "cost_stress": stress,
@@ -685,6 +710,10 @@ def research_validate(
                         for key, value in (neighbourhood.get("neighbours") or {}).items()
                     },
                 },
+            ),
+            (
+                "Sharpe by benchmark-volatility regime (reported, never enforced)",
+                _regime_rows(report["stability"]["regime_split_sharpes"], report["stability"]["regime_split_basis"]),
             ),
             ("Grid (full-sample Sharpe per configuration)", _grid_table(params_by_key, full_sharpes_raw)),
             ("Cost stress (Sharpe)", stress),
