@@ -2801,16 +2801,41 @@ def _fmt_pct(value: Any) -> str:
 
 
 def _beta_regression_lines(block: Mapping[str, Any]) -> dict[str, Any]:
-    """One regression's readout.  The t printed is Newey-West, never OLS (see `benchmark` for why)."""
+    """One regression's readout.  The t printed is Newey-West, never OLS (see `benchmark` for why).
+
+    The BANDWIDTH is on the page beside the t, which it was not until 2026-09-22.  `NW_LAGS` is 48
+    and `MIN_BARS` is also 48, so a window that just cleared the minimum ran a Bartlett kernel as
+    wide as its own sample and reported the result as if it were the same ruler the long window uses.
+    A 55-bar window read alpha t = 5.49 that way against 2.23 on plain OLS.  Printing the constant's
+    name while a different width was in force is the failure this repository keeps finding, one
+    layer down from `giveback_since_hwm_in_usdt_pct`.
+    """
+    lags, wanted = block.get("nw_lags"), block.get("nw_lags_requested")
+    covers = block.get("nw_covers_intended_horizon")
+    clamped = covers is False
     return {
         "beta": _fmt_num(block.get("beta")),
         "beta_t (NW)": _fmt_num(block.get("beta_t")),
         "alpha": f"{_fmt_num(block.get('alpha_bps_per_hour'))} bps/h",
         "alpha_t (NW)": _fmt_num(block.get("alpha_t")),
+        "NW 带宽": (
+            f"{lags} bar"
+            + (
+                f"（被夹住：请求 {wanted}，样本不足其 4 倍，修正够不到它要修的两天自相关）"
+                if clamped
+                else "（= NW_LAGS，够得到两天自相关）"
+            )
+            if lags is not None
+            else "n/a"
+        ),
         "alpha annualised": (
             _fmt_pct(block.get("alpha_annualised"))
             if block.get("alpha_annualised") is not None
-            else "不年化（|t| < 2，年化会把噪声放大三个数量级）"
+            else (
+                "不年化（NW 带宽被夹住，标准误答的是更窄的问题）"
+                if clamped
+                else "不年化（|t| < 2，年化会把噪声放大三个数量级）"
+            )
         ),
         "R^2": _fmt_num(block.get("r2")),
         "市场部分": _fmt_pct(block.get("market_part")),

@@ -3,6 +3,12 @@
 Every case here is a mistake this repository actually made on 2026-09-19 while answering "is the live
 book's return the market's or the signal's", not a hypothetical.  The numbers in the assertions are
 the shapes of those mistakes, so a regression reads as the wrong answer coming back.
+
+2026-09-22 added a fifth, found while re-checking the same question three days later: `NW_LAGS` and
+`MIN_BARS` were both 48, so a window that just cleared the minimum ran a Bartlett kernel as wide as
+its own sample.  A 55-bar window read alpha t = **5.49** that way, against 2.23 on plain OLS - the
+correction shrank the standard error threefold instead of widening it, and 5.49 would have read as
+"the signal finally shows".  See `MAX_LAG_SHARE` for where the boundary was measured.
 """
 
 from __future__ import annotations
@@ -12,16 +18,21 @@ import math
 import random
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from beidou_live.benchmark import (
+    MAX_LAG_SHARE,
     MIN_BARS,
+    NW_LAGS,
+    _nw_se,
     beta_decomposition,
     foreign_bars,
     pit_benchmark,
     series_from_cycles,
     signal_state,
 )
+from beidou_live.reports import _beta_regression_lines
 
 ROOT = Path(__file__).resolve().parents[2]
 HOUR = 3_600_000
@@ -180,7 +191,11 @@ def test_the_annualisation_switch_follows_the_t_in_both_directions() -> None:
     Both directions on purpose: a switch only ever tested on the side it blocks is indistinguishable
     from a field that is always ``None``.
     """
-    n = MIN_BARS * 3
+    # MIN_BARS * 4, not * 3: at 3 the Newey-West bandwidth is clamped by `MAX_LAG_SHARE` and
+    # annualisation is refused for that reason instead of this one, which would leave the "loud"
+    # half of this test passing for the wrong reason.  The switch this test is about is the t; the
+    # bandwidth switch has its own tests below.
+    n = MIN_BARS * 4
     bars = _bars(n + 1)
 
     def build(mean: float) -> dict:
@@ -256,3 +271,85 @@ def test_the_field_names_match_what_the_running_loop_actually_writes() -> None:
     state = signal_state(rows, "tsmom", series["bars"])
     assert state["measured"] and state["bars"] > 0
     assert set(state["values"]) <= {"+1.0", "-1.0"}, "tsmom's contributions are still sign-only"
+
+
+# --- the fifth trap: a bandwidth as wide as the sample -------------------------------------------------
+
+
+def _resid(n: int, *, seed: int = 20260922) -> tuple[list[float], object]:
+    rng = random.Random(seed)
+    x = [rng.gauss(0.0, 0.005) for _ in range(n)]
+    resid = np.asarray([rng.gauss(0.0, 0.004) for _ in range(n)], dtype=float)
+    return x, resid
+
+
+def test_the_bandwidth_is_capped_at_a_quarter_of_the_sample() -> None:
+    """Measured boundary, not a rule of thumb: at 48/n <= 0.25 four bandwidths agree to within 0.05."""
+    x, resid = _resid(100)
+
+    _se_a, _se_b, used = _nw_se(x, resid, NW_LAGS)
+
+    assert used == int(100 * MAX_LAG_SHARE) == 25
+    assert used < NW_LAGS, "a 100-bar window cannot carry a 48-bar kernel"
+
+
+def test_a_long_enough_window_still_gets_the_bandwidth_the_constant_names() -> None:
+    """The shipped reading must not move: the live window is 349 bars and 48/349 = 0.14."""
+    x, resid = _resid(349)
+
+    _se_a, _se_b, used = _nw_se(x, resid, NW_LAGS)
+
+    assert used == NW_LAGS
+
+
+def test_clamping_is_the_same_as_having_asked_for_the_smaller_bandwidth() -> None:
+    """The Bartlett weights must use the width in force, or the kernel stops being a proper one.
+
+    The bug this forbids is subtle and silent: taper by `1 - lag / (requested + 1)` while summing
+    only to `used` truncates the kernel mid-taper, which is no longer a positive-semidefinite weight
+    function - the variance it produces can come out smaller than the uncorrected one, which is
+    exactly the direction that invents significance.
+    """
+    x, resid = _resid(100)
+
+    clamped = _nw_se(x, resid, NW_LAGS)
+    asked = _nw_se(x, resid, 25)
+
+    assert clamped == asked
+
+
+def test_a_clamped_window_refuses_to_annualise_even_when_the_t_clears_the_bar() -> None:
+    """Two separate refusals.  |t| >= 2 is about the estimate; `covers` is about the ruler."""
+    n = MIN_BARS + 7  # the 55-bar shape that read 5.49
+    bars = _bars(n + 1)
+    rng = random.Random(20260922)
+    strategy_level = [1.0]
+    benchmark_level = [1.0]
+    for _ in range(n):
+        strategy_level.append(strategy_level[-1] * math.exp(0.004 + rng.gauss(0.0, 0.005)))
+        benchmark_level.append(benchmark_level[-1] * math.exp(rng.gauss(0.0, 0.005)))
+
+    block = beta_decomposition(strategy_level, benchmark_level, [1.0] * n, bars=bars)["constant"]
+
+    assert abs(block["alpha_t"]) > 2.0, "the t still clears its own bar"
+    assert block["nw_covers_intended_horizon"] is False
+    assert block["nw_lags"] < block["nw_lags_requested"] == NW_LAGS
+    assert block["alpha_annualised"] is None, "a ruler that cannot see two days does not clear a two-day bar"
+
+
+def test_the_readout_says_which_bandwidth_produced_the_t() -> None:
+    """Printing `NW_LAGS`'s name while another width was in force is the defect one layer down."""
+    n = MIN_BARS * 4
+    bars = _bars(n + 1)
+    rng = random.Random(20260922)
+    levels = [1.0]
+    market = [1.0]
+    for _ in range(n):
+        levels.append(levels[-1] * math.exp(0.0002 + rng.gauss(0.0, 0.005)))
+        market.append(market[-1] * math.exp(rng.gauss(0.0, 0.005)))
+    long_block = beta_decomposition(levels, market, [1.0] * n, bars=bars)["constant"]
+    short_block = beta_decomposition(levels[:60], market[:60], [1.0] * 59, bars=bars[:60])["constant"]
+
+    assert f"{NW_LAGS} bar" in _beta_regression_lines(long_block)["NW 带宽"]
+    assert "被夹住" not in _beta_regression_lines(long_block)["NW 带宽"]
+    assert "被夹住" in _beta_regression_lines(short_block)["NW 带宽"]
