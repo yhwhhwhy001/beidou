@@ -14454,3 +14454,128 @@ N=183），此后四天没有任何后果。`beidou_cli/governance_cmd.py` 与 `
 - **不变的。** K-EX14 的钟在 `beidou_governance/admission.py` 里按实盘记录现算，机器经
   `governance apply` 的写入仍要等到 10-17 前后。`governance/reopen.yaml` 里「K-EX14 另外管到
   2026-10-17T16:07Z」那句因此不改。
+
+## 2026-09-23 · GAP-SF02 补上：validate 报告第一次带分 regime 的夏普
+
+本节补记一件 09-17 裁定过、却没执行的事。原节（「操作者裁定 Q-SF1/2/3 三条都做」）保持原样。
+
+**代码在 `1c83f184`。本节零 ledger。** 没跑 validate，没新增配置，没改 registry 与构造。下面的真实
+面板读数只读基准本身，不评估任何策略配置，所以不是 trial。主 checkout 与本 worktree 的
+`git status reports/` 全程为空。
+
+### 起因
+
+09-17 的策略因子分析（`docs/analysis/2026-09-17-strategy-factor-belief-deep-analysis.md`）交出三条
+裁定请求。其中 Q-SF3 含两件事：GAP-SF01 是 pit 上的信号级诊断，GAP-SF02 是把
+`regime_split_sharpes` 接进 validate 报告。操作者答「三条都做」。当天那一节做了 GAP-SF01、Q-SF2
+和 Q-SF1，GAP-SF02 没做。
+
+缺这张表的代价记在 `analysis-calibration.md` 09-17 那一行。`regime_split_sharpes` 写好了却零调用者，
+所以没有一份报告带过非日历状态的条件夏普。作者于是把「没有报告」读成了「所有状态下都 ≤ 0」。
+09-23 的清点（`docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`）把它列为 G5：
+冻结期内能做，不动构造。
+
+### 改了什么
+
+validate 报告的 `stability` 下多两个键，照 `time_split_sharpes` 的先例：
+
+- `regime_split_sharpes`：样本外序列按基准波动率分三档（low / mid / high）。每档报 Sharpe、bar 数
+  和年化波动率区间。
+- `regime_split_basis`：五条口径，说明这张表从哪来。
+
+Markdown 另起一节「Sharpe by benchmark-volatility regime (reported, never enforced)」，平铺成行。
+
+| 项 | 取法 | 理由 |
+| --- | --- | --- |
+| 拆哪条序列 | walk-forward 样本外，`time_split_sharpes` 拆的同一条 | 同源，两张表能对着读 |
+| 基准 | 书在每根 bar 能持有的符号，等权、零成本。pit 下只算当期成员，static 下算全部面板符号 | 量过才定，见下一小节 |
+| 波动率 | 30 天滚动标准差，年化 | 仓库在信号之外已用过两次：impact 的 sigma、实盘风险预算的 realised vol |
+| 因果 | `shift(1)`：bar t 的标签只读到 t-1 的基准 | 见下 |
+| 切点 | 本样本自己的三分位，三档 bar 数相等 | 状态是 ex-ante 的，切点不是 |
+
+30 天刻意不做成 CLI 选项。挑一个让某个策略最好看的窗口，就是一次搜索。
+
+**因果为什么读到 t-1 为止。** net 的第 t 根，是第 t-1 根收盘时决定的仓位在第 t 根赚到的
+（`run_backtest` 执行 `weights.shift(1)`）。标签若含第 t 根的基准，一根暴跌的 bar 会把自己标成
+高波动，表就有一部分是按结果分的。移一位之后，标签就是下单那一刻能看到的东西。这个前提本身也有
+测试钉着：执行滞后哪天改了，那条测试先红。
+
+### 基准取谁：量过才定
+
+初稿照 `research backtest` 的 `benchmark` 块，取全部面板符号。在真实 pit 面板上量过之后，改成只取
+当期成员。
+
+测量是只读的：`--universe pit`、`--to 2026-09-22`，面板 212 个符号 × 50,160 根 1h bar。区间取面板
+第 4,050 根起的 46,110 根（2021-06-18 → 2026-09-21）。它与默认 validate 的样本外基本重合（后者从
+warmup 之后第 4,000 根起），所以下文的切点只作量级参考。每份报告会按自己的样本重新切。
+
+| 年 | 全部有价符号（中位） | 当期成员 |
+| --- | ---: | ---: |
+| 2021 | 69 | 16–20 |
+| 2022 | 81 | 16–20 |
+| 2023 | 103 | 15–20 |
+| 2024 | 137 | 15–20 |
+| 2025 | 180 | 15–20 |
+| 2026 | 203 | 15–20 |
+
+全部有价符号的等权篮子年年在长。它的波动率里混着上市节奏，而那些符号书从来不持有。
+
+两种口径的 30 天波动率相关 0.923。三分位标签一致率 81.8%：约每五根 bar 就有一根，换个基准就换
+一档。成员口径就是实盘 `pit_benchmark`（D-045）的规则。为此 `benchmark_returns` 多了一个可选参数
+`membership`。它默认 `None`，所以 `research backtest` 与 `decompose` 的读数一位不动。
+
+同一段样本上，成员口径的切点在年化 0.711 / 0.882，全区间 0.403–2.231。
+
+### 读这张表之前要知道的三件事
+
+**一、它和日历部分重叠。** 波动率有年代趋势，全样本三分位会把某些年整块划进一档（成员口径）：
+
+| 年 | low | mid | high |
+| --- | ---: | ---: | ---: |
+| 2021 | 8.5% | 19.9% | 71.7% |
+| 2022 | 22.9% | 30.4% | 46.6% |
+| 2023 | 67.5% | 27.9% | 4.7% |
+| 2024 | 18.8% | 39.7% | 41.5% |
+| 2025 | 18.1% | 39.4% | 42.5% |
+| 2026 | 60.3% | 37.7% | 2.1% |
+
+high 档一大块是 2021，low 档一大块是 2023 和 2026。所以 high 档为负时，单凭这张表分不出是「高波动
+时亏」还是「2021 年亏」，要对着 `time_split_sharpes` 读。成员口径已经好一些：全部符号口径下，
+2026 年有 91.0% 落在 low，2021 年有 79.2% 落在 high。
+
+**二、切点是这份样本自己的。** 状态（滞后一根的 30 天波动率）下单时看得到，切点看不到。所以这张表
+说的是「样本在哪种状态下赚的」，不是「一道按状态开关的门会赚多少」。要把它变成门，切点得换成扩张
+窗口的分位数，那是一次新的预登记。
+
+**三、每档的噪声很大。** 上面这段样本每档约 15,370 根 bar，合 1.75 年。按 i.i.d. 近似（Sharpe
+接近 0 时），每档 Sharpe 的标准误约 0.75，两档之差约 1.07。两档差不到 2，这张表就说不出它们
+不同。自相关只会让真实的标准误更大。
+
+### 只报告，不判定
+
+`verdict.decide` 不读 `stability`。`tests/alpha/test_the_regime_label_reads_only_what_was_known.py`
+遍历 `reports/research/` 下全部归档的 validation 报告，给每份塞一张 −99 或 +99 的表。verdict 与
+reasons 一个字都不能动。形状照 R0 那条（`test_the_other_caliber_is_reported_not_applied.py`）。
+
+### 怎么验的
+
+- 测试吃真实数据。alpha 侧用 2026-08 的四个币安 1h K 线，钉因果、执行滞后的前提、分档算术和
+  membership 基准。CLI 侧经 `KlineStore` 端到端跑 validate，pit 与 static 各一次。它从面板独立
+  重算标签区间来对账，并断言三档 bar 数之和等于 `oos_bars`。索引对不上时 inner join 不报错，只会
+  静默少几根 bar。
+- 变异六个，关字节码缓存：去掉 `shift(1)`、基准忽略 membership、CLI 不传 membership、改拆全样本
+  序列、`decide` 偷读这张表、标签次序颠倒。每个至少一条红，还原后全绿。
+- 在真实面板的基准序列上复核因果（全部符号口径；这条性质与口径无关）。从第 27,105 根起把基准
+  改成 ×50 + 0.1：第 27,105 根及之前的标签逐位不变，第 27,106 根变了。
+- 两个构造测试（`test_the_construction_is_frozen_until_the_holdout_matures.py`、
+  `test_construction_identity.py`）15 条全过。
+
+### 还没做的
+
+- 还没有一份真实报告带这张表。第一份会是下一次按预登记跑的 validate。本节一次都没跑。
+- `research backtest` 的 `benchmark` 块与 `decompose` 仍取全部面板符号，pit 下同样带着上市漂移。
+  没改，因为改了之后它们的读数与已归档的报告不可比。要不要对齐是另一个决定。
+- `research book` 没有这张表。
+- 已归档的报告不补，它们被 sha256 钉着。
+
+术语表「写中文」一栏补了「基准」「三分位」。此前本文件里「基准」出现 28 次，benchmark 3 次。

@@ -173,6 +173,20 @@ def _power_rows(power: Mapping[str, Any] | None) -> dict[str, str]:
     return rows
 
 
+def _regime_rows(split: Mapping[str, Any], basis: Mapping[str, Any]) -> dict[str, str]:
+    """`stability.regime_split_sharpes` as flat rows, each tercile's vol range in its key.
+
+    Flat for `_power_rows`' reason: `render_markdown` prints a nested dict as one cell, which is a table
+    nobody reads.  The basis follows the numbers because "high" means nothing until it says high WHAT,
+    measured WHEN - and the answer to WHEN (bars through t-1) is the causality claim itself.
+    """
+    rows = {
+        f"{label} (annualised vol {row['vol_from']:.2f}-{row['vol_to']:.2f})": f"sharpe={_fmt(row['sharpe'])}  bars={row['bars']}"
+        for label, row in split.items()
+    } or {"regime split": "n/a (fewer than 30 OOS bars carry a trailing-vol label)"}
+    return {**rows, **{f"basis: {key}": str(value) for key, value in basis.items()}}
+
+
 def _pbo_note(grid_trials: object) -> str:
     """PBO below four configurations is a coin flip; `decide` knows that and readers of the report did not."""
     try:

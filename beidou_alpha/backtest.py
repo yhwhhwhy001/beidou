@@ -391,8 +391,21 @@ def _replay_book_guards(
 
 
 def benchmark_returns(
-    panel: Panel, execution: Execution = "open_to_close", symbols: list[str] | None = None
+    panel: Panel,
+    execution: Execution = "open_to_close",
+    symbols: list[str] | None = None,
+    membership: pd.DataFrame | None = None,
 ) -> pd.Series:
-    """Equal-weight, always-long, zero-cost comparator (an opportunity-cost benchmark, not investable)."""
+    """Equal-weight, always-long, zero-cost comparator (an opportunity-cost benchmark, not investable).
+
+    ``membership`` (bars x symbols, `--universe pit`) keeps each bar to the symbols the book could hold
+    at it - the rule the live `pit_benchmark` follows (D-045).  Without it every priced symbol counts:
+    on the pit panel a median of 69 a bar in 2021, rising every year to 203 in 2026, against 15-20
+    members throughout (measured 2026-09-23) - so its volatility carries a listing drift the book
+    never held.
+    """
     chosen = symbols or panel.symbols
-    return asset_returns(panel, execution)[chosen].mean(axis=1)
+    returns = asset_returns(panel, execution)[chosen]
+    if membership is not None:
+        returns = returns.where(membership.reindex(index=returns.index, columns=returns.columns, fill_value=False))
+    return returns.mean(axis=1)
