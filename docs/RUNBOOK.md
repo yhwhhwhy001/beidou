@@ -121,7 +121,7 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 ## 排障
 
 - 心跳超时：`beidou live status --check`；看 `~/Library/Application Support/beidou/live.err.log`。
-- 连续错误 ≥ 12 次进程退出，launchd 60s 后拉起；根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
+- 连续 12 个周期失败触发熔断（`beidou_live/engine.py` 的 `breaker_stop`）。告警送达就以 0 退出，launchd **不会**再拉起（`KeepAlive.SuccessfulExit=false`）；恢复是一次重启，按上文「改了 registry / profile 之后」的窗口与纪律做。没有任何通道收下告警时才非零退出，launchd 60s 后拉起。失败之间循环自己按指数退避，上限 1 小时。根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
 - `cycles.jsonl` 每周期一行：`targets`、`orders`（含 `note`：`PARTICIPATION_CAPPED` / `MARGIN_SCALED`）、`exit_events`、`throttle`、`universe_update`、`skipped`。
 - `state.json` 的 `exit_states`（入场价/极值/冷却）、`equity_hwm`、`universe`、`leaving` 在重启后恢复；入场价以交易所为准。
 - `heartbeat.json` 的 `history_bars`（当前 1,442）与 `external_flows`；`cycles.jsonl` 的 `external_flows`（`rebaselined: true` = 该周期发生了非交易性现金流，日起点 / 高水位已重置，日报 drift 跳过该 bar）。

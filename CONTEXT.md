@@ -59,6 +59,7 @@ _Avoid_: 分仓、袖子、子组合、sub-portfolio、book
 
 **Probe sleeve**：
 组合层 ACCEPT 但信号级未 PASS，由操作者显式放行上线的小 sleeve。按 30 天归因 P&L 自动停掉。
+组合层 REJECT 也能上，但 registry 要写明 `accepted_despite` 与理由（D-029）。
 _Avoid_: 实验 sleeve、paper sleeve
 
 **Fraction**：
