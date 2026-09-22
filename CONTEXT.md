@@ -91,7 +91,7 @@ _Avoid_: 目标仓位（那是乘过权益之后的东西）
 **每条路径只算一层**：回测里它是仓位递推，实盘里参照的是交易所真实仓位。
 
 **Overlay**（覆盖层）：
-作用在已构建好的 sleeve 之上的一层调整。实盘在动权重的有两个：exit overlay 与风险预算阶梯（R8，`beidou_alpha/overlays/ladder.py`）。
+作用在已构建好的 sleeve 之上的一层调整。实盘上能动权重的有两个：exit overlay 与风险预算阶梯（R8，`beidou_alpha/overlays/ladder.py`）。
 回撤节流也是 overlay，但在 `config/live.demo.yaml` 里关着（`drawdown_throttle.enabled: false`）。
 
 **Exit overlay**：

@@ -82,7 +82,7 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 
 ### 采纳 exit overlay / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
 
-M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何 exit overlay 或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：风险预算阶梯（P13）触发，那是预登记的降档，不是采纳。档位以 `beidou_governance/policy.py` 的 `drawdown_ladder` 为准；2026-09-14 随预算重标后是回撤 −49% / −70%（D-035），此前的 −35% / −50% 已作废。
+M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何 exit overlay 或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：风险预算阶梯（P13）触发，那是预登记的降档，不是采纳。档位以 `beidou_governance/policy.py` 的 `drawdown_ladder` 为准。2026-09-14 随预算重标，现为回撤 −49% / −70%（D-035）；此前的 −35% / −50% 已作废。
 
 窗口起点**不写在这里**：它随每一次构造变更移动，写死在正文里的日期只会过期（这一段最初写的 2026-09-06T10:19Z / 最早采纳日 2026-10-06 就是如此，`unit_mode` 进指纹后一次重启即作废）。要当前答案，读这两处之一——`beidou report daily` 的 evidence-window 一节（`since_ms` 是起点、`bars` 是已积累的周期数），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar。最早采纳日 = 该起点 + 30 天。
 
@@ -99,7 +99,7 @@ M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录
 ## Registry 里的书（`config/alpha_registry.yaml`）
 
 - `books.<name>.fraction` —— 独立小书的风险预算比例；策略用 `book: <name>` 归属，未写的属于主书。
-- **资金费率**：round 6b（D-023）之后行情端口提供 `funding_history`，实盘面板与研究面板由同一份结算费率构成，消费资金费率的设置（tsmom 的 `crowding_window > 0`、`carry` 信号）**不再会被静默跳过**——信号自己声明需求，拿不到历史时 `AlphaModel.targets` 报错、`beidou live run` 拒绝启动（第六轮 KILL-027 的结构性关闭）。tsmom 现在跑 `crowding_window: 72`，修饰器已重新打开。打开它是**证据问题**而不是管线问题：按 D-013/D-020 在时点 universe 上重验，再更新 evidence 指针。经过见 registry 该行的注释与其下的 D-034 段。
+- **资金费率**：round 6b（D-023）之后行情端口提供 `funding_history`，实盘面板与研究面板由同一份结算费率构成，消费资金费率的设置（tsmom 的 `crowding_window > 0`、`carry` 信号）**不再会被静默跳过**——信号自己声明需求，拿不到历史时 `AlphaModel.targets` 报错、`beidou live run` 拒绝启动（第六轮 KILL-027 的结构性关闭）。tsmom 现在跑 `crowding_window: 72`，修饰器已重新打开。打开它是**证据问题**而不是管线问题：按 D-013/D-020 在时点 universe 上重验，再更新 evidence 指针。经过见 `config/alpha_registry.yaml` tsmom 条目 `params` 之上的「2026-09-05 RE-ENABLED」一段。
 - 探针书（D-019）：`evidence.verdict: ACCEPT`（来自 `beidou research book`）+ `probe` 块（`accepted_by`、`accepted_on`、`stop: {window_days, max_loss}`、`review_after_days`）。书级判定是 REJECT 也能跑，但 `probe` 块还要写明 `accepted_despite: REJECT` 与 `reason`（D-029）。启动时核对报告种类、对象与 fraction；缺任何一项 `beidou live run` 拒绝启动。当前：`flow_short`（flow 只做空，1/3 预算）。它引用的书级报告判 REJECT，靠 `accepted_despite` 运行。止损是 30 天归因 P&L ≤ −2% 权益（`max_loss: 0.02`）。复审期 30 天，自 `accepted_on` 起算，到期时日报标 REVIEW_DUE。
 
 ## 主机时钟漂移（2026-09-04 实测到 −3,612 秒）
