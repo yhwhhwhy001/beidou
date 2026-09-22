@@ -3340,8 +3340,13 @@ CEILING = {
     # It reads the cycle and attribution rows, fills prices the loop's own `closes` does not reach back
     # far enough for out of the parquet archive (that field is newer than the loop: 141 bars against
     # 259 on 2026-09-19, and the gap closes on its own), and renders.  No arithmetic lives here.
-    # +43 beidou_cli，2026-09-23（7_670 -> 7_713）：GAP-SF02，`validate` 的报告带上分 regime 的夏普。
-    # 操作者 2026-09-17 对 Q-SF3 答「三条都做」，当天那一节只执行了诊断。09-23 的清点把它列为 G5。
+    # +15 beidou_cli (7_670 -> 7_685), 2026-09-23, same ruling: `governance advance` reads the verdict
+    # ledger and folds each `refuse` row in time order among the tenure's own events.  Folded after a
+    # later window instead, it sits behind the watermark and is skipped as already folded - the mutation
+    # that does exactly that turns `test_the_refusal_folds_between_the_windows_it_fell_between` red.
+    # +43 beidou_cli，2026-09-23（7_685 -> 7_728）：GAP-SF02，`validate` 的报告带上分 regime 的夏普。
+    # 操作者 2026-09-17 对 Q-SF3 答「三条都做」，Q-SF3 的两半里当天那一节只做了诊断。09-23 的清点
+    # 把这一半列为 G5。
     #
     # 43 行是什么。`research_validate_cmd.py` +29：import 4 行，算基准波动率 2 行加 7 行注释，
     # `stability` 块 12 行（`regime_split_basis` 的五条口径占 9 行），Markdown 一节 4 行。
@@ -3356,7 +3361,7 @@ CEILING = {
     #
     # 只报告，不判定。`verdict.decide` 不读 `stability`。一条测试遍历全部归档的 validation 报告，
     # 两个方向注入敌意值，verdict 与 reasons 一个字都不能动。
-    "beidou_cli": 7_713,
+    "beidou_cli": 7_728,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3419,7 +3424,12 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_940,
+    # +31 beidou_governance (3_940 -> 3_971), 2026-09-23, operator ruling "family gate 失败降回 probe":
+    # `lifecycle` sends a main that fails the recomputed gate back to probe instead of retiring it and
+    # leaves a probe a probe (retiring the probe would turn the demotion into a delay), and
+    # `family_gate.refusals` is the event's first producer - the 09-19 refusal of tsmom sat in the verdict
+    # ledger four days with no consequence.  About half is the docstrings recording the ruling.
+    "beidou_governance": 3_971,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

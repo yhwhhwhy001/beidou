@@ -5,6 +5,12 @@
 The third had no branch in `lifecycle.evaluate` at all, and `Event.FAMILY_GATE_FAILED` had a definition,
 a handler, and no producer anywhere in the tree.  Found by the 2026-09-09 audit.
 
+**2026-09-23: what failing does, and who says so.**  The operator ruled that a failed recomputation sends
+a main back to probe instead of retiring it, and leaves a probe a probe (`lifecycle.evaluate`).  The
+event was still produced by nothing - the 09-19 refusal of tsmom sat in the verdict ledger with no
+consequence - so `refusals` now derives it from the `refuse` rows `governance gate` writes, and
+`governance advance` folds them.
+
 **What "recompute" means, and why it is not a re-run.**  The D-028 gate is `max_sharpe_quantile(N,
 variance, alpha)` - the 95th percentile of the best of N draws from a null with the candidate's own
 sampling variance.  Everything in it except N is a property of the evidence and does not change after
@@ -13,7 +19,7 @@ anybody searches in that family.  So the gate a strategy passed at adoption is n
 today, and the recomputation holds the evidence fixed and moves only the denominator.
 
 That is the whole mechanism, and it is worth stating plainly because it cuts both ways: **searching more
-retires your own incumbents.**  tsmom was adopted against a threshold of 1.4884 at N=148 and faces
+demotes your own incumbents.**  tsmom was adopted against a threshold of 1.4884 at N=148 and faces
 1.5136 at N=183 five days later, on the same 1.8087.  The gate rises as sqrt(2 ln N), so it saturates -
 that is why the incumbent survives - but a strategy adopted with a thin margin does not get to keep it
 by standing still.
@@ -34,16 +40,21 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from beidou_alpha.panel import bars_per_year
 from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import ledger_scope, parse_ledger, unique_trials
 from beidou_alpha.validation.multiple_testing import SELECTION_GATE, max_sharpe_quantile
+from beidou_governance.lifecycle import Event
+from beidou_governance.tenure import Derived
+from beidou_governance.verdicts import REFUSE, Verdict
 
 PASS = "PASS"
 FAIL = "FAIL"
 UNREADABLE = "UNREADABLE"
+VERDICT_KIND = "family_gate"  # the `kind` `governance gate` records its rulings under, and `refusals` reads
 
 
 @dataclass(frozen=True)
@@ -240,3 +251,17 @@ def recheck(
 def failures(readings: Sequence[GateReading]) -> tuple[GateReading, ...]:
     """FAIL only.  UNREADABLE is not a failure of the gate, it is a failure to ask it."""
     return tuple(reading for reading in readings if reading.status == FAIL)
+
+
+def refusals(verdicts: Iterable[Verdict], strategy: str) -> tuple[Derived, ...]:
+    """One strategy's `refuse` rulings in the verdict ledger, oldest first, as events `advance` folds.
+
+    Read from the ledger rather than from a fresh `recheck` for the reason `tenure` reads `cycles.jsonl`:
+    a ruling has an instant and an id, so the watermark folds it once and every demotion names its row.
+    ALLOW rows produce nothing - passing again does not promote; the nine windows do.
+    """
+    rows = [v for v in verdicts if v.kind == VERDICT_KIND and v.subject == strategy and v.ruling == REFUSE]
+    return tuple(
+        Derived(at=v.at, event=Event.FAMILY_GATE_FAILED, why=f"R0: verdict {v.id} refused: {'; '.join(v.reasons)}")
+        for v in sorted(rows, key=lambda v: datetime.fromisoformat(v.at))
+    )
