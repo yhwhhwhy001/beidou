@@ -14408,3 +14408,49 @@ CAGR 的绝对水平是 bootstrap 产物。
 `vol_target` 重跑整个模型，权重、guard 的绑定与成本全部重算。拿 `k / K` 去缩放已有的收益序列是另一
 回事而且是错的：`max_weight`、`max_gross` 与成本模型都不随目标波动率等比缩放，那个便宜版本会报出
 一本没有任何 `vol_target` 能产生的书。
+
+## 2026-09-23 · 操作者两条裁定：family gate 失败降回 probe；冻结到期按 10-13
+
+两条都出自同日的清点（`docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md` 的 G2，以及
+「说法与行为不符」表）。
+
+### 一、family gate 失败：main 降回 probe
+
+**裁定前。** `lifecycle.py` 把 `FAMILY_GATE_FAILED` 判成 `-> retired`，但全仓库没有代码产生这个事件。
+09-19 的重算对 tsmom 判 `refuse`（`governance/verdicts.jsonl` 第 19 行：OOS 1.2306 对门 1.5238，
+N=183），此后四天没有任何后果。`beidou_cli/governance_cmd.py` 与 `deploy/run_governance_gate.sh` 的
+说明写的是「失败经 `governance advance` 退休」，与代码不符。
+
+**改了什么。**
+
+- `lifecycle.evaluate`：main 收到 `FAMILY_GATE_FAILED` 降为 probe。簿记照抄 main 的 P&L stop：
+  `windows_survived` 清零，不动 R7 的 `probe_entries`。
+- probe 收到它：拒绝，停在 probe。这一半是从裁定推出来的。保留 `probe -> retired` 的话，降级之后
+  下一次失败的读数会把刚降下来的 main 退休，裁定就成了延迟退休。
+- 事件的产生方：`family_gate.refusals` 从裁定账本的 `refuse` 行派生，`governance advance` 把它按时间
+  插进 tenure 自己的事件里一起折叠。要是放在窗口之后折，水位线已经越过它，它会被当成「已折」跳过。
+  变异验证：去掉排序，`test_the_refusal_folds_between_the_windows_it_fell_between` 变红。
+
+**会发生什么，不会发生什么。**
+
+- 下一次 `governance advance --commit` 会把 tsmom 从 main 降为 probe。回到 main 要按 §3 在门通过的
+  前提下再活过 9 个窗口。
+- `advance` 不碰 registry，不改循环交易的东西；实盘循环也不读 `governance_state.json`。降级只改治理
+  记录，仓位不动。
+- `advance` 没有排进任何 job。降级要等有人跑 `--commit`，才会写进 `governance_state.json`。
+- tsmom 成为 probe 之后，与 flow 一起占满 `max_concurrent_probes` 的两个名额。R3 之下，别的候选进
+  不了 probe，直到其中一个离开。
+
+### 二、冻结到期按 10-13
+
+`tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py` 的 `FREEZE_ENDS` 由
+`2026-10-17T16:07:00+00:00` 改为 `2026-10-13T00:00:00+00:00`，与 `deploy/run_live.sh` 的
+`BRIDGE_UNTIL`、reopen 条件的 `date_after` 同一个日界。
+
+- **10-17 的来历。** 09-17 同时打开 D1、D2、D3，16:07:34Z 重启（#53），三个时钟一起清零，冻结随之
+  后移到重启 + 30 天。那次后移没有传到 `run_live.sh` 与 reopen 条件。
+- **代价。** 现行构造下 M-010 满 30 天是 10-17T16:07，新到期日早约四天。10-13 当天改构造的话，这套
+  构造拿不到完整 30 天的 M-010 读数。
+- **不变的。** K-EX14 的钟在 `beidou_governance/admission.py` 里按实盘记录现算，机器经
+  `governance apply` 的写入仍要等到 10-17 前后。`governance/reopen.yaml` 里「K-EX14 另外管到
+  2026-10-17T16:07Z」那句因此不改。
