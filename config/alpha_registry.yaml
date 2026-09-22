@@ -413,6 +413,8 @@ strategies:
     # <= -1% of equity (about -2 sigma of the sleeve's 30-day P&L; a literal "negative P&L stops" rule would stop a
     # Sharpe-1 sleeve ~37% of the time in its first month), `review_after_days` flags the review date (2026-12-02)
     # in the daily report, and `beidou live run` refuses an ACCEPT verdict without this probe block (KILL-015).
+    # The 91% above is a backtest-period statistic.  Measured live on 2026-09-17 it was 0%: the two books shared
+    # three names and disagreed on all three, flow short against tsmom long (D-044, `beidou_live/attribution.py`).
     enabled: true
     book: flow_short
     weight: 1.0

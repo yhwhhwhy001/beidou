@@ -1,4 +1,4 @@
-"""Multiple-testing control: BH-FDR, Holm, Deflated Sharpe Ratio, Probability of Backtest Overfitting."""
+"""Multiple-testing control: Deflated Sharpe, PBO, OOS selection gate; BH-FDR and Holm are called only by tests."""
 
 from __future__ import annotations
 

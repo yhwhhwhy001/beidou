@@ -1,4 +1,4 @@
-"""Robustness checks: time-split degradation, parameter neighbourhood, cost stress, regime split."""
+"""Robustness checks: time-split, parameter neighbourhood, cost and slippage stress; regime split has no caller yet."""
 
 from __future__ import annotations
 

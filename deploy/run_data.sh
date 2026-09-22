@@ -60,7 +60,7 @@ echo "[$(stamp)] status"
 #   asked whether anything DID.
 #
 # The precedent that survives them, and the reason this job stayed small: `data metrics` HAS a panel
-# reader (`_load(metrics=…)`) and `data spot` has half of one, and neither is scheduled here either.
+# reader (`_load(metrics=…)`) and is still not scheduled here.  (`data spot` is, above, since 2026-09-09.)
 # This job is the loop's own evidence - klines, funding, spot, pool - and putting a feed nobody reads
 # into it turns a red data job into noise.
 exit "$fail"
