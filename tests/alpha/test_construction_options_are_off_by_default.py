@@ -21,6 +21,7 @@ import pandas as pd
 from beidou_alpha.features import ewm_vol, garch_forecast_vol
 from beidou_alpha.panel import Panel
 from beidou_alpha.portfolio import PortfolioParams, asset_vol, build_weights, hrp_budget, risk_budget
+from tests.alpha.test_causality import _bit_for_bit
 
 BARS_PER_YEAR = 8760.0
 
@@ -107,7 +108,8 @@ def test_garch_is_causal_under_a_shuffled_future() -> None:
     """T-A02's rule applied to the divisor: a fit that reads its own future is invisible in a backtest.
 
     Sized so the pre-cutoff region is non-empty on purpose - KILL-AR-15 was a causality test comparing
-    NaN against NaN, which passes for any implementation at all.
+    NaN against NaN, which passes for any implementation at all.  Compared bit for bit for the sibling
+    reason: the default rtol 1e-5 passes any refit that leaked less than that.
     """
     close = _garch_panel()
     cutoff = 6_000
@@ -120,7 +122,7 @@ def test_garch_is_causal_under_a_shuffled_future() -> None:
     before = garch_forecast_vol(close, **kwargs).iloc[:cutoff]
     after = garch_forecast_vol(shuffled, **kwargs).iloc[:cutoff]
     assert before.notna().sum().sum() > 10_000, "the comparison must not be NaN against NaN"
-    pd.testing.assert_frame_equal(before, after)
+    _bit_for_bit(before, after)
 
 
 def test_garch_forecasts_better_than_ewma_when_the_data_really_is_garch() -> None:

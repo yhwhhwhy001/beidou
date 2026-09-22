@@ -69,7 +69,7 @@ from beidou_alpha.signals.breakout import BreakoutParams
 from beidou_alpha.signals.tsmom import TsmomParams
 from beidou_live.composition import portfolio_params
 from beidou_shared.config import load_yaml
-from tests.alpha.test_causality import _shuffle_future
+from tests.alpha.test_causality import _bit_for_bit, _shuffle_future
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -138,21 +138,6 @@ def _perturb_after(frame: pd.DataFrame, cutoff: int, seed: int) -> pd.DataFrame:
     rng.shuffle(future, axis=0)
     out.iloc[cutoff:] = future * rng.uniform(0.5, 1.5, size=future.shape)
     return out
-
-
-def _bit_for_bit(before: pd.DataFrame | pd.Series, after: pd.DataFrame | pd.Series) -> None:
-    """`check_exact` for a readable first difference, then the uint64 view for the claim in full.
-
-    `check_exact` still reads NaN as equal to NaN and 0.0 as equal to -0.0; the view does not, which is
-    the difference between "the same numbers" and "the same computation".
-    """
-    if isinstance(before, pd.Series):
-        pd.testing.assert_series_equal(before, after, check_exact=True)
-    else:
-        pd.testing.assert_frame_equal(before, after, check_exact=True)
-    left, right = before.to_numpy(), after.to_numpy()
-    if left.dtype == np.float64:
-        assert np.array_equal(left.view(np.uint64), right.view(np.uint64)), "equal values, different bits"
 
 
 def _moved_before(left: pd.DataFrame, right: pd.DataFrame) -> int:
