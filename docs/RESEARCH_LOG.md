@@ -14238,3 +14238,84 @@ mtm ruler，也就是 2026-09-14 起上线的那把（income-only 那把五年�
 `pit 20`，两份输出逐字相同（`diff` 空）。同一次跑也顺带复核了 `p32d` 自己 docstring 里那句
 ——`shipped` 与 `rescaled` 两臂在 k=0.60 下确实是同一个梯（逐行相等），而 `unrescaled` 那臂
 的代价读到 18.6pp，与 D-035 引用的「中位 20.5pp」同一量级。
+
+
+## 2026-09-22 · 代理路径：对照臂的判读结清（n=3 → n=68），探针已撤
+
+**这一节结清 `deploy/com.beidou.proxy-probe.plist` 自己写下的撤除条件，并撤掉它。** 它写着
+「REMOVE ONLY AFTER a "both hosts" cluster has landed inside the control window」——那个条件
+现在满足了 68 次。
+
+**起因是两个失败周期。** 2026-09-21T17:00Z `ProxyError: 503 Service Unavailable`、
+2026-09-21T20:00Z `VenueError: GET /fapi/v2/positionRisk failed after 4 attempts: 503 Service
+Unavailable`。`com.beidou.check` 的 `status` 一项自 21:10Z 起每小时红在「周期成功率 91.3% < 95%」
+上（滚动 24h 窗口，两次失败都在窗口内）。日报自己给的失败动作是「查到交易所的这条路径，不是重启」，
+这一节就是那次查。
+
+**判读规则是采样之前写在 `deploy/run_proxy_probe.sh` 里的**，逐字：control 在同一批 burst 里也失败
+→ **local**（uplink 或 tunnel app 本身），换节点买不到任何东西；control 保持干净 → **remote**
+（节点或它到 Binance 的那一段），换节点是便宜的修法，而 `NO_PROXY` 完全不是。规则还写死了两条
+限定：按 host 拆簇、**只有「两 host 都挂」型的簇能用于这个判读**，且只看对照臂上线之后的。
+
+**对照臂的连续在线远比 2026-09-17 那节以为的长。** 那节记的是 3.58h。实际是：探针
+2026-09-16T14:43Z 被拆，**15:19:38Z 就重装了**，只断了 36 分钟，此后一路跑到今天撤除，
+连续 **133.72 小时**（判读窗口 2026-09-16T15:19:38Z → 2026-09-22T05:03:02Z，38,062 个样本）。
+
+| 臂 | 失败/样本 | 失败率 |
+| --- | --- | --- |
+| `captive.apple.com` `direct_routed`（对照） | **0 / 7,613** | **0.00%** |
+| `demo-fapi.binance.com` `explicit` | 177 / 7,612 | 2.33% |
+| `demo-fapi.binance.com` `transparent` | 185 / 7,613 | 2.43% |
+| `fapi.binance.com` `explicit` | 186 / 7,612 | 2.44% |
+| `fapi.binance.com` `transparent` | 188 / 7,612 | 2.47% |
+
+按规则拆簇，两种归并间隔都给同一个答案（可用簇 = 双 host 型且对照臂样本落在簇内）：
+
+| 归并间隔 | 簇 | 双 host | 可用簇 | 簇内对照样本 | **对照臂也失败的簇** |
+| --- | --- | --- | --- | --- | --- |
+| ≤180s | 150 | 68 | **68** | 124 | **0** |
+| ≤300s | 145 | 68 | **68** | 155 | **0** |
+
+**判读：remote。** 换远端节点是便宜的修法；`NO_PROXY` 不是修法——两条都经过 tunnel app 的臂
+失败率逐位可比（2.43%/2.47% 对 2.33%/2.44%），这是这个结论第三次被确认。
+
+**与「2026-09-17 · 六、代理路径判读：第一次有可用的簇，答案是 remote」同向，但换了一个量级。**
+那节的三条限定里：
+
+1. **「n=3，且三个簇都短（15–16s）」这一条退休。** 现在是 n=68，簇中位时长 66–67s、最长 1708s，
+   簇内对照样本 124–155 个。覆盖从 3.58h 变成 133.72h。
+2. **「对照臂是不同的 host」原样保留。** `captive.apple.com` 不是 venue，脚本自己的注释承认这条臂
+   「NOT 'the proxy removed'」，它移除的是 app 的远端节点，而那是 **evidence of a different route,
+   not proof of one**。所以「对照臂干净」里仍可能有一部分来自 Apple 的 CDN 更近。n 变大不修这条，
+   它是设计上的，不是样本量上的。
+3. **「换节点是操作者在 Shadowrocket 里的动作，不在仓库里，Agent 不做」原样保留。** 本节只交判读。
+
+**簇的刻度（133.72h 重测）：** 145 簇（≤300s 归并），**每 0.92 小时一个**，中位 67s，最长 1708s，
+合计约占 **4.1%** 墙钟。日失败率基线 1.6%–2.2%，**2026-09-21 离群到 4.84%**，那天就是两个失败周期
+所在的那天。145 簇里只有 5 个与整点后 15–120s 的周期窗口重叠；同期 138 个周期实丢 2 个（**1.4%**）。
+
+**在 bar 内重试仍然救不回来，这次有两个数摆在一起。** `beidou_exchange/binance_usdm/rest_client.py`
+是 4 次尝试、退避 `0.5 → 1 → 2`（+jitter），**约 4 秒走完**；簇的中位数是 **67 秒**。要跨过中位簇
+得把重试拉到 70 秒以上，而 2026-09-22 日报量到的再平衡窗口是 **86.18s**。这条路是堵的，不是没调够。
+
+**远端节点六天没换。** `lsof` 的 socket 表读法（配置文件受 TCC 保护，读不到）：
+`155.254.102.226:8083` 以 **57 条 established** 压倒性排第一，与 2026-09-16 记的是同一个
+（TOMORIN，`country: HK`，AS401984）。单节点，没看到轮换。
+
+**撤除记录。** `launchctl unload -w` 于 **2026-09-22T05:03:47Z**，`~/Library/LaunchAgents/` 下那份
+已 `rm`；`launchctl list | grep beidou` 复核过，`com.beidou.proxy-probe` 已不在，其余七个作业未动。
+最后一个样本是 05:03:02Z。`deploy/com.beidou.proxy-probe.plist` 与 `deploy/run_proxy_probe.sh`
+在本提交里从仓库删除，**恢复用 `git show 3a4bf6fa:deploy/com.beidou.proxy-probe.plist` 与
+`git show 3a4bf6fa:deploy/run_proxy_probe.sh`**（上一次撤除没留这个地址，下一个人只能翻历史）。
+数据文件 `~/Library/Application Support/beidou/proxy-probe.jsonl` **未删**，42,939 行全部保留，
+含 2026-09-15T17:16Z 起的全部样本；读含历史段时仍要把 `"http":000` 正则改成 `"http":0` 再
+`json.loads`，否则失败样本会被整段静默丢掉——坏行到 2026-09-16T11:25:25Z 为止共 169 行。
+
+**未了，而且这一条是撤除自己买的单。**
+
+- **换节点没做**，那是操作者在 Shadowrocket UI 里的动作。
+- **换完之后没有细粒度的读数可以复核它。** 探针撤掉之后，能看见这条路径的只剩周期失败率
+  （每小时一个点）与 `rest_client` 的 `consecutive transport failures` 警告，粒度从每分钟掉到每小时，
+  而基线 2.4% 对应每 0.92 小时一簇——用周期失败率去量一个 1.4% 的东西，要等很多天才分辨得出来。
+  **若要复核换节点的效果，先用上面那两个 `git show` 把探针装回去，跑满至少 24 小时再换**，
+  否则换完只能得到一个「好像好了」。这一点在撤除时是知道的，写在这里而不是留给下一个人重新发现。
