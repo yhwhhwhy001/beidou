@@ -30,6 +30,9 @@
 | family gate | 家族门 | `family_gate` |
 | ceiling | 天花板 | `ceiling` |
 | alert | 呼叫（名词用法） | `alerts` |
+| regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
+| beta | 贝塔 | `rolling_beta`、`beidou report beta` |
+| VaR、ES | 在险价值、预期损失 | —（仓库没有实现，2026-09-23 清点） |
 
 ## 保留中文的近形词
 
