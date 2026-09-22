@@ -407,10 +407,10 @@ def decay_watch(
     The window is `window_days` of hourly bars and the history is read from bar zero, because the rule
     is about the live period as a whole; every other number in this report is about one day.
 
-    `q10` is looked up on the strategy's own evidence block.  It is not there yet for any strategy, so
-    every row reads INSUFFICIENT_DATA and says which half is missing.  That is the correct reading today
-    and it is meant to stay visible until somebody computes the quantile - a blank row would be read as
-    "fine".
+    `q10` is looked up on the strategy's own evidence block.  Reports written before 2026-09-07 lack
+    it; both reports the registry cites carry it (checked 2026-09-23), so the half that can still be
+    missing is the live one - two whole windows are needed - and the row says which half it is.  That
+    reading must stay visible either way: a blank row would be read as "fine".
     """
     bars = int(window_days * 24)
     rows: dict[str, Any] = {}
@@ -2124,8 +2124,8 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             alerts.append(f"{name}漂移告警：{'；'.join(str(d) for d in detail)}")
     budget = payload.get("risk_budget") or {}
     if str(budget.get("status")) == "ALERT":
-        # P13's ladder: the thresholds were fixed before the change went live, so this says what to do
-        # rather than that something looks off.  It alerts; a human still runs the one-line change.
+        # P13's ladder: its thresholds were fixed before the change went live.  R8 applies the attributed
+        # rung in the loop after two cycles of grace (`LiveEngine._risk_ladder`); the rest only report.
         alerts.append("风险预算告警：" + "；".join(str(r) for r in budget.get("reasons") or []))
     adaptation = payload.get("risk_adaptation") or {}
     if str(adaptation.get("status")) == "ALERT":

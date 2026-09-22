@@ -48,8 +48,8 @@ def cpcv_splits(
     `AlphaModel.warmup_bars` (1,442 under the registry shipped on 2026-09-13), or at the very least
     the longest lookback in it - `max(horizons)` = 720 for tsmom.
 
-    What the callers actually pass today is `embargo = purge = 50` (`beidou_cli/research_cmd.py`,
-    `research validate` and `research book`), which leaves roughly 670 of those ~720 contaminated
+    What the callers actually pass today is `embargo = purge = 50` (`beidou_cli/research_validate_cmd.py`
+    and `research_book_cmd.py`), which leaves roughly 670 of those ~720 contaminated
     bars inside the training set of every "after" group.  This boundary is therefore OPEN, on the
     record rather than by argument: see the orange entry in
     `docs/analysis/2026-09-13-full-repo-review.md`.  `--embargo` exists so the operator can close it;

@@ -1,11 +1,11 @@
 """P13's pre-registered monitoring: is the book still inside the risk budget it was sized for?
 
-`vol_target` was set to 0.30 against a declared 50% drawdown budget, from a bootstrap whose q95 sits at
--43.7%/-49.5%.  That bootstrap resamples weekly blocks, so it preserves within-week autocorrelation and
-destroys the multi-month regime structure real bear markets have — it is optimistic by construction, and
-the de-escalation ladder below is what covers the gap.  The thresholds were written before the change
-went live and are not up for renegotiation when they fire; what is deliberately NOT automated is the
-acting, because rewriting live position sizing from a cron job is a different risk than measuring it.
+`vol_target` is 0.60 against a declared 70% drawdown budget (2026-09-14, D-035); before that, 0.30 against
+50%, from a bootstrap whose q95 sat at -43.7%/-49.5%.  That bootstrap resamples weekly blocks, so it keeps
+within-week autocorrelation and destroys the multi-month regime structure real bear markets have — it is
+optimistic by construction, and the de-escalation ladder below is what covers the gap.  The thresholds were
+written before the change went live and are not renegotiated when they fire.  Acting on the EQUITY reading
+is deliberately not automated; R8 acts on the attributed one, in the loop (`LiveEngine._risk_ladder`).
 
 Every metric here refuses to read zero when it cannot be computed (the failure this project keeps
 finding): a window with too few bars, or one straddling a construction change, reports `enforced: false`

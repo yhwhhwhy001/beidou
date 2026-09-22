@@ -59,6 +59,7 @@ _Avoid_: 分仓、袖子、子组合、sub-portfolio、book
 
 **Probe sleeve**：
 组合层 ACCEPT 但信号级未 PASS，由操作者显式放行上线的小 sleeve。按 30 天归因 P&L 自动停掉。
+组合层 REJECT 也能上，但 registry 要写明 `accepted_despite` 与理由（D-029）。
 _Avoid_: 实验 sleeve、paper sleeve
 
 **Fraction**：
@@ -90,7 +91,8 @@ _Avoid_: 目标仓位（那是乘过权益之后的东西）
 **每条路径只算一层**：回测里它是仓位递推，实盘里参照的是交易所真实仓位。
 
 **Overlay**（覆盖层）：
-作用在已构建好的 sleeve 之上的一层调整。当前有两个：exit overlay 与回撤节流。
+作用在已构建好的 sleeve 之上的一层调整。实盘上能动权重的有两个：exit overlay 与风险预算阶梯（R8，`beidou_alpha/overlays/ladder.py`）。
+回撤节流也是 overlay，但在 `config/live.demo.yaml` 里关着（`drawdown_throttle.enabled: false`）。
 
 **Exit overlay**：
 bar 收盘评估的止损／移动止损／止盈加冷却期，阈值以**入场时**的日波动率为单位。
@@ -103,7 +105,8 @@ bar 收盘评估的止损／移动止损／止盈加冷却期，阈值以**入�
 在 gross 上限处初始保证金占权益的比例上限。交易所杠杆由它反推，只改变保证金效率，不改变敞口。
 
 **Participation**（参与率）：
-单笔加仓单相对该标的近期成交额的比例上限。只在实盘存在，回测的成本模型里没有它。
+单笔委托相对该标的近期成交额的比例上限。只豁免完全平仓：`exempt_reductions` 默认关，纯减仓单也会被截。
+只在实盘存在，回测的成本模型里没有它。
 
 **Compression**（压缩比）：
 风险贡献离散度 ÷ 市场波动离散度。用来证伪「每标的自适应发生在组合层而不是交易所杠杆层」。
@@ -142,7 +145,8 @@ kill-switch、flatten。**语义只有一份**，回测重放实盘真正会做�
 **Kill-switch**：
 一个文件。存在即拒绝一切**加风险**的写入，只放行降风险的那些：撤单、reduce-only 与 closePosition
 下单、杠杆与 session 控制（`beidou_exchange/guard.py` 的 `is_risk_reducing`）。与 host allowlist
-一起，是系统里唯一的「熔断」。
+一起，是写入场地这一侧的「熔断」。它不是唯一的一道：循环另有连续失败熔断，连续 12 个周期失败就告警并
+停止循环（`beidou_live/engine.py` 的 `breaker_stop`）。
 本条曾写作「拒绝一切写入场地的操作」。照那句读，踩下开关就等于把仓位冻在原地、平不掉——词表比实现
 更严，而且严在危险的一侧：真要平仓的人会以为自己先得把开关撤掉。
 
@@ -169,7 +173,9 @@ _Avoid_: exchange（那是适配器包的名字）、broker
 支撑某个 Strategy 上线的那份验证报告。Registry 条目用指针引用它，启动门比对指针与实际参数。
 
 **Trial**（试验）：
-一次被评估过的配置。**去重口径是 (param_key, range, symbols)**——精确重放只算一次。
+一次被评估过的配置。**去重口径是 `TrialRecord.fold_key` 的八项**：`param_key`、`range_start`、`range_end`、
+`symbols`、`construction_digest`、`overlay_digest`、`symbol_set_hash`、`search_space_version`。
+八项全同才是同一笔，精确重放只算一次。`range_end` 按 7 天分桶（`Policy.trial_range_end_granularity_days`）。
 
 **Ledger**：
 只追加的全部 Trial 记录。全仓库只有一份，是多重检验校正的分母。

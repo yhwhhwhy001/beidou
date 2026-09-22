@@ -28,7 +28,7 @@ portfolio:
   margin_cap: 0.40            # initial margin at the gross cap stays below 40% of equity (was 100% at a fixed 2x)
   max_leverage: 5
   margin_buffer: 0.10         # keep 10% of the available balance free when scaling risk-adding orders (T-S02)
-  max_participation: 0.02     # a risk-adding order <= 2% of the symbol's average hourly quote volume (T-S03)
+  max_participation: 0.02     # any order but a full close <= 2% of the symbol's average hourly quote volume (T-S03)
   # 2026-09-04 (operator decision): 0.15 -> 0.30.  Read this as a risk-budget decision, not a research
   # finding, because that is what it is.  `vol_target` was never chosen against a stated budget - it is
   # `PortfolioParams`' default and appears in no D-decision, no pre-registration and no trials ledger -
@@ -415,9 +415,9 @@ drawdown_throttle:            # scale the whole book down between `start` and `s
   stop: 0.20
   floor: 0.25
 risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered before the change went live;
-  # a breach alerts through `report daily --check` and the hourly job, it does not trade.  Acting is left
-  # explicit on purpose: rewriting live position sizing from a cron job is a different risk from measuring
-  # it, and the ladder below removes the discretion about WHAT to do, not the step of doing it.
+  # a breach alerts through `report daily --check` and the hourly job, and this block does not trade:
+  # rewriting live position sizing from a cron job is a different risk from measuring it.  The acting is
+  # R8's, inside the loop, on the attributed drawdown (`Policy.drawdown_ladder`, `LiveEngine._risk_ladder`).
   # 2026-09-14: re-derived for the -70% budget declared when `vol_target` went to 0.60, by the shipped
   # rule transcribed - `deescalate_at` = 70% of budget, `rollback_at` = budget, `deescalate_to` = 75%
   # of k, `rollback_to` = 50% of k.  `Policy.drawdown_ladder` is what ACTS; these four are the
