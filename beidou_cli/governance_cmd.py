@@ -37,6 +37,7 @@ from beidou_governance.admission import WINDOW_ANCHOR, Admission, admit, rolled,
 from beidou_governance.assemble import assemble, conclude
 from beidou_governance.budget import window_spend
 from beidou_governance.canary import evaluate as evaluate_canary
+from beidou_governance.family_gate import VERDICT_KIND, refusals
 from beidou_governance.family_gate import failures as gate_failures
 from beidou_governance.family_gate import recheck as recheck_gate
 from beidou_governance.lifecycle import Book, Facts, State
@@ -505,7 +506,7 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     Everything except N is held at the values the evidence report recorded, including the annualisation
     scale, which is backed out of the report's own threshold/quantile pair.  Any movement here is
     therefore attributable to the denominator and to nothing else - which is the honest form of
-    "searching more retires your own incumbents".
+    "searching more demotes your own incumbents".
 
     It changes no BOOK - it retires nothing, promotes nothing, and touches neither the registry nor the
     state machine - but it is not read-only, and the word used to say it was.  Every PASS/FAIL reading
@@ -526,12 +527,13 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
     a stray.
 
     What it does not do stays true after the merge that gave `lifecycle.apply` a production caller.
-    A FAIL is an event for the state machine (`FAMILY_GATE_FAILED` -> retired), and `governance advance`
-    is what folds events into `governance_state.json` - this command hands it the reading through
-    `Facts.family_gate_still_passes` and retires nothing itself.  The sentence here used to say
-    `lifecycle.apply` had no production caller at all; that was true in the branch this command was
-    written in and false the moment `advance` landed beside it, which is why it is corrected rather
-    than quietly deleted.
+    A FAIL is an event for the state machine, and `governance advance` is what folds events into
+    `governance_state.json` - this command only writes the `refuse` row that `family_gate.refusals`
+    turns into `FAMILY_GATE_FAILED`, and moves nothing itself.  Until 2026-09-23 this sentence said the
+    event went `-> retired`; nothing produced it, so the 09-19 refusal of tsmom had no consequence, and
+    the operator then ruled main -> probe instead.  Before that it said `lifecycle.apply` had no
+    production caller at all; that was true in the branch this command was written in and false the
+    moment `advance` landed beside it, which is why it is corrected rather than quietly deleted.
     """
     checkout = Path(root).resolve()
     registry = parse_registry(load_yaml(registry_path))
@@ -557,7 +559,7 @@ def gate_cmd(registry_path: str, root: str, check: bool) -> None:
         if reading.status in ("PASS", "FAIL"):
             record_verdict(
                 checkout / VERDICTS,
-                kind="family_gate",
+                kind=VERDICT_KIND,
                 subject=reading.strategy,
                 ruling=ALLOW if reading.passes else REFUSE,
                 reasons=(reading.why,),
@@ -892,7 +894,11 @@ def advance_cmd(
 
     This never touches the registry, so it never changes what the loop trades.  A `probe -> main` here
     records that §3's conditions were met; moving the exposure is `governance apply`, past `admission`,
-    and a restart.
+    and a restart.  The same holds the other way: a main sent back to probe keeps trading as it did.
+
+    `FAMILY_GATE_FAILED` is the one event not read off `cycles.jsonl`: `governance gate` writes a
+    `refuse` row, `family_gate.refusals` turns it into an event at the ruling's instant, and it folds
+    in time order with the tenure's own events (operator ruling 2026-09-23: main -> probe).
     """
     checkout = Path(root).resolve()
     policy = Policy()
@@ -926,10 +932,12 @@ def advance_cmd(
     for reading in readings.values():
         click.echo(f"gate     {reading.status:10s} {reading.strategy:20s} {reading.why}")
 
+    verdicts = read_verdicts(checkout / VERDICTS)
     starts = dict(pair.split("=", 1) for pair in started if "=" in pair)
     for name in books_in(rows):
         at = starts.get(name, anchor)
         announced = False
+        pending: list[Derived] | None = None
         for _round in range(MAX_TENURES):
             result = tenure(rows, book=name, started_at=at, window_anchor=anchor, policy=policy)
             strategy = result.strategy or name
@@ -946,7 +954,14 @@ def advance_cmd(
                 announced = True
             if strategy not in book.candidates:
                 break
-            for event in result.events:
+            if pending is None:
+                pending = list(refusals(verdicts, strategy))
+            # A refusal folds in the tenure whose span holds its instant, sorted in among that tenure's
+            # events: folded after a later window instead, the watermark would already be past it.
+            end = datetime.fromisoformat(result.stopped_at) if result.stopped_at else None
+            due = [e for e in pending if end is None or datetime.fromisoformat(e.at) <= end]
+            pending = pending[len(due) :]
+            for event in sorted([*result.events, *due], key=lambda e: datetime.fromisoformat(e.at)):
                 # UNREADABLE and FAIL are both False here, and they are different operator actions -
                 # which is why the gate's own line is printed above rather than folded into this one.
                 passes = strategy in readings and readings[strategy].passes
