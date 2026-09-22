@@ -154,12 +154,19 @@ def ladder(mark: np.ndarray, realised: np.ndarray, policy: Policy, ruler: str) -
     return out, scalars
 
 
-def panel_series(mode: str) -> tuple[np.ndarray, np.ndarray]:
+def panel_series(mode: str, k: float = K) -> tuple[np.ndarray, np.ndarray]:
     """(mark-to-market returns, realised returns) for one universe, as every arm below consumes them.
 
     Extracted from `main` on 2026-09-20 so `p32f` runs the same panel through the same model rather
     than building a second one beside it - the failure this whole `p32*` family is named after.  Pure
     move: `main` calls it and prints what it printed.
+
+    `k` became a parameter the same day for `p32g`, which sweeps it.  The default is the module's `K`
+    and nothing this file prints moves, but note what the parameter actually does: it re-runs the whole
+    model at that `vol_target`, so the weights, the guards' binding and the costs are all re-derived.
+    Scaling the returned series by `k / K` instead would be a different and wrong thing - `max_weight`,
+    `max_gross` and the cost model do not scale with the target, so the cheap version would report a
+    book that no `vol_target` produces.
     """
     profile = load_yaml("config/live.demo.yaml")
     registry = load_registry(Path("config/alpha_registry.yaml"))
@@ -171,7 +178,7 @@ def panel_series(mode: str) -> tuple[np.ndarray, np.ndarray]:
     guards = BookGuardParams(max_weight=float(pf["max_weight"]), max_gross=float(pf["max_gross"]),
                              daily_loss_pause=float(profile["guards"]["daily_loss_pause"]))
     tuned = copy.deepcopy(profile)
-    tuned.setdefault("portfolio", {})["vol_target"] = K
+    tuned.setdefault("portfolio", {})["vol_target"] = k
     w, _c, _p = build_model(registry, tuned).evaluate(panel, membership)
     w = apply_exits(w, panel.close, exits).weights if exits.enabled else w
     result = run_backtest(panel, w, cost, guards=guards)
