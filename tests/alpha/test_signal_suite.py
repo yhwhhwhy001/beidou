@@ -13,6 +13,7 @@ from beidou_alpha.signals.carry import CarryParams, carry_scores
 from beidou_alpha.signals.meanrev import MeanrevParams, meanrev_scores
 from beidou_alpha.signals.residual import ResidualParams, residual_scores
 from beidou_alpha.signals.xsmom import XsmomParams, xsmom_scores
+from tests.alpha.test_causality import _bit_for_bit
 
 
 def _synthetic_panel(
@@ -97,6 +98,9 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
     already in that range, and chanlun's is too.  Sizing both from `warmup_for` keeps the test
     non-vacuous as warmups grow, and the assertion below makes the emptiness a failure rather than
     a silent pass.
+
+    The comparison is bit for bit for the same reason.  Until 2026-09-23 it was `assert_frame_equal`'s
+    default, rtol 1e-5 / atol 1e-8, and a signal that leaked less than that passed.
     """
     spec = SIGNALS[signal_id]
     params = {**spec.default_params, **overrides}
@@ -142,7 +146,7 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
         funding = pd.concat([panel.funding.iloc[:cutoff], shuffled.funding.iloc[cutoff:]])
     mixed = Panel.from_frames(mixed_frames, "1h", funding=funding)
     later = spec.compute(mixed, params)
-    pd.testing.assert_frame_equal(scores.iloc[:cutoff], later.iloc[:cutoff])
+    _bit_for_bit(scores.iloc[:cutoff], later.iloc[:cutoff])
 
 
 def test_carry_direction_and_missing_funding() -> None:
