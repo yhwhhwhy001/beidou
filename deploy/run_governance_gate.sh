@@ -2,8 +2,8 @@
 # family gate 的日读数：R0 按今天的 ledger 桶大小重算（§3 给 `probe -> main` 的第三个条件）。
 #
 # **为什么它要是一个 job。** 机制 2026-09-09 就齐了：`beidou_governance/family_gate.py` 会算，
-# `lifecycle.py` 的 `FAMILY_GATE_FAILED -> retired` 分支连 main 一起覆盖，`governance gate --check`
-# 是现成的命令。缺的只有调用者——七个 plist 里没有它，所以这个读数只在有人手敲命令时才存在。
+# `lifecycle.py` 有 `FAMILY_GATE_FAILED` 分支，`governance gate --check` 是现成的命令。
+# （那个分支原本是 `-> retired`；2026-09-23 操作者裁定改为 main 降回 probe、probe 不动。）缺的只有调用者——七个 plist 里没有它，所以这个读数只在有人手敲命令时才存在。
 # 这正是 `run_check.sh` 里那段「a file in deploy/ is not a job」记下的同一种错误，它是 2026-09-17
 # forward-board 发出去却没人装换来的。写下来的规则没有闹钟，就只是一段散文。
 #
@@ -24,7 +24,8 @@
 # 所以 N 没动时重复跑不会进 M-G05 的分母，N 动了就该是一条新 ruling。命令自己的 docstring 里有
 # 2026-09-14 那次「拿它当 read-only 跑、结果追了一行」的更正，别再把它读成只读。
 #
-# **它改不了任何 book。** 退休与晋升由 `governance advance` 折进状态机，这里只交读数。
+# **它改不了任何 book。** 这里只交读数：它写下的 `refuse` 行由 `governance advance` 经
+# `family_gate.refusals` 折进状态机（main 降回 probe）。`advance` 没有排进任何 job，要人跑 `--commit`。
 #
 # 排在 forward-board（02:00）之后：两个都读 `reports/research/`，错开好让日志分得清是谁。
 #

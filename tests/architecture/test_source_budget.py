@@ -3340,7 +3340,11 @@ CEILING = {
     # It reads the cycle and attribution rows, fills prices the loop's own `closes` does not reach back
     # far enough for out of the parquet archive (that field is newer than the loop: 141 bars against
     # 259 on 2026-09-19, and the gap closes on its own), and renders.  No arithmetic lives here.
-    "beidou_cli": 7_670,
+    # +15 beidou_cli (7_670 -> 7_685), 2026-09-23, same ruling: `governance advance` reads the verdict
+    # ledger and folds each `refuse` row in time order among the tenure's own events.  Folded after a
+    # later window instead, it sits behind the watermark and is skipped as already folded - the mutation
+    # that does exactly that turns `test_the_refusal_folds_between_the_windows_it_fell_between` red.
+    "beidou_cli": 7_685,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3403,7 +3407,12 @@ CEILING = {
     # are one decision - fixing the ruler alone would have made the OLD rungs bite for the first time,
     # silently buying a brake measured at 20.5pp of CAGR that nobody chose, and rescaling alone would
     # have re-tuned something that never fires.  The options were priced before the operator picked.
-    "beidou_governance": 3_940,
+    # +31 beidou_governance (3_940 -> 3_971), 2026-09-23, operator ruling "family gate 失败降回 probe":
+    # `lifecycle` sends a main that fails the recomputed gate back to probe instead of retiring it and
+    # leaves a probe a probe (retiring the probe would turn the demotion into a delay), and
+    # `family_gate.refusals` is the event's first producer - the 09-19 refusal of tsmom sat in the verdict
+    # ledger four days with no consequence.  About half is the docstrings recording the ruling.
+    "beidou_governance": 3_971,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

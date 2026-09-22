@@ -245,8 +245,14 @@ def evaluate(book: Book, candidate: Candidate, event: Event, facts: Facts, polic
         exhausted = candidate.probe_entries >= policy.max_probe_entries_lifetime
         return Decision(True, State.RETIRED if exhausted else State.QUEUED, ("§3: probe hit the P&L stop",))
 
-    if event is Event.FAMILY_GATE_FAILED and candidate.state in (State.PROBE, State.MAIN):
-        return Decision(True, State.RETIRED, ("R0: the quantile gate no longer passes on recomputation",))
+    # Operator ruling 2026-09-23: a failed recomputation sends a main back to probe, the way its P&L
+    # stop does, and it re-earns main through the WINDOW_SURVIVED edge above, whose third condition is
+    # this same gate.  It used to retire.  A probe that fails stays a probe instead of retiring, or the
+    # next failing reading would retire the main just demoted: retirement with a delay, not demotion.
+    if event is Event.FAMILY_GATE_FAILED and candidate.state is State.MAIN:
+        return Decision(True, State.PROBE, ("R0: the quantile gate no longer passes on recomputation, back to probe",))
+    if event is Event.FAMILY_GATE_FAILED and candidate.state is State.PROBE:
+        return Decision(False, State.PROBE, ("R0: already probe, and this reading already blocks probe -> main",))
 
     return Decision(False, candidate.state, (f"§3: {event.value} is not a legal event in {candidate.state.value}",))
 
@@ -312,7 +318,7 @@ def apply(
             )
             if stops >= policy.freeze_after_consecutive_stops:
                 frozen_until = book.window + policy.freeze_windows
-        elif candidate.state is State.MAIN and event is Event.PNL_STOP:
+        elif candidate.state is State.MAIN and event in (Event.PNL_STOP, Event.FAMILY_GATE_FAILED):
             updated = replace(updated, windows_survived=0)
         if decision.state is State.RETIRED:
             updated = replace(updated, fraction=0.0)
