@@ -187,6 +187,21 @@ def _regime_rows(split: Mapping[str, Any], basis: Mapping[str, Any]) -> dict[str
     return {**rows, **{f"basis: {key}": str(value) for key, value in basis.items()}}
 
 
+def _break_even_row(block: Mapping[str, Any]) -> str:
+    """`cost_break_even` as one row: each series' m*, or why it has none, or how far re-pricing left it."""
+    cells = []
+    for label in ("full_sample", "oos"):
+        row = block[label]
+        if row["multiple"] is None:
+            cells.append(f"{label}=n/a ({row['why']})")
+        else:
+            off = row["mean_net_at_multiple"] / row["cost_per_multiple"]
+            cells.append(
+                f"{label}={row['multiple']:.2f}" + ("" if row["converged"] else f" (unsettled: {off:+.1e} off)")
+            )
+    return "  ".join(cells) + "  (mean net return is 0 with turnover and carry costs x m*)"
+
+
 def _pbo_note(grid_trials: object) -> str:
     """PBO below four configurations is a coin flip; `decide` knows that and readers of the report did not."""
     try:
