@@ -139,6 +139,9 @@ G11、G12 要等冻结结束。
   D-011，是显著性口径的阴性对照（`tests/alpha/test_validation.py:132`）。它的名义水平是 5%，断言
   拒绝率不超过 20%。本文写「不是显著性检验」，漏了它。按 `D-011` 搜一遍 `tests/` 就能看到。
 
+**后续（三）（同日）**：G1、G3、G4、G6、G8、G9、G10 已落地。结果、操作者裁定与还没定的事，见
+`docs/analysis/2026-09-23-optimization-plan-from-external-checklist.md` 末尾的「执行记录」。
+
 ## 逐项
 
 ### #1 策略架构（Goldman Sachs）
