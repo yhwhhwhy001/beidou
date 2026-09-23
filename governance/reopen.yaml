@@ -89,8 +89,8 @@ entries:
     args: {columns: [oi, lsr, basis, liquidations]}
     note: >-
       2026-09-23 补注：verdict 括号里的理由「相关按构造过不了 0.5」已于 2026-09-17 撤回。
-      √占空比是特例下的期望值，不是下界，见 RESEARCH_LOG 同日「regime 复核那句『构造下界』不是下界」一节。
-      经验裁定不变，作废的是「不用跑、事前可判」。verdict 原文保持裁定当时的样子。
+      √占空比是特例下的期望值，不是下界，见 RESEARCH_LOG 同日 `regime 复核那句「构造下界」不是下界` 一节。
+      经验裁定不受影响，作废的是「事前可判」。verdict 原文保持裁定当时的样子。
     log: 2026-09-09 块 6 重测预登记
 
   - id: carry
