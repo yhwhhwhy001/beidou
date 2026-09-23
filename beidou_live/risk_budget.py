@@ -15,11 +15,13 @@ with the reason rather than a number that looks like a pass.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from bisect import bisect_left
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
 
+from beidou_alpha.registry import MAIN_BOOK
 from beidou_live.construction import canonical_construction
 from beidou_live.cycle_record import latest
 
@@ -544,6 +546,44 @@ def books_by_symbol(cycle: Mapping[str, Any] | None) -> dict[str, frozenset[str]
     return {symbol: frozenset(names) for symbol, names in out.items()}
 
 
+def books_by_bar(rows: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, frozenset[str]]]:
+    """`books_by_symbol` for every cycle, keyed by its bar: what each cycle's books carried."""
+    return {
+        int(row["bar_open_ms"]): books_by_symbol(row)
+        for row in rows
+        if isinstance(row.get("bar_open_ms"), int | float) and not isinstance(row.get("bar_open_ms"), bool)
+    }
+
+
+def fill_grouper(books_at: Mapping[int, Mapping[str, frozenset[str]]]) -> Callable[[int, str], str]:
+    """Which population a fill at (bar, symbol) belongs to: main_only, overlaid, other or unattributed.
+
+    Operator ruling 2026-09-23 (G9): a fill is split by the books of ITS OWN cycle and the cycle
+    before it - the books whose targets it moved between - never by the newest cycle's map.  Split by
+    the newest, every fill read main-only once the probe went flat: 119 fills judged as the main
+    book's on 2026-09-23, of which 52 are, 15 overlaid (at +13.43 bps) and 52 from cycles whose
+    record cannot name the books.  Its own cycle alone misses a close: 4 fills traded a name no book carried
+    on that bar, and the cycle before names who held it.  A cycle with no `books` cannot say, and
+    neither can a name no book carried on either side: both are unattributed, never guessed.
+    """
+    bars = sorted(books_at)
+
+    def group(bar_ms: int, symbol: str) -> str:
+        own = books_at.get(bar_ms)
+        if not own:
+            return "unattributed"
+        at = bisect_left(bars, bar_ms)
+        previous = books_at.get(bars[at - 1], {}) if at > 0 else {}
+        carried = own.get(symbol, frozenset()) | previous.get(symbol, frozenset())
+        if carried == {MAIN_BOOK}:
+            return "main_only"
+        if len(carried) > 1:
+            return "overlaid"
+        return "other" if carried else "unattributed"
+
+    return group
+
+
 def _weighted(values: Sequence[float], sizes: Sequence[float]) -> dict[str, Any]:
     """Notional-weighted mean with the standard error the point estimate never carried.
 
@@ -572,11 +612,12 @@ def slippage_bps(
     params: RiskBudgetParams,
     *,
     latest_ms: int,
-    books: Mapping[str, frozenset[str]] | None = None,
+    books_at: Mapping[int, Mapping[str, frozenset[str]]] | None = None,
 ) -> dict[str, Any]:
     """Notional-weighted adverse fill vs the DECISION BAR CLOSE, against M-Q08's "2x model" bar.
 
-    ``books`` (from `books_by_symbol`) splits the reading by how many books carry the symbol.  The
+    ``books_at`` (from `books_by_bar`) splits the reading by the books each fill traded for - see
+    `fill_grouper` for the rule and for why it is not the newest cycle's map (G9, 2026-09-23).  The
     2026-09-12 ALERT is why: 5.47 bps against a 4 bps bar, which is neither book's number.  The
     fourteen names only the main book holds filled at **0.80 bps**; the four the flow probe adds
     filled at **16.18** (t = 2.31 against the bar, the only one of the three readings that clears
@@ -597,10 +638,12 @@ def slippage_bps(
     `without_reference` and excluded.  Falling back to the mark is exactly how the wrong number
     would come back, and history is not backfilled."""
     cutoff = latest_ms - params.slippage_window_days * DAY_MS
-    carried = dict(books or {})
+    group_of = fill_grouper(books_at) if books_at else None
     values: list[float] = []
     sizes: list[float] = []
-    groups: dict[str, tuple[list[float], list[float]]] = {"main_only": ([], []), "overlaid": ([], [])}
+    groups: dict[str, tuple[list[float], list[float]]] = {
+        name: ([], []) for name in ("main_only", "overlaid", "other", "unattributed")
+    }
     by_symbol: dict[str, tuple[list[float], list[float]]] = {}
     without_reference = 0
     for row in trades:
@@ -628,8 +671,8 @@ def slippage_bps(
         by_symbol.setdefault(symbol, ([], []))
         by_symbol[symbol][0].append(adverse)
         by_symbol[symbol][1].append(size)
-        if carried:
-            key = "overlaid" if len(carried.get(symbol, frozenset())) > 1 else "main_only"
+        if group_of is not None:
+            key = group_of(int(row.get("bar_open_ms") or 0), symbol)
             groups[key][0].append(adverse)
             groups[key][1].append(size)
     fills = len(values)
@@ -642,8 +685,11 @@ def slippage_bps(
     # combined number stays computed and printed (the L3 / M-015 shape); what changes is which one
     # `inside` reads.  Where the record cannot split the books the combined reading is judged
     # instead - an unreadable split is not a pass, and every row written before 2026-09-12 is that case.
-    judged_name = "main_only" if "main_only" in by_group else "combined"
-    judged = by_group.get("main_only") or whole
+    # Since G9 the test is per fill: once any fill can be attributed, the main book's own fills are
+    # judged, and too few of them is BLIND rather than a fall back to a number that is not the main book's.
+    splittable = any(group[0] for name, group in groups.items() if name != "unattributed")
+    judged_name = "main_only" if splittable else "combined"
+    judged = (by_group.get("main_only") or _weighted([], [])) if splittable else whole
     judged_fills = int(judged["fills"])
     # `is None`, not falsiness: a notional-weighted slippage of exactly 0.0 is a reading, not a gap.
     if judged_fills < params.min_slippage_fills or judged.get("value") is None or notional <= 0:
@@ -662,7 +708,12 @@ def slippage_bps(
             "enforced": False,
             "why": f"{'主书' if judged_name == 'main_only' else '全书'}只有 {judged_fills} 笔成交，"
             f"需要 {params.min_slippage_fills} 笔"
-            + (f"；其中 {without_reference} 笔没有 decision_close" if without_reference else ""),
+            + (f"；其中 {without_reference} 笔没有 decision_close" if without_reference else "")
+            + (
+                f"；另有 {len(groups['unattributed'][0])} 笔分不出书，不计入"
+                if splittable and groups["unattributed"][0]
+                else ""
+            ),
         }
     value = float(judged["value"])
     se = judged["se"]
@@ -749,9 +800,7 @@ def risk_budget_status(
     # on the day it fires on something somebody must.
     tradable = usdt_drawdown_state(rows, params)
     volatility = realised_vol(rows, params)
-    slippage = slippage_bps(
-        trades, params, latest_ms=_latest_ms(rows), books=books_by_symbol(rows[-1] if rows else None)
-    )
+    slippage = slippage_bps(trades, params, latest_ms=_latest_ms(rows), books_at=books_by_bar(rows))
     guards = guard_firings(rows, params)
     reasons: list[str] = []
     if attributed["enforced"] and attributed["action"]:

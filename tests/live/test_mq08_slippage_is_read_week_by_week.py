@@ -1,10 +1,11 @@
 """M-Q08 on one page: slippage as a trend beside its judged number, and all four clauses together.
 
 The judged slippage reading pools thirty days, so it cannot say whether fills are getting better or
-worse.  The trend buckets the same fills by week with the same arithmetic - pinned below to the bit - and
-differs in exactly one thing: it splits each fill by the books of its OWN cycle.  The judged reading
-splits every fill by the newest cycle's map, so once the probe book is flat every fill reads main-only;
-on 2026-09-23 that was 119 fills judged as the main book's where their own cycles name 72.
+worse.  The trend buckets the same fills by week with the same arithmetic - pinned below to the bit - and,
+since the operator's G9 ruling (2026-09-23), the same split: each fill by the books of its own cycle and
+the one before (`fill_grouper`).  Before the ruling the judged reading split every fill by the newest
+cycle's map, and this file pinned that difference; the rule itself is pinned in
+`test_mq08_judges_each_fill_by_the_books_it_traded_for.py`.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from beidou_live.composition import build_model, load_registry
 from beidou_live.config import live_overlay_blocks
 from beidou_live.engine import registry_digest
 from beidou_live.reports import daily_markdown, daily_payload
-from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, slippage_bps
+from beidou_live.risk_budget import RiskBudgetParams, books_by_bar, slippage_bps
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
@@ -84,25 +85,26 @@ def test_a_bucket_is_read_with_the_judged_instruments_own_arithmetic() -> None:
         _fill(bar, "BBBUSDT", "SELL", 99.80, quantity=2.0),
         _fill(bar, "BBBUSDT", "BUY", 100.07, quantity=5.0),
     ]
-    judged = slippage_bps(
-        trades, RiskBudgetParams(min_slippage_fills=1), latest_ms=bar, books=books_by_symbol(rows[-1])
-    )
+    judged = slippage_bps(trades, RiskBudgetParams(min_slippage_fills=1), latest_ms=bar, books_at=books_by_bar(rows))
     (week,) = fidelity.slippage_by_week(rows, trades)
     assert week["combined"] == judged["combined"]
     assert week["main_only"] == judged["by_group"]["main_only"]
 
 
-def test_the_trend_splits_a_fill_by_its_own_cycle_and_the_judged_reading_by_the_newest() -> None:
-    """The one deliberate difference, pinned so that nobody "fixes" the two into agreement unknowingly."""
+def test_the_judged_reading_and_the_trend_split_a_fill_by_its_own_cycle() -> None:
+    """Operator ruling 2026-09-23 (G9): one rule for both readers.
+
+    Until the ruling this test pinned the opposite on purpose - the judged reading split by the newest
+    cycle, so this overlaid fill, made while the probe carried BBB, was judged as the main book's.
+    """
     traded, newest = T0 + DAY, T0 + 2 * DAY
     rows = [_cycle(traded, BOTH_BOOKS), _cycle(newest, MAIN_ONLY)]  # the probe went flat after the fill
     trades = [_fill(traded, "BBBUSDT", "SELL", 99.79)]
-    judged = slippage_bps(
-        trades, RiskBudgetParams(min_slippage_fills=1), latest_ms=newest, books=books_by_symbol(rows[-1])
-    )
+    judged = slippage_bps(trades, RiskBudgetParams(min_slippage_fills=1), latest_ms=newest, books_at=books_by_bar(rows))
     (week,) = fidelity.slippage_by_week(rows, trades)
-    assert judged["judged"] == "main_only" and judged["fills"] == 1, "judged: read as the main book's"
-    assert week["main_only"] is None and week["combined"]["fills"] == 1, "trend: it was an overlaid fill"
+    assert judged["judged"] == "main_only" and judged["fills"] == 0 and not judged["enforced"]
+    assert judged["by_group"]["overlaid"]["fills"] == 1, "judged: an overlaid fill, not the main book's"
+    assert week["main_only"] is None and week["combined"]["fills"] == 1, "trend: the same"
 
 
 def test_the_daily_report_prints_all_four_mq08_clauses(tmp_path: Path) -> None:

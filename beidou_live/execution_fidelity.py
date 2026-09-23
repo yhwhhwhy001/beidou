@@ -60,7 +60,7 @@ from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars
 from beidou_data.store import FundingStore, KlineStore
 from beidou_live.composition import build_model, cost_model, load_panel
 from beidou_live.construction import canonical_construction
-from beidou_live.risk_budget import _weighted, books_by_symbol
+from beidou_live.risk_budget import _weighted, books_by_bar, fill_grouper
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
@@ -447,14 +447,13 @@ def slippage_by_week(
 ) -> list[dict[str, Any]]:
     """Slippage against the decision close, by UTC week of the deciding bar: mean, standard error and n.
 
-    `slippage_bps`'s arithmetic (`_weighted`: notional-weighted, Kish n_eff) and its split rule - a symbol
-    more than one book carries is overlaid - with one difference, which is why a trend needs its own
-    reader: each fill is split by the `books` of ITS OWN cycle.  The judged reading splits all 30 days by
-    the newest cycle's map, so once the probe book is flat every fill reads main-only: on 2026-09-23 it
-    judged 119 fills as the main book's, of which 72 are main-only by their own cycles, 13 overlaid and 34
-    from cycles written before `books` existed.  Those are counted in `unsplit` and stay in `combined`.
+    `slippage_bps`'s arithmetic (`_weighted`: notional-weighted, Kish n_eff) and its split rule,
+    `fill_grouper`: each fill by the books of its own cycle and the one before.  Until the operator's G9
+    ruling (2026-09-23) the judged reading split all 30 days by the newest cycle's map instead, and this
+    trend was the one reader that did not; now both read one rule.  A fill that cannot be attributed is
+    counted in `unsplit` and stays in `combined`.
     """
-    books_at = {int(row["bar_open_ms"]): books_by_symbol(row) for row in rows if _bar(row)}
+    group_of = fill_grouper(books_by_bar(rows))
     buckets: dict[str, dict[str, Any]] = {}
     for trade in trades:
         try:
@@ -468,11 +467,11 @@ def slippage_by_week(
         bar = pd.Timestamp(int(trade["bar_open_ms"]), unit="ms", tz="UTC")
         week = str((bar - pd.Timedelta(days=bar.weekday())).date())
         bucket = buckets.setdefault(week, {"combined": ([], []), "main_only": ([], []), "unsplit": 0})
-        carried = books_at.get(int(trade["bar_open_ms"])) or {}
+        group = group_of(int(trade["bar_open_ms"]), str(trade.get("symbol")))
         populations = ["combined"]
-        if not carried:
+        if group == "unattributed":
             bucket["unsplit"] += 1
-        elif len(carried.get(str(trade.get("symbol")), frozenset())) <= 1:
+        elif group == "main_only":
             populations.append("main_only")
         for name in populations:
             bucket[name][0].append(fill[0])

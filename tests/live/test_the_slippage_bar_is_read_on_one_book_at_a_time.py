@@ -20,6 +20,10 @@ many fills short it is.  The combined number stays computed and printed either w
 
 A record that cannot name the books is judged on the combined reading, not excused: every trade row
 written before 2026-09-12 is that case, and an unreadable split is not a pass.
+
+Since the G9 ruling (2026-09-23) the split is per fill, by the books of its own cycle and the one before
+(`test_mq08_judges_each_fill_by_the_books_it_traded_for.py`).  Every fill below sits on one bar, so
+`BOOKS_AT` gives that bar the map these tests always meant.
 """
 
 from __future__ import annotations
@@ -29,6 +33,7 @@ from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, slippage_
 HOUR = 3_600_000
 NOW = 1_757_000_000_000
 BOOKS = {"MAINONLYUSDT": frozenset({"main"}), "OVERLAIDUSDT": frozenset({"main", "flow_short"})}
+BOOKS_AT = {NOW - HOUR: BOOKS}  # every `_fill` below trades on this bar
 
 
 def _fill(symbol: str, *, decision_close: float, avg_price: float, qty: float = 1.0) -> dict:
@@ -52,7 +57,7 @@ def test_the_two_populations_are_reported_separately() -> None:
         _fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.01),
         _fill("OVERLAIDUSDT", decision_close=100.0, avg_price=100.21),
     ]
-    result = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)
+    result = slippage_bps(fills, _params(), latest_ms=NOW, books_at=BOOKS_AT)
     groups = result["by_group"]
     assert abs(groups["main_only"]["value"] - 1.0) < 1e-6
     assert abs(groups["overlaid"]["value"] - 21.0) < 1e-6
@@ -68,7 +73,7 @@ def test_the_two_populations_are_reported_separately() -> None:
 def test_a_record_that_cannot_name_the_books_reports_one_population_rather_than_guessing() -> None:
     """No `books` in the cycle -> no split.  Absent knowledge is not a reading (the house rule)."""
     fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.01)]
-    blind = slippage_bps(fills, _params(), latest_ms=NOW, books=None)
+    blind = slippage_bps(fills, _params(), latest_ms=NOW, books_at=None)
     assert blind["by_group"] == {} and blind["judged"] == "combined"
     assert books_by_symbol({"contributions": {"tsmom": {"MAINONLYUSDT": 1.0}}}) == {}
     assert books_by_symbol(None) == {}
@@ -104,7 +109,7 @@ def test_the_breach_carries_the_error_bar_that_decides_whether_it_is_a_reading()
         ],
         _params(),
         latest_ms=NOW,
-        books=BOOKS,
+        books_at=BOOKS_AT,
     )
     assert noisy["se"] > 2.0
     assert noisy["decisive"] is False  # 5.5 bps with a 10 bps error bar is not a breach measurement
@@ -113,7 +118,7 @@ def test_the_breach_carries_the_error_bar_that_decides_whether_it_is_a_reading()
         [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.2)] * 4,
         _params(),
         latest_ms=NOW,
-        books=BOOKS,
+        books_at=BOOKS_AT,
     )
     assert tight["se"] == 0.0
     assert tight["decisive"] is True  # 20 bps against a 4 bps bar, with no disagreement at all
@@ -125,7 +130,7 @@ def test_the_worst_symbols_are_named_so_a_breach_can_be_chased() -> None:
         _fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.01),
         _fill("OVERLAIDUSDT", decision_close=100.0, avg_price=100.5),
     ]
-    worst = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)["worst_symbols"]
+    worst = slippage_bps(fills, _params(), latest_ms=NOW, books_at=BOOKS_AT)["worst_symbols"]
     assert worst[0]["symbol"] == "OVERLAIDUSDT"
     assert abs(worst[0]["value"] - 50.0) < 1e-6
 
@@ -134,7 +139,7 @@ def test_the_probes_names_can_no_longer_fail_the_main_books_bar() -> None:
     """The 2026-09-12 shape, scaled down: the main book inside 4, the probe's names four times it."""
     fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.008)] * 2
     fills += [_fill("OVERLAIDUSDT", decision_close=100.0, avg_price=100.162)] * 2
-    result = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)
+    result = slippage_bps(fills, _params(), latest_ms=NOW, books_at=BOOKS_AT)
     assert result["judged"] == "main_only"
     assert result["inside"] is True, "the main book fills at 0.8 bps"
     assert result["combined"]["value"] > result["limit"], "and the book as traded is still over the bar"
@@ -144,7 +149,7 @@ def test_the_probes_names_can_no_longer_fail_the_main_books_bar() -> None:
 def test_a_main_book_that_really_is_slow_still_fails() -> None:
     """The falsifier.  Re-pointing the bar must not be a way of never failing it."""
     fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.09)] * 2
-    result = slippage_bps(fills, _params(), latest_ms=NOW, books=BOOKS)
+    result = slippage_bps(fills, _params(), latest_ms=NOW, books_at=BOOKS_AT)
     assert result["judged"] == "main_only" and result["inside"] is False
     assert abs(result["value"] - 9.0) < 1e-6
 
@@ -153,7 +158,7 @@ def test_too_few_main_book_fills_is_blind_and_says_how_many_short() -> None:
     """M-Q08's own "≥ 30 fills" now applies to the book it judges - 19 of 34, on 2026-09-12."""
     fills = [_fill("MAINONLYUSDT", decision_close=100.0, avg_price=100.01)] * 2
     fills += [_fill("OVERLAIDUSDT", decision_close=100.0, avg_price=100.2)] * 40
-    result = slippage_bps(fills, RiskBudgetParams(min_slippage_fills=30), latest_ms=NOW, books=BOOKS)
+    result = slippage_bps(fills, RiskBudgetParams(min_slippage_fills=30), latest_ms=NOW, books_at=BOOKS_AT)
     assert result["enforced"] is False and result["value"] is None
     assert result["fills"] == 2 and result["fills_all_books"] == 42
     assert "主书只有 2 笔" in result["why"]

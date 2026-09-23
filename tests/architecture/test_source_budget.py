@@ -3231,7 +3231,24 @@ CEILING = {
     #
     # 并入 G1、G3、G6、G4（#118、#119、#121、#123）之后，两个提交合计 +601：11_262 -> 11_863。
     # 留 40 行（11_863 -> 11_903），理由与上面几格逐字相同，不重述。
-    "beidou_live": 11_903,
+    #
+    # 2026-09-23（不编号，同上）。+48 beidou_live，11_882 -> 11_930，抬到 11_970。中间那 19 行是 #126
+    # 用掉的余量（G6 降为提示），没有抬顶。
+    #
+    # G9 的两处口径，操作者当天裁定「按建议」：M-Q08 的判定滑点按每笔成交下单前后的周期分书；14 天的
+    # 最小样本不变。原来判定拿最新周期的 books 给 30 天里的全部成交分书，probe 空仓以后每一笔都读成
+    # 主书的。09-23 的实盘记录上 119 笔全判主书；按下单前后的周期分，是主书独有 52 笔（+6.43 bps）、
+    # 共载 15 笔（+13.43 bps）、分不出书 52 笔（+3.93 bps，全部来自 09-12 写入 books 之前的周期）。
+    #
+    # 花在哪：`books_by_bar` 与 `fill_grouper` 38 行，其中 docstring 10 行，写规则、为什么不用最新周期、
+    # 为什么要看上一个周期；`slippage_bps` 的分组、判定条件、BLIND 原因与导入净 +13；`risk_budget_status`
+    # 的调用 −2；`execution_fidelity.slippage_by_week` 改调同一个函数，净 −1。
+    #
+    # 买到什么：判定只读主书自己的成交，按周趋势与判定读同一条规则。告警照旧：主书 6.43 bps 仍在 4 bps
+    # 线外，只是不再掺 probe 的成交，标准误从 1.88 变宽到 3.34。
+    #
+    # 留 40 行（11_930 -> 11_970），理由与上面几格逐字相同，不重述。
+    "beidou_live": 11_970,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
