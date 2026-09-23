@@ -27,6 +27,7 @@ import pytest
 
 from beidou_alpha.backtest import CostModel, ImpactModel, impact_costs, run_backtest
 from beidou_alpha.panel import Panel
+from tests.alpha.test_causality import _bit_for_bit
 
 
 def _panel(bars: int = 900, symbols: tuple[str, ...] = ("AAA", "BBB"), volume: float = 1_000.0) -> Panel:
@@ -153,7 +154,7 @@ def test_it_reads_no_bar_the_decision_could_not_have() -> None:
     if tampered.quote_volume is not None:
         tampered.quote_volume.iloc[cutoff:] *= 150.0
     after = impact_costs(turnover, rets, tampered, columns, model)
-    pd.testing.assert_frame_equal(before.iloc[:cutoff], after.iloc[:cutoff])
+    _bit_for_bit(before.iloc[:cutoff], after.iloc[:cutoff])
 
 
 def test_a_thinner_market_costs_more_for_the_same_order() -> None:

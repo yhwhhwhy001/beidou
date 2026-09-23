@@ -30,6 +30,7 @@ from beidou_alpha.panel import Panel
 from beidou_alpha.validation.metrics import sharpe
 from beidou_alpha.validation.stability import REGIME_VOL_WINDOW_DAYS, regime_split_sharpes, trailing_benchmark_vol
 from beidou_alpha.validation.verdict import decide
+from tests.alpha.test_causality import _bit_for_bit
 
 REPORTS = Path(__file__).resolve().parents[2] / "reports" / "research"
 
@@ -52,7 +53,7 @@ def test_a_shock_from_bar_k_on_moves_no_label_at_or_before_k(august_panel: Panel
 
     before, after = trailing_benchmark_vol(bench, bpy), trailing_benchmark_vol(shocked, bpy)
 
-    pd.testing.assert_series_equal(before.iloc[: k + 1], after.iloc[: k + 1])
+    _bit_for_bit(before.iloc[: k + 1], after.iloc[: k + 1])
     assert not np.isclose(before.iloc[k + 1], after.iloc[k + 1]), "扰动到不了后面的标签，上一条就是空转"
     window = round(REGIME_VOL_WINDOW_DAYS * bpy / 365.0)
     unshifted = bench.rolling(window, min_periods=window // 4).std()
@@ -134,10 +135,8 @@ def test_the_benchmark_keeps_each_bar_to_the_symbols_the_book_could_hold(august_
 
     first = returns[["BTCUSDT", "ETHUSDT"]].iloc[:half].mean(axis=1)
     second = returns[["BTCUSDT", "ETHUSDT", "BNBUSDT"]].iloc[half:].mean(axis=1)
-    pd.testing.assert_series_equal(bench, pd.concat([first, second]), check_names=False)
-    pd.testing.assert_series_equal(
-        _benchmark(august_panel), returns[august_panel.symbols].mean(axis=1), check_names=False
-    )
+    _bit_for_bit(bench, pd.concat([first, second]), check_names=False)
+    _bit_for_bit(_benchmark(august_panel), returns[august_panel.symbols].mean(axis=1), check_names=False)
 
 
 def _archived_validations() -> list[tuple[str, dict[str, Any]]]:

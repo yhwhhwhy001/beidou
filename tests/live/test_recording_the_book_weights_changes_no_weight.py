@@ -27,6 +27,7 @@ from beidou_alpha.model import AlphaModel
 from beidou_alpha.panel import Panel
 from beidou_alpha.portfolio import combine_books
 from beidou_live.config import build_model_from_profile, load_profile
+from tests.alpha.test_causality import _bit_for_bit
 
 
 @pytest.fixture(scope="module")
@@ -74,7 +75,7 @@ def test_combine_books_of_the_recorded_weights_is_the_traded_weight(model: Alpha
     # rebalancer's live (D-033), and combining with it latches a previous weight instead of the
     # one the books asked for - 0.15 against 0.14295 at the first differing bar when I got this wrong
     bare = replace(model.portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
-    pd.testing.assert_frame_equal(combine_books(books, bare), traded)
+    _bit_for_bit(combine_books(books, bare), traded)
 
 
 def test_the_live_entry_point_returns_both_and_they_agree(model: AlphaModel, panel: Panel) -> None:

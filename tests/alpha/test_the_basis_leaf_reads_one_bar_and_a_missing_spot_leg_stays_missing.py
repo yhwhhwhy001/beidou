@@ -43,6 +43,7 @@ from beidou_alpha.mining.search import _basis_family, enumerate_candidates, to_s
 from beidou_alpha.panel import Panel
 from beidou_data.alignment import PASS, SPOT_BASIS_COLUMN, UNVERIFIABLE, Verification
 from beidou_live.engine import spot_refusal
+from tests.alpha.test_causality import _bit_for_bit
 
 BARS = pd.date_range("2024-01-01", periods=64, freq="h", tz="UTC")
 SYMBOLS = ("BTCUSDT", "ETHUSDT", "FARTCOINUSDT")
@@ -111,7 +112,8 @@ def test_truncating_the_panel_leaves_every_surviving_basis_value_identical() -> 
     )
     short = Basis().evaluate(trimmed)
 
-    assert np.allclose(short.to_numpy(), full.loc[index].to_numpy(), equal_nan=True)
+    # `full.loc[index]` takes the name of the unnamed index it was sliced with; `short` keeps `open_time`.
+    _bit_for_bit(short, full.loc[index], check_names=False)
 
 
 def test_a_halted_spot_listing_is_nan_on_every_later_bar_rather_than_its_last_price() -> None:

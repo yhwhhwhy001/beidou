@@ -29,6 +29,7 @@ from beidou_alpha.features import apply_numpy, taker_buy_ratio, volume_ratio
 from beidou_alpha.panel import Panel
 from beidou_alpha.signals import get_signal
 from beidou_alpha.signals.flow import FlowParams, flow_scores
+from tests.alpha.test_causality import _bit_for_bit
 
 DEFAULTS = FlowParams()
 
@@ -72,7 +73,7 @@ def test_the_default_multiplier_on_the_un_warm_bars_is_still_exactly_one() -> No
     assert expansion.loc[gap].isna().to_numpy().all(), "these are exactly the bars the fill reaches"
     imbalance = taker_buy_ratio(panel.taker_buy_quote, panel.quote_volume, params.window) - 0.5
     old = apply_numpy(imbalance / params.scale, np.tanh).clip(-1.0, 1.0).where(imbalance.notna())
-    pd.testing.assert_frame_equal(flow_scores(panel, params).loc[gap], old.loc[gap])
+    _bit_for_bit(flow_scores(panel, params).loc[gap], old.loc[gap])
 
 
 def test_none_leaves_the_un_warm_bars_missing_which_is_what_warmup_bars_already_promised() -> None:

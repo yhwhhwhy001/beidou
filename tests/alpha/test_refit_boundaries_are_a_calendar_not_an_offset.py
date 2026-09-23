@@ -32,6 +32,7 @@ import pandas as pd
 from beidou_alpha.features import garch_forecast_vol, refit_boundaries
 from beidou_alpha.panel import Panel
 from beidou_alpha.portfolio import PortfolioParams, asset_vol, risk_budget
+from tests.alpha.test_causality import _bit_for_bit
 
 # Deliberately not midnight and deliberately not a multiple of anything: a panel whose first bar
 # happened to sit on the grid would pass a positional implementation too.
@@ -92,7 +93,7 @@ def test_a_panel_that_starts_later_gets_the_same_garch_forecast_bit_for_bit() ->
     common = part.index[part.index >= first + pd.Timedelta(hours=kwargs["fit_bars"])]
     assert len(common) > 800, "the comparison must not be a handful of bars"
     assert whole.loc[common].notna().to_numpy().all(), "nor NaN against NaN"
-    pd.testing.assert_frame_equal(whole.loc[common], part.loc[common])
+    _bit_for_bit(whole.loc[common], part.loc[common])
 
     # The control: this test would pass on any implementation if the slice simply reproduced the whole
     # panel, so check that the two genuinely differ where the slice lacks the history.

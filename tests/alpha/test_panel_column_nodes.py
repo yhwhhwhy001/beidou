@@ -29,6 +29,7 @@ import pytest
 
 from beidou_alpha.mining.expr import Abs, Const, Dim, ExprError, Moment, Residual, Ret, Semi, TradeSize, Vol
 from beidou_alpha.panel import Panel
+from tests.alpha.test_causality import _bit_for_bit
 
 
 def _panel(n: int = 400, symbols: tuple[str, ...] = ("AAA", "BBB", "CCC"), *, trades: bool = True) -> Panel:
@@ -253,7 +254,7 @@ def test_no_node_reads_the_future(node: object) -> None:
         )
     ).iloc[:cutoff]
 
-    pd.testing.assert_frame_equal(before, after)
+    _bit_for_bit(before, after)
 
 
 @pytest.mark.parametrize(
