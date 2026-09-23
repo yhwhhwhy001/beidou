@@ -30,15 +30,17 @@ constant-long comparator, and no decomposition can find signal alpha in a stretc
 no distinction.  `signal_state` reports this because a reader who does not have it will read a beta
 number as though a choice had been made.
 
-Pure functions.  The CLI does the I/O, and nothing here writes.  This measures; it changes nothing and
-gates nothing -- 11 days cannot settle whether the book has alpha (M-G06's window runs to 2028-03-17),
-and a report that pretended otherwise would be the failure this repository keeps finding.
+Pure functions.  The callers do the I/O (`report beta` and the daily report, both through
+`beta_reading`), and nothing here writes.  This measures; it changes nothing and gates nothing --
+11 days cannot settle whether the book has alpha (M-G06's window runs to 2028-03-17), and a report
+that pretended otherwise would be the failure this repository keeps finding.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
 
@@ -381,4 +383,57 @@ def beta_decomposition(
         "exposure_max": max(ex),
         "constant": constant,
         "conditional": conditional,
+    }
+
+
+def beta_reading(
+    cycles: Sequence[Mapping[str, Any]],
+    attribution: Sequence[Mapping[str, Any]],
+    closes: Callable[[str], Any],
+    strategy: str = "tsmom",
+) -> dict[str, Any]:
+    """The whole D-045 reading from what the loop wrote: `report beta`'s page and the daily report's block.
+
+    One function for both callers.  Until 2026-09-23 this sat inside the CLI command, so the reading
+    existed only when somebody ran it by hand.  The daily report now takes it every hour, and a second
+    copy of the fill below is how the two would stop agreeing - the first four answers to this
+    question differed because the BENCHMARK did (module docstring).
+
+    `closes(symbol)` is the parquet archive as a series indexed by bar open time.  The cycle records'
+    own `closes` is newer than the loop, so the archive fills in the bars that predate it.  A symbol the
+    archive cannot give is a gap, not an error: `pit_benchmark` counts every symbol-bar it skipped.
+    Only the window's bars are copied out of the archive, because `pit_benchmark` looks up nothing
+    else.  The CLI used to copy the whole history: the same numbers for 121 ms instead of 7 ms on
+    2026-09-23 (710,252 archive rows over 20 symbols), a cost the daily report would pay every hour.
+
+    Fewer than two bars carrying `collateral.usdt_equity` returns a refusal (`measured`, `reason`)
+    in place of the four blocks: there is no return to split.
+    """
+    series = series_from_cycles(cycles)
+    bars = series["bars"]
+    if len(bars) < 2:
+        return {"measured": False, "reason": "周期记录里还没有两根带 usdt_equity 的 bar，无法分解"}
+    prices = {symbol: dict(points) for symbol, points in series["prices"].items()}
+    for symbol in {s for names in series["universe"].values() for s in names}:
+        try:
+            archive = closes(symbol)
+        except Exception:  # a missing or half-written parquet is a gap here, not a failure
+            continue
+        archive = archive[archive.index.isin(bars)]
+        archived = prices.setdefault(symbol, {})
+        for stamp, price in zip(archive.index.astype("int64"), archive.astype(float), strict=True):
+            archived.setdefault(int(stamp), float(price))
+    benchmark = pit_benchmark(bars, series["universe"], prices)
+    return {
+        "window": {
+            "from": datetime.fromtimestamp(bars[0] / 1000, UTC).isoformat(),
+            "to": datetime.fromtimestamp(bars[-1] / 1000, UTC).isoformat(),
+            "days": (bars[-1] - bars[0]) / 86_400_000,
+            "cycles": len(bars),
+        },
+        "benchmark": {k: v for k, v in benchmark.items() if k != "level"},
+        "signal": signal_state(cycles, strategy, bars),
+        "decomposition": beta_decomposition(
+            series["equity"], benchmark["level"], series["exposure"], excluded_bars=foreign_bars(attribution), bars=bars
+        ),
     }

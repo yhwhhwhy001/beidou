@@ -13,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from beidou_live.bar_sanity import check_bars
 from beidou_live.ports import MarketData, SignalModel
 
 
@@ -41,6 +42,9 @@ class ModelInputs:
     funding: dict[str, float]
     funding_history: dict[str, pd.Series] | None = None
     dropped: list[str] = field(default_factory=list)  # symbols whose frame was missing or too short
+    # G6: `bar_sanity.check_bars` over `bars`.  A reading for the cycle row and the daily report; the
+    # model is never handed it, so no weight can depend on it.  Not in `to_dict`: `inputs` keeps its shape.
+    sanity: dict[str, Any] = field(default_factory=dict)
 
     def settled_symbols(self) -> int:
         """Symbols carrying at least one settlement this cycle.  A zero column and no column are one input."""
@@ -78,7 +82,8 @@ async def model_inputs(
     if bool(getattr(model, "needs_funding", False)):
         starts = [start for start in (first_open_ms(frame) for frame in usable.values()) if start is not None]
         history = await market.funding_history(list(usable), min(starts) if starts else 0)
-    return ModelInputs(bars=usable, funding=dict(funding), funding_history=history, dropped=dropped)
+    sanity = check_bars(usable, interval)  # alert only, never raises (see its module docstring)
+    return ModelInputs(bars=usable, funding=dict(funding), funding_history=history, dropped=dropped, sanity=sanity)
 
 
 def latest_closes(bars: Mapping[str, pd.DataFrame]) -> dict[str, float]:

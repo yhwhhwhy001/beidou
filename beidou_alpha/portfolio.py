@@ -367,15 +367,7 @@ def build_weights(
     factor = (params.max_gross / gross.where(gross > params.max_gross)).fillna(1.0).clip(upper=1.0)
     weights = stage2.mul(factor, axis=0)
     weights = weights.where(aligned.notna().any(axis=1).cummax(), other=np.nan)
-    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
-        weights = apply_no_trade_band(
-            weights,
-            params.no_trade_band,
-            params.no_trade_rel_band,
-            params.flat_inside_band,
-            params.band_entry_multiple,
-        )
-    return weights
+    return banded(weights, params)
 
 
 def apply_no_trade_band(
@@ -424,6 +416,29 @@ def apply_no_trade_band(
     return pd.DataFrame(out, index=weights.index, columns=weights.columns)
 
 
+def banded(weights: pd.DataFrame, params: PortfolioParams) -> pd.DataFrame:
+    """The no-trade band as the construction applies it: every knob ``params`` carries, or none at all.
+
+    The one way a book gets banded, for the reason ``cap_gross`` is the one gross cap.
+    ``apply_no_trade_band`` takes its knobs one argument at a time, and each caller used to spell the call
+    out - so each knob reached only the callers someone remembered.  D2 (2026-09-15) reached
+    ``build_weights`` and ``combine_books`` but not ``research book``'s single arms; D3 (2026-09-17)
+    reached ``build_weights`` alone.  From then on, every multi-book research reading banded D2 without
+    D3, a construction that never traded.  The live loop was never affected: it asks for ``band=False``
+    and the rebalancer, which carries D3, bands against the venue's position.  A knob added here reaches
+    every book.
+    """
+    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
+        return apply_no_trade_band(
+            weights,
+            params.no_trade_band,
+            params.no_trade_rel_band,
+            params.flat_inside_band,
+            params.band_entry_multiple,
+        )
+    return weights
+
+
 def cap_gross(weights: pd.DataFrame, max_gross: float) -> pd.DataFrame:
     """Scale each row down to ``sum |w| <= max_gross``; never up, and never below.  ``0`` disables.
 
@@ -466,6 +481,4 @@ def combine_books(books: Mapping[str, pd.DataFrame], params: PortfolioParams) ->
         total = total + frame.fillna(0.0)
     clipped = total.clip(-params.max_weight, params.max_weight)
     weights = cap_gross(clipped, params.max_gross).where(valid, other=np.nan)
-    if params.no_trade_band > 0 or params.no_trade_rel_band > 0:
-        weights = apply_no_trade_band(weights, params.no_trade_band, params.no_trade_rel_band, params.flat_inside_band)
-    return weights
+    return banded(weights, params)

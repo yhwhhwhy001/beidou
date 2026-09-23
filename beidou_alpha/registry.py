@@ -437,7 +437,7 @@ def _probe_problems(
 
     The alternative is worse than it looks.  When the flow sleeve's book verdict turned REJECT on
     2026-09-04, the choices were to point the registry at a report whose universe no longer existed on
-    disk, or to let a REJECT through the gate silently and stop the whole loop from starting.  Requiring
+    disk, or to cite the REJECT and have the gate refuse to start the whole loop, not just the sleeve.  Requiring
     ``accepted_despite`` plus a reason and a review date keeps the running configuration attached to
     current, reproducible evidence and puts the exception in the file rather than in a commit message.
     """
