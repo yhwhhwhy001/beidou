@@ -27,9 +27,9 @@ class RebalanceParams:
     no_trade_band: float = 0.005
     no_trade_rel_band: float = 0.0
     max_order_notional: float | None = None
-    max_participation: float = 0.0  # cap on a risk-adding order: fraction of the symbol's average hourly quote volume
+    max_participation: float = 0.0  # cap on any non-closing order: fraction of the symbol's average hourly quote volume
     # False = today's scope, where only a full close escapes the cap.  True = the scope the line above
-    # has always claimed: every ``reduce_only`` order (full close AND pure reduction) escapes it.
+    # claimed until 2026-09-23: every ``reduce_only`` order (full close AND pure reduction) escapes it.
     exempt_reductions: bool = False
     # False = today's live book, where the absolute band is applied to every planned change.  True =
     # the book `beidou_alpha.portfolio.apply_no_trade_band` has always scored, whose own docstring
@@ -256,8 +256,8 @@ def plan_rebalance(
                 continue
         note = ""
         cap = (liquidity or {}).get(symbol)
-        # T-S03's cap and the scope it actually has.  The field's comment has always read "risk-adding
-        # order", but the exemption here was `closing` alone, so a 15% -> 5% pure reduction was
+        # T-S03's cap and the scope it actually has.  The field's comment read "risk-adding order" until
+        # 2026-09-23, but the exemption here was `closing` alone, so a 15% -> 5% pure reduction was
         # truncated by `max_participation x trailing volume` - a cap that shrinks with the same volume
         # curve that dries up in the bar where getting smaller matters most (2026-09-13 review, second
         # pass: the exit channel contracts with liquidity).  Widening it is a live behaviour change and
