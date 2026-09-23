@@ -6,7 +6,8 @@
 | --- | --- |
 | 拉取/刷新研究数据并选 universe | `beidou data sync` |
 | 手动刷新实盘交易池（30 日成交量 + 滞回） | `beidou data pool refresh`（实盘循环每个 UTC 日也会自动做一次） |
-| 重建时点成员表（研究用，先同步 878 个候选的日线；必须带 `--refresh D`：2026-09-04 起研究口径逐日重选，默认的 `MS` 出的是月表） | `beidou data pool history --refresh D [--sync-members]` |
+| 重建时点成员表（研究用，先同步 878 个候选的日线；必须带 `--refresh D`：2026-09-04 起研究口径逐日重选，默认的 `MS` 出的是月表）。**重建会挡住 armed 启动**，先读下面「成员表落后告警」 | `beidou data pool history --refresh D [--sync-members]` |
+| 时点成员表落后几天（每小时巡检带 `--check` 跑它） | `beidou data pool lag [--check]` |
 | 单策略回测 / 验证 | `beidou research backtest --strategy tsmom`；`beidou research validate --strategy tsmom --universe pit --prior-trials N`（`--min-tenure K` 只交易已入池 ≥K 次的老牌币） |
 | exit overlay / 回撤节流证据 | `beidou research overlay --universe pit` |
 | 信号 vs 构建归因（D-024，不计 ledger） | `beidou research decompose --strategy tsmom --universe pit --from 2021-01-01` |
@@ -69,6 +70,33 @@ git show 3a4bf6fa:deploy/com.beidou.proxy-probe.plist > ~/Library/LaunchAgents/c
 ```bash
 launchctl bootout gui/$(id -u)/com.beidou.shadow && mv .beidou/live-shadow-dry-run .beidou/live-shadow-dry-run.$(date -u +%Y%m%d) && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.shadow.plist
 ```
+
+## 成员表落后告警（2026-09-23 起）
+
+操作者 2026-09-23 裁定：时点成员表维持手动重建，不排定时任务。每小时巡检为此加了一行，报它落后几天
+（`beidou data pool lag --check`）。
+
+**含义。** 表末行之后的 bar，研究侧沿用末行的成员（`membership_at_bars` 前推）。落后 k 天，就是研究
+最近 k 天用的是一个冻住的池子。刚重建完读数是 1，不是 0：末行是最后一根收盘日线，也就是昨天。
+落后满 14 天告警。表不存在、读不了、是空的、不是日表，或末行晚于今天，也都告警。这些状态都说不出
+表有多新。
+
+**为什么是 14 天。** 在 09-18 重建的真实表上量过。取截止今天的 30 天窗口，最后 14 天前推时，
+平均 3.42% 的成员位拿错了名字。13 天时是 2.98%。3% 是 P12 第 0 段用过的线：成员改动低于它，
+不值得跑回测。量法与出处在 `beidou_data/pool.py` 的 `MEMBERSHIP_ALERT_DAYS`。
+`tests/data/test_the_membership_table_says_how_far_it_trails.py` 在真实表上逐个重算这些数。
+
+**收到告警怎么办：不要马上重建。** `membership` 是 dataset manifest 的阻断字段，重建会改动它。
+armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要等证据在新表上重出，才能再过这道门。
+2026-09-18 那次单独重建，就是这样引出了 D-041 bridge。所以：
+
+1. 重建和证据重出排进同一个安排，时间由操作者定。重出要花 ledger。
+2. 重建必须带 `--refresh D`。不带就是月表，巡检会接着报「不是日表」。
+3. 开跑前先确认没有别的会话在写 `.beidou/data`（RISK-LD05）。`--sync` 默认开，会给每个候选下载
+   日线，走的是实盘循环那条代理，按 RESEARCH_LOG 里回填那条整点避让挑时间。
+4. 表是原地重写的。巡检若撞上写到一半的文件，会报一次「读不了」，下一小时自己消失。
+
+告警会每小时重报，直到重建为止，和巡检里其它闸住的检查一样。
 
 ## 改了 registry / profile 之后
 
@@ -133,4 +161,4 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
 - 当前实测：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
 - **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data pool refresh`（`data spot` 2026-09-09 加入；每日 01:20，`com.beidou.data.plist`）。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。
-- **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check` 与 `report daily --check`，失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。
+- **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check`、`report daily --check` 与 `data pool lag --check`（成员表落后，见上文「成员表落后告警」），失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。
