@@ -69,6 +69,12 @@ brew install gitleaks && bash deploy/install-hooks.sh
 
    操作者 2026-09-17 要求把这一步写死。当时本地积了 4 个 `: gone` 的残留分支（#17 / #18 / #20 / #21 留下的），远端早已自动清掉，只有本地没人收。
 
+   **例外：会话自己的 worktree 不 remove**（2026-09-23 操作者认可）。Claude 桌面版给每个会话建的
+   `.claude/worktrees/<名字>` 就是会话的工作目录，remove 它就删掉了会话正在用的目录，而合并后会话要留着继续用
+   （见下一节的 `auto_archive_on_close`）。做法：在那个 worktree 里切回它自己的 `claude/<名字>`
+   分支并 `git merge --ff-only origin/main`，再 `git branch -d <PR 分支>`。这一步要做到的
+   「本地不留残留分支」照样做到。
+
 只有三种情况先停下来说话，而且都是**报告发现**而不是请求授权：
 
 - **CI 红了**——去修，不是去问。修完推同一个分支，CI 重跑，绿了照规则合
