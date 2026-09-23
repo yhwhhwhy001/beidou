@@ -117,14 +117,14 @@ G11、G12 要等冻结结束。
 
 ### 后续（二）：清点之后合入的 PR
 
-同日，main 又合入 #102–#107。下表的现状逐项在 `ecd09b2f` 上核过，行号也以它为准。「在途」指写这一节时
-还开着的 PR。#105 与 #107 的数字引自各自的 PR 描述，没有重跑。本文的表格都不改，仍是清点当时的样子。
+同日，main 又合入 #102–#109。下表的现状逐项在 `eeb4031c` 上核过，行号也以它为准。「在途」指写这一节时
+还开着的 PR。#105、#107 与 #108 的数字引自各自的 PR 描述，没有重跑。本文的表格都不改，仍是清点当时的样子。
 
 | 本文的项 | 现状 |
 | --- | --- |
 | G2：family gate 失败的后果 | #102 已做。`family_gate.refusals` 把 `governance/verdicts.jsonl` 的 `refuse` 行变成 `FAMILY_GATE_FAILED`，`governance advance` 据此把 main 降回 probe。`advance` 没排进任何 job，要人跑 `--commit`（`deploy/run_governance_gate.sh:28`）。`governance/governance_state.json` 里 tsmom 仍是 main |
 | G5：`regime_split_sharpes` 接进 validate | #104 已做，只报告、不判定。`reports/research/` 里还没有一份报告带这张表 |
-| G7：组合层的「打乱未来」因果测试 | #105 已做。植入 14 处一根前视，抓到 11 处。扫全部 79 个 cutoff 能抓到另外 3 处，代价约 40 秒；这个测试文件现在约 1 秒。没做。#107 把信号层三处因果比较改成逐位。它的描述另列 26 处，操作者裁定照改，#108 在途 |
+| G7：组合层的「打乱未来」因果测试 | #105 已做。植入 14 处一根前视，抓到 11 处。扫全部 79 个 cutoff 能抓到另外 3 处，代价约 40 秒；这个测试文件现在约 1 秒。没做。#107 把信号层三处因果比较改成逐位。它的描述另列 26 处，操作者裁定照改，#108 已合入 |
 | 「说法与行为不符」前 2 行 | #102 已做。`FAMILY_GATE_FAILED` 有了产生方，说法改成「降回 probe」；冻结到期改为 10-13 |
 | 「说法与行为不符」后 3 行 | 没动。原文仍在 `beidou_live/reports.py:367`、`beidou_cli/research_backtest_cmd.py:139` 与 `beidou_data/store.py:109` |
 | 「陈述过期」25 行 | #103 改了 21 行，跳过 4 行。跳过的 `config/costs.yaml:16` 那句带日期，同文件 `:20` 已就地更正。另 3 行交给操作者：决策清单与 `governance/reopen.yaml` 两处。清单外还有两处也交给操作者：`beidou_alpha/validation/forward_board.py:73` 的运行时字符串，`beidou_live/rebalancer.py:30` 的字段注释。操作者答「按建议处理」，#110 在途 |
