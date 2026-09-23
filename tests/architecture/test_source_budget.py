@@ -3142,7 +3142,30 @@ CEILING = {
     # 0.697s 对 0.697s、0.731s 对 0.732s。进程内的 `decay_watch` 走 `read_jsonl` 缓存是 0.3ms，冷读 19ms。
     #
     # 留 46 行（10_734 -> 10_780），理由与 2026-09-17 那格逐字相同，不重述。
-    "beidou_live": 10_780,
+    #
+    # 2026-09-23（不编号，同上）。+131 beidou_live。分支上是 10_660 -> 10_791；并入 G1（#118）之后是
+    # 10_734 -> 10_865，抬到 10_905。
+    #
+    # G3：`report beta` 的读数进日报。D-045 的分解原来写在 CLI 命令体里，只有人手动跑才有读数。
+    # 日报与每小时的巡检都看不到。现在抽成 `benchmark.beta_reading`，`report beta` 与日报的 `beta`
+    # 块共用它。两处读同一个数，只有共用一份计算才安全。D-045 的前四个答案互不相同，原因正是基准换了。
+    #
+    # 花在哪：`beta_reading` 51 行（docstring 17 行）；`market_beta` 24 行（docstring 9 行，写的是
+    # 为什么宽捕获、为什么不告警）；`_market_beta_lines` 43 行；挂接 4 行（payload 3 行，其中注释
+    # 2 行；markdown 1 行）；import 2 行；模块 docstring 净增 1 行；函数间空行 6 行。命令体搬走的
+    # 29 行记在 beidou_cli 那一格，那格的顶同步降下。
+    #
+    # 买到什么。巡检第一次带上 beta 与残差。2026-09-23 在实盘状态副本上读到：constant beta 1.10
+    # （t 8.79），alpha t 1.22；conditional beta 0.70（t 28.26），alpha t 0.36；样本 362 根 bar。
+    # 日报块与 `report beta` 的 JSON 逐位相同，21 个浮点逐个比过。重构前后 `report beta` 的
+    # markdown 与 JSON 逐字节相同。只报告，不告警：beta 与残差都没有预登记的阈值。
+    #
+    # 耗时。`report daily --check` 的中位数从 0.592 s 到 0.627 s（交替各 8 次，配对差中位 +38 ms）。
+    # 归档只取窗口内的 bar：整段历史要 121 ms，窗口内 7 ms，读数相同（20 个标的，710,252 行）。
+    # 照搬原来的取法，每小时要多花约 0.11 s。
+    #
+    # 留 40 行（10_865 -> 10_905），理由与上面几格逐字相同，不重述。
+    "beidou_live": 10_905,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3390,7 +3413,10 @@ CEILING = {
     # +70%）。真实面板上量过：同一本书（`decompose-tsmom-20260904T052958Z` 的配置，复现到归档的
     # 小数点后三位），基准 Sharpe 从 +0.50 变成 +0.10，复利从 +31% 变成 −84%；书与基准的相关只从
     # −0.135 变成 −0.127。所以变的是「市场赚了多少」，不是「书像不像市场」。
-    "beidou_cli": 7_735,
+    # −29 beidou_cli，2026-09-23（7_735 -> 7_706）：`report beta` 的计算搬进 `benchmark.beta_reading`，
+    # 命令体只剩读文件、渲染与写盘。搬走的行不留作 headroom：只升不降的 ratchet，每搬一次家就白送
+    # 这个包一段余量。beidou_live 那一格的 +131 是同一次改动的另一半。
+    "beidou_cli": 7_706,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
