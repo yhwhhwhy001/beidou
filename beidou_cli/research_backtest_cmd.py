@@ -11,7 +11,7 @@ from typing import Any
 
 import click
 
-from beidou_alpha.backtest import benchmark_returns
+from beidou_alpha.backtest import benchmark_basket, benchmark_returns
 from beidou_alpha.report import render_markdown
 from beidou_alpha.validation.ledger import (
     TrialRecord,
@@ -136,7 +136,7 @@ def research_backtest(
         panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
     )
     summary = result.summary()
-    bench = benchmark_returns(panel, execution, panel.symbols).reindex(result.weights.index)  # type: ignore[arg-type]
+    bench = benchmark_returns(panel, execution, panel.symbols, membership).reindex(result.weights.index)  # type: ignore[arg-type]
     report: dict[str, Any] = {
         "kind": "backtest",
         # Which of the live book's four layers this priced.  Until 2026-09-17 this command could not
@@ -154,7 +154,14 @@ def research_backtest(
         "funding_inputs": _funding_facts([entry], panel),
         "execution": execution,
         "summary": summary,
-        "benchmark": {"gross_return": compound(bench), "sharpe": sharpe(bench, panel.bars_per_year)},
+        # Held to `membership` since 2026-09-23 (operator ruling).  On a pit run the old basket carried names
+        # picked for a membership still in their future (`benchmark_returns`) and the key did not change,
+        # so the report says which basket this was.
+        "benchmark": {
+            "gross_return": compound(bench),
+            "sharpe": sharpe(bench, panel.bars_per_year),
+            "basket": benchmark_basket(membership),
+        },
         "per_symbol": result.per_symbol_summary(),
         "yearly": yearly_breakdown(result.portfolio_net, panel.bars_per_year),
         "generated_at": datetime.now(UTC).isoformat(),

@@ -3361,7 +3361,16 @@ CEILING = {
     #
     # 只报告，不判定。`verdict.decide` 不读 `stability`。一条测试遍历全部归档的 validation 报告，
     # 两个方向注入敌意值，verdict 与 reasons 一个字都不能动。
-    "beidou_cli": 7_728,
+    # +7 beidou_cli，2026-09-23（7_728 -> 7_735）：`research backtest` 的 benchmark 块改取当期成员，
+    # 并印出 `basket`。操作者当天裁定「对齐」。7 行是 `basket` 那一行、把单行 dict 拆成多行，以及 3 行
+    # 注释：同一个键在 pit 报告里换了篮子，所以报告要自己说是哪一个。
+    #
+    # 为什么值。旧篮子在 pit 下不只是更宽，而是带着事后选择：pit 面板就是「曾经当过成员」的全部符号，
+    # 所以 bar t 的篮子里有以后才入选的名字，而它们是在暴涨之后才进前列的（首次入选前 30 天收益中位
+    # +70%）。真实面板上量过：同一本书（`decompose-tsmom-20260904T052958Z` 的配置，复现到归档的
+    # 小数点后三位），基准 Sharpe 从 +0.50 变成 +0.10，复利从 +31% 变成 −84%；书与基准的相关只从
+    # −0.135 变成 −0.127。所以变的是「市场赚了多少」，不是「书像不像市场」。
+    "beidou_cli": 7_735,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

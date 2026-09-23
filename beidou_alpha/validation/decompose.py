@@ -26,7 +26,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
+from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_basket, benchmark_returns, run_backtest
 from beidou_alpha.model import AlphaModel
 from beidou_alpha.panel import Panel
 from beidou_alpha.portfolio import build_weights
@@ -84,7 +84,7 @@ def decompose_book(
         common = result.portfolio_net.index if common is None else common.intersection(result.portfolio_net.index)
     assert common is not None
     nets = {name: result.portfolio_net.reindex(common).fillna(0.0) for name, result in results.items()}
-    bench = benchmark_returns(panel, "open_to_close", panel.symbols).reindex(common).fillna(0.0)
+    bench = benchmark_returns(panel, "open_to_close", panel.symbols, membership).reindex(common).fillna(0.0)
     n_bars = len(common)
     fold_list = walk_forward_folds(n_bars, folds, min_train=min(min_train, max(n_bars // 2, 2)), purge=purge)
     oos_start = fold_list[0].test_start
@@ -125,6 +125,7 @@ def decompose_book(
             "net_return": compound(bench),
             "max_drawdown": max_drawdown(bench),
             "oos_sharpe": sharpe(bench.iloc[oos_start:], bpy),
+            "basket": benchmark_basket(membership),
         },
         "variants": rows,
         "legs": legs,

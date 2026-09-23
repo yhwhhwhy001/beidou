@@ -399,13 +399,30 @@ def benchmark_returns(
     """Equal-weight, always-long, zero-cost comparator (an opportunity-cost benchmark, not investable).
 
     ``membership`` (bars x symbols, `--universe pit`) keeps each bar to the symbols the book could hold
-    at it - the rule the live `pit_benchmark` follows (D-045).  Without it every priced symbol counts:
-    on the pit panel a median of 69 a bar in 2021, rising every year to 203 in 2026, against 15-20
-    members throughout (measured 2026-09-23) - so its volatility carries a listing drift the book
-    never held.
+    at it - the rule the live `pit_benchmark` follows (D-045).  `validate`, `backtest` and `decompose`
+    all pass the run's own (None when static).
+
+    Without it every priced column counts, and on a pit panel that is hindsight, not just a wider
+    basket: the panel IS every symbol that was ever a member, so at bar t it holds names picked for a
+    membership still in their future.  Volume ranks follow price - the 30 days before a symbol's first
+    membership return a median +70% - so those names are there because they were about to have run.
+    Measured 2026-09-23 (pit, 2021-06..2026-09): not-yet-members are a median 15% of the basket (51% in
+    2021) and their pre-entry bars earn an equal-weight Sharpe of +2.32; the basket read Sharpe +0.38
+    where the members read -0.10.  D-045's lesson, arriving through selection instead of survival.
     """
     chosen = symbols or panel.symbols
     returns = asset_returns(panel, execution)[chosen]
     if membership is not None:
         returns = returns.where(membership.reindex(index=returns.index, columns=returns.columns, fill_value=False))
     return returns.mean(axis=1)
+
+
+def benchmark_basket(membership: pd.DataFrame | None) -> str:
+    """Which basket `benchmark_returns` averaged, named in every report that prints a benchmark.
+
+    Since 2026-09-23 `research backtest` and `decompose` pass the run's `membership`, as `validate`'s
+    regime split already did.  On a pit run that changed the basket and not the key, so a report with
+    no `basket` predates it: its benchmark averaged every priced column, hindsight included (see
+    `benchmark_returns`).  Five archived pit reports are that shape.
+    """
+    return "pit members at each bar" if membership is not None else "every panel symbol"
