@@ -406,7 +406,7 @@ def research_validate(
     # and `cost_stress` priced flat - and `cost_stress.x2` is a GATE that `verdict.decide` reads, so the
     # artefact's own label did not describe the number the verdict turned on.  The error ran in the
     # permissive direction (flat is cheaper than flat+impact), which is the direction that matters.
-    # The multiplier still scales `turnover_bps` alone: impact is not a fee and does not scale with one.
+    # The multiplier scales the fee rates (`turnover_bps`; `carry_bps_per_bar`, 0 from costs.yaml), never impact.
     def _priced(multiplier: float) -> pd.Series:
         return run_backtest(
             panel,

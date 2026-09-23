@@ -27,20 +27,24 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _archived() -> list[tuple[str, dict[str, Any]]]:
     out = []
-    for path in sorted((ROOT / "reports" / "research").glob("*validation*.json")):
+    # Recursive since 2026-09-23: `scratch/` and `diagnostics/` hold validation reports too, and the flat glob
+    # read 79 of the 81 while this file's claim is about every report.
+    for path in sorted((ROOT / "reports" / "research").rglob("*validation*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
             continue
         if isinstance(payload, dict) and payload.get("kind") == "validation":
-            out.append((path.name, payload))
+            out.append((str(path.relative_to(ROOT)), payload))
     return out
 
 
 def test_the_whole_library_block_cannot_change_a_verdict() -> None:
     """T-G1-1.  Injected at a level that would fail every report, the verdict must not move."""
     hostile = {"gate": "max_sharpe_quantile", "threshold_annual": 99.0, "n_trials": 10_000, "p_family": 1.0}
-    for name, report in _archived():
+    reports = _archived()
+    assert any(Path(name).parent != Path("reports/research") for name, _ in reports)  # scratch/, diagnostics/
+    for name, report in reports:
         before = decide(report)
         after = decide({**report, "oos_selection_whole_library": hostile})
         assert before == after, f"{name}: the reported-only caliber reached the verdict"
