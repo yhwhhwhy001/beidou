@@ -200,6 +200,10 @@ M-010 的口径差有多大，以 flow 为例：已实现口径的 30 天 σ 是
   要按整点避让挑时间。补上之后，`report beta` 因缺价跳过的 236 个 symbol-bar 应当消失。
 - **主 checkout 再快进一次**，把 #128 与 #129 带进每小时巡检与日任务。
 
+**后续（同夜）**：操作者定了上面三件，本会话都做了。主 checkout 本地 00:31、00:32 两次快进到 `0e907289`；
+CYSUSDT、TUTUSDT 回填，`report beta` 因缺价跳过的 symbol-bar 从 236 降到 0；实盘循环按纪律重启（第 56 次，
+16:41Z）。可观测事实见 `docs/RESEARCH_LOG.md`「重启 #56：G6 的 bar sanity 进实盘」一节。
+
 ### 10-13 的清单补一条
 
 `config/alpha_registry.yaml` 里 09-08 审计那段注释仍引 k=0.30 的崩盘窗口读数（FTX −3.3%）。
