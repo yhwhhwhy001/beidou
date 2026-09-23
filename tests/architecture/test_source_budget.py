@@ -3186,7 +3186,24 @@ CEILING = {
     # 最大 2.03 ms。
     #
     # 留 40 行（11_175 -> 11_215），理由与上面几格逐字相同，不重述。
-    "beidou_live": 11_215,
+    #
+    # 2026-09-23（不编号，同上）。+87 beidou_live。分支上是 10_660 -> 10_747；并入 G1、G3、G6
+    # （#118、#119、#121）之后是 11_175 -> 11_262，抬到 11_302。
+    #
+    # G4：尾部读数停在 k=0.30。五段崩盘窗口是 09-08 在 0.30 下回放的。k 在 09-14 升到 0.60，
+    # 之后没人重跑。日报只有 σ 尺子，没有经验 VaR 与 ES。重跑放在 scratchpad 里，不花包里的行；
+    # 花在包里的，是日报读出回测尾部的那一段。
+    #
+    # 这些行买到什么（`scratchpad/g4_stress_windows_and_var_at_k060.py`，2,059 个完整 UTC 日）：
+    # 回放的日标准差 3.17%，σ 尺子印的设计值 3.14%，两者对得上。对不上的是坏日子。
+    # 99% 那天亏 7.83%，最差 1% 的均值亏 9.25%。折成标准差是 2.47 与 2.92，正态下是 2.33 与 2.67。
+    # 只看 σ，坏日子会读轻。这一段把它们按当天权益折成 USDT，印在 σ 旁边。
+    #
+    # 花在哪：四个常量与出处注释（9）；`tail_readings` 49 行，其中 docstring 17 行，记着实盘日收益
+    # 取哪条序列、在实盘记录上量过什么；`_tail_readings_lines`（21）；两处挂接（2）；空行（6）。
+    #
+    # 留 40 行（11_262 -> 11_302），理由与上面几格逐字相同，不重述。
+    "beidou_live": 11_302,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

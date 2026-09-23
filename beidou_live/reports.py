@@ -1125,6 +1125,68 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     }
 
 
+# G4, 2026-09-23: the backtest's one-day tail on the construction that trades - registry book (tsmom main +
+# flow_short sleeve), exits, both book guards, the live band (D2 + D3) and R8's ladder at vol_target 0.60, pit
+# universe, every complete UTC day 2021-02-01 -> 2026-09-21 (n = 2,059), from
+# `scratchpad/g4_stress_windows_and_var_at_k060.py`.  Historical: VaR is the m-th worst day and ES the mean of
+# the m worst, m = ceil(n x (1 - level)) = 103 / 21.  Fractions of equity, positive = a loss.  Measured at ONE
+# vol_target, so `tail_readings` refuses to convert them under another.
+TAIL_VOL_TARGET = 0.60
+BACKTEST_DAILY_VAR = {0.95: 0.043210, 0.99: 0.078255}
+BACKTEST_DAILY_ES = {0.95: 0.063345, 0.99: 0.092512}
+
+
+def tail_readings(store: StateStore, day: str, *, vol_target: float | None) -> dict[str, Any]:
+    """G4: the backtest's one-day VaR / ES in USDT at the day's last equity, and live days past the VaR.
+
+    Beside DL-EX0 because sigma sizes a normal day, and read as a normal distribution it misplaces the bad
+    ones.  The same replay's daily sd is 3.17% (design 3.14%), but its 99% day sits at 2.47 sd with ES 2.92
+    sd, where a normal day would put them at 2.33 and 2.67; its 95% day is 1.36 sd against 1.645.  The
+    conversion multiplies by the equity `design_daily_sigma_u` scales, because the weights are fractions of it.
+
+    The live day is `noise_scale`'s series compounded: total equity cycle to cycle, a step whose later
+    cycle re-baselined on a transfer skipped, bucketed by `_day_of` of the later cycle.  Measured over the
+    nine complete k=0.60 days of the live record (09-14 -> 09-22): it differs from the book's own
+    mark-to-market (attributed P&L + change in `unrealized`) by 0.42pp a day at most, and the two agree
+    on every day's side of both VaRs.  USDT equity does not: its daily move reads 1.90x (median), and on
+    that record it put one day past VaR 95% that neither of the others did.
+
+    Only complete UTC days count, after the day the D-026 window opened and before `day`.  So a count
+    never mixes two books, and an hourly run never scores a day that is still open.
+    """
+    rows = _cycles(store)
+    today = [row for row in rows if _day_of(row) == day]
+    equity = float(today[-1]["equity"]) if today else None
+    if vol_target is None or not math.isclose(vol_target, TAIL_VOL_TARGET):
+        why = f"常量在 vol_target {TAIL_VOL_TARGET} 下量得，profile 是 {vol_target}：不换算，不计数"
+        return {"enforced": False, "why": why, "equity_u": equity}
+    since = int(evidence_window(store).get("since_ms") or 0)
+    inside = [row for row in rows if int(row.get("bar_open_ms") or 0) >= since]
+    opened = _day_of(inside[0]) if inside else None
+    growth: dict[str, float] = {}
+    for a, b in pairwise(inside):
+        if (b.get("external_flows") or {}).get("rebaselined") or float(a["equity"]) <= 0:
+            continue
+        key = str(_day_of(b))
+        growth[key] = growth.get(key, 1.0) * float(b["equity"]) / float(a["equity"])
+    days = {key: value - 1.0 for key, value in growth.items() if opened is not None and opened < key < day}
+    out: dict[str, Any] = {
+        "enforced": True,
+        "equity_u": equity,
+        "days": len(days),
+        "first_day": min(days, default=None),
+    }
+    for level in (0.95, 0.99):
+        var, es = BACKTEST_DAILY_VAR[level], BACKTEST_DAILY_ES[level]
+        tag = f"{round(level * 100)}"
+        out[f"var_{tag}"], out[f"es_{tag}"] = var, es
+        out[f"var_{tag}_u"] = var * equity if equity is not None else None
+        out[f"es_{tag}_u"] = es * equity if equity is not None else None
+        out[f"past_var_{tag}"] = sorted(key for key, value in days.items() if value < -var)
+        out[f"expected_past_var_{tag}"] = len(days) * (1.0 - level)
+    return out
+
+
 def _store_closes(root: str | Path, interval: str) -> Callable[[str], pd.Series]:
     def loader(symbol: str) -> pd.Series:
         frame = KlineStore(root).load(symbol, interval)
@@ -2155,6 +2217,7 @@ def daily_payload(
         # count means both things at once until something separates them.
         "exit_reachability": exit_reachability(store, exits),
         "noise_scale": noise_scale(store, day, vol_target=vol_target),
+        "tail": tail_readings(store, day, vol_target=vol_target),  # G4: the backtest tail beside the sigma ruler
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
@@ -2771,6 +2834,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 },
             ),
             ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
+            ("Tail beside the sigma ruler (G4)", _tail_readings_lines(payload.get("tail") or {})),
             (
                 "Exit counterfactuals (M-005, monitoring only)",
                 {
@@ -2878,6 +2942,29 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "expected_exits_so_far": _fmt_num(block.get("expected_exits_so_far")),
         "exits_so_far": block.get("exits_so_far"),
     }
+
+
+def _tail_readings_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """G4's two readings under the sigma ruler: the backtest tail in USDT, then live days past it."""
+    if not block.get("enforced"):
+        return {"status": "n/a", "why": block.get("why") or "no reading"}
+    lines: dict[str, Any] = {}
+    for tag in ("95", "99"):
+        lines[f"VaR {tag}% / ES {tag}% (1 day, backtest k={TAIL_VOL_TARGET:.2f})"] = (
+            f"{_fmt_pct(block.get(f'var_{tag}'))} / {_fmt_pct(block.get(f'es_{tag}'))} of equity = "
+            f"{_fmt_num(block.get(f'var_{tag}_u'))} / {_fmt_num(block.get(f'es_{tag}_u'))} U"
+        )
+    for tag in ("95", "99"):
+        past = block.get(f"past_var_{tag}") or []
+        lines[f"live days below -VaR {tag}%"] = (
+            f"{len(past)} of {block.get('days')} (expected {_fmt_num(block.get(f'expected_past_var_{tag}'))})"
+            + (f" {json_dumps(past)}" if past else "")
+        )
+    lines["live day"] = (
+        f"total equity, transfer steps skipped (noise_scale's); complete UTC days from "
+        f"{block.get('first_day') or '(none yet)'}, inside the D-026 window, before this report's day"
+    )
+    return lines
 
 
 def _fmt_num(value: Any) -> str:
