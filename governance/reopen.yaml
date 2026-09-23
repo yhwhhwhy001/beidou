@@ -87,6 +87,10 @@ entries:
       需要块 1 的数据宽度（OI / 多空比 / 基差 / 清算流）定义一把波动率以外的尺子，并走新预登记。
     check: data_columns
     args: {columns: [oi, lsr, basis, liquidations]}
+    note: >-
+      2026-09-23 补注：verdict 括号里的理由「相关按构造过不了 0.5」已于 2026-09-17 撤回。
+      √占空比是特例下的期望值，不是下界，见 RESEARCH_LOG 同日「regime 复核那句『构造下界』不是下界」一节。
+      经验裁定不变，作废的是「不用跑、事前可判」。verdict 原文保持裁定当时的样子。
     log: 2026-09-09 块 6 重测预登记
 
   - id: carry
@@ -269,6 +273,10 @@ entries:
       限回 reference 总体后 N = 2,949、门 1.8239，对 OOS 0.1707 差 −1.65，而另外四条响过的门
       （CPCV 60% 为负、PBO 0.63、成本 ×2 后 −0.02）与总体口径无关，「所以『修了再判』的先验很低」。
       `pairs_scores` 至今未修（改它会让已归档报告失效，且 pairs 不在 registry 的七条里）。
+      ---
+      2026-09-23 补注：subject 写「配对/协整」，实际测过的只有按相关性选伙伴、按波动率配平的配对，
+      见 `beidou_alpha/signals/pairs.py`。协整从未实现：`statsmodels` 只在 `pyproject.toml` 的
+      research 依赖里声明，全库零 import。subject 保持裁定当时的样子。
     log: 2026-09-09 P28 裁决的更正 §「本条没做什么」
 
   - id: meanrev
