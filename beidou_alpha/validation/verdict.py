@@ -67,7 +67,7 @@ def _unselected(wf: dict[str, Any], mt: dict[str, Any], t: VerdictThresholds) ->
     evidence of a fixed rule's performance, which is exactly what WEAK_PASS already means elsewhere
     in this file ("the number is real, the case for it is not the strongest one").  Failing it would
     also retire the shipped tsmom book on a rule about its EVIDENCE rather than about its returns,
-    and `registry.py:369` admits WEAK_PASS to live use, so the cap says what it means without
+    and `registry.evidence_problems` admits WEAK_PASS to live use, so the cap says what it means without
     stopping a loop that is holding positions.
 
     Blast radius, measured on all 60 archived reports carrying a `walk_forward` block before the

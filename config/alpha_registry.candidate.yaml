@@ -369,7 +369,7 @@ strategies:
     # registry 可以写一个报告自己已经限定过的 PASS。补的是那一条读取路径，不是一条新门槛。
     #
     # 三件事没有变，写在这里免得下一个读者把降级当成降配置：
-    #   * 循环照常跑。`registry.py:369` 允许 WEAK_PASS 上线，启动门读这个字符串、不重算。
+    #   * 循环照常跑。`registry.evidence_problems` 允许 WEAK_PASS 上线，启动门读这个字符串、不重算。
     #   * 权重、参数、构造一个都没动；`registry_digest` 不含 evidence 块，指纹不变。
     #   * 数字一个都没变。变的是这个数字被允许支撑多强的结论。
     #
