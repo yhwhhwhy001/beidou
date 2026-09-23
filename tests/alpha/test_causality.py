@@ -23,8 +23,14 @@ def _shuffle_future(panel: Panel, cutoff: int, seed: int = 7) -> Panel:
     return Panel(interval=panel.interval, **fields)
 
 
-def _bit_for_bit(before: pd.DataFrame | pd.Series, after: pd.DataFrame | pd.Series) -> None:
-    """How a shuffled-future test compares: `check_exact` for a readable first difference, then the uint64 view.
+def _bit_for_bit(
+    before: pd.DataFrame | pd.Series,
+    after: pd.DataFrame | pd.Series,
+    *,
+    check_names: bool = True,
+    check_freq: bool = True,
+) -> None:
+    """How a test here says "bit for bit": `check_exact` for a readable first difference, then the uint64 view.
 
     Not `assert_frame_equal`'s default, which compares floats at rtol 1e-5 / atol 1e-8.  On the venv's
     pandas 3.0.5 `df` against `df + 1e-9` passes, so any leak inside that tolerance passed every
@@ -32,17 +38,31 @@ def _bit_for_bit(before: pd.DataFrame | pd.Series, after: pd.DataFrame | pd.Seri
     measured it on the 13 comparisons that did until 2026-09-23 - the signal suite's 11 cases, tsmom and
     GARCH: a leak of 1e-9 of the next bar's return, which moves the last bar before the cutoff by 4e-11 to
     8e-10, passed all 13 at the default and fails all 13 here.  The last test in this file keeps one.
+    The same day 26 more call sites moved here: 11 more shuffled- or truncated-future comparisons, and 15
+    whose name or docstring already said bit for bit, exactly, or "an identity rather than a tolerance".
 
     `check_exact` still treats every NaN as the same NaN and 0.0 as -0.0; the view does not, which is the
-    difference between "the same numbers" and "the same computation".
+    difference between "the same numbers" and "the same computation".  So a comparison against a negation
+    does not belong here: `-x` flips the sign bit of every NaN and every zero.  `test_mining.py`'s
+    reversal test compares one, and stays on `assert_frame_equal`.
+
+    The view is taken column by column, on every float64 column.  A frame that mixes dtypes - an exit
+    overlay's `events`, with its prices beside symbols and timestamps - becomes `object` under
+    `to_numpy()`, and one whole-frame view would skip its floats.
+
+    `check_names` and `check_freq` pass through.  They relax labels, never values or their order, so the
+    view still compares the cells `check_exact` did.
     """
     if isinstance(before, pd.Series):
-        pd.testing.assert_series_equal(before, after, check_exact=True)
+        pd.testing.assert_series_equal(before, after, check_exact=True, check_names=check_names, check_freq=check_freq)
     else:
-        pd.testing.assert_frame_equal(before, after, check_exact=True)
-    left, right = before.to_numpy(), after.to_numpy()
-    if left.dtype == np.float64:
-        assert np.array_equal(left.view(np.uint64), right.view(np.uint64)), "equal values, different bits"
+        pd.testing.assert_frame_equal(before, after, check_exact=True, check_names=check_names, check_freq=check_freq)
+    columns = [frame.to_frame() if isinstance(frame, pd.Series) else frame for frame in (before, after)]
+    for (name, left), (_, right) in zip(columns[0].items(), columns[1].items(), strict=True):
+        if left.dtype == np.float64:
+            assert np.array_equal(left.to_numpy().view(np.uint64), right.to_numpy().view(np.uint64)), (
+                f"{name!r}: equal values, different bits"
+            )
 
 
 def test_tsmom_is_causal(august_panel: Panel) -> None:

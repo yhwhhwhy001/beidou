@@ -14,6 +14,7 @@ import pytest
 
 from beidou_alpha.mining.expr import Dim, ExprError, HourOfDay
 from beidou_alpha.panel import Panel
+from tests.alpha.test_causality import _bit_for_bit
 
 
 def _panel(bars: int = 24 * 80, seed: int = 7) -> Panel:
@@ -55,7 +56,7 @@ def test_the_estimate_excludes_the_bar_it_scores() -> None:
     history = returns.loc[same_hour].iloc[-15:-1]  # the 14 occurrences BEFORE this one
     expected = history.mean()
 
-    pd.testing.assert_series_equal(scored.iloc[row], expected, check_names=False)
+    _bit_for_bit(scored.iloc[row], expected, check_names=False)
     # ...and it is NOT the mean that includes this bar
     including = returns.loc[same_hour].iloc[-14:].mean()
     assert not np.allclose(scored.iloc[row].to_numpy(), including.to_numpy())
@@ -75,7 +76,7 @@ def test_no_node_reads_the_future() -> None:
         .evaluate(Panel(**{**vars(panel), "close": tampered, "open": tampered, "high": tampered, "low": tampered}))
         .iloc[:cutoff]
     )
-    pd.testing.assert_frame_equal(before, after)
+    _bit_for_bit(before, after)
 
 
 def test_nothing_is_scored_before_the_hour_has_happened_enough_times() -> None:

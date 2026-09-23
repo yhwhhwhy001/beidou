@@ -57,7 +57,7 @@ def test_the_defaults_are_the_shipped_construction_and_nothing_else() -> None:
 
 def test_asset_vol_on_the_defaults_is_still_exactly_the_ewma_divisor(august_panel: Panel) -> None:
     expected = (ewm_vol(august_panel.close, halflife=48) * math.sqrt(BARS_PER_YEAR)).clip(lower=0.10)
-    pd.testing.assert_frame_equal(asset_vol(august_panel.close, PortfolioParams(), BARS_PER_YEAR), expected)
+    _bit_for_bit(asset_vol(august_panel.close, PortfolioParams(), BARS_PER_YEAR), expected)
 
 
 def test_the_budget_branch_reproduces_stage_one_but_is_not_the_branch_that_ships(august_panel: Panel) -> None:
@@ -156,4 +156,4 @@ def test_neither_option_changes_the_book_while_it_is_off(august_panel: Panel) ->
         PortfolioParams(vol_target=0.30, garch_fit_bars=4_380, garch_refit_bars=168, hrp_refit_bars=24),
         PortfolioParams(vol_target=0.30, vol_model="ewma", budget_mode="inverse_vol"),
     ):
-        pd.testing.assert_frame_equal(build_weights(targets, august_panel.close, BARS_PER_YEAR, switched_off), shipped)
+        _bit_for_bit(build_weights(targets, august_panel.close, BARS_PER_YEAR, switched_off), shipped)

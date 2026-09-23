@@ -54,6 +54,7 @@ from beidou_alpha.mining.search import Candidate
 from beidou_alpha.panel import Panel
 from beidou_alpha.signals import tsmom
 from beidou_cli.research_cmd import research_mine
+from tests.alpha.test_causality import _bit_for_bit
 
 BARS = 900
 SYMBOLS = ("A", "B", "C")
@@ -305,7 +306,7 @@ def test_funding_is_a_return_so_every_shape_must_divide_it_by_volatility() -> No
 def test_the_leaf_is_exactly_the_shared_feature(funding_panel: Panel) -> None:
     """T-P17-03: values, not structure - and the declared lookback is deliberately not NaN-backed."""
     assert funding_panel.funding is not None
-    pd.testing.assert_frame_equal(
+    _bit_for_bit(
         Funding(24).evaluate(funding_panel),
         features.funding_per_bar_to_8h(funding_panel.funding, 24),
     )

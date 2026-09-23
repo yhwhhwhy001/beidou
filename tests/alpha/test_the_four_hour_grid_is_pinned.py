@@ -23,6 +23,7 @@ import pandas as pd
 
 from beidou_alpha.panel import Panel
 from beidou_alpha.signals.chanlun import LEVELS, ChanlunParams, chanlun_scores
+from tests.alpha.test_causality import _bit_for_bit
 
 RULE = LEVELS["4h"]
 
@@ -81,7 +82,7 @@ def test_a_four_hour_score_is_never_readable_before_the_bar_that_closes_it() -> 
     poked.loc[stamp] = poked.loc[stamp] * 1.5
     after = chanlun_scores(Panel(**{**panel.__dict__, "high": poked}), params)
     head = panel.index[panel.index <= stamp]
-    pd.testing.assert_frame_equal(before.loc[head], after.loc[head])
+    _bit_for_bit(before.loc[head], after.loc[head])
 
 
 def test_the_one_hour_level_is_not_resampled_at_all() -> None:

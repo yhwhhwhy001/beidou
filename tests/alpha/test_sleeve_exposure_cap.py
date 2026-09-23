@@ -31,6 +31,7 @@ from beidou_alpha.portfolio import PortfolioParams, build_weights, cap_gross, co
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.signals.breakout import BreakoutParams
 from beidou_alpha.signals.tsmom import TsmomParams
+from tests.alpha.test_causality import _bit_for_bit
 
 TSMOM = {**TsmomParams(vol_window=100).__dict__, "horizons": [5, 20, 50], "horizon_weights": [0.2, 0.3, 0.5]}
 BREAKOUT = {**asdict(BreakoutParams()), "entry_threshold": 0.05}
@@ -79,7 +80,7 @@ def test_the_cap_is_off_by_default_and_the_two_book_path_stays_bit_identical(aug
         },
         params,
     )
-    pd.testing.assert_frame_equal(weights, expected)
+    _bit_for_bit(weights, expected)
 
 
 def test_the_cap_binds_the_sleeve_before_its_fraction_and_never_the_main_book(august_panel: Panel) -> None:
@@ -125,7 +126,7 @@ def test_capping_is_not_the_same_book_as_lowering_the_fraction(august_panel: Pan
     binding = gross > cap
     assert binding.any() and not binding.all(), "the cap must bind on some bars and not others"
     # under the cap the two books are identical; above it they are not proportional to each other
-    pd.testing.assert_frame_equal(capped[~binding], raw[~binding])
+    _bit_for_bit(capped[~binding], raw[~binding])
     scaled = raw * float((capped.abs().sum(axis=1).sum()) / gross.sum())  # the exposure-matched fraction
     assert not np.allclose(capped.fillna(0.0).to_numpy(), scaled.fillna(0.0).to_numpy()), (
         "a cap that equals a uniform rescaling would make F2 unanswerable"

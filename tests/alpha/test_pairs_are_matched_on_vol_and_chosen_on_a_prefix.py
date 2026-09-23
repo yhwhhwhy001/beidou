@@ -22,6 +22,7 @@ from beidou_alpha.panel import Panel
 from beidou_alpha.signals import SIGNALS
 from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.signals.pairs import HOLD, PairsParams, pairs_scores
+from tests.alpha.test_causality import _bit_for_bit
 
 SYMBOLS = ("AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT")
 
@@ -72,7 +73,7 @@ def test_a_pair_is_chosen_from_a_prefix_and_truncating_the_future_changes_nothin
         },
         "1h",
     )
-    pd.testing.assert_frame_equal(pairs_scores(prefix), whole.iloc[:cut], check_freq=False)
+    _bit_for_bit(pairs_scores(prefix), whole.iloc[:cut], check_freq=False)
 
 
 def test_an_uncorrelated_panel_produces_no_pair_at_all() -> None:
