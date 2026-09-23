@@ -364,8 +364,10 @@ def income_drift(
 
     The equity-based `drift_check` cannot do this.  Equity here is multi-asset collateral, so it moves
     with BTC even when the book is flat (KILL-033), and it is one number for a book that runs a main
-    strategy plus a probe sleeve.  Income rows are per strategy and contain only realised P&L, commission
-    and funding, which is what the backtest Sharpe was computed from.
+    strategy plus a probe sleeve.  Income rows are per strategy and hold realised P&L, commission and
+    funding only - NOT the backtest's caliber, which marks every bar to market (`w_{t-1} . r_t`).  On
+    2026-09-12 flow's 30-day sigma read 0.137% of equity realised, 3.239% marked (`probe.py:128`).
+    Operator ruling A, 2026-09-23: kept, labelled as two calibers; no computation or alert changed.
     """
     if not equity or equity <= 0:
         return {"status": "INSUFFICIENT_DATA", "reason": "no equity"}
