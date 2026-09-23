@@ -547,11 +547,20 @@ def books_by_symbol(cycle: Mapping[str, Any] | None) -> dict[str, frozenset[str]
 
 
 def books_by_bar(rows: Sequence[Mapping[str, Any]]) -> dict[int, dict[str, frozenset[str]]]:
-    """`books_by_symbol` for every cycle, keyed by its bar: what each cycle's books carried."""
+    """`books_by_symbol` for every cycle that recorded `books`, keyed by its bar: what its books carried.
+
+    A row without `books` is skipped, not keyed, because keyed it replaces an earlier row for the same
+    bar.  A SKIPPED row written after the bar already traded (what a restart's `--immediate` cycle writes
+    outside its window) is that row: fed every row on 2026-09-23, two of them (09-13T20:00Z, 09-17T15:00Z)
+    turned 18 fills into "cannot say", 52/15/52 where the report's rows read 67/18/34.  `reports._cycles`
+    drops them already; this keeps the helper right for a caller that does not.
+    """
     return {
         int(row["bar_open_ms"]): books_by_symbol(row)
         for row in rows
-        if isinstance(row.get("bar_open_ms"), int | float) and not isinstance(row.get("bar_open_ms"), bool)
+        if isinstance(row.get("bar_open_ms"), int | float)
+        and not isinstance(row.get("bar_open_ms"), bool)
+        and row.get("books")
     }
 
 
@@ -561,7 +570,7 @@ def fill_grouper(books_at: Mapping[int, Mapping[str, frozenset[str]]]) -> Callab
     Operator ruling 2026-09-23 (G9): a fill is split by the books of ITS OWN cycle and the cycle
     before it - the books whose targets it moved between - never by the newest cycle's map.  Split by
     the newest, every fill read main-only once the probe went flat: 119 fills judged as the main
-    book's on 2026-09-23, of which 52 are, 15 overlaid (at +13.43 bps) and 52 from cycles whose
+    book's on 2026-09-23, of which 67 are, 18 overlaid (at +12.10 bps) and 34 from cycles whose
     record cannot name the books.  Its own cycle alone misses a close: 4 fills traded a name no book carried
     on that bar, and the cycle before names who held it.  A cycle with no `books` cannot say, and
     neither can a name no book carried on either side: both are unattributed, never guessed.
@@ -582,6 +591,11 @@ def fill_grouper(books_at: Mapping[int, Mapping[str, frozenset[str]]]) -> Callab
         return "other" if carried else "unattributed"
 
     return group
+
+
+# What the paging line calls each `fill_grouper` population.  It had two names until G9 added `other`
+# and `unattributed`, and on 2026-09-23 17:10Z it paged the 34 unattributed fills as 共载.
+SPLIT_LABELS = {"main_only": "主书独有", "overlaid": "两本书共载", "other": "其它书独有", "unattributed": "分不出书"}
 
 
 def _weighted(values: Sequence[float], sizes: Sequence[float]) -> dict[str, Any]:
@@ -819,7 +833,7 @@ def risk_budget_status(
         if slippage.get("se"):
             detail = f"（±{slippage['se']:.1f}，{'可分辨' if slippage.get('decisive') else '与噪声不可分辨'}）"
         split = "；".join(
-            f"{'主书独有' if name == 'main_only' else '两本书共载'} {group['value']:.1f} bps/{group['fills']} 笔"
+            f"{SPLIT_LABELS.get(name, name)} {group['value']:.1f} bps/{group['fills']} 笔"
             for name, group in (slippage.get("by_group") or {}).items()
             if group.get("value") is not None
         )

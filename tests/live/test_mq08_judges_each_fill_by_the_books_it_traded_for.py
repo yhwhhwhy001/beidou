@@ -1,8 +1,8 @@
 """M-Q08's judged slippage splits each fill by the books it traded for (operator ruling 2026-09-23, G9).
 
 Until then the judged reading split thirty days of fills by the NEWEST cycle's books.  Once the probe book
-went flat every fill read as the main book's: on 2026-09-23 it judged 119 fills, of which 52 were the main
-book's alone, 15 overlaid - at +13.43 bps against the main book's +6.43 - and 52 from cycles written
+went flat every fill read as the main book's: on 2026-09-23 it judged 119 fills, of which 67 were the main
+book's alone, 18 overlaid - at +12.10 bps against the main book's +5.17 - and 34 from cycles written
 before `books` existed.  The rule now: a fill belongs to the books that carried its symbol in its own
 cycle or the one before, the targets it moved between.  A cycle without `books` cannot say, and a name no
 book carried on either side cannot either; neither is guessed.
@@ -70,6 +70,34 @@ def test_a_cycle_without_books_cannot_say_and_is_never_guessed() -> None:
 
     assert group(T0, "AAAUSDT") == "unattributed"
     assert group(T0 + 2 * HOUR, "AAAUSDT") == "unattributed", "a bar with no cycle record at all"
+
+
+def test_a_later_row_without_books_does_not_erase_the_bar_it_repeats() -> None:
+    """A SKIPPED row for a bar that already traded carries no `books`.  Keyed over the traded cycle, it
+    turned 18 of 2026-09-23's fills into "cannot say" in a replay fed every row."""
+    skipped = {"bar_open_ms": T0, "phase": "SKIPPED"}
+    group = fill_grouper(books_by_bar([_cycle(T0, BOTH), skipped]))
+
+    assert group(T0, "AAAUSDT") == "main_only"
+    assert group(T0, "BBBUSDT") == "overlaid"
+
+
+def test_the_paging_line_names_each_population_for_what_it_is() -> None:
+    """Four populations, four names.  The line had two until G9 added the other two, and on 2026-09-23 it
+    paged 34 fills no record can attribute as 两本书共载."""
+    rows = [_cycle(T0), _cycle(T0 + HOUR, BOTH), _cycle(T0 + 2 * HOUR, PROBE_ALONE)]
+    trades = [
+        _fill(T0, "AAAUSDT", "BUY", 100.05),  # a cycle without books
+        _fill(T0 + HOUR, "AAAUSDT", "BUY", 100.10),
+        _fill(T0 + HOUR, "BBBUSDT", "SELL", 99.80),
+        _fill(T0 + 2 * HOUR, "CCCUSDT", "SELL", 99.70),  # a name only the probe carried
+    ]
+
+    (reason,) = [line for line in risk_budget_status(rows, trades, ONE)["reasons"] if line.startswith("滑点")]
+
+    assert reason.endswith(
+        "分书读：主书独有 10.0 bps/1 笔；两本书共载 20.0 bps/1 笔；其它书独有 30.0 bps/1 笔；分不出书 5.0 bps/1 笔"
+    )
 
 
 def test_the_budget_status_judges_each_fill_by_its_own_cycle_not_by_the_newest() -> None:
