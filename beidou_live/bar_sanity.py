@@ -41,9 +41,9 @@ archive (878 files, 15,127,202 bars, 866,126 of them on PIT-member days):
   ln 3 would drop CVX and keep 25 real hours; ln 1.5 would add three reopenings (CTK x0.51, TLM
   x0.57, AIA x1.63) and 311 more real hours.
 
-A real hour flagged is not a false alarm in the sense that matters here - a halving inside one hour
-in a name the book holds is worth a page - but the flag says which kind it is, so the reader does not
-have to work it out.
+A real hour flagged is not a false alarm - a halving inside one hour in a name the book holds is worth
+reading - but since the operator's ruling of 2026-09-23 it is a notice, not a page (`sanity_findings`):
+what pages is what no real market produces.  The flag says which kind it is either way.
 """
 
 from __future__ import annotations
@@ -263,15 +263,34 @@ def describe_flag(flag: Mapping[str, Any]) -> str:
     return f"{symbol} {stamp} OHLC 自相矛盾（{'、'.join(str(r) for r in flag.get('reasons') or [])}）"
 
 
+def is_traded_through(flag: Mapping[str, Any]) -> bool:
+    """A jump both of whose bars traded: it reads as a real market, not as a broken price."""
+    return flag.get("check") == "jump" and bool(flag.get("continuous"))
+
+
+def _listed(flags: list[Mapping[str, Any]]) -> str:
+    more = f"；另有 {len(flags) - 5} 处" if len(flags) > 5 else ""
+    return "；".join(describe_flag(flag) for flag in flags[:5]) + more
+
+
 def sanity_findings(block: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """(alerts, notices) for `daily_alerts`: a new flag pages; a check that could not run is read at review."""
+    """(alerts, notices) for `daily_alerts`: a new flag pages; a check that could not run is read at review.
+
+    Operator ruling 2026-09-23: a jump that traded through (`is_traded_through`) is read at review, not
+    paged.  At ln 2 the archive's member days carry about 2.6 of those a year, every one a real move.
+    What still pages is what a real market cannot produce: a jump across a gap (BNX's re-denomination),
+    an OHLC contradiction, a frozen run.
+    """
     alerts: list[str] = []
     notices: list[str] = []
-    new = list(block.get("new") or [])
+    new = [flag for flag in block.get("new") or [] if not is_traded_through(flag)]
+    market = [flag for flag in block.get("new") or [] if is_traded_through(flag)]
     if new:
-        shown = "；".join(describe_flag(flag) for flag in new[:5])
-        more = f"；另有 {len(new) - 5} 处" if len(new) > 5 else ""
-        alerts.append(f"bar sanity：今天首次出现 {len(new)} 处可疑 bar（只告警，交易照常）：{shown}{more}")
+        alerts.append(f"bar sanity：今天首次出现 {len(new)} 处可疑 bar（只告警，交易照常）：{_listed(new)}")
+    if market:
+        notices.append(
+            f"bar sanity：今天首次出现 {len(market)} 处有连续成交的跳变（像真实行情，只提示）：{_listed(market)}"
+        )
     if block.get("errors"):
         notices.append(
             f"bar sanity 检查今天有 {block['errors']} 个周期没读完（只记录，交易照常）：{block.get('first_error')}"
