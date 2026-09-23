@@ -70,6 +70,7 @@ KEYS: dict[str, str] = {
     "universe_update": "D-014: the daily refresh, adopted or merely recorded",
     "inputs": "what the feed supplied, including `dropped`",
     "dropped_inputs": "what the loop DID about `inputs.dropped`",
+    "bar_sanity": "G6: OHLC contradictions, frozen runs and jumps in those bars - alert only, never traded on",
     # --- execution -----------------------------------------------------------------------------
     "orders": "the orders this cycle placed",
     "skipped": "orders planned and not sent, with the reason",
