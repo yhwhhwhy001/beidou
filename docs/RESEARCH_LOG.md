@@ -15652,3 +15652,65 @@ registry 一项比的是循环最新记下的 digest 与磁盘上的那份，和
 
 六处变异，每处至少一条测试变红，还原后逐字节一致：归属不看上一周期；退回「≤ 1 本即主书」；判定按最新周期；
 主书为空时退回判合计；趋势把共载算进主书；去掉 BLIND 里「分不出书」那半句。
+
+## 2026-09-23 · 查缺补漏：`data sync` 带上池子；`pool history` 默认日表、原子写
+
+对照优化方案逐项核验收时，执行记录「顺带发现，未修」里有两条数据缺陷，正在拉低 G3 与 G9 的读数。
+这一节修它们。不动构造，不花 ledger，实盘只读。
+
+### `data sync` 漏掉了池子里的名字
+
+- `data sync` 的候选只有 24h 成交额前 2N（默认 30）加 pin。池子按 30 天成交额带滞回选，成员可以在
+  24h 排名里掉出前 2N 很久。`LivePool.select` 为此把上一版池子留在候选里，`data sync` 没有。
+- 09-23 的读数：LSKUSDT 在 `universe.json` 与循环 `state.json` 的池子里，1h K 线停在
+  2026-09-18T16:00Z。当天日报的 M-Q08 一节因此把它两边一起剔掉。CYSUSDT 停在 09-04、TUTUSDT 停在
+  09-03，两者 09-16 才离池。`report beta` 的篮子因此缺价 236 个 symbol-bar（#119 的描述）。
+- 修法：候选并入 `universe.json` 的 `symbols` 与 `left`。`left` 是上次刷新刚移出的名字，循环正在平掉
+  它们，带一天，退出那几根 bar 也就存下了。`--symbols` 显式给的名单不变。文件读不了只丢这一项，
+  打一行警告：`run_data.sh` 下一步的 `pool refresh` 读同一个文件，会在那里响亮地失败。
+- 日志多一行：池子里哪些名字在 24h 前 2N 之外。
+- 生效：主 checkout 更新之后，01:20 的日任务起。LSKUSDT 会随之补齐。CYSUSDT、TUTUSDT 已经离池，
+  这次修改不会回填它们的缺口。要补，得手动跑一次 `data sync --symbols CYSUSDT,TUTUSDT`，由操作者定。
+
+### `pool history`
+
+- `--refresh` 默认从 `MS` 改成 `D`。研究口径 09-04 起用日表（D-013），而 `pool lag --check` 把月表判为
+  「不是日表」。系统自己判错的默认值是个陷阱。
+- 开跑先印一行：重建会改动 manifest 的 `membership` 字段，armed 启动随即被数据集门挡住。放在漫长的
+  日线同步之前，这时按 Ctrl-C 什么都不损失。
+- 成员表改走 `write_parquet_atomically`，`membership.json` 走 tmp 加 replace。原来原地写，每小时的
+  `pool lag --check` 可能读到半张表。`write_parquet_atomically` 多了一个 `index` 参数：三个 store 都不写
+  索引，成员表要留日期。在真实表（`tests/fixtures/pit_membership_2026_09_17`）上，新旧写法产出的文件
+  逐字节相同，122,191 字节，manifest 读数不变。
+- G10 告警里「必须带 --refresh D，默认的 MS 出的是月表」改成「日表；MS 是 09-04 弃用的月表」。命令里
+  仍显式写 `--refresh D`。RUNBOOK 两处、ARCHITECTURE 的 D-013 一处同步改写。
+
+### PUMPUSDT：同一个名字下的两段序列
+
+G6 发现 `beidou_data/store.py` 说 PUMPUSDT 的第一根 bar 在 2025-07-10，而归档里 2025-04-12 就有。
+这次读了归档：
+
+- 1h 文件从 2025-04-12 14:00 起。前一段以 639 根零成交收尾，价格停在 0.0471。
+- 缺 7 小时。2025-07-10 07:00 起是另一段，收盘对收盘的对数跳变 −2.21，价位低约 9 倍。
+- 日线文件从 2025-07-10 起。时点成员表里它 2025-08-09 首次入选，那是新序列第 30 天。
+
+docstring 按这些事实改写。对研究的影响只查了代码路径，没有重放：
+
+- 研究面板是各标的索引的并集，缺口里是空值，不前推（`Panel.from_frames`）。
+- tsmom 的 horizon 收益是 `close / close.shift(h)`。入选当天往回 720 小时，落在那 7 个空值里，读成空值。
+  再往后就全在新序列里。接缝那一根自己的收益也是空值。
+- 所以按代码路径，接缝进不了 tsmom 的信号。
+
+这段接缝在 G6 的实盘检查里会判成断档跳变加 frozen bar，都会告警。
+
+### 验证
+
+- 新测试 10 条：
+  - `tests/cli/test_data_sync_keeps_the_pool.py` 6 条，`universe.json` 用循环自己的 `universe_sink` 写出；
+  - `tests/cli/test_pool_history_writes_a_daily_table_atomically.py` 4 条，其中一条让写到一半的
+    `to_parquet` 抛错，旧表必须逐字节不变。
+- 变异 10 个，每个至少一条测试变红，还原后 git 状态不变：sync 不带池子；不带刚离池的名字；
+  `--symbols` 也并入池子；读不了就抛错；日志不印池外名字；默认改回 MS；不印数据集门提示；
+  成员表改回原地写；原子写丢索引；告警文字丢 MS 提醒。`membership.json` 的原子写没有测试覆盖，
+  没有哪项检查读它。
+- source budget：`beidou_cli` 7_798 → 7_841，`beidou_data` 3_178 → 3_181，都抬到齐平，理由写在常量旁。

@@ -3535,7 +3535,23 @@ CEILING = {
     # 7_796 -> 7_798，抬到齐平。`report daily` 把 registry 与 profile 交给 M-Q08 的换手
     # 仪器（`ReplayInputs.from_profile`），一行 import、一个参数。建模失败只让这台仪器读不出数，不让日报挂掉，
     # 因为这种 registry 已经由 `live status` 报警。
-    "beidou_cli": 7_798,
+    #
+    # +43 beidou_cli，2026-09-23（7_798 -> 7_841，抬到齐平）。优化方案查缺补漏：G3、G9、G10 三个包各自记下、
+    # 没修的两个数据缺陷，修在同一个文件里。
+    #
+    # 43 行是什么。`_pool_and_leavers` 21 行（含其后两行空行），其中 docstring 9 行：为什么要带上池子，
+    # 以及文件读不了为什么只丢这一项。`data sync` 的候选 +3，其中 1 行把「池子里哪些名字在 24h 前 2N
+    # 之外」印进日志。`pool history`：`--refresh` 默认改 D +6，其中 1 行注释写为什么；开跑先印数据集门
+    # 的提示 +1；成员表与 membership.json 改原子写 +4，其中 2 行注释。`_REBUILD` 拆成两段 +1。
+    # `beidou_data.store` 的 import 多一个名字，formatter 折成 8 行，+7。
+    #
+    # 为什么值。`data sync` 原来只按 24h 成交额取前 2N，而池子按 30 天成交额带滞回选。CYSUSDT 的 K 线
+    # 停在 09-04、TUTUSDT 停在 09-03，两者 09-16 才离池，`report beta` 的篮子因此缺价 236 个 symbol-bar。
+    # LSKUSDT 此刻就在循环的池子里，K 线却停在 09-18T16:00Z，M-Q08 的换手重放只能把它两边一起剔掉。
+    # `LivePool.select` 本来就把上一版池子留在候选里，这里补上同一条。成员表原地写，每小时巡检可能读到
+    # 半张表；默认 MS 出的月表，巡检自己判「不是日表」。测试见 `tests/cli/test_data_sync_keeps_the_pool.py` 与
+    # `tests/cli/test_pool_history_writes_a_daily_table_atomically.py`。
+    "beidou_cli": 7_841,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3588,7 +3604,12 @@ CEILING = {
     # 窗口）。P12 第 0 段把 3% 以下的成员改动判为不值得回测，14 是第一个越线的 k。基准取日历、不取
     # 归档最新一根 bar 的理由也写在那里：同步停了，那个基准会让这条告警跟着沉默。
     # `tests/data/test_the_membership_table_says_how_far_it_trails.py` 在真实表上重算其中每个数。
-    "beidou_data": 3_178,
+    # +3 beidou_data，2026-09-23（3_178 -> 3_181）：`write_parquet_atomically` 多一个 `index` 参数，给
+    # 时点成员表用，docstring +2。表带日期索引，而三个 store 都不写索引；新旧两种写法在真实表上逐字节
+    # 相同，manifest 的读数不变。另 +1 是 `gaps` 的 docstring：PUMPUSDT 那句按归档改写。1h 文件从
+    # 2025-04-12 起，前一段以 639 根零成交的 0.0471 收尾，隔 7 小时的缺口，07-10 07:00 起另一段，价位
+    # 低约 9 倍。原文说「第一根 bar 是 07-10」，G6 的扫描发现它不对。
+    "beidou_data": 3_181,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are

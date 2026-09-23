@@ -51,7 +51,7 @@ def test_over_the_line_the_one_line_says_the_lag_the_flag_and_the_gate() -> None
     assert len(lines) == 1, lines  # `tail -n 3` pastes it whole
     page = lines[0]
     assert "落后 14 天" in page and "告警线 14 天" in page  # how far
-    assert "beidou data pool history --refresh D" in page and "默认的 MS 出的是月表" in page  # the flag
+    assert "beidou data pool history --refresh D" in page and "MS 是 09-04 弃用的月表" in page  # the flag
     assert "armed 启动随即被数据集门挡住" in page and "registry_dataset_problems" in page  # the gate
     assert "要和证据重出排在一起" in page  # and what a rebuild has to be scheduled with
     assert _english(page) <= TOKENS, _english(page) - TOKENS  # the Lark channel is read in Chinese
@@ -71,7 +71,10 @@ def test_a_missing_table_is_an_alert_and_not_a_pass(tmp_path: Path) -> None:
 
 
 def test_an_unreadable_table_is_an_alert_and_not_a_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A half-written file is what a check sees while `pool history` rewrites the table in place."""
+    """A half-written file is what a check used to see while `pool history` rewrote the table in place.
+
+    The write is atomic since 2026-09-23, so that source is gone; any other damage still reads the same way.
+    """
     real = (REAL / "membership.parquet").read_bytes()
     (tmp_path / "membership.parquet").write_bytes(real[: len(real) // 2])
     result = _run("--check", "--root", str(tmp_path))

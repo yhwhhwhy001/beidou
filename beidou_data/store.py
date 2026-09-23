@@ -26,8 +26,10 @@ def _fsync(path: Path) -> None:
         os.close(fd)
 
 
-def write_parquet_atomically(frame: pd.DataFrame, path: Path) -> None:
+def write_parquet_atomically(frame: pd.DataFrame, path: Path, *, index: bool | None = False) -> None:
     """tmp -> fsync -> replace -> fsync the directory.  One standard, in one place.
+
+    ``index`` is pandas' own flag.  The stores keep none; the point-in-time table keeps its dates (``None``).
 
     All three stores here were tmp + `replace` and nothing else until 2026-09-13, which is the same
     gap `beidou_live.state._atomic_write` had: `replace` makes the RENAME atomic and says nothing
@@ -39,7 +41,7 @@ def write_parquet_atomically(frame: pd.DataFrame, path: Path) -> None:
     """
     tmp = path.with_suffix(".parquet.tmp")
     path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_parquet(tmp, index=False)
+    frame.to_parquet(tmp, index=index)
     _fsync(tmp)
     tmp.replace(path)
     _fsync(path.parent)
@@ -104,10 +106,11 @@ class KlineStore:
         nothing else would notice: ``append`` dedupes and sorts but never checks continuity, and a
         backtest silently treats a hole as a jump.  Both 2022 archive-wide outages were found this way.
 
-        A reported gap is not always a sync failure.  It can be an absence upstream: a listing boundary (PUMPUSDT's
-        first bar is 2025-07-10 07:00, so the "missing" hours before it never existed), a delisted symbol whose history
-        the venue no longer serves (LITUSDT), a halt for a redenomination under the same symbol (BNXUSDT: 518 hours,
-        back at 1/55 the price), or a venue outage.  Re-fetching it tells the two apart, so this stays a pure query.
+        A reported gap is not always a sync failure.  It can be an absence upstream: a seam between two series under
+        one name (PUMPUSDT: bars from 2025-04-12 end in 639 zero-volume hours at 0.0471; 7 hours later, 2025-07-10
+        07:00, a series 9x lower starts), a delisted symbol whose history the venue no longer serves (LITUSDT), a
+        redenomination halt (BNXUSDT: 518 hours, back at 1/55 the price), or a venue outage.  Re-fetching it tells
+        the two apart, so this stays a pure query.
         """
         frame = self.load(symbol, interval)
         if len(frame) < 2:
