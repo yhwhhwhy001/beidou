@@ -26,6 +26,7 @@ from beidou_alpha.validation.metrics import (
 )
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
+from beidou_live.benchmark import beta_reading
 from beidou_live.construction import canonical_construction
 from beidou_live.cycle_record import latest
 from beidou_live.probe import ProbeParams, probe_status
@@ -2071,6 +2072,9 @@ def daily_payload(
         # the row that says how far off it is is the only honest thing it can say today.
         "long_run_sharpe": long_run_sharpe(store, equity=equities[-1] if equities else None),
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
+        # D-045 beside the legs, which split the same money by side: this splits it into the market's
+        # part and the rest.  Over the whole USDT-equity record rather than the day, as `report beta`.
+        "beta": market_beta(store, closes=closes, root=data_root),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
         # Beside the exit COUNT rather than inside it: that block says what the overlay did today,
@@ -2621,6 +2625,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 }
                 or {"none": 0},
             ),
+            ("Market beta (D-045, reported only)", _market_beta_lines(payload.get("beta") or {})),
             (
                 "Probe correlation (M-014)",
                 {
@@ -2840,6 +2845,77 @@ def _beta_regression_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "R^2": _fmt_num(block.get("r2")),
         "市场部分": _fmt_pct(block.get("market_part")),
         "残差部分": _fmt_pct(block.get("residual_part")),
+    }
+
+
+def market_beta(
+    store: StateStore,
+    *,
+    closes: Callable[[str], pd.Series] | None = None,
+    root: str | Path = ".beidou/data",
+    interval: str = "1h",
+) -> dict[str, Any]:
+    """D-045 in the daily report: `report beta`'s reading, taken by the same `beta_reading`.
+
+    Reported, never judged.  Nothing here pages: no threshold for the beta or the residual was
+    registered before the book went live, and one picked after reading the number is not a threshold.
+
+    The catch is broad for the reason `exit_counterfactuals` gives.  This runs inside the hourly check,
+    and a reading that gates nothing must not take the rest of the report down with it.  The failure
+    stays visible: the block carries its reason, and `report beta` on the same state raises it whole.
+    """
+    try:
+        return beta_reading(
+            store.read_jsonl(store.cycles_path),
+            store.read_jsonl(store.attribution_path),
+            closes or _store_closes(root, interval),
+        )
+    except Exception as exc:
+        return {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _market_beta_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """The daily report's view of `market_beta`: one line per regression, and no verdict.
+
+    Short on purpose.  The full page is `beidou report beta`, and its numbers are these numbers.  The
+    all-long share comes before the regressions for the reason `beta_markdown` gives: over those bars
+    no split of the return can credit the signal with anything.
+    """
+    decomposition = block.get("decomposition") or {}
+    if not decomposition.get("measured"):
+        return {"measured": "no", "reason": decomposition.get("reason") or block.get("reason") or "not computed"}
+    window, basket, signal = block.get("window") or {}, block.get("benchmark") or {}, block.get("signal") or {}
+
+    def regression(row: Mapping[str, Any]) -> str:
+        return (
+            f"beta {_fmt_num(row.get('beta'))}（t {_fmt_num(row.get('beta_t'))}）；"
+            f"alpha {_fmt_num(row.get('alpha_bps_per_hour'))} bps/h（t {_fmt_num(row.get('alpha_t'))}）；"
+            f"残差部分 {_fmt_pct(row.get('residual_part'))}"
+            + (f"；年化 {_fmt_pct(row['alpha_annualised'])}" if row.get("alpha_annualised") is not None else "")
+            + (f"；NW 带宽被夹到 {row.get('nw_lags')} bar" if row.get("nw_covers_intended_horizon") is False else "")
+        )
+
+    return {
+        "窗口": f"{window.get('from')} → {window.get('to')}（{_fmt_num(window.get('days'))} 天）",
+        "回归样本": f"{decomposition.get('bars')} 根 bar（剔除的 bar {decomposition.get('excluded_bars')}，D-032）",
+        "收益 策略/PIT 基准": (
+            f"{_fmt_pct(decomposition.get('strategy_return'))} / {_fmt_pct(decomposition.get('benchmark_return'))}"
+        ),
+        "净敞口 均值/峰值": (
+            f"{_fmt_num(decomposition.get('exposure_mean'))}x / {_fmt_num(decomposition.get('exposure_max'))}x"
+        ),
+        "基准篮子": (
+            f"每根 bar {_fmt_num(basket.get('symbols_per_bar'))} 个币；"
+            f"因缺价跳过 {basket.get('prices_missing')} 个 symbol-bar"
+        ),
+        "全多头的 bar": (
+            f"{signal.get('all_long_bars')}/{signal.get('bars')}（{_fmt_pct(signal.get('all_long_share'))}）"
+            if signal.get("measured")
+            else f"n/a（{signal.get('reason')}）"
+        ),
+        "constant beta": regression(decomposition.get("constant") or {}),
+        "conditional（敞口 × 市场）": regression(decomposition.get("conditional") or {}),
+        "读法": "只报告不告警：beta 与残差都没有预登记的阈值。t 按 Newey-West；完整一页见 `beidou report beta`",
     }
 
 
