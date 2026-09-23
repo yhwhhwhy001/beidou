@@ -32,7 +32,7 @@
 | alert | 呼叫（名词用法） | `alerts` |
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
 | beta | 贝塔 | `rolling_beta`、`beidou report beta` |
-| VaR、ES | 在险价值、预期损失 | —（仓库没有实现，2026-09-23 清点） |
+| VaR、ES | 在险价值、预期损失 | `BACKTEST_DAILY_VAR`、`BACKTEST_DAILY_ES`、`tail_readings`（2026-09-23 起） |
 | cutoff | 截断点 | `_shuffle_future` 的 `cutoff` |
 
 ## 保留中文的近形词
