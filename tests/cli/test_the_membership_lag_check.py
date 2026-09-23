@@ -102,7 +102,12 @@ def test_an_empty_or_monthly_table_is_an_alert_even_when_its_last_row_is_recent(
 
 
 def test_the_hourly_check_gates_and_pages_on_it_like_its_other_lines() -> None:
-    """The wiring, read from the script: run with `--check`; on failure, `report daily`'s exact path."""
+    """The wiring, read from the script: run with `--check`; on failure, `report daily`'s exact path.
+
+    One difference, on purpose (operator ruling 2026-09-23): this line pages once a day, so its `notify`
+    carries a daily window and a state file of its own - why the file has to be its own is
+    `tests/live/test_the_membership_page_is_once_a_day.py`.  Everything else is `report daily`'s path.
+    """
     script = (ROOT / "deploy" / "run_check.sh").read_text(encoding="utf-8").splitlines()
     runs = [n for n, line in enumerate(script) if "data pool lag --check" in line]
     assert len(runs) == 1, runs
@@ -114,4 +119,5 @@ def test_the_hourly_check_gates_and_pages_on_it_like_its_other_lines() -> None:
         "  failed=1",
         '  notify "membership" "$(echo "$output" | tail -n 3 | tr \'\\n\' \' \')"',
     ]
-    assert script[runs[0] + 2 : runs[0] + 6] == failure
+    daily = failure[2] + ' 86340 "$SUPPORT/alert-dedup-daily.json"'
+    assert script[runs[0] + 2 : runs[0] + 6] == [failure[0], failure[1], daily, failure[3]]

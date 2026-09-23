@@ -371,3 +371,38 @@ def test_a_report_without_the_block_is_unchanged() -> None:
     """Every report written before G6, and every cycle before the loop restarts onto this code."""
     assert sanity_findings({}) == ([], [])
     assert daily_alerts({}) == ([], [])
+
+
+def _lunas_day() -> dict[str, Any]:
+    """LUNA's 2022-05-12 archive, first seen today: traded-through crash hours plus one frozen halt."""
+    symbol, frame = _slice("LUNAUSDT_2022-05-12.json")
+    today = 1_789_516_800_000  # 2026-09-16T00:00Z
+    return sanity_status([_row(today, check_bars({symbol: frame}))], "2026-09-16", day_of=_day_of)
+
+
+def test_a_jump_that_traded_through_is_a_notice_and_a_frozen_halt_still_pages() -> None:
+    """Operator ruling 2026-09-23: a move that traded reads as a market and is read at review, not paged."""
+    status = _lunas_day()
+    jumps = [flag for flag in status["new"] if flag["check"] == "jump"]
+    assert jumps and all(flag["continuous"] for flag in jumps)
+
+    alerts, notices = sanity_findings(status)
+
+    [page] = alerts
+    assert "今天首次出现 1 处可疑 bar" in page and "OHLC 全等且零成交" in page, "the frozen halt still pages"
+    assert "跳变" not in page, "no traded-through jump rides along in the page"
+    [notice] = notices
+    assert f"今天首次出现 {len(jumps)} 处有连续成交的跳变" in notice and "像真实行情" in notice
+
+
+def test_traded_through_jumps_alone_page_nothing_and_a_gap_bridged_jump_still_does() -> None:
+    lunas = _lunas_day()
+    only_jumps = {**lunas, "new": [flag for flag in lunas["new"] if flag["check"] == "jump"]}
+    assert sanity_findings(only_jumps)[0] == []
+
+    symbol, frame = _slice("BNXUSDT_2023-02-22.json")
+    today = 1_789_516_800_000
+    bnx = sanity_status([_row(today, check_bars({symbol: frame}))], "2026-09-16", day_of=_day_of)
+    assert [flag["continuous"] for flag in bnx["new"]] == [False]
+    alerts, notices = sanity_findings(bnx)
+    assert len(alerts) == 1 and "BNXUSDT" in alerts[0] and notices == [], "a re-denomination is not a market"

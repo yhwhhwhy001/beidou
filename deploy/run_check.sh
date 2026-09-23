@@ -30,14 +30,20 @@ notify() {
     "$REPO/.venv/bin/python" -c '
 import asyncio, sys
 from pathlib import Path
-from beidou_live.alerts import WebhookAlerts
+from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
 # DL-L3 same-source dedup.  KILL-R7 counted 36 identical FAIL lines over 36 hours and they came from
 # THIS job: a fresh process every hour, so the in-memory dedup dict is empty every time.  The state
 # file is what makes the window mean anything here; the key is the check name, so a standing problem
 # re-announces itself once an hour instead of once a run.
-alerts = WebhookAlerts(sys.argv[1], state_path=Path(sys.argv[4]))
+#
+# G10, operator ruling 2026-09-23: a caller may pass a longer window ($3), and must then pass a state
+# file of its own ($4).  `_save_state` writes back only the rows its own window kept, so any hourly
+# caller that saves the shared file drops every row older than an hour: a daily row kept there would
+# last only until the next hourly FAIL.  With neither argument this is the hourly window, as before.
+window = float(sys.argv[5]) if sys.argv[5] else HOURLY_CALLER_WINDOW_SECONDS
+alerts = WebhookAlerts(sys.argv[1], state_path=Path(sys.argv[4]), dedup_window_seconds=window)
 sys.exit(0 if asyncio.run(alerts.send(sys.argv[2], key=sys.argv[3])) else 1)
-' "$BEIDOU_ALERTS_WEBHOOK_URL" "北斗巡检失败（$1）：$2" "check-$1" "$SUPPORT/alert-dedup.json" \
+' "$BEIDOU_ALERTS_WEBHOOK_URL" "北斗巡检失败（$1）：$2" "check-$1" "${4:-$SUPPORT/alert-dedup.json}" "${3:-}" \
       || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }
@@ -127,15 +133,18 @@ else
   notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
 fi
 # G10, operator ruling 2026-09-23: the point-in-time membership table stays rebuilt by hand, and this
-# says how far it trails.  Gated like the lines above because it is the alert the operator asked for,
-# so once over the line it re-announces hourly until a rebuild.  The command prints ONE line, which is
-# the whole page: the lag, the `--refresh D` a rebuild needs, and that a rebuild blocks the armed start
-# until the evidence is re-issued - 2026-09-18's bare rebuild is what the D-041 bridge was built for.
+# says how far it trails.  Gated like the lines above because it is the alert the operator asked for.
+# It PAGES once a day, not hourly (second ruling, same day): a lag is a standing condition that waits
+# for a rebuild scheduled with the evidence, so its page carries a 23h59m window and a state file of
+# its own - see `notify`.  The log below still records a FAIL line every hour.  The command prints ONE
+# line, which is the whole page: the lag, the `--refresh D` a rebuild needs, and that a rebuild blocks
+# the armed start until the evidence is re-issued - 2026-09-18's bare rebuild is what the D-041 bridge
+# was built for.
 if output="$("$REPO/.venv/bin/beidou" data pool lag --check 2>&1)"; then
   echo "[$(stamp)] ok   membership: $output"
 else
   failed=1
-  notify "membership" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+  notify "membership" "$(echo "$output" | tail -n 3 | tr '\n' ' ')" 86340 "$SUPPORT/alert-dedup-daily.json"
 fi
 # L3's criterion, which nothing computed until 2026-09-09: the soak ran for a rule that lived in prose.
 # REPORTED, NOT GATED, and the distinction is deliberate.  L3 is a criterion that accumulates over seven
