@@ -1,6 +1,6 @@
 """T-S03's cap truncated reductions too, and its own comment said it did not (2026-09-13 review).
 
-`RebalanceParams.max_participation` is documented as a cap "on a risk-adding order", but the exemption
+`RebalanceParams.max_participation` was documented as a cap "on a risk-adding order", but the exemption
 in `plan_rebalance` was `not closing` - a full close only.  A 15% -> 5% pure reduction was truncated by
 `max_participation x trailing volume`, which is the number that shrinks in exactly the bar where
 getting smaller matters: the second pass of the review named this as one of three things that make the

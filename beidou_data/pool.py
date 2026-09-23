@@ -223,6 +223,62 @@ def membership_summary(membership: pd.DataFrame, *, available: pd.DataFrame | No
     return summary
 
 
+MEMBERSHIP_ALERT_DAYS = 14
+"""The hourly check alerts once the table trails today (UTC) by this many days.  Measured, not picked.
+
+Bars after the last row borrow it (``membership_at_bars`` forward-fills), so a lag of k days is k days of
+research run on a frozen pool.  On the table rebuilt 2026-09-18 (2,056 daily rows, last 2026-09-17, kept
+as ``tests/fixtures/pit_membership_2026_09_17``) a refresh changes 0.36 names, and a frozen pool misses
+1.2 of ~17.6 on its 7th day and 2.3 on its 14th.  A whole-history run barely notices; a window that ENDS
+today does - a backtest of the live period set beside the live record, say.  In a 30-day window whose
+last k days are borrowed, the wrong share of member slots averages 2.98% at k=13 and 3.42% at k=14 over
+2,027 windows (last year: 2.95% / 3.38%).  RESEARCH_LOG's P12 stage-0 rule calls a membership change
+under 3% too small to backtest, and 14 is the first k past it.  A fresh rebuild reads 1, not 0: its last
+row is the last closed daily bar, yesterday's.
+
+Against the calendar, not the archive's newest bar: the archive moves only when a sync runs (daily, from
+`com.beidou.data`), so that base would let a stalled sync silence this alert too, and nothing checks the
+sync hourly.
+"""
+
+
+@dataclass(frozen=True)
+class MembershipLag:
+    """``status``: OK, STALE, EMPTY, NOT_DAILY (built without ``--refresh D``) or AHEAD (last row after today)."""
+
+    status: str
+    last: pd.Timestamp | None = None
+    lag_days: int | None = None
+    gap_days: float | None = None
+
+
+def membership_lag(
+    membership: pd.DataFrame, today: str | pd.Timestamp, *, alert_days: int = MEMBERSHIP_ALERT_DAYS
+) -> MembershipLag:
+    """Whole UTC days from the table's last row to ``today``: the days research can only forward-fill.
+
+    Every state that cannot vouch for freshness is named rather than read as OK.  A monthly table
+    that is five days old is not fresh - every bar in it borrows a row up to a month old.
+    """
+    if membership.empty:
+        return MembershipLag("EMPTY")
+    index = pd.DatetimeIndex(membership.index)
+    index = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
+    now = pd.Timestamp(today)
+    now = now.tz_localize("UTC") if now.tz is None else now.tz_convert("UTC")
+    last = index.max().normalize()
+    lag = (now.normalize() - last).days
+    gaps = pd.Series(index.sort_values()).diff().dropna()
+    gap = float(gaps.median() / pd.Timedelta(days=1)) if len(gaps) else None
+    if gap is not None and round(gap) != 1:  # half a day of tolerance; monthly reads 31, weekly 7
+        status = "NOT_DAILY"
+    elif lag < 0:
+        status = "AHEAD"
+    else:
+        status = "STALE" if lag >= alert_days else "OK"
+    return MembershipLag(status, last, lag, gap)
+
+
 # --- live: daily refresh --------------------------------------------------------------------------
 
 

@@ -96,7 +96,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
                 float(portfolio["max_order_notional"]) if portfolio.get("max_order_notional") else None
             ),
             max_participation=float(portfolio.get("max_participation", 0.0)),
-            # T-S03's cap is documented as being about a RISK-ADDING order, and it exempted only a
+            # T-S03's cap was documented as being about a RISK-ADDING order, and it exempted only a
             # full close - so a 15% position being cut to 5% was throttled by the same liquidity that
             # was drying up.  Off by default, which is today's behaviour bit for bit; the backtest
             # replay carries the same field and the two have to be flipped together (KILL-027).
