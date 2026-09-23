@@ -15819,3 +15819,19 @@ rebalance`，与 #53–#55 同形态。`missed_rebalances` 是 1 而不是 0，�
   两个序列都没有缺口，没有零成交 bar。`report beta` 因缺价跳过的 symbol-bar：**236 → 0**。
   回填后手动跑 `live status --check`，exit 0；回填前那次是 16:10Z 巡检的 `ok status`。manifest 的 `klines`、
   `funding` 两个字段只提示，不阻断。
+
+### 重启后的核验（本地 01:10 与 01:20）
+
+- **17:10Z 巡检**：`ok status`；`ok verify (max_contribution_diff 0.0)`，新进程的输出能逐位复现。
+  日报「Bar sanity (G6, alert only)」一节：`cycles_checked 1`，没有新 flag，检查错误 0，最长 3.7 ms。
+  「Market beta」一节的基准篮子：每根 bar 17.24 个币，因缺价跳过 0 个 symbol-bar。回填前是 16.62 个币、236 个。
+- **17:20Z 数据日任务**，第一次跑 #128 的代码。日志：`pool names outside the 24h top 30: LSKUSDT, AKEUSDT`，
+  候选 32 个。LSKUSDT 从 09-18T16:00Z 补到 09-23T16:00Z，23,331 根，没有缺口。任务退出码 0，stderr 没有新内容。
+
+**顺带发现，未修：重启之后，M-Q03 把一次周期失败改记成了重启。** 17:11Z 的 report 告警仍是「漏掉 1 次
+再平衡」，但原因从 16:10Z 的「其中 1 根是周期失败（ProxyError: 503）；失败动作：查这条路径，不是重启」，
+变成了「最迟的一次在 bar 收盘后 2505 秒；失败动作：查重启原因」。「周期失败丢掉 1 根 bar」那条单独的告警也不再发。
+- 原因在 `beidou_live/reports.py` 的 M-Q03 统计：`failed_bars = len(lost - accounted)`。15:00 那根 bar 先有一条
+  ERROR 行进 `lost`，重启后的 SKIPPED 行又把它加进 `accounted`，于是 `failed_bars` 从 1 变成 0。
+- 漏掉的次数没错，错在归因：失败发生在重启前 40 分钟，重启只是给同一根 bar 补了一条跳过记录。
+  按现在的写法，任何一次失败之后的重启，都会把失败读成重启、把告警提前撤掉。
