@@ -36,12 +36,40 @@ from beidou_data.spot import (
     measure_alignment,
     write_spot_map,
 )
-from beidou_data.store import SPOT_KLINE_KIND, FundingStore, KlineStore, MetricsStore, interval_ms
+from beidou_data.store import (
+    SPOT_KLINE_KIND,
+    FundingStore,
+    KlineStore,
+    MetricsStore,
+    interval_ms,
+    write_parquet_atomically,
+)
 from beidou_data.sync import sync_funding, sync_klines
 from beidou_data.universe import UniverseConfig, eligible_symbols
-from beidou_live.composition import read_universe, write_universe
+from beidou_live.composition import UNIVERSE_STATE, read_universe, write_universe
 from beidou_shared.binance_rules import parse_exchange_info
 from beidou_shared.config import load_yaml
+
+
+def _pool_and_leavers(root: str) -> list[str]:
+    """The pool in `universe.json`, and the names its last refresh dropped (2026-09-23).
+
+    The 24h top 2N alone missed names the loop was trading.  The pool ranks 30-day volume with
+    hysteresis, so a member can sit below that cut for weeks; `LivePool.select` keeps `previous` among
+    its candidates for exactly this.  LSKUSDT's bars stopped at 2026-09-18T16:00Z while it was still
+    in the pool.  CYSUSDT and TUTUSDT lost twelve days before they left on 09-16.  All three fell out
+    of `report beta`'s basket and M-Q08's turnover replay.  The leavers ride along one more day so the
+    bars of their exit are stored too.  An unreadable file costs only this addition: `pool refresh`
+    reads the same file next in `run_data.sh` and fails loudly there.
+    """
+    try:
+        payload = json.loads((Path(root) / UNIVERSE_STATE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as error:
+        click.echo(f"    ! {UNIVERSE_STATE} unreadable, pool names not added: {error}")
+        return []
+    return list(dict.fromkeys(str(s) for s in [*payload.get("symbols", []), *payload.get("left", [])]))
 
 
 @data.command("sync")
@@ -70,7 +98,10 @@ def data_sync(
         else:
             ranked = sorted((s for s in eligible if s in volume_24h), key=lambda s: -volume_24h[s])
             limit = candidates or 2 * config.top_n
-            candidate_list = list(dict.fromkeys([*config.always_include, *ranked[:limit]]))
+            pool = _pool_and_leavers(root)
+            candidate_list = list(dict.fromkeys([*config.always_include, *pool, *ranked[:limit]]))
+            outside = [s for s in pool if s not in ranked[:limit] and s not in config.always_include]
+            click.echo(f"pool names outside the 24h top {limit}: {', '.join(outside) or '-'}")
         click.echo(f"candidates: {len(candidate_list)} symbols from {history_start} (root={root})")
         reports = []
         for index, symbol in enumerate(candidate_list, start=1):
@@ -363,7 +394,13 @@ def pool_refresh(universe_path: str, root: str, market_url: str, venue_url: str,
 @click.option("--root", default=".beidou/data", show_default=True)
 @click.option("--market-url", default="https://fapi.binance.com", show_default=True)
 @click.option("--start", default=None, help="first month YYYY-MM (default from universe.yaml)")
-@click.option("--refresh", default="MS", show_default=True, help="pandas offset alias of the re-selection dates")
+@click.option(
+    "--refresh",
+    default="D",
+    show_default=True,
+    # D since 2026-09-23: research adopted the daily table on 2026-09-04, and `pool lag` flags a monthly one.
+    help="pandas offset alias of the re-selection dates (MS = the monthly table research dropped)",
+)
 @click.option("--sync/--no-sync", default=True, show_default=True, help="refresh daily klines for every candidate")
 @click.option(
     "--sync-members/--no-sync-members",
@@ -388,6 +425,7 @@ def pool_history(
     always_include: str,
 ) -> None:
     """Rebuild point-in-time membership from daily quote volume of every USDT perpetual that ever had an archive."""
+    click.echo(f"注意：{_REBUILD_BLOCKS}")  # before the long sync, while Ctrl-C still costs nothing
     base = UniverseConfig.from_mapping(load_yaml(universe_path))
     pins = tuple(s.strip().upper() for s in always_include.split(",") if s.strip())
     config = replace(base, always_include=pins)
@@ -443,14 +481,18 @@ def pool_history(
         volume = volume.loc[pd.Timestamp(history_start.start_ms(), unit="ms", tz="UTC") :]
         membership = point_in_time_membership(volume, config, eligible=eligible, refresh=refresh)
         table_path = Path(root) / MEMBERSHIP_FILE
-        membership.to_parquet(table_path)
+        # Atomic since 2026-09-23: the hourly `pool lag --check` reads this file, and an in-place write
+        # let it catch half a table.  `index=None` keeps the dates exactly as the plain `to_parquet` did.
+        write_parquet_atomically(membership, table_path, index=None)
         summary = membership_summary(membership)
         summary["coverage"] = {
             "symbols_with_daily_data": int(volume.notna().any(axis=0).sum()),
             "symbol_days": int(volume.notna().sum().sum()),
             "eligible": len(eligible),
         }
-        (Path(root) / "membership.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", "utf-8")
+        summary_tmp = Path(root) / "membership.json.tmp"
+        summary_tmp.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", "utf-8")
+        summary_tmp.replace(Path(root) / "membership.json")
         click.echo(
             f"membership: {summary['refreshes']} refreshes {summary['first']} -> {summary['last']}, "
             f"mean size {summary['mean_size']:.1f}, {summary['changes_per_refresh']:.2f} changes/refresh, "
@@ -491,11 +533,12 @@ def pool_history(
 
 # Every reason whose fix is a rebuild carries this, or the alert talks the operator into 2026-09-18
 # again: that rebuild moved a blocking manifest field and the armed start was saved only by D-041.
-_REBUILD = (
-    "重建命令：beidou data pool history --refresh D。必须带 --refresh D，默认的 MS 出的是月表。"
+# `pool history` prints the gate half itself before it starts (2026-09-23).
+_REBUILD_BLOCKS = (
     "重建会改动 manifest 的 membership 字段，armed 启动随即被数据集门挡住（registry_dataset_problems）。"
     "所以重建要和证据重出排在一起，不要单独重建。"
 )
+_REBUILD = f"重建命令：beidou data pool history --refresh D（日表；MS 是 09-04 弃用的月表）。{_REBUILD_BLOCKS}"
 
 
 def _lag_line(path: Path, today: pd.Timestamp, alert_days: int) -> tuple[bool, str]:
