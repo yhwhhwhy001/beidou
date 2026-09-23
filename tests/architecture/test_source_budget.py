@@ -2609,7 +2609,7 @@ CEILING = {
     # 1.5493, which is 2.7% of headroom on a number that is not an out-of-sample record at all.
     # About 45 of the 58 lines are `_unselected`'s docstring, and they are the part worth the ratchet:
     # the measured blast radius (10 archived reports, all PASS -> WEAK_PASS, none to FAIL) and the
-    # reason this caps rather than fails - `registry.py:369` admits WEAK_PASS to live use, so the rule
+    # reason this caps rather than fails - `registry.evidence_problems` admits WEAK_PASS to live use, so the rule
     # can say what it means without stopping a loop that is holding positions.  Deleting that paragraph
     # to fit under the ceiling would leave a threshold nobody can argue with, which is the failure mode
     # the ninth raise's note already named.
