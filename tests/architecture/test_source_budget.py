@@ -2609,7 +2609,7 @@ CEILING = {
     # 1.5493, which is 2.7% of headroom on a number that is not an out-of-sample record at all.
     # About 45 of the 58 lines are `_unselected`'s docstring, and they are the part worth the ratchet:
     # the measured blast radius (10 archived reports, all PASS -> WEAK_PASS, none to FAIL) and the
-    # reason this caps rather than fails - `registry.py:369` admits WEAK_PASS to live use, so the rule
+    # reason this caps rather than fails - `registry.evidence_problems` admits WEAK_PASS to live use, so the rule
     # can say what it means without stopping a loop that is holding positions.  Deleting that paragraph
     # to fit under the ceiling would leave a threshold nobody can argue with, which is the failure mode
     # the ninth raise's note already named.
@@ -3122,7 +3122,29 @@ CEILING = {
     # 带宽仍是 48，t 仍是 0.34）。
     #
     # 留 45 行（10_635 -> 10_680），理由与上面几格逐字相同，不重述。
-    # 2026-09-23（不编号，同上）。+131 beidou_live，10_660 -> 10_791，抬到 10_830。
+    # 2026-09-23（不编号，同上）。+72 beidou_live，10_662 -> 10_734，抬到 10_780。
+    #
+    # G1：§12.9 的衰减规则进每小时的 `report daily --check`。规则 09-07 就建好了，唯一的读者是
+    # `report weekly`，而没有 job 跑周报——REVIEW 算出来也没人读。现在 `daily_payload` 带上
+    # `decay_watch`，日报印一节，`daily_alerts` 只在 REVIEW 时告警。INSUFFICIENT_DATA 只印不告警。
+    #
+    # 同一处还有一个与 §12.9 相悖的读法。裁定写的是「构造一变，q10 必须重算，与 M-010 的清零语义
+    # 一致」，而窗口原来从第一根记录起算。09-23 的实盘副本上，第一个窗口会从 09-03T06:00Z 开始，
+    # 已有的 478 根 bar 横跨五个 canonical 构造，另有 27 个周期早于任何指纹。现在窗口从
+    # `evidence_window` 起算，与 M-010 同一起点，别名不清零。当天两种读法都还没有完整窗口，
+    # 周报的 markdown 逐字未变。
+    #
+    # 花在哪：三个新函数 58 行（`_decay_alerts` 18、`_decay_lines` 36、`_utc_minute` 4，都含空行），
+    # `decay_watch` 的 docstring 与两行代码 +9，三处挂接 +5。日报这一节与告警都写明两边口径不同：
+    # 实盘窗口是已实现归因，q10 是回测盯市（操作者 09-23 裁定 A，前一个提交在余量内先改了 M-010）。
+    #
+    # 耗时：`report daily --check` 在实盘副本上改前改后交替各跑 10 次，两轮的中位数是
+    # 0.697s 对 0.697s、0.731s 对 0.732s。进程内的 `decay_watch` 走 `read_jsonl` 缓存是 0.3ms，冷读 19ms。
+    #
+    # 留 46 行（10_734 -> 10_780），理由与 2026-09-17 那格逐字相同，不重述。
+    #
+    # 2026-09-23（不编号，同上）。+131 beidou_live。分支上是 10_660 -> 10_791；并入 G1（#118）之后是
+    # 10_734 -> 10_865，抬到 10_905。
     #
     # G3：`report beta` 的读数进日报。D-045 的分解原来写在 CLI 命令体里，只有人手动跑才有读数。
     # 日报与每小时的巡检都看不到。现在抽成 `benchmark.beta_reading`，`report beta` 与日报的 `beta`
@@ -3142,8 +3164,8 @@ CEILING = {
     # 归档只取窗口内的 bar：整段历史要 121 ms，窗口内 7 ms，读数相同（20 个标的，710,252 行）。
     # 照搬原来的取法，每小时要多花约 0.11 s。
     #
-    # 留 39 行（10_791 -> 10_830），理由与上面几格逐字相同，不重述。
-    "beidou_live": 10_830,
+    # 留 40 行（10_865 -> 10_905），理由与上面几格逐字相同，不重述。
+    "beidou_live": 10_905,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
