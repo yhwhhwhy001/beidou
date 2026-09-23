@@ -6,7 +6,7 @@
 | --- | --- |
 | 拉取/刷新研究数据并选 universe | `beidou data sync` |
 | 手动刷新实盘交易池（30 日成交量 + 滞回） | `beidou data pool refresh`（实盘循环每个 UTC 日也会自动做一次） |
-| 重建时点成员表（研究用，先同步 878 个候选的日线；必须带 `--refresh D`：2026-09-04 起研究口径逐日重选，默认的 `MS` 出的是月表）。**重建会挡住 armed 启动**，先读下面「成员表落后告警」 | `beidou data pool history --refresh D [--sync-members]` |
+| 重建时点成员表（研究用，先同步 878 个候选的日线；出日表：2026-09-04 起研究口径逐日重选，2026-09-23 起 `--refresh` 默认就是 `D`，传 `MS` 出的是月表）。**重建会挡住 armed 启动**，先读下面「成员表落后告警」 | `beidou data pool history --refresh D [--sync-members]` |
 | 时点成员表落后几天（每小时巡检带 `--check` 跑它） | `beidou data pool lag [--check]` |
 | 单策略回测 / 验证 | `beidou research backtest --strategy tsmom`；`beidou research validate --strategy tsmom --universe pit --prior-trials N`（`--min-tenure K` 只交易已入池 ≥K 次的老牌币） |
 | exit overlay / 回撤节流证据 | `beidou research overlay --universe pit` |
@@ -91,10 +91,10 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 2026-09-18 那次单独重建，就是这样引出了 D-041 bridge。所以：
 
 1. 重建和证据重出排进同一个安排，时间由操作者定。重出要花 ledger。
-2. 重建必须带 `--refresh D`。不带就是月表，巡检会接着报「不是日表」。
+2. 重建要出日表。2026-09-23 起 `--refresh` 默认就是 `D`；传 `MS` 出的是月表，巡检会接着报「不是日表」。
 3. 开跑前先确认没有别的会话在写 `.beidou/data`（RISK-LD05）。`--sync` 默认开，会给每个候选下载
    日线，走的是实盘循环那条代理，按 RESEARCH_LOG 里回填那条整点避让挑时间。
-4. 表是原地重写的。巡检若撞上写到一半的文件，会报一次「读不了」，下一小时自己消失。
+4. 表是原子写入的（2026-09-23 起）：巡检读到的要么是旧表，要么是新表。命令开跑时先印一行数据集门的提示。
 
 告警每天推送一次，直到重建为止（操作者 2026-09-23 裁定）。巡检日志里仍每小时记一行 FAIL，变的只是推送。
 这一条的去重用单独的状态文件 `alert-dedup-daily.json`：共用的 `alert-dedup.json` 会被每小时的检查写回时冲掉。
@@ -212,5 +212,5 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
 - 当前实测：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
-- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data pool refresh`（`data spot` 2026-09-09 加入；每日 01:20，`com.beidou.data.plist`）。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。
+- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data pool refresh`（`data spot` 2026-09-09 加入；每日 01:20，`com.beidou.data.plist`）。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。
 - **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check`、`report daily --check` 与 `data pool lag --check`（成员表落后，见上文「成员表落后告警」），失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。
