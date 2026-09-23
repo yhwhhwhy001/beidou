@@ -2609,7 +2609,7 @@ CEILING = {
     # 1.5493, which is 2.7% of headroom on a number that is not an out-of-sample record at all.
     # About 45 of the 58 lines are `_unselected`'s docstring, and they are the part worth the ratchet:
     # the measured blast radius (10 archived reports, all PASS -> WEAK_PASS, none to FAIL) and the
-    # reason this caps rather than fails - `registry.py:369` admits WEAK_PASS to live use, so the rule
+    # reason this caps rather than fails - `registry.evidence_problems` admits WEAK_PASS to live use, so the rule
     # can say what it means without stopping a loop that is holding positions.  Deleting that paragraph
     # to fit under the ceiling would leave a threshold nobody can argue with, which is the failure mode
     # the ninth raise's note already named.
@@ -3122,7 +3122,89 @@ CEILING = {
     # 带宽仍是 48，t 仍是 0.34）。
     #
     # 留 45 行（10_635 -> 10_680），理由与上面几格逐字相同，不重述。
-    # 2026-09-23（不编号，同上）。+585 beidou_live，10_660 -> 11_245（分支基点 e80b1335 上实测），抬到 11_290。
+    # 2026-09-23（不编号，同上）。+72 beidou_live，10_662 -> 10_734，抬到 10_780。
+    #
+    # G1：§12.9 的衰减规则进每小时的 `report daily --check`。规则 09-07 就建好了，唯一的读者是
+    # `report weekly`，而没有 job 跑周报——REVIEW 算出来也没人读。现在 `daily_payload` 带上
+    # `decay_watch`，日报印一节，`daily_alerts` 只在 REVIEW 时告警。INSUFFICIENT_DATA 只印不告警。
+    #
+    # 同一处还有一个与 §12.9 相悖的读法。裁定写的是「构造一变，q10 必须重算，与 M-010 的清零语义
+    # 一致」，而窗口原来从第一根记录起算。09-23 的实盘副本上，第一个窗口会从 09-03T06:00Z 开始，
+    # 已有的 478 根 bar 横跨五个 canonical 构造，另有 27 个周期早于任何指纹。现在窗口从
+    # `evidence_window` 起算，与 M-010 同一起点，别名不清零。当天两种读法都还没有完整窗口，
+    # 周报的 markdown 逐字未变。
+    #
+    # 花在哪：三个新函数 58 行（`_decay_alerts` 18、`_decay_lines` 36、`_utc_minute` 4，都含空行），
+    # `decay_watch` 的 docstring 与两行代码 +9，三处挂接 +5。日报这一节与告警都写明两边口径不同：
+    # 实盘窗口是已实现归因，q10 是回测盯市（操作者 09-23 裁定 A，前一个提交在余量内先改了 M-010）。
+    #
+    # 耗时：`report daily --check` 在实盘副本上改前改后交替各跑 10 次，两轮的中位数是
+    # 0.697s 对 0.697s、0.731s 对 0.732s。进程内的 `decay_watch` 走 `read_jsonl` 缓存是 0.3ms，冷读 19ms。
+    #
+    # 留 46 行（10_734 -> 10_780），理由与 2026-09-17 那格逐字相同，不重述。
+    #
+    # 2026-09-23（不编号，同上）。+131 beidou_live。分支上是 10_660 -> 10_791；并入 G1（#118）之后是
+    # 10_734 -> 10_865，抬到 10_905。
+    #
+    # G3：`report beta` 的读数进日报。D-045 的分解原来写在 CLI 命令体里，只有人手动跑才有读数。
+    # 日报与每小时的巡检都看不到。现在抽成 `benchmark.beta_reading`，`report beta` 与日报的 `beta`
+    # 块共用它。两处读同一个数，只有共用一份计算才安全。D-045 的前四个答案互不相同，原因正是基准换了。
+    #
+    # 花在哪：`beta_reading` 51 行（docstring 17 行）；`market_beta` 24 行（docstring 9 行，写的是
+    # 为什么宽捕获、为什么不告警）；`_market_beta_lines` 43 行；挂接 4 行（payload 3 行，其中注释
+    # 2 行；markdown 1 行）；import 2 行；模块 docstring 净增 1 行；函数间空行 6 行。命令体搬走的
+    # 29 行记在 beidou_cli 那一格，那格的顶同步降下。
+    #
+    # 买到什么。巡检第一次带上 beta 与残差。2026-09-23 在实盘状态副本上读到：constant beta 1.10
+    # （t 8.79），alpha t 1.22；conditional beta 0.70（t 28.26），alpha t 0.36；样本 362 根 bar。
+    # 日报块与 `report beta` 的 JSON 逐位相同，21 个浮点逐个比过。重构前后 `report beta` 的
+    # markdown 与 JSON 逐字节相同。只报告，不告警：beta 与残差都没有预登记的阈值。
+    #
+    # 耗时。`report daily --check` 的中位数从 0.592 s 到 0.627 s（交替各 8 次，配对差中位 +38 ms）。
+    # 归档只取窗口内的 bar：整段历史要 121 ms，窗口内 7 ms，读数相同（20 个标的，710,252 行）。
+    # 照搬原来的取法，每小时要多花约 0.11 s。
+    #
+    # 留 40 行（10_865 -> 10_905），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-23（不编号）。+310 beidou_live。分支上是 10_660 -> 10_970；并入 G1（#118）与 G3（#119）
+    # 之后是 10_865 -> 11_175，抬到 11_215。G6：实盘用 bar 之前查价格
+    # 本身（bar sanity），只告警。
+    #
+    # 常设检查只问数据在不在、新不新。BNXUSDT 在 2023-02-22 14:00 停牌 518 根后回来，价格是停牌前的
+    # 1/55，同名、同一份历史。现有每一道检查都放它过去，模型会把它读成一次行情。
+    #
+    # 花在哪：`beidou_live/bar_sanity.py` 293 行。模块 docstring 47 行，记的是阈值在全部归档上的测量
+    # （878 个 1h 文件、15,127,202 根；ln 2 下成员日 15 根、全是真实行情，折合约 2.6 根/年）。那段就是
+    # 阈值的理由，删掉它，阈值就成了拍的数。import 与常量 25 行；三条规则与永不抛错的外壳 123 行；日报
+    # 一侧 98 行。挂接 17 行：`inputs.py` 净 +5、`reports.py` +9、`engine.py` +2、`cycle_record.py` +1。
+    #
+    # 日报一侧为什么要 98 行：一根坏 bar 在 1,442 根的窗口里待约 60 天，每个周期都重报。按每次上报告警
+    # 要连响 60 天；只看当天收盘的 bar，又会漏掉带着旧重新计价入池的标的。「当天首次出现」两种都只响
+    # 一天，代价是读全部历史行去重，外加告警与 markdown 的文字。
+    #
+    # 单周期耗时（17 个标的 × 1,442 根，200 次，`scratchpad/bar_sanity_archive_scan.py`）：中位 1.21 ms，
+    # 最大 2.03 ms。
+    #
+    # 留 40 行（11_175 -> 11_215），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-23（不编号，同上）。+87 beidou_live。分支上是 10_660 -> 10_747；并入 G1、G3、G6
+    # （#118、#119、#121）之后是 11_175 -> 11_262，抬到 11_302。
+    #
+    # G4：尾部读数停在 k=0.30。五段崩盘窗口是 09-08 在 0.30 下回放的。k 在 09-14 升到 0.60，
+    # 之后没人重跑。日报只有 σ 尺子，没有经验 VaR 与 ES。重跑放在 scratchpad 里，不花包里的行；
+    # 花在包里的，是日报读出回测尾部的那一段。
+    #
+    # 这些行买到什么（`scratchpad/g4_stress_windows_and_var_at_k060.py`，2,059 个完整 UTC 日）：
+    # 回放的日标准差 3.17%，σ 尺子印的设计值 3.14%，两者对得上。对不上的是坏日子。
+    # 99% 那天亏 7.83%，最差 1% 的均值亏 9.25%。折成标准差是 2.47 与 2.92，正态下是 2.33 与 2.67。
+    # 只看 σ，坏日子会读轻。这一段把它们按当天权益折成 USDT，印在 σ 旁边。
+    #
+    # 花在哪：四个常量与出处注释（9）；`tail_readings` 49 行，其中 docstring 17 行，记着实盘日收益
+    # 取哪条序列、在实盘记录上量过什么；`_tail_readings_lines`（21）；两处挂接（2）；空行（6）。
+    #
+    # 留 40 行（11_262 -> 11_302），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-23（不编号，同上）。+585 beidou_live（分支基点 e80b1335 上实测 10_660 -> 11_245）。
     #
     # M-Q08 是 demo 期两条成功判据之一。它四项里的「换手与回测同期偏差 ±25%」一直没有仪器（09-23 清点的
     # G9），滑点也只有一个 30 天合并的数，看不出趋势。`beidou_live/execution_fidelity.py` 579 行补这两样，
@@ -3143,12 +3225,13 @@ CEILING = {
     #
     # 耗时：`report daily` 在 09-23 的状态副本上，中位 0.69 s -> 1.39 s（新旧交替各跑 5 次）。每小时一次，可以接受。
     #
-    # 留 45 行（11_245 -> 11_290），理由与 2026-09-22 那格逐字相同，不重述。
-    #
-    # 同日第二个提交，+16，实测 11_261，不抬顶。M-Q08 这一块跑在每小时的 `report daily --check` 里，
+    # 同日第二个提交，+16（分支上实测 11_261）。M-Q08 这一块跑在每小时的 `report daily --check` 里，
     # 第一版只接了列出来的几种异常，漏网的一种就会让整份日报连同其它告警一起失败。现在按 `market_beta`
-    # 的做法宽捕获，只包这一块（`from_profile`、重放、整块各一处），失败写进块里。用的是上面留的 45 行。
-    "beidou_live": 11_290,
+    # 的做法宽捕获，只包这一块（`from_profile`、重放、整块各一处），失败写进块里。
+    #
+    # 并入 G1、G3、G6、G4（#118、#119、#121、#123）之后，两个提交合计 +601：11_262 -> 11_863。
+    # 留 40 行（11_863 -> 11_903），理由与上面几格逐字相同，不重述。
+    "beidou_live": 11_903,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3396,10 +3479,46 @@ CEILING = {
     # +70%）。真实面板上量过：同一本书（`decompose-tsmom-20260904T052958Z` 的配置，复现到归档的
     # 小数点后三位），基准 Sharpe 从 +0.50 变成 +0.10，复利从 +31% 变成 −84%；书与基准的相关只从
     # −0.135 变成 −0.127。所以变的是「市场赚了多少」，不是「书像不像市场」。
-    # +2 beidou_cli，2026-09-23（7_735 -> 7_737）：`report daily` 把 registry 与 profile 交给 M-Q08 的换手
+    # −29 beidou_cli，2026-09-23（7_735 -> 7_706）：`report beta` 的计算搬进 `benchmark.beta_reading`，
+    # 命令体只剩读文件、渲染与写盘。搬走的行不留作 headroom：只升不降的 ratchet，每搬一次家就白送
+    # 这个包一段余量。beidou_live 那一格的 +131 是同一次改动的另一半。
+    #
+    # +51 beidou_cli，2026-09-23。分支上是 7_735 -> 7_786；并入 G3（#119）之后是 7_705 -> 7_756，抬到齐平。
+    # G10，`beidou data pool lag`。操作者当天裁定：时点
+    # 成员表维持手动重建，不排定时任务，另加一条「成员表多久没重建」的告警。`deploy/run_check.sh`
+    # 每小时带 `--check` 跑它，失败路径与 `report daily` 那一行逐字相同。
+    #
+    # 51 行是什么（各块都含其后的两行空行）。`_lag_line` 22 行，七种状态各给一行人读的原因：新鲜、
+    # 落后、不存在、读不了、空表、不是日表、末行晚于今天。其中 1 行把异常文字压成一行，因为告警正文
+    # 是 `tail -n 3`。`_REBUILD` 9 行，其中 2 行注释。命令本体 18 行，import 2 行。
+    #
+    # 为什么值。告警要同时写三件事：落后几天；重建要带 `--refresh D`；重建会让 armed 启动被数据集门
+    # 挡住，要和证据重出排在一起。少了第三件，告警会把操作者推回 2026-09-18：那次单独重建改动了
+    # manifest 的阻断字段，才有了 D-041 bridge。说不出新旧的状态各有一句，一个都不当作新鲜。
+    #
+    # +40 beidou_cli，2026-09-23。分支上是 7_735 -> 7_775；并入 G3（#119）与 G10（#120）之后是
+    # 7_756 -> 7_796，抬到齐平。G8，validate 的报告带保本成本倍数 m*。与
+    # beidou_alpha 那格 +60 是同一次改动的两半。09-23 的外部清单对照把它列为 G8：成本压力只有
+    # 1 / 1.5 / 2 倍三格，报告里没有「成本涨到几倍，净收益均值归零」这个数。
+    #
+    # 40 行是什么。`research_validate_cmd.py` +25：import 2 行；x1 / x1.5 / x2 的定价收成一个
+    # `_priced`，求 m* 时的重新定价要走同一台机器，净 +1（formatter 要求的空行）；`_oos` 视图与
+    # `cost_break_even` 块 18 行，其中四条口径 6 行、注释 2 行，另有 1 行是给 mypy 标注
+    # `pd.concat` 的返回类型；报告的键 1 行；Markdown 那一行 +3。
+    # `research_report.py` +15 是 `_break_even_row`：没有零点要印原因，没收敛要印离零多远。不印的话，
+    # 一个没找到的 m* 在 Markdown 里和找到的长得一样。
+    #
+    # 为什么值。这是上真钱之前最便宜的一个定量。出厂的 tsmom 书上（pit，到 2026-09-22 16:00，只读，
+    # 零 ledger）：全样本 m* = 15.46，样本外 14.48。重新定价每次约 0.6 秒，两条序列各 3 次，合 3.4 秒。
+    #
+    # 只报告，不判定。`verdict.decide` 不读这个键。一条测试递归遍历全部 81 份归档的 validation 报告，
+    # 两个方向注入敌意值，verdict 与 reasons 一个字都不能动。抬到齐平，照这一格前两次的做法。
+    #
+    # +2 beidou_cli，2026-09-23。分支上是 7_735 -> 7_737；并入 G3、G10、G8（#119、#120、#122）之后是
+    # 7_796 -> 7_798，抬到齐平。`report daily` 把 registry 与 profile 交给 M-Q08 的换手
     # 仪器（`ReplayInputs.from_profile`），一行 import、一个参数。建模失败只让这台仪器读不出数，不让日报挂掉，
     # 因为这种 registry 已经由 `live status` 报警。
-    "beidou_cli": 7_737,
+    "beidou_cli": 7_798,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3443,7 +3562,16 @@ CEILING = {
     # NOT removed, and the distinction matters: `beidou_live/liquidation.py` (DL-X1's liquidation
     # DISTANCE, in `beidou_live` and wired into every cycle record) and its tests are untouched.  One is
     # an ingest for data that does not exist; the other is an instrument reading the venue's own field.
-    "beidou_data": 3_122,
+    # +56 beidou_data，2026-09-23（3_122 -> 3_178）：G10 的纯函数一半，`membership_lag` 与告警线
+    # `MEMBERSHIP_ALERT_DAYS`。各块都含其后的两行空行：函数 27 行，`MembershipLag` 10 行，告警线与它的
+    # docstring 19 行。
+    #
+    # docstring 约占三分之一，因为 14 这个数是量出来的，量法要紧挨着它。在 09-18 重建的真实表上取截止
+    # 今天的 30 天窗口，最后 k 天前推时，错成员位的平均占比 k=13 是 2.98%，k=14 是 3.42%（2,027 个
+    # 窗口）。P12 第 0 段把 3% 以下的成员改动判为不值得回测，14 是第一个越线的 k。基准取日历、不取
+    # 归档最新一根 bar 的理由也写在那里：同步停了，那个基准会让这条告警跟着沉默。
+    # `tests/data/test_the_membership_table_says_how_far_it_trails.py` 在真实表上重算其中每个数。
+    "beidou_data": 3_178,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
@@ -3738,7 +3866,20 @@ CEILING = {
     #
     # 留 41 行（10_599 -> 10_640），理由与 2026-09-17 那格逐字相同，不重述。2026-09-20 留下的 44 行
     # 正是被这一次用掉的，那就是它存在的意义。
-    "beidou_alpha": 10_640,
+    # 2026-09-23（不编号）。+60 beidou_alpha，10_617 -> 10_677，抬到 10_720。G8：validate 的报告带
+    # 保本成本倍数 m*，与 beidou_cli 那格 +39 是同一次改动的两半。
+    #
+    # 60 行全在 `validation/stability.py`：`BREAK_EVEN_TOLERANCE` 与它的注释 3 行，
+    # `break_even_cost_multiple` 53 行（签名 7、docstring 22、正文 24），加 4 个空行。
+    # docstring 占得最多，它记的是「为什么要重新定价，而不是拿 x1、x2 两格直接解」的论证与测量。
+    # book 固定时，净收益均值对 m 严格线性：资金费与冲击成本照收但不随 m 变，只落在截距里。
+    # 可 book 不固定：日内亏损暂停读的是扣完成本的权益。出厂的 tsmom 书上，暂停从 x1 的 481 根
+    # 涨到 m* 处的 643 根，x1–x2 连线离零点差 0.008 倍（样本外 0.013）。x1.5 那格离连线只有 5e-5，
+    # 看不见它：偏离是过了 x2 才攒起来的，而那里没有格子。
+    #
+    # 留 43 行（10_677 -> 10_720），理由与 2026-09-17 那格逐字相同，不重述。上一格留的 41 行，此后
+    # 别的改动用掉 18 行，这次用完了剩下的 23 行。
+    "beidou_alpha": 10_720,
 }
 
 

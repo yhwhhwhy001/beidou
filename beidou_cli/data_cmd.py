@@ -19,9 +19,11 @@ from beidou_data.archive import ArchiveClient, Month
 from beidou_data.binance_public import AsyncPublicClient, PublicClient
 from beidou_data.metrics_archive import MetricsArchiveClient, sync_metrics
 from beidou_data.pool import (
+    MEMBERSHIP_ALERT_DAYS,
     MEMBERSHIP_FILE,
     LivePool,
     daily_quote_volume,
+    membership_lag,
     membership_summary,
     point_in_time_membership,
     sync_daily,
@@ -487,4 +489,53 @@ def pool_history(
                 )
 
 
-__all__ = ["data_status", "data_sync", "pool_history", "pool_refresh"]
+# Every reason whose fix is a rebuild carries this, or the alert talks the operator into 2026-09-18
+# again: that rebuild moved a blocking manifest field and the armed start was saved only by D-041.
+_REBUILD = (
+    "重建命令：beidou data pool history --refresh D。必须带 --refresh D，默认的 MS 出的是月表。"
+    "重建会改动 manifest 的 membership 字段，armed 启动随即被数据集门挡住（registry_dataset_problems）。"
+    "所以重建要和证据重出排在一起，不要单独重建。"
+)
+
+
+def _lag_line(path: Path, today: pd.Timestamp, alert_days: int) -> tuple[bool, str]:
+    """(fresh, one line for the operator).  Missing, unreadable, empty, monthly and future all read NOT fresh."""
+    if not path.exists():
+        return False, f"时点成员表不存在（{path}），说不出落后多少天，不能当作新鲜。{_REBUILD}"
+    try:
+        lag = membership_lag(pd.read_parquet(path), today, alert_days=alert_days)
+    except Exception as exc:  # a table nobody can read is a finding, never a pass
+        error = " ".join(f"{type(exc).__name__}: {exc}".split())  # one line: the page is `tail -n 3`
+        return False, f"时点成员表读不了（{error}），不能当作新鲜。{_REBUILD}"
+    last = "-" if lag.last is None else lag.last.strftime("%Y-%m-%d")
+    where = f"末行 {last}，今天 {today.strftime('%Y-%m-%d')} UTC"
+    if lag.status == "OK":
+        return True, f"时点成员表落后 {lag.lag_days} 天（告警线 {alert_days} 天；{where}）"
+    if lag.status == "STALE":
+        return False, f"时点成员表落后 {lag.lag_days} 天（告警线 {alert_days} 天；{where}）。{_REBUILD}"
+    if lag.status == "NOT_DAILY":
+        return False, f"时点成员表不是日表：相邻两行中位相隔 {lag.gap_days:g} 天（{where}）。{_REBUILD}"
+    if lag.status == "AHEAD":
+        return False, f"时点成员表的末行晚于今天（{where}）：本机时钟或这张表有一个不对，落后天数不可信。"
+    return False, f"时点成员表是空的（{path}），说不出落后多少天，不能当作新鲜。{_REBUILD}"
+
+
+@data_pool.command("lag")
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--date", "day", default=None, help="YYYY-MM-DD to measure against (default: today UTC)")
+@click.option("--alert-days", default=MEMBERSHIP_ALERT_DAYS, show_default=True, help="days of lag that alert")
+@click.option("--check", is_flag=True, help="exit non-zero unless the table is readable, daily and under the line")
+def pool_lag(root: str, day: str | None, alert_days: int, check: bool) -> None:
+    """How many days the point-in-time table trails today (G10: it is rebuilt by hand, never on a schedule).
+
+    One line either way, so the hourly check can paste it.  Why 14 days, and why the base is the
+    calendar rather than the archive, is written at ``MEMBERSHIP_ALERT_DAYS``.
+    """
+    today = pd.Timestamp(day, tz="UTC") if day else pd.Timestamp.now(tz="UTC")
+    fresh, line = _lag_line(Path(root) / MEMBERSHIP_FILE, today, alert_days)
+    if check and not fresh:
+        raise click.ClickException(line)
+    click.echo(line)
+
+
+__all__ = ["data_status", "data_sync", "pool_history", "pool_lag", "pool_refresh"]

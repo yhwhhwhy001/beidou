@@ -26,6 +26,8 @@ from beidou_alpha.validation.metrics import (
 )
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
+from beidou_live.bar_sanity import sanity_findings, sanity_lines, sanity_status
+from beidou_live.benchmark import beta_reading
 from beidou_live.construction import canonical_construction
 from beidou_live.cycle_record import latest
 from beidou_live.execution_fidelity import ReplayInputs, execution_fidelity, fidelity_lines, fidelity_notices
@@ -365,8 +367,10 @@ def income_drift(
 
     The equity-based `drift_check` cannot do this.  Equity here is multi-asset collateral, so it moves
     with BTC even when the book is flat (KILL-033), and it is one number for a book that runs a main
-    strategy plus a probe sleeve.  Income rows are per strategy and contain only realised P&L, commission
-    and funding, which is what the backtest Sharpe was computed from.
+    strategy plus a probe sleeve.  Income rows are per strategy and hold realised P&L, commission and
+    funding only - NOT the backtest's caliber, which marks every bar to market (`w_{t-1} . r_t`).  On
+    2026-09-12 flow's 30-day sigma read 0.137% of equity realised, 3.239% marked (`probe.py:128`).
+    Operator ruling A, 2026-09-23: kept, labelled as two calibers; no computation or alert changed.
     """
     if not equity or equity <= 0:
         return {"status": "INSUFFICIENT_DATA", "reason": "no equity"}
@@ -403,19 +407,28 @@ def decay_watch(
     window_days: int = DECAY_WINDOW_DAYS,
     bars_per_year: float = 8760.0,
 ) -> dict[str, Any]:
-    """Per strategy, the adopted decay rule against the whole income history (not just today).
+    """Per strategy, the adopted decay rule against the live record of the CURRENT construction.
 
-    The window is `window_days` of hourly bars and the history is read from bar zero, because the rule
-    is about the live period as a whole; every other number in this report is about one day.
+    The windows are `window_days` of hourly bars and they start where M-010's does: `evidence_window`,
+    so an aliased digest (`CONSTRUCTION_ALIASES`) carries them on and a real construction change starts
+    them over.  §12.9 ruled exactly that - "构造一变，q10 必须重算，与 M-010 的清零语义一致" - because q10
+    describes the construction its evidence run measured, and a live window from another construction
+    has nothing to be compared against.  Until 2026-09-23 this read from bar zero instead.  On the live
+    record that day the first window would have opened 2026-09-03T06:00Z, two weeks before the current
+    construction, and its 478 bars so far spanned five canonical constructions (vol_target 0.30 and
+    0.60, D3's band knobs off and on) plus 27 cycles from before any fingerprint.  Nobody saw it only
+    because no whole window existed yet under either reading.
 
     `q10` is looked up on the strategy's own evidence block.  Reports written before 2026-09-07 lack
     it; both reports the registry cites carry it (checked 2026-09-23), so the half that can still be
     missing is the live one - two whole windows are needed - and the row says which half it is.  That
-    reading must stay visible either way: a blank row would be read as "fine".
+    reading must stay visible either way: a blank row would be read as "fine".  q10 is marked to market
+    and the live windows are realised, the two calibers `income_drift` names; ruling A keeps it, labelled.
     """
     bars = int(window_days * 24)
     rows: dict[str, Any] = {}
-    for strategy, points in sorted(_series_by_strategy(store, None).items()):
+    since_ms = evidence_window(store)["since_ms"]
+    for strategy, points in sorted(_series_by_strategy(store, since_ms).items()):
         if not equity or equity <= 0:
             rows[strategy] = {"status": "INSUFFICIENT_DATA", "why": "no equity", "below": 0}
             continue
@@ -423,7 +436,7 @@ def decay_watch(
         windows = window_sharpes(returns, bars_per_window=bars, bars_per_year=bars_per_year)
         q10 = (expectations.get(strategy) or {}).get("oos_window_sharpe_q10")
         verdict = decay_verdict(live_windows=windows, q10=q10)
-        rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days}
+        rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days, "bars": len(points)}
     return rows
 
 
@@ -453,6 +466,64 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
     below = sum(1 for value in tail if value < q10)
     status = "REVIEW" if below == consecutive else "OK"
     return {"status": status, "below": below, "q10": q10, "windows": tail}
+
+
+def _decay_alerts(block: Mapping[str, Any]) -> list[str]:
+    """The paging half of §12.9, and the reason the rule reached the hourly check at all (G1, 2026-09-23).
+
+    Until then the rule's one reader was `report weekly`, which no job runs, so a REVIEW would have been
+    computed and read by nobody.  Only REVIEW pages.  INSUFFICIENT_DATA is what the rule reads for its
+    first sixty days under EVERY construction - two whole windows are its minimum - so it is rendered
+    and never routed, not even as a notice: M-G06's reason, a finding repeated hourly for two months
+    is not a finding.  OK needs no line.
+    """
+    return [
+        f"衰减规则判 REVIEW（§12.9）：{strategy} 最近两个不重叠的 {row.get('window_days')} 天窗口，"
+        f"归因夏普 {'、'.join(f'{float(value):.2f}' for value in row.get('windows') or [])} "
+        f"都低于回测 q10 {float(row['q10']):.2f}（已实现对盯市，口径不同）；窗口从当前构造起算；动作：复审这条策略"
+        for strategy, row in sorted(block.items())
+        if str(row.get("status")) == "REVIEW"
+    ]
+
+
+def _decay_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """§12.9 in the daily report: the weekly's reading verbatim, its two calibers, what it still waits for.
+
+    Beside each strategy go its q10 and a countdown in bars, because INSUFFICIENT_DATA is the reading
+    for sixty days after every construction change and "0 whole windows" alone cannot tell a rule that
+    is filling from one that is stuck.  The date is a floor: a missed bar only pushes it later.
+    """
+    block = payload.get("decay") or {}
+    if not block:
+        return {"none": "no attributed income yet"}
+    window = payload.get("evidence_window") or {}
+    since = window.get("since_ms")
+    lines: dict[str, Any] = {
+        "windows_start": f"{_utc_minute(since)}（构造 {window.get('construction')}，与 M-010 同一起点）"
+        if since is not None
+        else "没有构造指纹，窗口从第一根记录起算",
+        "口径": "实盘窗口是已实现归因，q10 是回测盯市。口径不同，比较保留（2026-09-23 操作者裁定 A）。"
+        "flow 的 30 天 σ 在 09-12 读数：已实现 0.137%，盯市 3.239%",
+    }
+    for strategy, row in sorted(block.items()):
+        needed = 2 * int(row.get("window_days") or DECAY_WINDOW_DAYS) * 24  # §12.9's "连续两个"
+        q10 = ((payload.get("expectations") or {}).get(strategy) or {}).get("oos_window_sharpe_q10")
+        lines[str(strategy)] = (
+            str(row.get("status"))
+            + (f" - {row['why']}" if row.get("why") else f" ({row.get('below')}/2 below q10)")
+            + f"；q10={_fmt_num(q10)}；bars {row.get('bars')}/{needed}"
+            + (f"；windows {json_dumps(row['windows'])}" if row.get("windows") else "")
+            + (
+                f"；不早于 {_utc_minute(since + needed * 3_600_000)}"
+                if since is not None and int(row.get("bars") or 0) < needed
+                else ""
+            )
+        )
+    return lines
+
+
+def _utc_minute(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%MZ")
 
 
 M_G06_WINDOW_MONTHS = 18  # §19 Q2's lagging criterion; not a dial, and shortening it is not an option
@@ -1053,6 +1124,68 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         "design_daily_sigma_in_usdt_pct": (design / usdt) if (design and usdt) else None,
         "giveback_since_hwm_in_usdt_pct": (since_hwm / usdt) if (since_hwm is not None and usdt) else None,
     }
+
+
+# G4, 2026-09-23: the backtest's one-day tail on the construction that trades - registry book (tsmom main +
+# flow_short sleeve), exits, both book guards, the live band (D2 + D3) and R8's ladder at vol_target 0.60, pit
+# universe, every complete UTC day 2021-02-01 -> 2026-09-21 (n = 2,059), from
+# `scratchpad/g4_stress_windows_and_var_at_k060.py`.  Historical: VaR is the m-th worst day and ES the mean of
+# the m worst, m = ceil(n x (1 - level)) = 103 / 21.  Fractions of equity, positive = a loss.  Measured at ONE
+# vol_target, so `tail_readings` refuses to convert them under another.
+TAIL_VOL_TARGET = 0.60
+BACKTEST_DAILY_VAR = {0.95: 0.043210, 0.99: 0.078255}
+BACKTEST_DAILY_ES = {0.95: 0.063345, 0.99: 0.092512}
+
+
+def tail_readings(store: StateStore, day: str, *, vol_target: float | None) -> dict[str, Any]:
+    """G4: the backtest's one-day VaR / ES in USDT at the day's last equity, and live days past the VaR.
+
+    Beside DL-EX0 because sigma sizes a normal day, and read as a normal distribution it misplaces the bad
+    ones.  The same replay's daily sd is 3.17% (design 3.14%), but its 99% day sits at 2.47 sd with ES 2.92
+    sd, where a normal day would put them at 2.33 and 2.67; its 95% day is 1.36 sd against 1.645.  The
+    conversion multiplies by the equity `design_daily_sigma_u` scales, because the weights are fractions of it.
+
+    The live day is `noise_scale`'s series compounded: total equity cycle to cycle, a step whose later
+    cycle re-baselined on a transfer skipped, bucketed by `_day_of` of the later cycle.  Measured over the
+    nine complete k=0.60 days of the live record (09-14 -> 09-22): it differs from the book's own
+    mark-to-market (attributed P&L + change in `unrealized`) by 0.42pp a day at most, and the two agree
+    on every day's side of both VaRs.  USDT equity does not: its daily move reads 1.90x (median), and on
+    that record it put one day past VaR 95% that neither of the others did.
+
+    Only complete UTC days count, after the day the D-026 window opened and before `day`.  So a count
+    never mixes two books, and an hourly run never scores a day that is still open.
+    """
+    rows = _cycles(store)
+    today = [row for row in rows if _day_of(row) == day]
+    equity = float(today[-1]["equity"]) if today else None
+    if vol_target is None or not math.isclose(vol_target, TAIL_VOL_TARGET):
+        why = f"常量在 vol_target {TAIL_VOL_TARGET} 下量得，profile 是 {vol_target}：不换算，不计数"
+        return {"enforced": False, "why": why, "equity_u": equity}
+    since = int(evidence_window(store).get("since_ms") or 0)
+    inside = [row for row in rows if int(row.get("bar_open_ms") or 0) >= since]
+    opened = _day_of(inside[0]) if inside else None
+    growth: dict[str, float] = {}
+    for a, b in pairwise(inside):
+        if (b.get("external_flows") or {}).get("rebaselined") or float(a["equity"]) <= 0:
+            continue
+        key = str(_day_of(b))
+        growth[key] = growth.get(key, 1.0) * float(b["equity"]) / float(a["equity"])
+    days = {key: value - 1.0 for key, value in growth.items() if opened is not None and opened < key < day}
+    out: dict[str, Any] = {
+        "enforced": True,
+        "equity_u": equity,
+        "days": len(days),
+        "first_day": min(days, default=None),
+    }
+    for level in (0.95, 0.99):
+        var, es = BACKTEST_DAILY_VAR[level], BACKTEST_DAILY_ES[level]
+        tag = f"{round(level * 100)}"
+        out[f"var_{tag}"], out[f"es_{tag}"] = var, es
+        out[f"var_{tag}_u"] = var * equity if equity is not None else None
+        out[f"es_{tag}_u"] = es * equity if equity is not None else None
+        out[f"past_var_{tag}"] = sorted(key for key, value in days.items() if value < -var)
+        out[f"expected_past_var_{tag}"] = len(days) * (1.0 - level)
+    return out
 
 
 def _store_closes(root: str | Path, interval: str) -> Callable[[str], pd.Series]:
@@ -2071,10 +2204,16 @@ def daily_payload(
         "income_drift": income_drift(
             store, expectations or {}, equity=equities[-1] if equities else None, since_ms=window["since_ms"]
         ),
+        # §12.9's decay rule, in the hourly check since 2026-09-23 (G1).  The weekly's own call, so the
+        # two reports cannot read the rule differently; `daily_alerts` pages on REVIEW and nothing else.
+        "decay": decay_watch(store, expectations or {}, equity=equities[-1] if equities else None),
         # M-G06 (§19 Q2's lagging half).  INSUFFICIENT_DATA for the next year and a half, on purpose:
         # the row that says how far off it is is the only honest thing it can say today.
         "long_run_sharpe": long_run_sharpe(store, equity=equities[-1] if equities else None),
         "legs": leg_split(store, since_ms=window["since_ms"], equity=equities[-1] if equities else None),
+        # D-045 beside the legs, which split the same money by side: this splits it into the market's
+        # part and the rest.  Over the whole USDT-equity record rather than the day, as `report beta`.
+        "beta": market_beta(store, closes=closes, root=data_root),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         "events": exit_and_pool_events(store, day),
         # Beside the exit COUNT rather than inside it: that block says what the overlay did today,
@@ -2082,6 +2221,7 @@ def daily_payload(
         # count means both things at once until something separates them.
         "exit_reachability": exit_reachability(store, exits),
         "noise_scale": noise_scale(store, day, vol_target=vol_target),
+        "tail": tail_readings(store, day, vol_target=vol_target),  # G4: the backtest tail beside the sigma ruler
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
@@ -2090,6 +2230,8 @@ def daily_payload(
         # "thinner" and "nothing happened" look identical in a rendered report.
         "state_file": {"readable": not _state_problem(store), "reason": _state_problem(store)},
         "data_coverage": data_coverage(store, root=data_root),
+        # G6: bars the loop fed its model that did not look like prices, split into first-seen-today and not.
+        "bar_sanity": sanity_status(store.read_jsonl(store.cycles_path), day, day_of=_day_of),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
@@ -2126,6 +2268,7 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
                 if row.get("z") is not None and row["z"] < -2.0
             ]
             alerts.append(f"{name}漂移告警：{'；'.join(str(d) for d in detail)}")
+    alerts.extend(_decay_alerts(payload.get("decay") or {}))
     budget = payload.get("risk_budget") or {}
     if str(budget.get("status")) == "ALERT":
         # P13's ladder: its thresholds were fixed before the change went live.  R8 applies the attributed
@@ -2150,6 +2293,10 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             + "；风险贡献相互拉开——查第一层"
         )
     notices: list[str] = []
+    # G6: a suspicious bar pages on the day it is first seen; a check that could not run is read at review.
+    sanity_alerts, sanity_notices = sanity_findings(payload.get("bar_sanity") or {})
+    alerts += sanity_alerts
+    notices += sanity_notices
     margin = payload.get("margin") or {}
     if margin.get("over_budget"):
         # M-007.  A notice rather than an alert, by the same test the other entries here use: realized
@@ -2398,9 +2545,9 @@ def weekly_payload(
         "promotion_budget": 1,
         "evidence_window": window,
         "income": income,
-        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly rather than daily on purpose: it
-        # asks about the live period as a whole, and every other number in the daily report is about
-        # one day.  It reads INSUFFICIENT_DATA until somebody computes the q10 for this construction.
+        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly-only was a choice - the rule is
+        # about the live period, not one day - but no job runs this report, so since 2026-09-23 the
+        # daily report makes this same call and the hourly check pages on its REVIEW (G1).
         "decay": decay,
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),
@@ -2612,6 +2759,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     },
                 },
             ),
+            ("Edge decay (M-010 vs backtest q10)", _decay_lines(payload)),
             (
                 # §19 Q2's lagging criterion.  Rendered while it is still INSUFFICIENT_DATA because the
                 # countdown IS the reading: a criterion nobody can see the distance to is a criterion
@@ -2627,6 +2775,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 }
                 or {"none": 0},
             ),
+            ("Market beta (D-045, reported only)", _market_beta_lines(payload.get("beta") or {})),
             (
                 "Probe correlation (M-014)",
                 {
@@ -2644,6 +2793,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 "Research data coverage",
                 payload.get("data_coverage") or {"none": 0},
             ),
+            # G6, beside the archive's coverage: whether the bars the LOOP read looked like prices at all.
+            ("Bar sanity (G6, alert only)", sanity_lines(payload.get("bar_sanity") or {})),
             (
                 "Margin and rejections (M-007)",
                 {
@@ -2689,6 +2840,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 },
             ),
             ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
+            ("Tail beside the sigma ruler (G4)", _tail_readings_lines(payload.get("tail") or {})),
             (
                 "Exit counterfactuals (M-005, monitoring only)",
                 {
@@ -2798,6 +2950,29 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tail_readings_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """G4's two readings under the sigma ruler: the backtest tail in USDT, then live days past it."""
+    if not block.get("enforced"):
+        return {"status": "n/a", "why": block.get("why") or "no reading"}
+    lines: dict[str, Any] = {}
+    for tag in ("95", "99"):
+        lines[f"VaR {tag}% / ES {tag}% (1 day, backtest k={TAIL_VOL_TARGET:.2f})"] = (
+            f"{_fmt_pct(block.get(f'var_{tag}'))} / {_fmt_pct(block.get(f'es_{tag}'))} of equity = "
+            f"{_fmt_num(block.get(f'var_{tag}_u'))} / {_fmt_num(block.get(f'es_{tag}_u'))} U"
+        )
+    for tag in ("95", "99"):
+        past = block.get(f"past_var_{tag}") or []
+        lines[f"live days below -VaR {tag}%"] = (
+            f"{len(past)} of {block.get('days')} (expected {_fmt_num(block.get(f'expected_past_var_{tag}'))})"
+            + (f" {json_dumps(past)}" if past else "")
+        )
+    lines["live day"] = (
+        f"total equity, transfer steps skipped (noise_scale's); complete UTC days from "
+        f"{block.get('first_day') or '(none yet)'}, inside the D-026 window, before this report's day"
+    )
+    return lines
+
+
 def _fmt_num(value: Any) -> str:
     return "n/a" if value is None else f"{float(value):.2f}"
 
@@ -2846,6 +3021,77 @@ def _beta_regression_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "R^2": _fmt_num(block.get("r2")),
         "市场部分": _fmt_pct(block.get("market_part")),
         "残差部分": _fmt_pct(block.get("residual_part")),
+    }
+
+
+def market_beta(
+    store: StateStore,
+    *,
+    closes: Callable[[str], pd.Series] | None = None,
+    root: str | Path = ".beidou/data",
+    interval: str = "1h",
+) -> dict[str, Any]:
+    """D-045 in the daily report: `report beta`'s reading, taken by the same `beta_reading`.
+
+    Reported, never judged.  Nothing here pages: no threshold for the beta or the residual was
+    registered before the book went live, and one picked after reading the number is not a threshold.
+
+    The catch is broad for the reason `exit_counterfactuals` gives.  This runs inside the hourly check,
+    and a reading that gates nothing must not take the rest of the report down with it.  The failure
+    stays visible: the block carries its reason, and `report beta` on the same state raises it whole.
+    """
+    try:
+        return beta_reading(
+            store.read_jsonl(store.cycles_path),
+            store.read_jsonl(store.attribution_path),
+            closes or _store_closes(root, interval),
+        )
+    except Exception as exc:
+        return {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _market_beta_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """The daily report's view of `market_beta`: one line per regression, and no verdict.
+
+    Short on purpose.  The full page is `beidou report beta`, and its numbers are these numbers.  The
+    all-long share comes before the regressions for the reason `beta_markdown` gives: over those bars
+    no split of the return can credit the signal with anything.
+    """
+    decomposition = block.get("decomposition") or {}
+    if not decomposition.get("measured"):
+        return {"measured": "no", "reason": decomposition.get("reason") or block.get("reason") or "not computed"}
+    window, basket, signal = block.get("window") or {}, block.get("benchmark") or {}, block.get("signal") or {}
+
+    def regression(row: Mapping[str, Any]) -> str:
+        return (
+            f"beta {_fmt_num(row.get('beta'))}（t {_fmt_num(row.get('beta_t'))}）；"
+            f"alpha {_fmt_num(row.get('alpha_bps_per_hour'))} bps/h（t {_fmt_num(row.get('alpha_t'))}）；"
+            f"残差部分 {_fmt_pct(row.get('residual_part'))}"
+            + (f"；年化 {_fmt_pct(row['alpha_annualised'])}" if row.get("alpha_annualised") is not None else "")
+            + (f"；NW 带宽被夹到 {row.get('nw_lags')} bar" if row.get("nw_covers_intended_horizon") is False else "")
+        )
+
+    return {
+        "窗口": f"{window.get('from')} → {window.get('to')}（{_fmt_num(window.get('days'))} 天）",
+        "回归样本": f"{decomposition.get('bars')} 根 bar（剔除的 bar {decomposition.get('excluded_bars')}，D-032）",
+        "收益 策略/PIT 基准": (
+            f"{_fmt_pct(decomposition.get('strategy_return'))} / {_fmt_pct(decomposition.get('benchmark_return'))}"
+        ),
+        "净敞口 均值/峰值": (
+            f"{_fmt_num(decomposition.get('exposure_mean'))}x / {_fmt_num(decomposition.get('exposure_max'))}x"
+        ),
+        "基准篮子": (
+            f"每根 bar {_fmt_num(basket.get('symbols_per_bar'))} 个币；"
+            f"因缺价跳过 {basket.get('prices_missing')} 个 symbol-bar"
+        ),
+        "全多头的 bar": (
+            f"{signal.get('all_long_bars')}/{signal.get('bars')}（{_fmt_pct(signal.get('all_long_share'))}）"
+            if signal.get("measured")
+            else f"n/a（{signal.get('reason')}）"
+        ),
+        "constant beta": regression(decomposition.get("constant") or {}),
+        "conditional（敞口 × 市场）": regression(decomposition.get("conditional") or {}),
+        "读法": "只报告不告警：beta 与残差都没有预登记的阈值。t 按 Newey-West；完整一页见 `beidou report beta`",
     }
 
 

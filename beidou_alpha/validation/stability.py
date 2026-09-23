@@ -1,4 +1,4 @@
-"""Robustness checks: time-split, parameter neighbourhood, cost and slippage stress, regime split by benchmark vol."""
+"""Robustness checks: time-split, parameter neighbourhood, cost and slippage stress, break-even cost multiple, regime split."""
 
 from __future__ import annotations
 
@@ -64,6 +64,66 @@ def parameter_neighborhood(
 
 def cost_stress(net_by_multiplier: Mapping[float, pd.Series], bars_per_year: float) -> dict[str, float | None]:
     return {f"x{multiplier:g}": sharpe(series, bars_per_year) for multiplier, series in net_by_multiplier.items()}
+
+
+#: How close to zero a re-priced mean must land, in multiples: |mean net| <= this x `cost_per_multiple`.
+#: Four orders finer than m* is ever read, and far above what float summation leaves on 50,000 bars.
+BREAK_EVEN_TOLERANCE = 1e-6
+
+
+def break_even_cost_multiple(
+    price: Callable[[float], pd.Series],
+    priced: Mapping[float, pd.Series],
+    view: Callable[[pd.Series], pd.Series] = lambda net: net,
+    *,
+    max_repricings: int = 6,
+) -> dict[str, Any]:
+    """m*: the multiple on `turnover_bps` and `carry_bps_per_bar` at which mean net return is zero.
+
+    ``priced`` is the book's net return at multiples already priced (`validate`'s cost_stress cells),
+    ``price`` re-prices the same book at any m >= 0, and ``view`` picks the bars the mean is taken
+    over.  Reported, never enforced.
+
+    Why a secant and then re-pricing, rather than solving on the cells alone.  For a FIXED executed book
+    the mean is exactly affine in m: the scaled charge is m times turnover and gross, while funding and
+    impact are charged on that book whatever m is, so they sit in the intercept - they move m* without
+    bending the line (on the book below, holding funding rather than scaling it is worth 1.3 of m*).
+    The book is not fixed.  The daily-loss pause reads equity net of the scaled costs, so a dearer run
+    pauses on more bars and trades a different book.  On the shipped tsmom book (pit, to 2026-09-22)
+    481 pause bars at x1 became 643 at m* = 15.46, and the line through x1 and x2 missed that zero by
+    0.008 of a multiple (0.013 out of sample, m* = 14.48).  The x1.5 cell sat 5e-5 off the line and
+    could not show it: the drift builds up past x2, where no cell is priced.  So the secant through the
+    outermost cells is only the first guess, kept as `linear_estimate`, and the book is re-priced at
+    each guess until the mean is within `BREAK_EVEN_TOLERANCE` of zero.
+
+    The mean's zero is the Sharpe's, so on the series `cost_stress` prices, "x2 >= 0" and "m* >= 2" are
+    one statement wherever the mean falls with m.  It is not the gate's headroom: D-028's threshold is
+    a positive Sharpe, reached at a far lower m.  Compounded return, too, reaches zero before m*.
+    """
+    lo, hi = min(priced), max(priced)
+    means = {m: float(view(priced[m]).mean()) for m in (lo, hi)}
+    slope = (means[hi] - means[lo]) / (hi - lo)
+    out: dict[str, Any] = {"multiple": None, "converged": False, "linear_estimate": None, "cost_per_multiple": -slope}
+    out.update(mean_net_at_multiple=None, repricings=0)
+    if not slope < 0:
+        return {**out, "why": f"mean net does not fall with m: {means[lo]:.3g} at x{lo:g}, {means[hi]:.3g} at x{hi:g}"}
+    multiple = out["linear_estimate"] = lo - means[lo] / slope
+    if multiple < 0:
+        return {**out, "why": "mean net is below zero before any cost is scaled"}
+    previous = (hi, means[hi])
+    for count in range(1, max_repricings + 1):
+        mean = float(view(price(multiple)).mean())
+        out.update(multiple=multiple, mean_net_at_multiple=mean, repricings=count)
+        if abs(mean) <= BREAK_EVEN_TOLERANCE * -slope:
+            out["converged"] = True
+            break
+        (m0, f0), previous = previous, (multiple, mean)
+        if mean == f0:
+            break
+        multiple -= mean * (multiple - m0) / (mean - f0)
+        if not multiple >= 0:
+            break
+    return out
 
 
 def slippage_levels(*, taker_fee_bps: float, levels: Sequence[float]) -> dict[float, float]:

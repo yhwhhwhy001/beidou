@@ -126,6 +126,17 @@ else
   failed=1
   notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
 fi
+# G10, operator ruling 2026-09-23: the point-in-time membership table stays rebuilt by hand, and this
+# says how far it trails.  Gated like the lines above because it is the alert the operator asked for,
+# so once over the line it re-announces hourly until a rebuild.  The command prints ONE line, which is
+# the whole page: the lag, the `--refresh D` a rebuild needs, and that a rebuild blocks the armed start
+# until the evidence is re-issued - 2026-09-18's bare rebuild is what the D-041 bridge was built for.
+if output="$("$REPO/.venv/bin/beidou" data pool lag --check 2>&1)"; then
+  echo "[$(stamp)] ok   membership: $output"
+else
+  failed=1
+  notify "membership" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+fi
 # L3's criterion, which nothing computed until 2026-09-09: the soak ran for a rule that lived in prose.
 # REPORTED, NOT GATED, and the distinction is deliberate.  L3 is a criterion that accumulates over seven
 # days, so it is FALSE for the first six by construction; wiring it into `failed` would page the operator

@@ -843,6 +843,8 @@ class LiveEngine:
             # this row since the beginning and had no reader anywhere in the tree (D-041 / DL-Q0's
             # shape: written down, nobody reads it); this is the reader's own record.
             "dropped_inputs": dropped_inputs,
+            # G6: were the bars above plausible as prices?  Read by the daily report and by nothing here.
+            "bar_sanity": inputs.sanity,
             "construction": construction_fingerprint(config)["digest"],
             # DL-G9: the same construction, restricted to what a validation report can describe, so a
             # later reader can compare the two as strings.  Cheap enough to write every cycle (16 chars),

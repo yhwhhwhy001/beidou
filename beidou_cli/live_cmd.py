@@ -29,13 +29,7 @@ from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore
 from beidou_governance.policy import policy_digest
 from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
-from beidou_live.benchmark import (
-    beta_decomposition,
-    foreign_bars,
-    pit_benchmark,
-    series_from_cycles,
-    signal_state,
-)
+from beidou_live.benchmark import beta_reading
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
     account_kill_switches,
@@ -1054,38 +1048,15 @@ def report_beta(profile: str, paper: bool, strategy: str, data_root: str, out: s
     """D-045: how much of the live book's return was the market's, and how much was the signal's."""
     payload = load_profile(profile)
     store = _store_for(payload, paper)
-    series = series_from_cycles(list(store.read_jsonl(store.cycles_path)))
-    bars = series["bars"]
-    if len(bars) < 2:
-        raise click.ClickException("周期记录里还没有两根带 usdt_equity 的 bar，无法分解")
-    # `closes` is newer than the loop, so the archive fills in the bars that predate it.  A symbol the
-    # archive does not have is not an error here - `pit_benchmark` counts what it had to skip.
-    prices = {symbol: dict(points) for symbol, points in series["prices"].items()}
-    loader = _store_closes(data_root, _interval(payload))
-    for symbol in {s for names in series["universe"].values() for s in names}:
-        try:
-            closes = loader(symbol)
-        except Exception:  # a missing or half-written parquet is a gap here, not a failure
-            continue
-        archived = prices.setdefault(symbol, {})
-        for stamp, price in zip(closes.index.astype("int64"), closes.astype(float), strict=True):
-            archived.setdefault(int(stamp), float(price))
-    benchmark = pit_benchmark(bars, series["universe"], prices)
-    excluded = foreign_bars(list(store.read_jsonl(store.attribution_path)))
-    decomposition = beta_decomposition(
-        series["equity"], benchmark["level"], series["exposure"], excluded_bars=excluded, bars=bars
+    # The daily report's `beta` block is this same call, so the page and the block cannot disagree.
+    data = beta_reading(
+        store.read_jsonl(store.cycles_path),
+        store.read_jsonl(store.attribution_path),
+        _store_closes(data_root, _interval(payload)),
+        strategy,
     )
-    data = {
-        "window": {
-            "from": datetime.fromtimestamp(bars[0] / 1000, UTC).isoformat(),
-            "to": datetime.fromtimestamp(bars[-1] / 1000, UTC).isoformat(),
-            "days": (bars[-1] - bars[0]) / 86_400_000,
-            "cycles": len(bars),
-        },
-        "benchmark": {k: v for k, v in benchmark.items() if k != "level"},
-        "signal": signal_state(list(store.read_jsonl(store.cycles_path)), strategy, bars),
-        "decomposition": decomposition,
-    }
+    if "reason" in data:
+        raise click.ClickException(str(data["reason"]))
     markdown = beta_markdown(data)
     click.echo(markdown)
     if out:
