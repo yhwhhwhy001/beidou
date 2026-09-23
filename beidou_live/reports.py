@@ -30,6 +30,7 @@ from beidou_live.bar_sanity import sanity_findings, sanity_lines, sanity_status
 from beidou_live.benchmark import beta_reading
 from beidou_live.construction import canonical_construction
 from beidou_live.cycle_record import latest
+from beidou_live.execution_fidelity import ReplayInputs, execution_fidelity, fidelity_lines, fidelity_notices
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, collateral_drift, risk_budget_status
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
@@ -2101,6 +2102,7 @@ def daily_payload(
     data_root: str | Path = ".beidou/data",
     closes: Callable[[str], pd.Series] | None = None,
     exits: ExitParams | None = None,
+    fidelity: ReplayInputs | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -2172,6 +2174,8 @@ def daily_payload(
         # DL-L4 wrote these into the cycle rows and nothing read them; a cost that only exists in a
         # JSONL is an assumption, not a measurement, and one nothing compares to a bar is not a metric.
         "restarts": restart_cost(cycles, trades, risk_budget or RiskBudgetParams()),
+        # M-Q08's turnover clause (it had no instrument), its digest clause and slippage by week: see the module.
+        "execution_fidelity": execution_fidelity(store, fidelity),
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "risk_budget": risk_budget_status(
@@ -2364,6 +2368,7 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         # COMPLETE record even when the half above already paged: the alert is the actionable subset,
         # this is what a reader at review needs, and the two go to different places.
         notices.append("M-Q03 迟到成交：" + "；".join(str(r) for r in restarts.get("reasons") or []))
+    notices.extend(fidelity_notices(payload))  # M-Q08 turnover: a review item, see `fidelity_notices`
     lagging = payload.get("long_run_sharpe") or {}
     if str(lagging.get("status")) == "FAIL":
         # M-G06.  INSUFFICIENT_DATA says nothing here on purpose - it will be the answer until
@@ -2675,6 +2680,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 "Restart cost (M-Q03 / DL-L4 / RISK-P2)",
                 _restart_cost_lines(payload.get("restarts") or {}),
             ),
+            ("Execution fidelity (M-Q08, four clauses)", fidelity_lines(payload)),
             (
                 # D-041: the manifest was written into every report and read by nothing.  It is read now,
                 # and this is where a human sees the answer after startup has scrolled away.

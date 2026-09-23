@@ -3203,7 +3203,35 @@ CEILING = {
     # 取哪条序列、在实盘记录上量过什么；`_tail_readings_lines`（21）；两处挂接（2）；空行（6）。
     #
     # 留 40 行（11_262 -> 11_302），理由与上面几格逐字相同，不重述。
-    "beidou_live": 11_302,
+    #
+    # 2026-09-23（不编号，同上）。+585 beidou_live（分支基点 e80b1335 上实测 10_660 -> 11_245）。
+    #
+    # M-Q08 是 demo 期两条成功判据之一。它四项里的「换手与回测同期偏差 ±25%」一直没有仪器（09-23 清点的
+    # G9），滑点也只有一个 30 天合并的数，看不出趋势。`beidou_live/execution_fidelity.py` 579 行补这两样，
+    # `reports.py` 三处挂接 6 行。
+    #
+    # 行数花在哪：同期回测的重放约 140 行（按磁盘上的 registry 建模、读归档与时点成员表、`score_book`
+    # 定价、按决策 bar 对齐）；实盘换手与比值约 185 行（逐笔按本周期权益定尺、按日配对的比值与标准误、
+    # 窗口与判定、归档够不着的格子两边剔除）；registry 读数 25 行；滑点周趋势 45 行；日报渲染与提示约
+    # 90 行；模块 docstring 38 行，记口径与三组实测。
+    #
+    # 清点估它「代码 S」，多出来的都是量出来非有不可的：
+    #   - 同期回测有路径依赖。从循环自己请求的 1,442 根开始重放，比值读 1.40；往前多推 30 天读 2.0679，
+    #     60、120、180 天与之一致到 1e-5。所以要 warmup。
+    #   - 拿全历史（2021 年起，时点成员表）重放同一窗口对照，逐 bar 最大差 8e-11。warmup 60 天的重放
+    #     就是研究侧那条回测，不是另一个近似。
+    #   - LSKUSDT 的归档停在 09-18T16:00Z，循环 09-23 仍持有它。不剔除，重放会在归档断掉之后替它平仓，
+    #     多出一笔实盘没有的换手。
+    #
+    # 耗时：`report daily` 在 09-23 的状态副本上，中位 0.69 s -> 1.39 s（新旧交替各跑 5 次）。每小时一次，可以接受。
+    #
+    # 同日第二个提交，+16（分支上实测 11_261）。M-Q08 这一块跑在每小时的 `report daily --check` 里，
+    # 第一版只接了列出来的几种异常，漏网的一种就会让整份日报连同其它告警一起失败。现在按 `market_beta`
+    # 的做法宽捕获，只包这一块（`from_profile`、重放、整块各一处），失败写进块里。
+    #
+    # 并入 G1、G3、G6、G4（#118、#119、#121、#123）之后，两个提交合计 +601：11_262 -> 11_863。
+    # 留 40 行（11_863 -> 11_903），理由与上面几格逐字相同，不重述。
+    "beidou_live": 11_903,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3485,7 +3513,12 @@ CEILING = {
     #
     # 只报告，不判定。`verdict.decide` 不读这个键。一条测试递归遍历全部 81 份归档的 validation 报告，
     # 两个方向注入敌意值，verdict 与 reasons 一个字都不能动。抬到齐平，照这一格前两次的做法。
-    "beidou_cli": 7_796,
+    #
+    # +2 beidou_cli，2026-09-23。分支上是 7_735 -> 7_737；并入 G3、G10、G8（#119、#120、#122）之后是
+    # 7_796 -> 7_798，抬到齐平。`report daily` 把 registry 与 profile 交给 M-Q08 的换手
+    # 仪器（`ReplayInputs.from_profile`），一行 import、一个参数。建模失败只让这台仪器读不出数，不让日报挂掉，
+    # 因为这种 registry 已经由 `live status` 报警。
+    "beidou_cli": 7_798,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

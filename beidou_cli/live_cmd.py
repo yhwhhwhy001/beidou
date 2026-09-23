@@ -53,6 +53,7 @@ from beidou_live.engine import (
     registry_digest,
     release_kill_switches,
 )
+from beidou_live.execution_fidelity import ReplayInputs
 from beidou_live.health import STUCK_IN_ERROR_STREAK, cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_lock_path
@@ -864,6 +865,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         margin_cap=float((payload.get("portfolio", {}) or {}).get("margin_cap", 0.0)) or None,
         data_root=data_root,
         exits=ExitParams.from_mapping(payload.get("exits", {}) or {}),
+        fidelity=ReplayInputs.from_profile(payload, registry, data_root),
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
