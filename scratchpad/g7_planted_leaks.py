@@ -39,8 +39,11 @@ CUTOFFS = range(150, 700, 7)
 LEAKS: dict[str, tuple[str, str, str]] = {
     "control: build_weights returns zeros": (
         "beidou_alpha/portfolio.py",
-        "            params.band_entry_multiple,\n        )\n    return weights\n",
-        "            params.band_entry_multiple,\n        )\n    return weights * 0.0\n",
+        # The line above the return, because `combine_books` ends in the same `return banded(...)`.
+        "    weights = weights.where(aligned.notna().any(axis=1).cummax(), other=np.nan)\n"
+        "    return banded(weights, params)\n",
+        "    weights = weights.where(aligned.notna().any(axis=1).cummax(), other=np.nan)\n"
+        "    return banded(weights, params) * 0.0\n",
     ),
     "covariance recursion reads the next bar": (
         "beidou_alpha/portfolio.py",

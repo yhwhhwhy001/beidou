@@ -73,7 +73,7 @@ EXCEPTIONS: tuple[ExceptionEntry, ...] = (
     ),
     ExceptionEntry(
         id="D-029",
-        date="2026-09-06",
+        date="2026-09-04",
         ruling="探针书可以引用 verdict REJECT 的书级报告，但 registry 必须写明 `probe.accepted_despite: REJECT`。",
         rule_conflict="§3 validated->booked 要求书级六项通过；三份被采纳的 book 报告是 REJECT。",
         why_not_encoded="这条已经**部分成为规则**：`beidou_alpha/registry.py` 强制那句书面承认，"

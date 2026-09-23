@@ -22,7 +22,7 @@ from beidou_alpha.model import AlphaModel, FundingUnavailable
 from beidou_alpha.overlays.exits import ExitParams, apply_exits
 from beidou_alpha.overlays.exposure import BookGuardParams
 from beidou_alpha.panel import Panel, interval_seconds
-from beidou_alpha.portfolio import PortfolioParams, apply_no_trade_band, cap_gross, combine_books
+from beidou_alpha.portfolio import PortfolioParams, banded, cap_gross, combine_books
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.validation.book_limits import (
     DECISION_SLIPPAGE_BPS,
@@ -405,14 +405,11 @@ def _evaluate_book(
     w_main, _mc, _mp = main_model.evaluate(panel, membership)
     w_sleeve, _sc, _sp = sleeve_model.evaluate(panel, membership)
 
-    def banded(weights: pd.DataFrame) -> pd.DataFrame:
-        if portfolio.no_trade_band > 0 or portfolio.no_trade_rel_band > 0:
-            return apply_no_trade_band(weights, portfolio.no_trade_band, portfolio.no_trade_rel_band)
-        return weights
-
-    main_decision = banded(w_main)
+    # Each arm banded as the construction bands that book, every knob.  Until 2026-09-23 these two passed
+    # neither D2 nor D3 and the combined arm D2 alone, so D-018's marginal carried a band difference.
+    main_decision = banded(w_main, portfolio)
     main_result = run_backtest(panel, main_decision, cost)
-    sleeve_decision = banded(w_sleeve)
+    sleeve_decision = banded(w_sleeve, portfolio)
     sleeve_result = run_backtest(panel, sleeve_decision, cost)
     # P30's cap applies to the sleeve AS IT ENTERS THE BOOK, before the fraction, and deliberately not
     # to `sleeve_decision` above: that block is the signal-level evidence (D-020's verdict, its own DSR)
@@ -467,7 +464,7 @@ def _evaluate_book(
                 main_oos=main_net.iloc[oos_start:],
             ),
         }
-    sleeve_scaled = run_backtest(panel, banded(w_sleeve_in_book * fractions[0]), cost)
+    sleeve_scaled = run_backtest(panel, banded(w_sleeve_in_book * fractions[0], portfolio), cost)
     raw_gross = w_sleeve.abs().sum(axis=1)
     in_book_gross = w_sleeve_in_book.abs().sum(axis=1)
     decided = raw_gross[w_sleeve.notna().any(axis=1)]

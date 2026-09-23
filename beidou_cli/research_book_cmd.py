@@ -280,6 +280,8 @@ def research_book(
             "max_gross": portfolio.max_gross,
             "no_trade_band": portfolio.no_trade_band,
             "no_trade_rel_band": portfolio.no_trade_rel_band,
+            "flat_inside_band": portfolio.flat_inside_band,
+            "band_entry_multiple": portfolio.band_entry_multiple,
         },
         "interval": interval,
         "universe_mode": universe_mode,
