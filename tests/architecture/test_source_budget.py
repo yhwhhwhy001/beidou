@@ -3122,7 +3122,26 @@ CEILING = {
     # 带宽仍是 48，t 仍是 0.34）。
     #
     # 留 45 行（10_635 -> 10_680），理由与上面几格逐字相同，不重述。
-    "beidou_live": 10_680,
+    # 2026-09-23（不编号）。+310 beidou_live，10_660 -> 10_970，抬到 11_010。G6：实盘用 bar 之前查价格
+    # 本身（bar sanity），只告警。
+    #
+    # 常设检查只问数据在不在、新不新。BNXUSDT 在 2023-02-22 14:00 停牌 518 根后回来，价格是停牌前的
+    # 1/55，同名、同一份历史。现有每一道检查都放它过去，模型会把它读成一次行情。
+    #
+    # 花在哪：`beidou_live/bar_sanity.py` 293 行。模块 docstring 47 行，记的是阈值在全部归档上的测量
+    # （878 个 1h 文件、15,127,202 根；ln 2 下成员日 15 根、全是真实行情，折合约 2.6 根/年）。那段就是
+    # 阈值的理由，删掉它，阈值就成了拍的数。import 与常量 25 行；三条规则与永不抛错的外壳 123 行；日报
+    # 一侧 98 行。挂接 17 行：`inputs.py` 净 +5、`reports.py` +9、`engine.py` +2、`cycle_record.py` +1。
+    #
+    # 日报一侧为什么要 98 行：一根坏 bar 在 1,442 根的窗口里待约 60 天，每个周期都重报。按每次上报告警
+    # 要连响 60 天；只看当天收盘的 bar，又会漏掉带着旧重新计价入池的标的。「当天首次出现」两种都只响
+    # 一天，代价是读全部历史行去重，外加告警与 markdown 的文字。
+    #
+    # 单周期耗时（17 个标的 × 1,442 根，200 次，`scratchpad/bar_sanity_archive_scan.py`）：中位 1.21 ms，
+    # 最大 2.03 ms。
+    #
+    # 留 40 行（10_970 -> 11_010），理由与上面几格逐字相同，不重述。
+    "beidou_live": 11_010,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

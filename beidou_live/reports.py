@@ -26,6 +26,7 @@ from beidou_alpha.validation.metrics import (
 )
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
+from beidou_live.bar_sanity import sanity_findings, sanity_lines, sanity_status
 from beidou_live.construction import canonical_construction
 from beidou_live.cycle_record import latest
 from beidou_live.probe import ProbeParams, probe_status
@@ -2086,6 +2087,8 @@ def daily_payload(
         # "thinner" and "nothing happened" look identical in a rendered report.
         "state_file": {"readable": not _state_problem(store), "reason": _state_problem(store)},
         "data_coverage": data_coverage(store, root=data_root),
+        # G6: bars the loop fed its model that did not look like prices, split into first-seen-today and not.
+        "bar_sanity": sanity_status(store.read_jsonl(store.cycles_path), day, day_of=_day_of),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
@@ -2146,6 +2149,10 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             + "；风险贡献相互拉开——查第一层"
         )
     notices: list[str] = []
+    # G6: a suspicious bar pages on the day it is first seen; a check that could not run is read at review.
+    sanity_alerts, sanity_notices = sanity_findings(payload.get("bar_sanity") or {})
+    alerts += sanity_alerts
+    notices += sanity_notices
     margin = payload.get("margin") or {}
     if margin.get("over_budget"):
         # M-007.  A notice rather than an alert, by the same test the other entries here use: realized
@@ -2638,6 +2645,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 "Research data coverage",
                 payload.get("data_coverage") or {"none": 0},
             ),
+            # G6, beside the archive's coverage: whether the bars the LOOP read looked like prices at all.
+            ("Bar sanity (G6, alert only)", sanity_lines(payload.get("bar_sanity") or {})),
             (
                 "Margin and rejections (M-007)",
                 {
