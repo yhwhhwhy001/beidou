@@ -3370,7 +3370,23 @@ CEILING = {
     # +70%）。真实面板上量过：同一本书（`decompose-tsmom-20260904T052958Z` 的配置，复现到归档的
     # 小数点后三位），基准 Sharpe 从 +0.50 变成 +0.10，复利从 +31% 变成 −84%；书与基准的相关只从
     # −0.135 变成 −0.127。所以变的是「市场赚了多少」，不是「书像不像市场」。
-    "beidou_cli": 7_735,
+    # +40 beidou_cli，2026-09-23（7_735 -> 7_775）：G8，validate 的报告带保本成本倍数 m*。与
+    # beidou_alpha 那格 +60 是同一次改动的两半。09-23 的外部清单对照把它列为 G8：成本压力只有
+    # 1 / 1.5 / 2 倍三格，报告里没有「成本涨到几倍，净收益均值归零」这个数。
+    #
+    # 40 行是什么。`research_validate_cmd.py` +25：import 2 行；x1 / x1.5 / x2 的定价收成一个
+    # `_priced`，求 m* 时的重新定价要走同一台机器，净 +1（formatter 要求的空行）；`_oos` 视图与
+    # `cost_break_even` 块 18 行，其中四条口径 6 行、注释 2 行，另有 1 行是给 mypy 标注
+    # `pd.concat` 的返回类型；报告的键 1 行；Markdown 那一行 +3。
+    # `research_report.py` +15 是 `_break_even_row`：没有零点要印原因，没收敛要印离零多远。不印的话，
+    # 一个没找到的 m* 在 Markdown 里和找到的长得一样。
+    #
+    # 为什么值。这是上真钱之前最便宜的一个定量。出厂的 tsmom 书上（pit，到 2026-09-22 16:00，只读，
+    # 零 ledger）：全样本 m* = 15.46，样本外 14.48。重新定价每次约 0.6 秒，两条序列各 3 次，合 3.4 秒。
+    #
+    # 只报告，不判定。`verdict.decide` 不读这个键。一条测试递归遍历全部 81 份归档的 validation 报告，
+    # 两个方向注入敌意值，verdict 与 reasons 一个字都不能动。抬到齐平，照这一格前两次的做法。
+    "beidou_cli": 7_775,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3709,7 +3725,20 @@ CEILING = {
     #
     # 留 41 行（10_599 -> 10_640），理由与 2026-09-17 那格逐字相同，不重述。2026-09-20 留下的 44 行
     # 正是被这一次用掉的，那就是它存在的意义。
-    "beidou_alpha": 10_640,
+    # 2026-09-23（不编号）。+60 beidou_alpha，10_617 -> 10_677，抬到 10_720。G8：validate 的报告带
+    # 保本成本倍数 m*，与 beidou_cli 那格 +39 是同一次改动的两半。
+    #
+    # 60 行全在 `validation/stability.py`：`BREAK_EVEN_TOLERANCE` 与它的注释 3 行，
+    # `break_even_cost_multiple` 53 行（签名 7、docstring 22、正文 24），加 4 个空行。
+    # docstring 占得最多，它记的是「为什么要重新定价，而不是拿 x1、x2 两格直接解」的论证与测量。
+    # book 固定时，净收益均值对 m 严格线性：资金费与冲击成本照收但不随 m 变，只落在截距里。
+    # 可 book 不固定：日内亏损暂停读的是扣完成本的权益。出厂的 tsmom 书上，暂停从 x1 的 481 根
+    # 涨到 m* 处的 643 根，x1–x2 连线离零点差 0.008 倍（样本外 0.013）。x1.5 那格离连线只有 5e-5，
+    # 看不见它：偏离是过了 x2 才攒起来的，而那里没有格子。
+    #
+    # 留 43 行（10_677 -> 10_720），理由与 2026-09-17 那格逐字相同，不重述。上一格留的 41 行，此后
+    # 别的改动用掉 18 行，这次用完了剩下的 23 行。
+    "beidou_alpha": 10_720,
 }
 
 

@@ -39,6 +39,7 @@ from beidou_alpha.validation.multiple_testing import (
 from beidou_alpha.validation.pipeline import layers_applied, score_book
 from beidou_alpha.validation.stability import (
     REGIME_VOL_WINDOW_DAYS,
+    break_even_cost_multiple,
     cost_stress,
     parameter_neighborhood,
     regime_split_sharpes,
@@ -94,6 +95,7 @@ from beidou_cli.research_panel import (
 )
 from beidou_cli.research_report import (
     _MARGIN_BUFFER_NOTE,
+    _break_even_row,
     _caliber_note,
     _embargo_note,
     _fmt,
@@ -398,14 +400,15 @@ def research_validate(
     # `decisions[best_key]`, not `results[best_key].weights.shift(-1)`: the executed frame is post-guard,
     # so inverting it would re-price a book the guards had already trimmed and then trim it again.
     best_weights = decisions[best_key]
+
     # DL-C1, 2026-09-09: `impact=impact` here and in `slippage_stress` below.  Without it a report whose
     # header says `impact_model: {capital: 100000}` had its walk-forward priced under the square-root law
     # and `cost_stress` priced flat - and `cost_stress.x2` is a GATE that `verdict.decide` reads, so the
     # artefact's own label did not describe the number the verdict turned on.  The error ran in the
     # permissive direction (flat is cheaper than flat+impact), which is the direction that matters.
     # The multiplier still scales `turnover_bps` alone: impact is not a fee and does not scale with one.
-    stressed_nets = {
-        multiplier: run_backtest(
+    def _priced(multiplier: float) -> pd.Series:
+        return run_backtest(
             panel,
             best_weights,
             CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
@@ -413,8 +416,8 @@ def research_validate(
             guards=book_guards,
             impact=impact,
         ).portfolio_net
-        for multiplier in (1.0, 1.5, 2.0)
-    }
+
+    stressed_nets = {multiplier: _priced(multiplier) for multiplier in (1.0, 1.5, 2.0)}
     stress = cost_stress(stressed_nets, bpy)
     # The same stressed series re-asked against D-028's gate.  `cost_stress` is a FULL-SAMPLE Sharpe and
     # the gate compares an OUT-OF-SAMPLE one, so the two are not subtractable - and the 2026-09-14 audit
@@ -432,6 +435,24 @@ def research_validate(
             net.reindex(common_index).fillna(0.0), fold_list, bpy, pooled["n_trials"]
         )
         for multiplier, net in stressed_nets.items()
+    }
+
+    # G8: how far costs can rise before mean net return is zero, on the two series priced just above.
+    # Reported, never enforced: `decide` reads `cost_stress.x2` and no key of this block.
+    def _oos(net: pd.Series) -> pd.Series:
+        aligned = net.reindex(common_index).fillna(0.0)
+        oos: pd.Series = pd.concat([aligned.iloc[fold.test_slice] for fold in fold_list])
+        return oos
+
+    break_even = {
+        "full_sample": break_even_cost_multiple(_priced, stressed_nets),
+        "oos": break_even_cost_multiple(_priced, stressed_nets, _oos),
+        "basis": {
+            "multiple": "on turnover_bps and carry_bps_per_bar together, as cost_stress; funding and impact unscaled",
+            "zero_of": "mean per-bar net return, i.e. the Sharpe's zero: not D-028's threshold, not compounded return",
+            "full_sample": "the series cost_stress prices",
+            "oos": "the series cost_stress_gate prices: best_key re-priced, on common_index, fold test slices",
+        },
     }
     costs_payload = load_yaml(costs_path)
     fee_bps = float(costs_payload.get("taker_fee_bps", 5.0))
@@ -595,6 +616,7 @@ def research_validate(
         },
         "cost_stress": stress,
         "cost_stress_gate": stress_gate,
+        "cost_break_even": break_even,
         # The fee is a contract constant and the slippage assumption is the half the loop measures, so
         # this varies only the second one at declared levels (`costs.yaml: slippage_stress_bps`).
         "slippage_stress": slippage,
@@ -716,7 +738,10 @@ def research_validate(
                 _regime_rows(report["stability"]["regime_split_sharpes"], report["stability"]["regime_split_basis"]),
             ),
             ("Grid (full-sample Sharpe per configuration)", _grid_table(params_by_key, full_sharpes_raw)),
-            ("Cost stress (Sharpe)", stress),
+            (
+                "Cost stress (Sharpe)",
+                {**stress, "break-even multiple m* (never enforced)": _break_even_row(break_even)},
+            ),
             ("Slippage stress (Sharpe; fee fixed)", slippage),
             (f"Same book under {other_execution}", {"annualized_sharpe": comparison["annualized_sharpe"]}),
             ("Verdict", {"verdict": verdict, "reasons": reasons or ["-"]}),
