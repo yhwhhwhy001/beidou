@@ -115,6 +115,30 @@ G11、G12 要等冻结结束。
 **后续（同日）**：操作者裁定 G2——family gate 失败时 main 降回 probe，probe 停在 probe；冻结到期按
 10-13。落地与代价见 `docs/RESEARCH_LOG.md` 同日「操作者两条裁定」一节。上面两张表保持清点当时的样子。
 
+### 后续（二）：清点之后合入的 PR
+
+同日，main 又合入 #102–#107。下表的现状逐项在 `ecd09b2f` 上核过，行号也以它为准。#105 与 #107 的数字
+引自各自的 PR 描述，没有重跑。本文的表格都不改，仍是清点当时的样子。
+
+| 本文的项 | 现状 |
+| --- | --- |
+| G2：family gate 失败的后果 | #102 已做。`family_gate.refusals` 把 `governance/verdicts.jsonl` 的 `refuse` 行变成 `FAMILY_GATE_FAILED`，`governance advance` 据此把 main 降回 probe。`advance` 没排进任何 job，要人跑 `--commit`（`deploy/run_governance_gate.sh:28`）。`governance/governance_state.json` 里 tsmom 仍是 main |
+| G5：`regime_split_sharpes` 接进 validate | #104 已做，只报告、不判定。`reports/research/` 里还没有一份报告带这张表 |
+| G7：组合层的「打乱未来」因果测试 | #105 已做。植入 14 处一根前视，抓到 11 处。扫全部 79 个 cutoff 能抓到另外 3 处，代价约 40 秒；这个测试文件现在约 1 秒。没做。#107 把信号层三处因果比较改成逐位，它的描述另列 26 处可以照改，待定 |
+| 「说法与行为不符」前 2 行 | #102 已做。`FAMILY_GATE_FAILED` 有了产生方，说法改成「降回 probe」；冻结到期改为 10-13 |
+| 「说法与行为不符」后 3 行 | 没动。原文仍在 `beidou_live/reports.py:367`、`beidou_cli/research_backtest_cmd.py:139` 与 `beidou_data/store.py:109` |
+| 「陈述过期」25 行 | #103 改了 21 行，跳过 4 行。决策清单与 `governance/reopen.yaml` 两处留给操作者定。`config/costs.yaml:16` 那句带日期，同文件 `:20` 已就地更正。另有两处也留给操作者：`beidou_alpha/validation/forward_board.py:73` 的运行时字符串，`beidou_live/rebalancer.py:30` 的字段注释 |
+| G1、G3、G4、G6、G8–G12 | 没有合入的 PR，也没有在途的 |
+
+#103 重核时发现，「陈述过期」表有两行本文写错了：
+
+- **`docs/PREREGISTRATION.md:11` 那一行写反了。** `:11` 的「八项」是对的，
+  `tests/live/test_the_preregistration_template_keeps_its_items.py` 钉着它。过期的是同文件 `:122`
+  的「七项」，#103 已改成「八项」。
+- **`docs/ARCHITECTURE.md:54` 那一行只对一半。** T-A03 确实只断言平均净收益为负。但 T-A06 自标
+  D-011，是显著性口径的阴性对照（`tests/alpha/test_validation.py:132`）。它的名义水平是 5%，断言
+  拒绝率不超过 20%。本文写「不是显著性检验」，漏了它。按 `D-011` 搜一遍 `tests/` 就能看到。
+
 ## 逐项
 
 ### #1 策略架构（Goldman Sachs）
@@ -335,6 +359,9 @@ pairs 09-09 判 REFUTED、转 retired（`governance/reopen.yaml:263`），09-17 
 | `docs/ARCHITECTURE.md:54` | 随机信号阴性对照「必须不显著」 | 测试只断言 50 次随机信号的平均净收益为负（`tests/alpha/test_causality.py:46`），不是显著性检验 |
 
 这份文件不改这两张表里的任何一处。它们会动 RUNBOOK、ARCHITECTURE、CONTEXT 与代码注释，另开一次。
+
+**后续（同日）**：#102 与 #103 已处理这两张表，结果见上文「后续（二）」。「陈述过期」表有两行写错了，
+更正也在那一节。
 
 ### 一处事实更正：币安发布历史深度归档
 
