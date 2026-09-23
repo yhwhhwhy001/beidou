@@ -15783,3 +15783,89 @@ docstring 按这些事实改写。对研究的影响只查了代码路径，没�
 
 要操作者定的三件写在方案那一节：G6 进实盘要按纪律重启；CYSUSDT、TUTUSDT 的历史缺口要手动回填；
 主 checkout 要再快进一次。
+
+## 2026-09-23 · 重启 #56：G6 的 bar sanity 进实盘；同一晚主 checkout 快进、CYSUSDT 与 TUTUSDT 回填
+
+**谁**：本会话，操作者指示「G6 按纪律重启实盘循环」。不是崩溃，不是别的会话。同一晚的快进与回填，
+也是操作者指示、本会话执行，见本节后半。
+
+**为什么**：G6（#121）的 bar sanity 在实盘循环里，要等重启才开始记录。旧进程 09-19T17:49:39Z 启动，
+跑的是那之前的代码。
+
+**窗口**：kickstart 于 **16:41:08Z**（本地 00:41），整点后 41 分，安全窗口（5–50 分）之内。
+
+**前置**：
+- 两个构造测试 `tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py` +
+  `test_construction_identity.py`：**15 passed**。构造未变，所以这是重启，不是构造变更。
+- 重启前心跳是 `ERROR`：16:01:02Z 那个周期失败，`ProxyError: 503 Service Unavailable`，
+  `consecutive_errors 1`。重启前用同一条代理路径探了两个域名，`fapi` 与 `demo-fapi` 都是 200，约 0.5 秒。
+
+**可观测事实**：
+
+| | 重启前 | 重启后 |
+| --- | --- | --- |
+| PID | 30351 | **51356** |
+| 进程启动 | 2026-09-19T17:49:39Z | **2026-09-23T16:41:38Z** |
+| `state.restarts` | 55 | **56** |
+| `state.restarted_at` | 2026-09-19T17:49:40Z | **2026-09-23T16:41:39Z** |
+| registry digest | `7f8adb754962` | `7f8adb754962` |
+| 构造指纹 | `b8f215ab706c` | `b8f215ab706c`（`CONSTRUCTION_ALIASES` 映到 `0c555e1c837e`） |
+
+`live status --check` 重启后 exit 0。源文件与配置里最新的 mtime 是本地 00:32:13，没有一个晚于新进程启动。
+
+**15:00 那根 bar 没有再平衡，也没有退出检查。原因是 16:01Z 的代理 503，不是重启。** `cycles.jsonl`：
+
+| `at` | `bar` | `phase` | |
+| --- | --- | --- | --- |
+| `2026-09-23T15:00:31Z` | `14:00` | （完整周期） | 旧进程 |
+| `2026-09-23T16:01:02Z` | `15:00` | `ERROR` | 旧进程；`ProxyError: 503` |
+| `2026-09-23T16:41:45Z` | `15:00` | `SKIPPED` | 新进程 `--immediate`；`late_seconds 2505.204`、`window_seconds 85.861`、`missed_rebalances 1`、`orders []` |
+| `2026-09-23T17:00:29Z` | `16:00` | （完整周期） | 新进程；第一行带 `bar_sanity`：17 个标的、24,514 根 bar、0 个 flag、0 个错误，耗时 3.7 ms |
+
+`live.stderr.log` 对应那条是 `restart was 2505.2s after the bar close (window 85.9s); reconciled but did not
+rebalance`，与 #53–#55 同形态。`missed_rebalances` 是 1 而不是 0，因为那根 bar 在重启前已经丢了。
+重启本身没有再吃掉一根：新进程 16:41:38Z 起在位，16:00 那根在 17:00:29Z 照常跑完，心跳 `OK`。
+
+**一并换掉的代码**：比旧进程启动时刻更新的源文件有 34 个：`beidou_alpha` 11、`beidou_live` 10、
+`beidou_cli` 8、`beidou_governance` 3、`beidou_data` 2。交易路径上有行为变化的只有 G6 的挂接：
+`engine.py` +2、`inputs.py` +7 −1、`cycle_record.py` +1。检查结果只写进周期记录，模型拿不到。
+其余逐个看过：
+- `rebalancer.py`、`config.py`、`registry.py` 只改了注释与 docstring；
+- `portfolio.py` 抽出 `banded()`，`build_weights` 那一路的参数逐个相同，而实盘本来就传 `band=False`；
+- 其余在研究与报告侧。
+
+两份配置从旧进程加载的 `accbae55`（本地 09-20 01:41 那次快进）到现在，只改了行尾注释：
+`crowding_window: 72`、`max_participation: 0.02` 的值没动。这是比较 mtime 与 diff 得到的，
+不是按时间相关性归因。
+
+### 同一晚的另两件（操作者指示，本会话执行）
+
+- **主 checkout 快进两次**（reflog，本地）：00:31:23 到 `fa1f447b`（#128），00:32:13 到 `0e907289`（#129）。
+  #129 比第一次快进早 4 秒合入，所以快进了两次。每次之后跑两个构造测试，都是 15 passed。
+  此前 00:14:40 已有一次快进到 `cc672d24`（#127），reflog 可见，不是本会话做的。
+- **CYSUSDT、TUTUSDT 回填**：本地 00:32:26 跑 `beidou data sync --symbols CYSUSDT,TUTUSDT`，3 秒，无错误。
+
+  | | 回填前 1h 末行 | 回填后 | 新增 | 资金费行数 |
+  | --- | --- | --- | ---: | --- |
+  | CYSUSDT | 2026-09-04T06:00Z | 2026-09-23T15:00Z | 465 | 1,594 → 1,711 |
+  | TUTUSDT | 2026-09-03T11:00Z | 2026-09-23T15:00Z | 484 | 3,192 → 3,313 |
+
+  两个序列都没有缺口，没有零成交 bar。`report beta` 因缺价跳过的 symbol-bar：**236 → 0**。
+  回填后手动跑 `live status --check`，exit 0；回填前那次是 16:10Z 巡检的 `ok status`。manifest 的 `klines`、
+  `funding` 两个字段只提示，不阻断。
+
+### 重启后的核验（本地 01:10 与 01:20）
+
+- **17:10Z 巡检**：`ok status`；`ok verify (max_contribution_diff 0.0)`，新进程的输出能逐位复现。
+  日报「Bar sanity (G6, alert only)」一节：`cycles_checked 1`，没有新 flag，检查错误 0，最长 3.7 ms。
+  「Market beta」一节的基准篮子：每根 bar 17.24 个币，因缺价跳过 0 个 symbol-bar。回填前是 16.62 个币、236 个。
+- **17:20Z 数据日任务**，第一次跑 #128 的代码。日志：`pool names outside the 24h top 30: LSKUSDT, AKEUSDT`，
+  候选 32 个。LSKUSDT 从 09-18T16:00Z 补到 09-23T16:00Z，23,331 根，没有缺口。任务退出码 0，stderr 没有新内容。
+
+**顺带发现，未修：重启之后，M-Q03 把一次周期失败改记成了重启。** 17:11Z 的 report 告警仍是「漏掉 1 次
+再平衡」，但原因从 16:10Z 的「其中 1 根是周期失败（ProxyError: 503）；失败动作：查这条路径，不是重启」，
+变成了「最迟的一次在 bar 收盘后 2505 秒；失败动作：查重启原因」。「周期失败丢掉 1 根 bar」那条单独的告警也不再发。
+- 原因在 `beidou_live/reports.py` 的 M-Q03 统计：`failed_bars = len(lost - accounted)`。15:00 那根 bar 先有一条
+  ERROR 行进 `lost`，重启后的 SKIPPED 行又把它加进 `accounted`，于是 `failed_bars` 从 1 变成 0。
+- 漏掉的次数没错，错在归因：失败发生在重启前 40 分钟，重启只是给同一根 bar 补了一条跳过记录。
+  按现在的写法，任何一次失败之后的重启，都会把失败读成重启、把告警提前撤掉。
