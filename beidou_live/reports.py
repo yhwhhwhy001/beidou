@@ -404,19 +404,28 @@ def decay_watch(
     window_days: int = DECAY_WINDOW_DAYS,
     bars_per_year: float = 8760.0,
 ) -> dict[str, Any]:
-    """Per strategy, the adopted decay rule against the whole income history (not just today).
+    """Per strategy, the adopted decay rule against the live record of the CURRENT construction.
 
-    The window is `window_days` of hourly bars and the history is read from bar zero, because the rule
-    is about the live period as a whole; every other number in this report is about one day.
+    The windows are `window_days` of hourly bars and they start where M-010's does: `evidence_window`,
+    so an aliased digest (`CONSTRUCTION_ALIASES`) carries them on and a real construction change starts
+    them over.  §12.9 ruled exactly that - "构造一变，q10 必须重算，与 M-010 的清零语义一致" - because q10
+    describes the construction its evidence run measured, and a live window from another construction
+    has nothing to be compared against.  Until 2026-09-23 this read from bar zero instead.  On the live
+    record that day the first window would have opened 2026-09-03T06:00Z, two weeks before the current
+    construction, and its 478 bars so far spanned five canonical constructions (vol_target 0.30 and
+    0.60, D3's band knobs off and on) plus 27 cycles from before any fingerprint.  Nobody saw it only
+    because no whole window existed yet under either reading.
 
     `q10` is looked up on the strategy's own evidence block.  Reports written before 2026-09-07 lack
     it; both reports the registry cites carry it (checked 2026-09-23), so the half that can still be
     missing is the live one - two whole windows are needed - and the row says which half it is.  That
-    reading must stay visible either way: a blank row would be read as "fine".
+    reading must stay visible either way: a blank row would be read as "fine".  q10 is marked to market
+    and the live windows are realised, the two calibers `income_drift` names; ruling A keeps it, labelled.
     """
     bars = int(window_days * 24)
     rows: dict[str, Any] = {}
-    for strategy, points in sorted(_series_by_strategy(store, None).items()):
+    since_ms = evidence_window(store)["since_ms"]
+    for strategy, points in sorted(_series_by_strategy(store, since_ms).items()):
         if not equity or equity <= 0:
             rows[strategy] = {"status": "INSUFFICIENT_DATA", "why": "no equity", "below": 0}
             continue
@@ -424,7 +433,7 @@ def decay_watch(
         windows = window_sharpes(returns, bars_per_window=bars, bars_per_year=bars_per_year)
         q10 = (expectations.get(strategy) or {}).get("oos_window_sharpe_q10")
         verdict = decay_verdict(live_windows=windows, q10=q10)
-        rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days}
+        rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days, "bars": len(points)}
     return rows
 
 
@@ -454,6 +463,64 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
     below = sum(1 for value in tail if value < q10)
     status = "REVIEW" if below == consecutive else "OK"
     return {"status": status, "below": below, "q10": q10, "windows": tail}
+
+
+def _decay_alerts(block: Mapping[str, Any]) -> list[str]:
+    """The paging half of §12.9, and the reason the rule reached the hourly check at all (G1, 2026-09-23).
+
+    Until then the rule's one reader was `report weekly`, which no job runs, so a REVIEW would have been
+    computed and read by nobody.  Only REVIEW pages.  INSUFFICIENT_DATA is what the rule reads for its
+    first sixty days under EVERY construction - two whole windows are its minimum - so it is rendered
+    and never routed, not even as a notice: M-G06's reason, a finding repeated hourly for two months
+    is not a finding.  OK needs no line.
+    """
+    return [
+        f"衰减规则判 REVIEW（§12.9）：{strategy} 最近两个不重叠的 {row.get('window_days')} 天窗口，"
+        f"归因夏普 {'、'.join(f'{float(value):.2f}' for value in row.get('windows') or [])} "
+        f"都低于回测 q10 {float(row['q10']):.2f}（已实现对盯市，口径不同）；窗口从当前构造起算；动作：复审这条策略"
+        for strategy, row in sorted(block.items())
+        if str(row.get("status")) == "REVIEW"
+    ]
+
+
+def _decay_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """§12.9 in the daily report: the weekly's reading verbatim, its two calibers, what it still waits for.
+
+    Beside each strategy go its q10 and a countdown in bars, because INSUFFICIENT_DATA is the reading
+    for sixty days after every construction change and "0 whole windows" alone cannot tell a rule that
+    is filling from one that is stuck.  The date is a floor: a missed bar only pushes it later.
+    """
+    block = payload.get("decay") or {}
+    if not block:
+        return {"none": "no attributed income yet"}
+    window = payload.get("evidence_window") or {}
+    since = window.get("since_ms")
+    lines: dict[str, Any] = {
+        "windows_start": f"{_utc_minute(since)}（构造 {window.get('construction')}，与 M-010 同一起点）"
+        if since is not None
+        else "没有构造指纹，窗口从第一根记录起算",
+        "口径": "实盘窗口是已实现归因，q10 是回测盯市。口径不同，比较保留（2026-09-23 操作者裁定 A）。"
+        "flow 的 30 天 σ 在 09-12 读数：已实现 0.137%，盯市 3.239%",
+    }
+    for strategy, row in sorted(block.items()):
+        needed = 2 * int(row.get("window_days") or DECAY_WINDOW_DAYS) * 24  # §12.9's "连续两个"
+        q10 = ((payload.get("expectations") or {}).get(strategy) or {}).get("oos_window_sharpe_q10")
+        lines[str(strategy)] = (
+            str(row.get("status"))
+            + (f" - {row['why']}" if row.get("why") else f" ({row.get('below')}/2 below q10)")
+            + f"；q10={_fmt_num(q10)}；bars {row.get('bars')}/{needed}"
+            + (f"；windows {json_dumps(row['windows'])}" if row.get("windows") else "")
+            + (
+                f"；不早于 {_utc_minute(since + needed * 3_600_000)}"
+                if since is not None and int(row.get("bars") or 0) < needed
+                else ""
+            )
+        )
+    return lines
+
+
+def _utc_minute(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%MZ")
 
 
 M_G06_WINDOW_MONTHS = 18  # §19 Q2's lagging criterion; not a dial, and shortening it is not an option
@@ -2069,6 +2136,9 @@ def daily_payload(
         "income_drift": income_drift(
             store, expectations or {}, equity=equities[-1] if equities else None, since_ms=window["since_ms"]
         ),
+        # §12.9's decay rule, in the hourly check since 2026-09-23 (G1).  The weekly's own call, so the
+        # two reports cannot read the rule differently; `daily_alerts` pages on REVIEW and nothing else.
+        "decay": decay_watch(store, expectations or {}, equity=equities[-1] if equities else None),
         # M-G06 (§19 Q2's lagging half).  INSUFFICIENT_DATA for the next year and a half, on purpose:
         # the row that says how far off it is is the only honest thing it can say today.
         "long_run_sharpe": long_run_sharpe(store, equity=equities[-1] if equities else None),
@@ -2124,6 +2194,7 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
                 if row.get("z") is not None and row["z"] < -2.0
             ]
             alerts.append(f"{name}漂移告警：{'；'.join(str(d) for d in detail)}")
+    alerts.extend(_decay_alerts(payload.get("decay") or {}))
     budget = payload.get("risk_budget") or {}
     if str(budget.get("status")) == "ALERT":
         # P13's ladder: its thresholds were fixed before the change went live.  R8 applies the attributed
@@ -2395,9 +2466,9 @@ def weekly_payload(
         "promotion_budget": 1,
         "evidence_window": window,
         "income": income,
-        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly rather than daily on purpose: it
-        # asks about the live period as a whole, and every other number in the daily report is about
-        # one day.  It reads INSUFFICIENT_DATA until somebody computes the q10 for this construction.
+        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly-only was a choice - the rule is
+        # about the live period, not one day - but no job runs this report, so since 2026-09-23 the
+        # daily report makes this same call and the hourly check pages on its REVIEW (G1).
         "decay": decay,
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),
@@ -2608,6 +2679,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     },
                 },
             ),
+            ("Edge decay (M-010 vs backtest q10)", _decay_lines(payload)),
             (
                 # §19 Q2's lagging criterion.  Rendered while it is still INSUFFICIENT_DATA because the
                 # countdown IS the reading: a criterion nobody can see the distance to is a criterion
