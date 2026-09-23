@@ -3416,7 +3416,20 @@ CEILING = {
     # −29 beidou_cli，2026-09-23（7_735 -> 7_706）：`report beta` 的计算搬进 `benchmark.beta_reading`，
     # 命令体只剩读文件、渲染与写盘。搬走的行不留作 headroom：只升不降的 ratchet，每搬一次家就白送
     # 这个包一段余量。beidou_live 那一格的 +131 是同一次改动的另一半。
-    "beidou_cli": 7_706,
+    #
+    # +51 beidou_cli，2026-09-23。分支上是 7_735 -> 7_786；并入 G3（#119）之后是 7_705 -> 7_756，抬到齐平。
+    # G10，`beidou data pool lag`。操作者当天裁定：时点
+    # 成员表维持手动重建，不排定时任务，另加一条「成员表多久没重建」的告警。`deploy/run_check.sh`
+    # 每小时带 `--check` 跑它，失败路径与 `report daily` 那一行逐字相同。
+    #
+    # 51 行是什么（各块都含其后的两行空行）。`_lag_line` 22 行，七种状态各给一行人读的原因：新鲜、
+    # 落后、不存在、读不了、空表、不是日表、末行晚于今天。其中 1 行把异常文字压成一行，因为告警正文
+    # 是 `tail -n 3`。`_REBUILD` 9 行，其中 2 行注释。命令本体 18 行，import 2 行。
+    #
+    # 为什么值。告警要同时写三件事：落后几天；重建要带 `--refresh D`；重建会让 armed 启动被数据集门
+    # 挡住，要和证据重出排在一起。少了第三件，告警会把操作者推回 2026-09-18：那次单独重建改动了
+    # manifest 的阻断字段，才有了 D-041 bridge。说不出新旧的状态各有一句，一个都不当作新鲜。
+    "beidou_cli": 7_756,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3460,7 +3473,16 @@ CEILING = {
     # NOT removed, and the distinction matters: `beidou_live/liquidation.py` (DL-X1's liquidation
     # DISTANCE, in `beidou_live` and wired into every cycle record) and its tests are untouched.  One is
     # an ingest for data that does not exist; the other is an instrument reading the venue's own field.
-    "beidou_data": 3_122,
+    # +56 beidou_data，2026-09-23（3_122 -> 3_178）：G10 的纯函数一半，`membership_lag` 与告警线
+    # `MEMBERSHIP_ALERT_DAYS`。各块都含其后的两行空行：函数 27 行，`MembershipLag` 10 行，告警线与它的
+    # docstring 19 行。
+    #
+    # docstring 约占三分之一，因为 14 这个数是量出来的，量法要紧挨着它。在 09-18 重建的真实表上取截止
+    # 今天的 30 天窗口，最后 k 天前推时，错成员位的平均占比 k=13 是 2.98%，k=14 是 3.42%（2,027 个
+    # 窗口）。P12 第 0 段把 3% 以下的成员改动判为不值得回测，14 是第一个越线的 k。基准取日历、不取
+    # 归档最新一根 bar 的理由也写在那里：同步停了，那个基准会让这条告警跟着沉默。
+    # `tests/data/test_the_membership_table_says_how_far_it_trails.py` 在真实表上重算其中每个数。
+    "beidou_data": 3_178,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
