@@ -3144,6 +3144,10 @@ CEILING = {
     # 耗时：`report daily` 在 09-23 的状态副本上，中位 0.69 s -> 1.39 s（新旧交替各跑 5 次）。每小时一次，可以接受。
     #
     # 留 45 行（11_245 -> 11_290），理由与 2026-09-22 那格逐字相同，不重述。
+    #
+    # 同日第二个提交，+16，实测 11_261，不抬顶。M-Q08 这一块跑在每小时的 `report daily --check` 里，
+    # 第一版只接了列出来的几种异常，漏网的一种就会让整份日报连同其它告警一起失败。现在按 `market_beta`
+    # 的做法宽捕获，只包这一块（`from_profile`、重放、整块各一处），失败写进块里。用的是上面留的 45 行。
     "beidou_live": 11_290,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",

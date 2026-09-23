@@ -61,6 +61,7 @@ from beidou_data.store import FundingStore, KlineStore
 from beidou_live.composition import build_model, cost_model, load_panel
 from beidou_live.construction import canonical_construction
 from beidou_live.risk_budget import _weighted, books_by_symbol
+from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
 DAY_MS = 86_400_000
@@ -92,23 +93,23 @@ class ReplayInputs:
     def from_profile(cls, profile: Mapping[str, Any], registry: Registry, data_root: str | Path) -> ReplayInputs:
         """The construction the files on disk describe, built the way the loop and its startup gate build it.
 
-        `config` and `engine` are imported here rather than at the top: both import `reports`, which
-        imports this module.
+        It runs in the hourly `report daily --check`, ahead of every other block, so it never raises: the
+        catch is broad for `market_beta`'s reason, and a registry the loop could not start on is `live
+        status`'s finding.  Here it only blinds this instrument, which says why.  `config` and `engine` are
+        imported inside, not at the top: both import `reports`, which imports this module.
         """
-        from beidou_live.config import live_overlay_blocks
-        from beidou_live.engine import registry_digest
-
-        blocks = live_overlay_blocks(profile)
-        guards = BookGuardParams(**(blocks["book_guards"] or {}))
-        exits = None if blocks["exits"] is None else ExitParams.from_mapping(blocks["exits"])
         try:
+            from beidou_live.config import live_overlay_blocks
+            from beidou_live.engine import registry_digest
+
+            blocks = live_overlay_blocks(profile)
+            guards = BookGuardParams(**(blocks["book_guards"] or {}))
+            exits = None if blocks["exits"] is None else ExitParams.from_mapping(blocks["exits"])
             model = build_model(registry, profile)
             cost = cost_model(load_yaml(str(profile.get("costs", "config/costs.yaml"))))
-        except (ValueError, KeyError, TypeError, OSError) as error:
-            # A registry the loop could not start on is `live status`'s finding; here it only blinds the
-            # instrument, and the report says so rather than dying on the hourly path.
-            return cls(None, CostModel(), guards, exits, str(data_root), None, f"{type(error).__name__}: {error}")
-        return cls(model, cost, guards, exits, str(data_root), registry_digest(model))
+            return cls(model, cost, guards, exits, str(data_root), registry_digest(model))
+        except Exception as error:
+            return cls(None, CostModel(), None, None, str(data_root), None, f"{type(error).__name__}: {error}")
 
 
 @dataclass(frozen=True)
@@ -357,7 +358,9 @@ def turnover_fidelity(
     since_ms = int(window["since_ms"])
     try:
         replay = backtest_turnover(inputs, rows, since_ms=since_ms)
-    except (ValueError, KeyError, OSError) as error:
+    # Broad, and here as well as around the whole block: the replay reads the archive and runs the model,
+    # the part most likely to break, and its failure should blind this clause and not the other readings.
+    except Exception as error:
         return {"enforced": False, "band": band, "why": f"重放失败：{type(error).__name__}: {error}"}
     decision_ms = _ms(pd.DatetimeIndex(replay.turnover.index))
     until_ms = min(int(window["latest_ms"]), int(decision_ms.max()) if len(decision_ms) else since_ms - 1)
@@ -485,15 +488,26 @@ def slippage_by_week(
     ]
 
 
-def execution_fidelity(
-    rows: Sequence[Mapping[str, Any]], trades: Sequence[Mapping[str, Any]], inputs: ReplayInputs | None
-) -> dict[str, Any]:
-    """The daily report's M-Q08 block: the two clauses that had no reader, and slippage as a trend."""
-    return {
-        "turnover": turnover_fidelity(rows, trades, inputs),
-        "registry": registry_reading(rows, None if inputs is None else inputs.registry_on_disk),
-        "slippage_by_week": slippage_by_week(rows, trades),
-    }
+def execution_fidelity(store: StateStore, inputs: ReplayInputs | None) -> dict[str, Any]:
+    """The daily report's M-Q08 block: the two clauses that had no reader, and slippage as a trend.
+
+    The catch is broad for the reason `market_beta` gives.  This runs inside the hourly check, and a
+    reading that judges nothing must not take the rest of the report down with it - nor every alert in
+    it, which is what an uncaught exception here would silence.  The failure stays visible: the block
+    carries its type and message, and `fidelity_lines` prints them.  The rows are those `reports._cycles`
+    keeps (a failed or dry-run cycle is not a bar that traded), read here so the reads are inside it too.
+    """
+    try:
+        cycles = store.read_jsonl(store.cycles_path)
+        rows = [row for row in cycles if row.get("equity") is not None and not row.get("dry_run")]
+        trades = store.read_jsonl(store.trades_path)
+        return {
+            "turnover": turnover_fidelity(rows, trades, inputs),
+            "registry": registry_reading(rows, None if inputs is None else inputs.registry_on_disk),
+            "slippage_by_week": slippage_by_week(rows, trades),
+        }
+    except Exception as error:
+        return {"error": f"{type(error).__name__}: {error}"}
 
 
 def _bps(block: Mapping[str, Any] | None) -> str:
@@ -518,6 +532,8 @@ def fidelity_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
     block = payload.get("execution_fidelity") or {}
     if not block:
         return {"none": 0}
+    if block.get("error"):
+        return {"读不出，这一块整块失败": block["error"]}
     turnover, registry = block.get("turnover") or {}, block.get("registry") or {}
     slippage = (payload.get("risk_budget") or {}).get("slippage") or {}
     late = (payload.get("restarts") or {}).get("late_cycle_share")

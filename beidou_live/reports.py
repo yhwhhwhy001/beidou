@@ -2042,7 +2042,7 @@ def daily_payload(
         # JSONL is an assumption, not a measurement, and one nothing compares to a bar is not a metric.
         "restarts": restart_cost(cycles, trades, risk_budget or RiskBudgetParams()),
         # M-Q08's turnover clause (it had no instrument), its digest clause and slippage by week: see the module.
-        "execution_fidelity": execution_fidelity(_cycles(store), store.read_jsonl(store.trades_path), fidelity),
+        "execution_fidelity": execution_fidelity(store, fidelity),
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "risk_budget": risk_budget_status(
