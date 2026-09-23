@@ -16,6 +16,7 @@ from beidou_alpha.overlays import (
     exit_step,
 )
 from beidou_alpha.overlays.exits import COOLDOWN, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP
+from tests.alpha.test_causality import _bit_for_bit
 
 
 def _frames(
@@ -102,7 +103,7 @@ def test_exits_are_causal() -> None:
     full = apply_exits(weights, close, params, sigma_1d=vol).weights
     cut = 40
     truncated = apply_exits(weights.iloc[:cut], close.iloc[:cut], params, sigma_1d=vol.iloc[:cut]).weights
-    pd.testing.assert_frame_equal(full.iloc[:cut], truncated)
+    _bit_for_bit(full.iloc[:cut], truncated)
 
 
 def test_drawdown_scalar_shape_and_throttle_path() -> None:
@@ -134,8 +135,8 @@ def test_unit_mode_entry_is_the_default_and_bit_identical() -> None:
     assert shipped.unit_mode == "entry"
     a = apply_exits(weights, close, shipped, sigma_1d=vol)
     b = apply_exits(weights, close, explicit, sigma_1d=vol)
-    pd.testing.assert_frame_equal(a.weights, b.weights)
-    pd.testing.assert_frame_equal(a.events, b.events)
+    _bit_for_bit(a.weights, b.weights)
+    _bit_for_bit(a.events, b.events)
     with pytest.raises(ValueError):
         ExitParams(unit_mode="atr")
 

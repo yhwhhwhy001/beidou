@@ -28,6 +28,7 @@ from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals.carry import CarryParams, carry_scores
 from beidou_alpha.signals.flow import FlowParams, flow_scores
 from beidou_alpha.signals.tsmom import TsmomParams, apply_crowding_modifier, tsmom_scores
+from tests.alpha.test_causality import _bit_for_bit
 from tests.alpha.test_signal_suite import _synthetic_panel
 
 # Params under which each signal actually consults the cross-section.  tsmom's shipped
@@ -95,7 +96,7 @@ def test_scores_depend_on_the_reference_not_on_extra_columns(signal_id: str) -> 
     referenced = spec.compute(_with_reference(wide, members), params)
     isolated = spec.compute(narrow, params)
 
-    pd.testing.assert_frame_equal(referenced[members], isolated, check_names=False)
+    _bit_for_bit(referenced[members], isolated, check_names=False)
 
 
 @pytest.mark.parametrize("signal_id", CROSS_SECTIONAL_SIGNALS)
@@ -222,4 +223,4 @@ def test_every_signal_still_causal_under_a_reference(signal_id: str) -> None:
         spec.default_params,
     )
 
-    pd.testing.assert_frame_equal(scores.iloc[: cutoff - 1], later.iloc[: cutoff - 1])
+    _bit_for_bit(scores.iloc[: cutoff - 1], later.iloc[: cutoff - 1])

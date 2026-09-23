@@ -15,6 +15,7 @@ import pytest
 from beidou_alpha.backtest import CostModel, ParticipationModel, run_backtest
 from beidou_alpha.overlays.exposure import BookGuardParams, clamp_book, hold_or_reduce
 from beidou_alpha.panel import Panel
+from tests.alpha.test_causality import _bit_for_bit
 
 BARS = 240
 SYMBOLS = ["AAAUSDT", "BBBUSDT"]
@@ -47,8 +48,8 @@ def test_replay_is_bit_for_bit_inert_when_neither_guard_binds() -> None:
     cost = CostModel(turnover_bps=7.0)
     off = run_backtest(panel, weights, cost)
     on = run_backtest(panel, weights, cost, guards=BookGuardParams())
-    pd.testing.assert_frame_equal(off.weights, on.weights)
-    pd.testing.assert_series_equal(off.portfolio_net, on.portfolio_net)
+    _bit_for_bit(off.weights, on.weights)
+    _bit_for_bit(off.portfolio_net, on.portfolio_net)
     guards = on.summary()["guards"]
     # gross 0.10 against the default 0.5% maintenance rate: the requirement is 5 bp of equity
     assert guards.pop("min_margin_buffer") > 1000.0

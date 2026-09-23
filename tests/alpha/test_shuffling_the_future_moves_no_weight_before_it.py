@@ -114,10 +114,10 @@ def _construction(**changes: Any) -> PortfolioParams:
     gross cap moves 666.  Everything else - both half-lives, the band 0.005 / 0.40, flat-inside at 2.0,
     `max_weight` - is what the loop holds, read from the profile rather than copied.
 
-    Not reached, and said so: flat-inside (D2/D3) is on, as shipped, and never binds before the cutoff,
-    because no weight there is below 6.9% of equity against its 1% threshold.  It is a test on the
-    current row alone, so it has nothing to read the future with - but that is an argument, and this
-    file does not claim to have measured it.
+    Not reached, and said so: flat-inside (D2/D3) is on, as shipped, and never binds before the cutoff.
+    Its threshold is at most 1% of equity, and before the cutoff no single-book weight is below 6.9% and
+    no two-book total below 1.6%.  It is a test on the current row alone, so it has nothing to read the
+    future with - but that is an argument, and this file does not claim to have measured it.
     """
     live = portfolio_params(load_yaml(ROOT / "config" / "live.demo.yaml"))
     return replace(live, vol_target=0.10, max_gross=0.5, **changes)

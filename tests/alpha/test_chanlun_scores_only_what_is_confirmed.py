@@ -21,6 +21,7 @@ from beidou_alpha.panel import Panel
 from beidou_alpha.signals import SIGNALS
 from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.signals.chanlun import HOLD, ChanlunParams, chanlun_scores
+from tests.alpha.test_causality import _bit_for_bit
 
 
 def _panel(n_bars: int = 2_000, seed: int = 3, symbols: tuple[str, ...] = ("AAAUSDT", "BBBUSDT")) -> Panel:
@@ -110,7 +111,7 @@ def test_truncating_the_panel_does_not_change_the_scores_that_survive() -> None:
         },
         "1h",
     )
-    pd.testing.assert_frame_equal(chanlun_scores(prefix), whole.iloc[:cut][prefix.close.columns], check_freq=False)
+    _bit_for_bit(chanlun_scores(prefix), whole.iloc[:cut][prefix.close.columns], check_freq=False)
 
 
 @pytest.mark.parametrize("bad", [{"level": "2h"}, {"min_bars": 1}, {"div_ratio": 0.0}, {"entry_threshold": 1.5}])
