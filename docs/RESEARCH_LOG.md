@@ -14715,6 +14715,30 @@ validation 报告，两个方向注入 ±99，verdict 与 reasons 一个字都�
 - 变异 13 个，关字节码缓存。各自至少一条红，还原后全绿。
 - 两个构造测试 15 条全过。
 
+### 复现
+
+本节的读数都来自 `scratchpad/` 里两个入库的脚本。在 checkout 根目录跑。`PYTHONPATH=.` 让脚本量的
+是这个 checkout 的代码，脚本开头会核对这一点。真实面板的两条命令都带 `--to "2026-09-22 17:00"`：
+终点按开盘时间，不含，所以面板停在本节用的 16:00 那根。归档每天在长，成员表重建也会挪动读数。
+
+下表的命令前缀都是 `PYTHONPATH=. .venv/bin/python scratchpad/`。时长是脚本自己印的，不含 import。
+
+| 读数 | 命令 | 时长 |
+| --- | --- | ---: |
+| 暂停 bar 数与离连线那张表、x1.5 的 5e-5、二分的零点、每次重新定价 0.57 秒 | `g8_break_even.py linearity --to "2026-09-22 17:00"` | 74 s |
+| 读数表、连线差的 0.008 与 0.013、x1 的 481 根暂停、`cost_stress` 的 x1 与 x2、资金费那一段、bps 换算 | `g8_break_even.py acceptance --to "2026-09-22 17:00"` | 24 s |
+| August fixture 上暂停线收到 −1% 时连线差 1.8 倍 | `g8_break_even.py fixture-pause` | 不到 1 s |
+| 两格 grid 的 669 对 619 根 | `g8_break_even.py grid-index` | 不到 1 s |
+| 变异 13 个 | `g8_break_even_mutations.py` | 18 s |
+
+`grid-index` 还印出两条序列上的全样本 m*：本格自己的序列 11.41，common_index 上 11.57。取错序列时
+CLI 测试会红，靠的就是这个差。变异脚本在临时目录里的一份拷贝上改代码，不碰运行它的那棵树。
+09-19 报告的 margin（+0.014 与 −0.047）直接读自 `reports/research/tsmom-validation-20260919T081914Z.json`
+的 `cost_stress_gate`，没有脚本。
+
+入库前按上表重跑了一遍，印出的每一位都与第一次相同。只有计时会浮动：`acceptance` 里两条序列的
+重新定价这次各 1.8 秒，正文「合 3.4 秒」是第一次的读数。
+
 ### 还没做的
 
 - 还没有一份归档报告带这个键。第一份会是下一次按预登记跑的 validate，本节一次都没跑。
