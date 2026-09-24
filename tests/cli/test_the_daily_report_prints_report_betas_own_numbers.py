@@ -28,6 +28,7 @@ import pandas as pd
 import pytest
 from click.testing import CliRunner
 
+import beidou_live.report_beta as report_beta
 import beidou_live.reports as reports
 from beidou_cli import main
 from beidou_data.store import KlineStore
@@ -227,7 +228,9 @@ def test_a_block_that_cannot_be_computed_says_why_and_the_rest_of_the_report_sta
     def broken(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("the archive answered with something that is not a price")
 
-    monkeypatch.setattr(reports, "beta_reading", broken)
+    # Patched where the reading calls it.  Since 2026-09-25 that is `report_beta`, not `reports`; a
+    # patch left on `reports` raises AttributeError instead of silently missing (see `reports`' docstring).
+    monkeypatch.setattr(report_beta, "beta_reading", broken)
     payload = daily_payload(StateStore(tmp_path / "live"), DAY, data_root=data_root)
 
     assert payload["beta"] == {

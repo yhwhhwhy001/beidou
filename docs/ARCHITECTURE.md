@@ -20,6 +20,27 @@ demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (s
 
 上表 2026-09-13 更正过一处：`beidou_exchange` 原本写的是「限频、熔断」，而代码里从来没有主动配额管理，也没有断路器——只有被动的 429/418 + `Retry-After` 退避重试。`X-MBX-USED-WEIGHT-*` 被记进 `used_weight` 但没有任何读取方，`consecutive_transport_failures` 同样只写不读，所以一个正走向权重上限的客户端和一个闲着的客户端在日志里长得一模一样。现在两者各有一条**边沿触发的 warning**（`USED_WEIGHT_WARN` / `TRANSPORT_FAILURE_WARN`），**仍然不 sleep**：主动节流会改变实盘循环运行中的行为，那是一次要单独定价的改动，不是补文档的副产品。这个包里唯一的「熔断」是 kill-switch 文件加 host allowlist（`guard.py`），已单列。循环层另有一道连续失败熔断（`beidou_live/engine.py` 的 `breaker_stop`），不在这个包里。
 
+2026-09-25 起，`beidou_live` 的监控层按外部清单的领域分模块。`reports.py` 原来 3,175 行，日报、周报与
+beta 报告的读数全在里面，09-23 那批并行合并的冲突也集中在它身上。现在它只剩五个组装函数：
+`daily_payload`、`daily_alerts`、`daily_markdown`、`weekly_payload`、`weekly_markdown`。读数按 09-23 清点
+（`docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`）的领域分住：
+
+| 模块 | 清单领域 |
+| --- | --- |
+| `report_decay` | #1.10 衰减监控、#4.10 信号监控、D.3 里自动的那部分（probe 停书与复审） |
+| `report_risk` | #3 风控看板：风险预算与阶梯、σ 尺子与回测 VaR / ES、保证金、抵押品、多空腿、M-015 |
+| `report_exits` | #1.5 / #3.2 exit overlay：退出与池子事件、够不着的阈值、反事实 |
+| `report_execution` | #10 执行：重启代价与失败 bar（M-Q03）、无交易带的计划缺口、主机时钟。M-Q08 本身在 `execution_fidelity.py` |
+| `report_data` | #9 数据：研究归档覆盖、metrics 同源比对、数据集清单。bar sanity 在 `bar_sanity.py` |
+| `report_beta` | #6.9 归因：市场 beta（D-045），日报一节与 `report beta` |
+| `report_governance` | 周报的 alpha 投入占比与预登记顺序 |
+| `report_common` | 各领域共用的状态读取与格式化 |
+
+调用方写死的 56 个地址照旧从 `beidou_live.reports` 取得到，而且是同一个对象。新读数放进所属领域的模块，
+不放回 `reports.py`。各领域只依赖 `report_common`，互不 import。三条都由
+`tests/live/test_the_report_layer_kept_its_addresses.py` 钉住。拆分只搬代码：81 个定义逐字相同，实盘状态
+快照上 81 个报告产物逐字节相同（`scratchpad/reports_split_byte_identity.py`）。
+
 2026-09-16 操作者裁定**撤出三条数据源**：`beidou_data` 的 `index_price.py`(307) / `macro.py`(844) / `onchain.py`(606)，连同 `beidou data index|macro|onchain` 三个命令与五个测试文件，共 1,757 行源码 + 2,092 行测试。它们 2026-09-10 落地，**建成了、也一直可达**，但没有任何读取方：`research_cmd._load` 只 join `metrics` 与 `spot`，`beidou_alpha` 没有任何叶子或信号读它们的列，`deploy/run_data.sh` 从落地当天起就把三者排除在日程外并写明了理由，`.beidou/data/` 里从来没有过它们的 store。
 
 **这件事对本文件的意义不是少了三行，而是一类缺陷没有仪器**：`test_every_module_is_reachable_from_an_entry_point` 问的是「每个模块能不能被跑到」，三者都能，所以它一路全绿；没有任何东西问过「有没有东西真的在跑它」。唯一判断对了的是 `run_data.sh` 里的一段注释，而注释不是任何守卫会去读的东西。撤出前后五条命令的输出**逐字节相同**（`governance reopen|replay|next`、`report weekly`、`live run --dry-run --cycles 0`），这也是它们确实没被读过的最后一道证明。要拉回来：`git show 71863e9e`。
