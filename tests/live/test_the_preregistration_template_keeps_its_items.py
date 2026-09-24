@@ -14,8 +14,8 @@ read location a prevention.  Turning this into a real mechanism means `research 
 to run without the line, the way it already refuses without `--grid`/`--charge` (PR #40).  That is a
 CLI change against a package with no source-budget headroom, and it is deliberately not done here.
 
-The count is asserted separately from the titles so that ADDING an item fails too: a ninth item is
-fine, but the heading that announces "必写的八项" has to move with it, or the document starts lying
+The count is asserted separately from the titles so that ADDING an item fails too: a tenth item is
+fine, but the heading that announces "必写的九项" has to move with it, or the document starts lying
 about itself.
 """
 
@@ -40,6 +40,7 @@ REQUIRED_ITEMS: tuple[tuple[int, str], ...] = (
     (6, "判定规则"),
     (7, "预期"),
     (8, "本次服务四个目标里的哪一个"),
+    (9, "实盘失效方式"),
 )
 
 # The four objectives the operator selected on 2026-09-18.  Item 8 is only meaningful if the
@@ -69,7 +70,7 @@ def test_every_numbered_item_is_still_in_the_template(template: str) -> None:
 
 
 def test_the_template_says_how_many_items_it_has_and_is_right(template: str) -> None:
-    """A heading that says 「必写的八项」 over seven items is worse than no heading."""
+    """A heading that says 「必写的九项」 over eight items is worse than no heading."""
     headings = re.findall(r"^### (\d+)\. ", template, re.MULTILINE)
     actual = len({int(n) for n in headings})
     expected_word = COUNT_IN_WORDS.get(actual)
@@ -84,7 +85,7 @@ def test_item_eight_still_defines_the_four_objectives(template: str) -> None:
     """The labels are only useful while the template says what they mean."""
     item_eight = template.split("### 8. ", 1)
     assert len(item_eight) == 2, "item 8 is gone; see the previous test"
-    body = item_eight[1].split("\n## ", 1)[0]
+    body = item_eight[1].split("\n## ", 1)[0].split("\n### ", 1)[0]  # item 8 ends where item 9 begins
     missing = [objective for objective in REQUIRED_OBJECTIVES if objective not in body]
     assert not missing, f"item 8 no longer defines {missing}; a label with no definition is not a label"
 
