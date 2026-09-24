@@ -86,6 +86,27 @@ def _design(x: Sequence[float]) -> Any:
     return np.column_stack([np.ones(len(x)), np.asarray(x, dtype=float)])
 
 
+def nw_covariance(design: Any, resid: Any, lags: int) -> tuple[Any, int] | None:
+    """Newey-West covariance of OLS coefficients on any design, Bartlett weights, and the bandwidth used.
+
+    `None` when the design is degenerate (no more rows than columns, or rank-deficient).  Split out of
+    `_nw_se` on 2026-09-25 so the multi-factor reading (`factor_loadings`) runs D-045's own estimator
+    and its own `MAX_LAG_SHARE` clamp rather than a second copy of them; on a two-column design these
+    are `_nw_se`'s operations in `_nw_se`'s order.
+    """
+    n, width = len(resid), design.shape[1]
+    if n <= width or np.linalg.matrix_rank(design) < width:
+        return None
+    used = max(0, min(lags, int(n * MAX_LAG_SHARE), n - 1))
+    inverse = np.linalg.inv(design.T @ design)
+    scores = resid[:, None] * design
+    meat = scores.T @ scores
+    for lag in range(1, used + 1):
+        gamma = scores[lag:].T @ scores[:-lag]
+        meat = meat + (1.0 - lag / (used + 1)) * (gamma + gamma.T)
+    return inverse @ meat @ inverse, used
+
+
 def _nw_se(x: Sequence[float], resid: Any, lags: int) -> tuple[float, float, int]:
     """Newey-West standard errors for the intercept and slope of ``y ~ 1 + x``, Bartlett weights.
 
@@ -98,18 +119,11 @@ def _nw_se(x: Sequence[float], resid: Any, lags: int) -> tuple[float, float, int
     class of defect as a percentage whose numerator and denominator come from two different series.
     The Bartlett weights use the bandwidth actually in force, so the kernel stays a proper one.
     """
-    design = _design(x)
-    n = len(resid)
-    if n <= 2 or np.linalg.matrix_rank(design) < 2:
+    found = nw_covariance(_design(x), resid, lags)
+    if found is None:
         return math.inf, math.inf, 0
-    used = max(0, min(lags, int(n * MAX_LAG_SHARE), n - 1))
-    inverse = np.linalg.inv(design.T @ design)
-    scores = resid[:, None] * design
-    meat = scores.T @ scores
-    for lag in range(1, used + 1):
-        gamma = scores[lag:].T @ scores[:-lag]
-        meat = meat + (1.0 - lag / (used + 1)) * (gamma + gamma.T)
-    se = np.sqrt(np.diag(inverse @ meat @ inverse))
+    covariance, used = found
+    se = np.sqrt(np.diag(covariance))
     return float(se[0]), float(se[1]), used
 
 
@@ -222,7 +236,7 @@ def signal_state(
 
 
 def series_from_cycles(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """The five series a decomposition needs, keyed by bar, from what the loop already writes.
+    """The series a decomposition needs, keyed by bar, from what the loop already writes.
 
     The equity line is `collateral.usdt_equity` -- the venue's own USDT `marginBalance` -- and not
     total equity, because A-GB01 (2026-09-15) settled that the operator reads the USDT line and
@@ -235,7 +249,8 @@ def series_from_cycles(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
     Exposure is the SIGNED sum of `targets`, rescaled from total equity to the USDT line so it is in
     the same unit as the return series above.  Duplicate bars keep their last record: a restart writes
-    the same bar twice and the second one is the one that traded.
+    the same bar twice and the second one is the one that traded.  `gross` is the unsigned sum on the
+    same rescaling; D-045 does not read it, the multi-factor reading scales its long-short sorts by it.
     """
     keep: dict[int, Mapping[str, Any]] = {}
     for row in rows:
@@ -247,6 +262,7 @@ def series_from_cycles(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     prices: dict[str, dict[int, float]] = {}
     equity: list[float] = []
     exposure: list[float] = []
+    gross: list[float] = []
     universe: dict[int, list[str]] = {}
     for bar in bars:
         row = keep[bar]
@@ -258,6 +274,7 @@ def series_from_cycles(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         weights = row.get("targets") or {}
         net = sum(float(v) for v in weights.values() if isinstance(v, int | float))
         exposure.append(net * total / usdt)
+        gross.append(sum(abs(float(v)) for v in weights.values() if isinstance(v, int | float)) * total / usdt)
         for symbol, price in (row.get("closes") or {}).items():
             if isinstance(price, int | float) and float(price) > 0:
                 prices.setdefault(str(symbol), {})[bar] = float(price)
@@ -265,6 +282,7 @@ def series_from_cycles(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "bars": bars,
         "equity": equity,
         "exposure": exposure,
+        "gross": gross,
         "universe": universe,
         "prices": prices,
     }
@@ -386,18 +404,8 @@ def beta_decomposition(
     }
 
 
-def beta_reading(
-    cycles: Sequence[Mapping[str, Any]],
-    attribution: Sequence[Mapping[str, Any]],
-    closes: Callable[[str], Any],
-    strategy: str = "tsmom",
-) -> dict[str, Any]:
-    """The whole D-045 reading from what the loop wrote: `report beta`'s page and the daily report's block.
-
-    One function for both callers.  Until 2026-09-23 this sat inside the CLI command, so the reading
-    existed only when somebody ran it by hand.  The daily report now takes it every hour, and a second
-    copy of the fill below is how the two would stop agreeing - the first four answers to this
-    question differed because the BENCHMARK did (module docstring).
+def window_prices(series: Mapping[str, Any], closes: Callable[[str], Any]) -> dict[str, dict[int, float]]:
+    """Each universe symbol's price at the window's bars: the cycle's own `closes`, the archive for the rest.
 
     `closes(symbol)` is the parquet archive as a series indexed by bar open time.  The cycle records'
     own `closes` is newer than the loop, so the archive fills in the bars that predate it.  A symbol the
@@ -406,13 +414,10 @@ def beta_reading(
     else.  The CLI used to copy the whole history: the same numbers for 121 ms instead of 7 ms on
     2026-09-23 (710,252 archive rows over 20 symbols), a cost the daily report would pay every hour.
 
-    Fewer than two bars carrying `collateral.usdt_equity` returns a refusal (`measured`, `reason`)
-    in place of the four blocks: there is no return to split.
+    Out of `beta_reading` since 2026-09-25, when the multi-factor reading needed the same prices: its
+    market factor is this basket, so it takes this fill rather than a copy (see `beta_reading`).
     """
-    series = series_from_cycles(cycles)
     bars = series["bars"]
-    if len(bars) < 2:
-        return {"measured": False, "reason": "周期记录里还没有两根带 usdt_equity 的 bar，无法分解"}
     prices = {symbol: dict(points) for symbol, points in series["prices"].items()}
     for symbol in {s for names in series["universe"].values() for s in names}:
         try:
@@ -423,6 +428,30 @@ def beta_reading(
         archived = prices.setdefault(symbol, {})
         for stamp, price in zip(archive.index.astype("int64"), archive.astype(float), strict=True):
             archived.setdefault(int(stamp), float(price))
+    return prices
+
+
+def beta_reading(
+    cycles: Sequence[Mapping[str, Any]],
+    attribution: Sequence[Mapping[str, Any]],
+    closes: Callable[[str], Any],
+    strategy: str = "tsmom",
+) -> dict[str, Any]:
+    """The whole D-045 reading from what the loop wrote: `report beta`'s page and the daily report's block.
+
+    One function for both callers.  Until 2026-09-23 this sat inside the CLI command, so the reading
+    existed only when somebody ran it by hand.  The daily report now takes it every hour, and a second
+    copy of the fill (`window_prices`) is how the two would stop agreeing - the first four answers to
+    this question differed because the BENCHMARK did (module docstring).
+
+    Fewer than two bars carrying `collateral.usdt_equity` returns a refusal (`measured`, `reason`)
+    in place of the four blocks: there is no return to split.
+    """
+    series = series_from_cycles(cycles)
+    bars = series["bars"]
+    if len(bars) < 2:
+        return {"measured": False, "reason": "周期记录里还没有两根带 usdt_equity 的 bar，无法分解"}
+    prices = window_prices(series, closes)
     benchmark = pit_benchmark(bars, series["universe"], prices)
     return {
         "window": {
