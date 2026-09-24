@@ -36,10 +36,13 @@
 | cutoff | 截断点 | `_shuffle_future` 的 `cutoff` |
 | bar sanity | 数值合理性检查、价格合理性检查 | `beidou_live/bar_sanity.py`、`cycles.jsonl` 的 `bar_sanity` |
 | frozen bar | 冻结 bar（与「构造冻结」撞词）、死 bar | `bar_sanity` 的 `frozen` |
+| probe | 探针、探针书 | `probe`、`PROBE_VERDICT`、`max_concurrent_probes`（2026-09-25 起） |
+| bridge（D-041 bridge） | 桥 | `deploy/run_live.sh` 的 `BRIDGE_UNTIL`（2026-09-25 起） |
+| exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起） |
 
 ## 保留中文的近形词
 
-这些字面上像术语，其实是正常中文，不要替换：折算、折扣、打折、折现、折减、折叠、折成、折进。「呼叫操作者」「BLIND 不呼叫」里的`呼叫`是动词，也保留——只有指 `alerts` 里那条记录时才写 `alert`。
+这些字面上像术语，其实是正常中文，不要替换：折算、折扣、打折、折现、折减、折叠、折成、折进。`exempt_crossings`、`exempt_reductions` 说明里的「豁免」是动词，照写中文——只有指 `tests/shipped_evidence.py` 那条机制时才写 `exemption`。「呼叫操作者」「BLIND 不呼叫」里的`呼叫`是动词，也保留——只有指 `alerts` 里那条记录时才写 `alert`。
 
 ## 写中文
 
