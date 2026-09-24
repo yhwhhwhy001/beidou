@@ -33,6 +33,7 @@
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
 | beta | 贝塔 | `rolling_beta`、`beidou report beta` |
 | VaR、ES | 在险价值、预期损失 | `BACKTEST_DAILY_VAR`、`BACKTEST_DAILY_ES`、`tail_readings`（2026-09-23 起） |
+| effective number of bets、effective bets | 有效押注数、有效赌注数 | `report_risk.effective_bets`（2026-09-25 起） |
 | cutoff | 截断点 | `_shuffle_future` 的 `cutoff` |
 | bar sanity | 数值合理性检查、价格合理性检查 | `beidou_live/bar_sanity.py`、`cycles.jsonl` 的 `bar_sanity` |
 | frozen bar | 冻结 bar（与「构造冻结」撞词）、死 bar | `bar_sanity` 的 `frozen` |
@@ -45,6 +46,9 @@
 
 这些词有现成的中文说法，不要改成英文：回撤、最大回撤、夏普、杠杆、敞口、毛敞口、净敞口、再平衡、再平衡带、止盈、止损、移动止损、样本外、样本内、置信区间、风险预算、风险预算阶梯、换手、滑点、成交、权益、波动率、逆波动率定价、基准、三分位、前视、逐位、阴性对照、跳变、重新计价、保本成本倍数。
 
+执行成本这一族也写中文：跳空、价差、冲击、参与率、手续费（2026-09-25，日报的 per-order TCA 一节）。
+`TCA` 写英文，它在代码里是 `per_order_tca`。
+
 `重放`（replay，把一段历史重新跑一遍）写中文，不写「回放」。两种写法在仓库里并存，前者多：2026-09-23
 在 `docs/RESEARCH_LOG.md` 里数到 61 对 21。旧文不改。
 
@@ -55,6 +59,9 @@
 `书级` / `仓位级`这对说法改成**组合层** / **仓位层**——两个都是通用中文，不必用 `book-level`。
 
 `预期书`是自造词，`expectation book` 也是自造的英文，两个都不用。写**预期说明**。
+
+`实盘失效方式`（How this fails，预登记模板第 9 项，2026-09-25 起）写中文。英文原名只在第 9 项的标题里当出处注，
+正文不写。审查报告里的`失效场景`照旧写：它是 backtest-guard 的字段，不拿来称呼第 9 项。
 
 ## 没定的怎么办
 

@@ -1,21 +1,31 @@
-"""Whether each bar was traded on time and as planned.
+"""Whether each bar was traded on time and as planned, and what each fill cost against its estimate.
 
 Checklist area #10 of `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`, the part
 `execution_fidelity.py` (M-Q08) does not hold: restart cost and failed bars (M-Q03), the no-trade
-band's plan gaps, and the host clock (D-025).
+band's plan gaps, the host clock (D-025), and per-order TCA (#10.9 / #10.10).
 """
 
 from __future__ import annotations
 
+import math
+import statistics
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
+from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
-from beidou_live.report_common import _day_of, _fmt_num
-from beidou_live.risk_budget import RiskBudgetParams
+import numpy as np
+
+from beidou_data.store import KlineStore
+from beidou_data.store import interval_ms as bar_ms_of  # `interval_ms` is a parameter name in this module
+from beidou_live.report_common import DAY_MS, _cycles, _day_of, _fmt_num
+from beidou_live.risk_budget import RiskBudgetParams, _weighted, books_by_bar, fill_grouper, slippage_bps
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
 from beidou_live.soak import _decided
 from beidou_live.state import StateStore
+from beidou_shared.config import load_yaml
 
 
 def plan_gaps(store: StateStore, day: str) -> dict[str, Any]:
@@ -295,3 +305,374 @@ def restart_cost(
         "status": "ALERT" if reasons else "OK",
         "reasons": reasons,
     }
+
+
+# --- per-order TCA: #10.9 pre-trade and #10.10 post-trade ---------------------------------------------
+
+#: The cost model the estimate is rebuilt from when the caller passes none: the file
+#: `ReplayInputs.from_profile` reads for a profile that names no other, and the one the shipped profile names.
+COSTS_PATH = "config/costs.yaml"
+#: Decade edges of participation for the error's buckets.  Fixed rather than quantiles, so a bucket
+#: means the same thing next month; the 2026-09-24 window put 39 / 61 / 19 / 5 fills in them.
+TCA_PARTICIPATION_EDGES = (1e-5, 1e-4, 1e-3)
+
+
+def per_order_tca(
+    store: StateStore,
+    params: RiskBudgetParams | None = None,
+    *,
+    data_root: str | Path = ".beidou/data",
+    costs: Mapping[str, Any] | None = None,
+    interval: str = "1h",
+) -> dict[str, Any]:
+    """#10.9 / #10.10: each fill's pre-trade cost estimate beside what it cost.  Reported, never judged.
+
+    **Pre-trade, rebuilt offline.**  The loop records no estimate, and recording one would cost a
+    restart for a reading.  Everything the estimate needs is already on the trade row or in the archive,
+    so rebuilding it here gives the number the loop would have written.  It is the cost model: taker
+    fee, `slippage_bps`, and the square-root impact term the way `backtest.impact_costs` prices it -
+    coefficient x sigma_daily x sqrt(notional / ADV) over the trailing `vol_window_bars` and
+    `adv_window_bars` - on the PLANNED notional (`quantity` x `price`, both fixed before the order was
+    sent).  Participation is that notional over the decision bar's quote volume.  Every input is the
+    decision bar or older: it had closed when the order went out, and it is the last bar
+    `impact_costs` reads for the execution bar.  The coefficient is E5 and has never been calibrated
+    (demo fills are too small to measure it, `config/costs.yaml`), so the error below measures the
+    model, not execution.
+
+    **Post-trade, against `decision_close`**, signed so a cost is positive, over M-Q08's population
+    (its window, no flattens, a reference on the row) with its arithmetic (`_weighted`: notional-
+    weighted, Kish SE) and its split by book (`fill_grouper`) - which is what lets the mean reconcile
+    to both of M-Q08's readings, the whole book and the main book it judges, and the block checks that
+    it does.  Split at the next bar's archived open into the gap (decision close -> open) and the fill
+    (open -> average price), both in bps of the decision close so the two add up.  The fill part
+    carries the order's delay past the open, the spread and any impact; 1h bars cannot tell those
+    three apart.
+
+    **The spread is not split out, for two reasons checked 2026-09-24.**  The fills trade on the demo
+    book, and it is not mainnet's: from 19:14 to 19:15Z demo BTCUSDT held its best bid / ask at
+    84457.9 / 84462.5 while mainnet's moved between 84580 and 84545, three demo AKEUSDT ask levels
+    each held 6,537,999, and demo's hourly quote volume on BTCUSDT ran 6-22x mainnet's on the four
+    bars sampled.  And the one archived top of book, data.binance.vision's `bookTicker`, stops in
+    2024-04 (BTCUSDT daily 2023-05-16 to 2024-03-30; none at all for AKEUSDT or ENAUSDT).  `bookDepth`
+    runs to date, but it is mainnet's book.
+
+    **The fee is listed apart**, as booked: the commission over the fill's notional.  An attribution
+    row carries `state.last_bar_ms` - the bar of the cycle BEFORE the one that read the income, which
+    is the cycle that placed the fills the commission came from - so (bar, symbol) keys a fill to its
+    commission, and only a key with one row on each side is read.  On 2026-09-24 that booked 4.0 bps
+    on thirteen names and 5.0 on seven, against the model's flat 5.0.
+
+    The catch is broad for `execution_fidelity`'s reason: this runs in the hourly check and judges
+    nothing, so it must not take the report or its alerts down.  The block carries the reason instead.
+    """
+    try:
+        return _tca(store, params or RiskBudgetParams(), Path(data_root), costs, interval)
+    except Exception as error:
+        return {"error": f"{type(error).__name__}: {error}"}
+
+
+def _tca(
+    store: StateStore, params: RiskBudgetParams, root: Path, costs: Mapping[str, Any] | None, interval: str
+) -> dict[str, Any]:
+    costs = load_yaml(COSTS_PATH) if costs is None else costs
+    impact = costs.get("impact") or {}
+    model: dict[str, Any] = {
+        "taker_fee_bps": float(costs.get("taker_fee_bps", 5.0)),
+        "slippage_bps": float(costs.get("slippage_bps", 2.0)),
+        "impact_coefficient": float(impact.get("coefficient", 1.0)),
+        "adv_window_bars": int(impact.get("adv_window_bars", 720)),
+        "vol_window_bars": int(impact.get("vol_window_bars", 720)),
+    }
+    # The report's own rows, the ones `risk_budget_status` is handed.  Read from every row, a restart's
+    # SKIPPED row would end the window on a bar that never traded; on 2026-09-23 such rows also took
+    # over their bars' books and re-split 67 main-book fills as 52 (`books_by_bar` now skips them).
+    rows, trades = _cycles(store), store.read_jsonl(store.trades_path)
+    books = books_by_bar(rows)
+    book_of = fill_grouper(books)
+    latest = int(rows[-1].get("bar_open_ms") or 0) if rows else 0
+    since = latest - params.slippage_window_days * DAY_MS
+    fees: dict[tuple[int, str], list[float]] = {}
+    for row in store.read_jsonl(store.attribution_path):
+        for symbol, bucket in (row.get("by_symbol") or {}).items():
+            if isinstance(row.get("bar_open_ms"), int) and (paid := float(bucket.get("COMMISSION") or 0.0)):
+                fees.setdefault((row["bar_open_ms"], str(symbol)), []).append(paid)
+    placed = Counter((row.get("bar_open_ms"), str(row.get("symbol") or "")) for row in trades)
+    bar_ms = bar_ms_of(interval)
+    start_ms = since - (max(model["adv_window_bars"], model["vol_window_bars"]) + 1) * bar_ms
+    archive: dict[str, dict[str, np.ndarray] | None] = {}
+    fills: list[dict[str, Any]] = []
+    without_reference = 0
+    for trade in trades:
+        # `slippage_bps`'s filter, test for test: the population is what makes the two means reconcile.
+        if int(trade.get("bar_open_ms") or 0) < since or trade.get("flatten"):
+            continue
+        reference, filled, quantity = trade.get("decision_close"), trade.get("avg_price"), trade.get("executed_qty")
+        if reference is None and filled and quantity:
+            without_reference += 1
+            continue
+        if not reference or not filled or not quantity:
+            continue
+        try:
+            reference, filled, quantity = float(reference), float(filled), float(quantity)
+        except (TypeError, ValueError):
+            continue
+        if reference <= 0 or filled <= 0 or quantity <= 0:
+            continue
+        side = 1.0 if str(trade.get("side", "")).upper() == "BUY" else -1.0
+        bar, symbol = int(trade.get("bar_open_ms") or 0), str(trade.get("symbol") or "")
+        reading: dict[str, Any] = {
+            "symbol": symbol,
+            "bar": bar,
+            "book": book_of(bar, symbol),
+            "notional": filled * quantity,
+            "slippage": side * (filled - reference) / reference * 10_000.0,
+            "late_seconds": trade.get("late_seconds"),
+        }
+        if len(paid_rows := fees.get((bar, symbol), [])) == 1 and placed[(bar, symbol)] == 1:
+            reading["fee"] = -paid_rows[0] / reading["notional"] * 10_000.0
+        if symbol not in archive:
+            archive[symbol] = _archived_bars(root, symbol, interval, start_ms)
+        reading.update(_against_the_archive(trade, archive[symbol], bar, bar_ms, side, reference, model))
+        fills.append(reading)
+    split = [reading for reading in fills if "gap" in reading]
+    for reading in split:
+        reading["fill"] = reading["slippage"] - reading["gap"]  # in bps of the decision close, so they add up
+    estimated = [reading for reading in fills if "predicted" in reading]
+    for reading in estimated:
+        reading["error"] = reading["predicted"] - reading["slippage"]
+    late = [float(r["late_seconds"]) for r in split if isinstance(r.get("late_seconds"), int | float)]
+    # The newest bar's commission is read by the NEXT cycle's income window, so it is not missing yet.
+    booked_until = max((bar for bar, _symbol in fees), default=0)
+    unbooked = [reading for reading in fills if "fee" not in reading]
+    participation = sorted(float(reading["participation"]) for reading in estimated)
+    measured = _tca_mean(fills, "slippage")
+    mq08 = slippage_bps(trades, params, latest_ms=latest, books_at=books)
+    return {
+        "window": {
+            "since": _iso(since),
+            "until": _iso(latest),
+            "days": params.slippage_window_days,
+            "interval": interval,
+        },
+        "fills": len(fills),
+        "without_reference": without_reference,
+        "post_trade": {
+            "slippage": measured,
+            "gap": _tca_mean(split, "gap"),
+            "fill": _tca_mean(split, "fill"),
+            "split_slippage": _tca_mean(split, "slippage"),
+            "late_seconds_median": statistics.median(late) if late else None,
+            "unsplit": dict(Counter(f"{r['symbol']} {r['unsplit']}" for r in fills if "unsplit" in r)),
+            "fee": {
+                "model_bps": model["taker_fee_bps"],
+                "booked": _tca_mean(fills, "fee"),
+                "not_yet_read": sum(1 for reading in unbooked if reading["bar"] > booked_until),
+                "unmatched": sum(1 for reading in unbooked if reading["bar"] <= booked_until),
+            },
+        },
+        # Against both of M-Q08's readings: the whole book, and the one it judges (G9's split, per fill).
+        "reconciliation": {
+            "combined": _reconciled(measured, mq08["combined"]),
+            "main_only": _reconciled(
+                _tca_mean([r for r in fills if r["book"] == "main_only"], "slippage"),
+                mq08["by_group"].get("main_only") or _weighted([], []),
+            ),
+            "judged": mq08["judged"],
+        },
+        "pre_trade": {
+            "model": model,
+            "predicted": _tca_mean(estimated, "predicted"),
+            "impact": _tca_mean(estimated, "impact"),
+            "participation": {"median": statistics.median(participation), "max": participation[-1]}
+            if participation
+            else None,
+            "unestimated": dict(Counter(f"{r['symbol']} {r['unestimated']}" for r in fills if "unestimated" in r)),
+        },
+        "predicted_minus_actual": _tca_mean(estimated, "error"),
+        "by_participation": _by_participation(estimated),
+    }
+
+
+def _archived_bars(root: Path, symbol: str, interval: str, start_ms: int) -> dict[str, np.ndarray] | None:
+    """One symbol's archived bars from `start_ms` on, as arrays; None when the archive never held it."""
+    try:
+        frame = KlineStore(root).load(symbol, interval, start_ms=start_ms)
+    except FileNotFoundError:
+        return None
+    columns = {name: frame[name].to_numpy(dtype=float) for name in ("open", "close", "quote_volume")}
+    return {"open_time": frame["open_time"].to_numpy(dtype=np.int64), **columns}
+
+
+def _against_the_archive(
+    trade: Mapping[str, Any],
+    bars: Mapping[str, np.ndarray] | None,
+    bar: int,
+    bar_ms: int,
+    side: float,
+    reference: float,
+    model: Mapping[str, Any],
+) -> dict[str, Any]:
+    """What the archive adds to one fill: the gap to the next open, and the estimate made before it was sent.
+
+    Each is there or replaced by the reason it is not, and the block counts the reasons: a fill the
+    archive cannot price is not a fill that cost nothing.
+    """
+    if bars is None:
+        return {"unsplit": "归档没有这个标的", "unestimated": "归档没有这个标的"}
+    times = bars["open_time"]
+    at = int(np.searchsorted(times, bar))
+    if at >= len(times) or int(times[at]) != bar:
+        # Past the archive's last bar is the daily sync not having caught up; inside it is a hole.
+        why = "归档还没到决策 bar" if at >= len(times) else "归档缺决策 bar"
+        return {"unsplit": why, "unestimated": why}
+    out: dict[str, Any] = {}
+    if at + 1 < len(times) and int(times[at + 1]) == bar + bar_ms:
+        out["gap"] = side * (float(bars["open"][at + 1]) - reference) / reference * 10_000.0
+    else:
+        out["unsplit"] = "归档还没到下一根 bar" if at + 1 >= len(times) else "归档缺下一根 bar"
+    bars_per_day = DAY_MS / bar_ms
+    planned = float(trade.get("quantity") or 0.0) * float(trade.get("price") or 0.0)
+    volume = float(bars["quote_volume"][at])
+    adv = float(np.mean(bars["quote_volume"][max(0, at - model["adv_window_bars"] + 1) : at + 1])) * bars_per_day
+    closes = bars["close"][max(0, at - model["vol_window_bars"]) : at + 1]
+    returns = closes[1:] / closes[:-1] - 1.0
+    fewest = model["vol_window_bars"] // 4  # `impact_costs`' own min_periods
+    if len(returns) < fewest:
+        out["unestimated"] = f"决策 bar 之前不足 {fewest} 根收益"
+        return out
+    sigma_daily = float(np.std(returns, ddof=1)) * math.sqrt(bars_per_day)
+    if not (planned > 0 and volume > 0 and adv > 0 and math.isfinite(sigma_daily)):
+        out["unestimated"] = "计划名义额、成交额或波动率读不出"
+        return out
+    impact = model["impact_coefficient"] * sigma_daily * math.sqrt(planned / adv) * 10_000.0
+    out.update(participation=planned / volume, impact=impact, predicted=model["slippage_bps"] + impact)
+    return out
+
+
+def _tca_mean(readings: Sequence[Mapping[str, Any]], key: str) -> dict[str, Any]:
+    """M-Q08's arithmetic (`_weighted`) over the readings that have `key`."""
+    chosen = [reading for reading in readings if reading.get(key) is not None]
+    return _weighted([float(r[key]) for r in chosen], [float(r["notional"]) for r in chosen])
+
+
+def _reconciled(measured: Mapping[str, Any], judged: Mapping[str, Any]) -> dict[str, Any]:
+    """This block's mean slippage against one of M-Q08's readings: the same fills must give the same number."""
+    value, reference = measured.get("value"), judged.get("value")
+    difference = None if value is None or reference is None else float(value) - float(reference)
+    same_fills = measured.get("fills") == judged.get("fills")
+    agrees = same_fills and (difference is None or abs(difference) <= 1e-9)
+    why = None
+    if not same_fills:
+        why = f"成交笔数不同（TCA {measured.get('fills')}，M-Q08 {judged.get('fills')}）：两边取的不是同一批成交"
+    elif not agrees:
+        why = "同一批成交而均值不同：两边的算术分叉了"
+    return {
+        "value": value,
+        "fills": measured.get("fills"),
+        "m_q08": reference,
+        "m_q08_fills": judged.get("fills"),
+        "difference": difference,
+        "agrees": agrees,
+        "why": why,
+    }
+
+
+def _by_participation(readings: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The prediction error per participation bucket, beside the two means it is the difference of."""
+    out: list[dict[str, Any]] = []
+    for low, high in pairwise((0.0, *TCA_PARTICIPATION_EDGES, math.inf)):
+        chosen = [reading for reading in readings if low <= float(reading["participation"]) < high]
+        if not chosen:
+            continue
+        label = f"<{high:.0e}" if low == 0.0 else (f"≥{low:.0e}" if math.isinf(high) else f"{low:.0e}–{high:.0e}")
+        out.append(
+            {
+                "bucket": label,
+                "predicted_minus_actual": _tca_mean(chosen, "error"),
+                "slippage": _tca_mean(chosen, "slippage")["value"],
+                "predicted": _tca_mean(chosen, "predicted")["value"],
+            }
+        )
+    return out
+
+
+def _iso(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
+
+
+def _tca_bps(block: Mapping[str, Any] | None) -> str:
+    if not block or block.get("value") is None:
+        return "无"
+    se = "" if block.get("se") is None else f"±{block['se']:.2f}"
+    return f"{block['value']:+.2f}{se} bps（{block.get('fills')} 笔）"
+
+
+def _signed(value: Any) -> str:
+    return "n/a" if value is None else f"{float(value):+.2f}"
+
+
+def _reconciled_line(row: Mapping[str, Any]) -> str:
+    verdict = "对得上" if row.get("agrees") else f"对不上：{row.get('why')}"
+    return (
+        f"TCA {_signed(row.get('value'))} / M-Q08 {_signed(row.get('m_q08'))} bps"
+        f"（{row.get('m_q08_fills')} 笔），差 {_signed(row.get('difference'))}，{verdict}"
+    )
+
+
+def tca_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """#10.9 / #10.10 on the page, with the estimate's three caveats as lines of their own."""
+    if not block:
+        return {"none": 0}
+    if block.get("error"):
+        return {"读不出，这一块整块失败": block["error"]}
+    window = block.get("window") or {}
+    if not block.get("fills"):
+        return {"窗口内成交": f"0 笔（决策 bar {window.get('since')} 起）"}
+    post, pre = block.get("post_trade") or {}, block.get("pre_trade") or {}
+    fee, model, recon = post.get("fee") or {}, pre.get("model") or {}, block.get("reconciliation") or {}
+    booked = fee.get("booked") or {}
+    participation, late = pre.get("participation") or {}, post.get("late_seconds_median")
+    lines: dict[str, Any] = {
+        "窗口": f"决策 bar {window.get('since')} 至 {window.get('until')}，与 M-Q08 同一个 {window.get('days')} 天",
+        "实际滑点（对 decision_close，对我不利为正）": f"{_tca_bps(post.get('slippage'))}，名义额加权",
+        "对账：M-Q08 全书合并读数": _reconciled_line(recon.get("combined") or {}),
+        "对账：M-Q08 主书独有读数" + ("（判定读数）" if recon.get("judged") == "main_only" else ""): (
+            _reconciled_line(recon.get("main_only") or {})
+        ),
+        "跳空（decision_close → 下一根开盘价）": _tca_bps(post.get("gap")),
+        "成交（开盘价 → 成交均价）": (
+            f"{_tca_bps(post.get('fill'))}；两段之和 {_signed((post.get('split_slippage') or {}).get('value'))} bps"
+        ),
+        "成交段里有什么": (
+            ("下单延迟" if late is None else f"下单延迟（中位 {late:.0f} 秒）")
+            + f"、价差与冲击。归档只有 {window.get('interval')} bar，拆不开"
+        ),
+        "价差为什么不单拆": "成交打在 demo 盘口上，demo 的深度是合成的。主网 bookTicker 归档止于 2024-04",
+        "手续费（另列，不在滑点里）": (
+            f"入账 {_tca_bps(booked)}；成本模型 taker {_fmt_num(fee.get('model_bps'))} bps"
+            + (f"；{fee['not_yet_read']} 笔下个周期才读到手续费" if fee.get("not_yet_read") else "")
+            + (f"；{fee['unmatched']} 笔在 attribution 里对不上唯一一行" if fee.get("unmatched") else "")
+        ),
+        "事前估计（离线重建，循环没有记录）": (
+            f"{_tca_bps(pre.get('predicted'))} = slippage_bps {_fmt_num(model.get('slippage_bps'))}"
+            f" + 冲击 {_fmt_num((pre.get('impact') or {}).get('value'))}；taker 另计"
+        ),
+        "事前估计的输入": "只用决策时刻已收盘的 bar。参与率 = 计划名义额 ÷ 决策 bar 成交额",
+        "冲击系数": f"{model.get('impact_coefficient')}，没校准（costs.yaml 标 E5）",
+        "参与率 中位 / 最大": (
+            f"{participation['median']:.1e} / {participation['max']:.1e}" if participation else "无"
+        ),
+        "预测 − 实际（滑点部分，名义额加权）": _tca_bps(block.get("predicted_minus_actual")),
+    }
+    for row in block.get("by_participation") or []:
+        lines[f"预测 − 实际，参与率 {row['bucket']}"] = (
+            f"{_tca_bps(row.get('predicted_minus_actual'))}；实际 {_signed(row.get('slippage'))}，"
+            f"预测 {_signed(row.get('predicted'))}"
+        )
+    for key, label in (("unestimated", "没有事前估计的"), ("unsplit", "没拆两段的")):
+        counted = (pre if key == "unestimated" else post).get(key) or {}
+        if counted:
+            lines[label] = "；".join(f"{why} {n} 笔" for why, n in sorted(counted.items()))
+    if block.get("without_reference"):
+        lines["没有 decision_close 的"] = f"{block['without_reference']} 笔，不计入（与 M-Q08 同）"
+    return lines

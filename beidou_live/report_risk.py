@@ -2,14 +2,16 @@
 
 Checklist area #3 of `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`: the risk
 budget and its ladder (P13), the sigma ruler (DL-EX0) with the backtest VaR / ES beside it (G4),
-margin (M-007), collateral (L1-10 / RISK-G11), the long and short legs (M-008) and per-symbol risk
-adaptation (M-015, D-046).  Item 3.9, what closing each held position would take, sits beside margin.
+margin (M-007), collateral (L1-10 / RISK-G11), the long and short legs (M-008), per-symbol risk
+adaptation (M-015, D-046) and the correlation between the positions held (#3.4, #8.9).  Item 3.9,
+what closing each held position would take, sits beside margin.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,7 @@ from beidou_live.report_common import (
     _day_of,
     _fmt_num,
     _fmt_pct,
+    _store_closes,
     evidence_window,
     json_dumps,
     readable_state,
@@ -1161,3 +1164,255 @@ def _tail_readings_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         f"{block.get('first_day') or '(none yet)'}, inside the D-026 window, before this report's day"
     )
     return lines
+
+
+# #3.4 / #8.9: the windows the holdings reading is taken over, in days of hourly archive returns.  Two, because
+# #8.9 asks whether the correlation is MOVING, and one window cannot say that.
+HOLDINGS_CORRELATION_DAYS = (7, 30)
+
+
+# What every holding is also read against: the market the book's longs load on.  D-045 reads that exposure as
+# a beta against a basket; this is the same question one name at a time.
+BTC = "BTCUSDT"
+
+
+def _held_at_snapshot(row: Mapping[str, Any]) -> tuple[dict[str, float], float | None, str | None]:
+    """The signed weight of each position the venue reported at this cycle's snapshot, before its orders.
+
+    Returns the weights, the share of `gross_before` they account for, and the reason they cannot be read.
+
+    No field of the row is that book, so it is rebuilt rather than read.  `targets` is what the planner was
+    told to steer to, and the no-trade band leaves a position up to 40% of itself away from it: at bar
+    2026-09-24T17:00Z ETHUSDT's target read 11.90% of equity while it held 10.07%, and AKEUSDT's target still
+    read +1.00% on the cycle whose order closed it (D3).  `book_weights` are the model's per-book weights
+    before the throttle, the exit overlay and the guards, and `contributions` are per-strategy convictions
+    (+1 / 0 / -1), not weights at all.  Symbol by symbol, the venue's positions reach the row only through
+    the planner: every symbol it looks at gets an order or a skip row carrying `current_notional`, except one
+    that is flat and stays flat - which holds nothing to miss (`rebalancer.plan_rebalance`).
+
+    `gross_before` sums |notional| over the same positions, which makes the rebuild checked rather than
+    trusted.  Skip rows before 2026-09-14T19:00Z carry no `current_notional`, and a skip for a reason that
+    records none (`MIN_NOTIONAL`, `QUANTITY_ROUNDS_TO_ZERO`) drops a name the same way, so a book the rows
+    cannot account for to within 1% is refused rather than read short.  Since 2026-09-14T19:00Z all 232
+    traded rows agree to within 0.06%: the planner prices at the marks it fetched, `gross_before` sums the
+    venue's own `notional`, and the two are read a moment apart.
+    """
+    notional: dict[str, float] = {}
+    for entry in (*(row.get("orders") or []), *(row.get("skipped") or [])):
+        value = entry.get("current_notional")
+        if entry.get("symbol") and isinstance(value, int | float):
+            notional[str(entry["symbol"])] = float(value)
+    gross, equity = row.get("gross_before"), float(row.get("equity") or 0.0)
+    if not isinstance(gross, int | float) or gross <= 0 or equity <= 0:
+        return {}, None, f"gross_before {gross} against equity {equity}: nothing to check a rebuilt book against"
+    covered = sum(abs(value) for value in notional.values()) / float(gross)
+    if abs(covered - 1.0) > 0.01:
+        return {}, covered, f"the order and skip rows account for {covered:.2%} of gross_before, not the whole book"
+    return {symbol: value / equity for symbol, value in sorted(notional.items()) if value}, covered, None
+
+
+def effective_bets(weights: np.ndarray, covariance: np.ndarray) -> float | None:
+    """The effective number of bets: how many uncorrelated bets the book's variance is spread over.
+
+    A. Meucci, "Managing Diversification", Risk 22 (May 2009), 74-79; SSRN 1358533.  Rotate the book onto
+    the principal components of the return covariance, Sigma = E diag(lambda) E'.  The n-th principal bet
+    carries exposure v_n = e_n'w, and because the components are uncorrelated its share of the book's
+    variance is p_n = lambda_n v_n^2 / w'Sigma w: non-negative, summing to one.  The effective number is the
+    exponential of their entropy,
+
+        N_Ent = exp(-sum_n p_n ln p_n)
+
+    which reads 1 when one bet carries all the variance and N when N bets carry equal shares.  Seventeen
+    longs that all load on one market factor read close to 1, which a count of names cannot say.  The
+    weights are signed, so a long and a short on two correlated names net inside a component the way their
+    variance does.
+
+    `None` when there is no variance to share out.  An eigenvalue a rounding error below zero is read as
+    zero: a covariance has no negative variance in any direction.
+    """
+    eigenvalues, vectors = np.linalg.eigh(covariance)
+    shares = np.clip(eigenvalues, 0.0, None) * (vectors.T @ weights) ** 2
+    total = float(shares.sum())
+    if total <= 0.0:
+        return None
+    p = shares[shares > 0.0] / total
+    return float(np.exp(-(p * np.log(p)).sum()))
+
+
+def _correlation_window(returns: pd.DataFrame, weights: np.ndarray, days: int) -> dict[str, Any]:
+    """One window of `holdings_correlation`, every number over the same complete bars.
+
+    One sample rather than pairwise-complete counts: a covariance built from pairs that each saw different
+    bars need not be positive semi-definite, and `effective_bets` takes its eigenvalues.  The held names are
+    the first columns, in the order of `weights`; BTCUSDT is among them or after them.
+    """
+    common = returns.dropna()
+    if len(common) < days * 12:
+        why = f"{len(common)} complete bars of {days * 24}: under half the window"
+        return {"measured": False, "bars": len(common), "why": why}
+    flat = [str(name) for name in common.columns if not float(common[name].std()) > 0.0]
+    if flat:
+        return {"measured": False, "bars": len(common), "why": f"no price movement in {', '.join(flat)}"}
+    held = len(weights)
+    values = common.to_numpy(dtype=float)
+    full = np.corrcoef(values, rowvar=False)
+    upper = np.triu_indices(held, k=1)
+    rho = full[:held, :held][upper]
+    size = np.abs(weights[upper[0]]) * np.abs(weights[upper[1]])
+    same = np.sign(weights[upper[0]]) == np.sign(weights[upper[1]])
+
+    def weighted(mask: np.ndarray) -> dict[str, Any]:
+        mean = float((size[mask] * rho[mask]).sum() / size[mask].sum()) if mask.any() else None
+        return {"pairs": int(mask.sum()), "weighted_mean": mean}
+
+    btc = list(common.columns).index(BTC)
+    return {
+        "measured": True,
+        "bars": len(common),
+        "last_bar": datetime.fromtimestamp(int(common.index[-1]) / 1000, tz=UTC).isoformat(),
+        "all_pairs": weighted(np.ones(len(rho), dtype=bool)),
+        "same_side": weighted(same),
+        "opposite_side": weighted(~same),
+        "effective_bets": effective_bets(weights, np.cov(values[:, :held], rowvar=False)),
+        "vs_btc": {str(name): float(full[i, btc]) for i, name in enumerate(common.columns[:held])},
+    }
+
+
+def holdings_correlation(
+    store: StateStore,
+    day: str,
+    *,
+    closes: Callable[[str], pd.Series] | None = None,
+    root: str | Path = ".beidou/data",
+) -> dict[str, Any]:
+    """#3.4 / #8.9: how correlated the positions the book actually held are, with each other and with BTC.
+
+    M-014 correlates the probe sleeve's income with the main book's.  Nothing read the held names against
+    each other or against BTC, which is what the 2026-09-23 checklist found under both items.  Reported
+    only: no threshold was registered before the book went live, and one picked after reading the number is
+    not a threshold, so nothing here pages.
+
+    The book is the day's last traded cycle's - through `_cycles`, so a SKIPPED row a restart writes over
+    the same bar cannot stand in for it - rebuilt by `_held_at_snapshot`.  The returns are the archive's
+    hourly closes over 7 and 30 days, ending at the bar that cycle decided on, and a window reads only the
+    bars on which every holding and BTCUSDT printed; `last_bar` says where the archive stopped, which can be
+    an hour or two short of the loop.  Per window:
+
+      all_pairs, same_side, opposite_side  pairwise correlations weighted by |w_i| |w_j|, split by whether
+                                           the two positions point the same way.  Apart on purpose: on a
+                                           long and a short a positive correlation is a hedge, and averaged
+                                           in with the longs it would read as concentration.
+      vs_btc                               each holding against BTCUSDT
+      effective_bets                       Meucci's effective number of bets (`effective_bets`)
+
+    `book_vol` rides along from the same row, so the daily section can print what the engine says about the
+    book's size beside it - and say that `ex_ante` is not a forecast of its own.  Stage 2 scales the book to
+    `vol_target` with the same EWMA covariance `ex_ante` is then read with, so on one book that no cap
+    touched (`max_weight`, `max_gross`, stage 2's own `max_scalar`) `ex_ante` IS the target.  Of the 168
+    traded rows carrying `book_vol` (2026-09-17T15:00Z to 09-24T17:00Z), the 145 whose flow_short sleeve held
+    nothing and whose `clipped_risk_share` was 0 read the target to within one ulp.  The 23 below it
+    (0.534-0.562) run from 09-17T15:00Z to 09-18T13:00Z, when the sleeve carried one or two names -
+    `combine_books` sums sleeves without re-targeting - and 12 of them clipped as well.  Realised against
+    the target already has its reading, P13's `realised_vol`, and the section quotes it rather than
+    computing a second one.
+
+    Measured at bar 2026-09-24T17:00Z: seventeen longs and no short; weighted pairwise correlation 0.53 over
+    7 days and 0.59 over 30; effective bets 2.10 and 1.77 of 17, with the first component carrying 83% and
+    87% of the book's variance.  The count of names overstates the bets this book holds eight- to tenfold.
+
+    The catch is broad for the reason `exit_counterfactuals` gives: this runs inside the hourly check, and a
+    reading that gates nothing must not take the report down with it.  The block carries the reason.
+    """
+    rows = [row for row in _cycles(store) if _day_of(row) == day]
+    if not rows:
+        return {"measured": False, "reason": f"no traded cycle on {day}", "book_vol": {}}
+    last = rows[-1]
+    weights, coverage, why = _held_at_snapshot(last)
+    base = {"bar": last.get("bar"), "coverage": coverage, "book_vol": dict(last.get("book_vol") or {})}
+    if why is None and len(weights) < 2:
+        why = f"{len(weights)} position(s) held; a correlation needs two"
+    if why is not None:
+        return {**base, "measured": False, "reason": why}
+    symbols = list(weights)
+    signed = np.asarray([weights[symbol] for symbol in symbols], dtype=float)
+    hour = DAY_MS // 24
+    anchor = int(last.get("as_of_ms") or last.get("bar_open_ms") or 0)
+    grid = range(anchor - max(HOLDINGS_CORRELATION_DAYS) * DAY_MS, anchor + hour, hour)
+    try:
+        loader = closes or _store_closes(root, "1h")
+        names = [*symbols, *([] if BTC in weights else [BTC])]
+        prices = pd.DataFrame({name: loader(name).reindex(grid) for name in names})
+        returns = (prices / prices.shift(1) - 1.0).iloc[1:]
+        windows = {
+            f"{days}d": _correlation_window(returns.iloc[-days * 24 :], signed, days)
+            for days in HOLDINGS_CORRELATION_DAYS
+        }
+    except Exception as exc:
+        return {**base, "measured": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {
+        **base,
+        "measured": True,
+        "reason": None,
+        "weights": weights,
+        "long": int((signed > 0).sum()),
+        "short": int((signed < 0).sum()),
+        "gross": float(np.abs(signed).sum()),
+        "windows": windows,
+    }
+
+
+def _holdings_correlation_lines(block: Mapping[str, Any], risk_budget: Mapping[str, Any]) -> dict[str, Any]:
+    """`holdings_correlation` on the page, then the engine's `book_vol` beside P13's realised vol.
+
+    The vol lines print whether or not the correlation could be read: they come off the cycle row, not the
+    archive.  The realised line is `_risk_budget_lines`' own text, so the page carries one rendering of P13's
+    number rather than a second one that could drift from it.
+    """
+    vol = block.get("book_vol") or {}
+    engine = {
+        "book_vol ex_ante / target / clipped_risk_share": " / ".join(
+            _fmt_pct(vol.get(key)) for key in ("ex_ante", "target", "clipped_risk_share")
+        ),
+        "realised vol (P13, quoted)": _risk_budget_lines(risk_budget).get("realised vol", "n/a"),
+        "ex_ante 读法": (
+            "单书且没有截断时，ex_ante 按构造等于 target。stage 2 用同一个 EWMA 协方差把书缩放到 target。"
+            "所以它不是独立预测。它只在 sleeve 相加或上限截断时偏离。"
+        ),
+    }
+    if not block.get("measured"):
+        return {"measured": "no", "reason": block.get("reason") or "not computed", **engine}
+    weights = block.get("weights") or {}
+    windows = block.get("windows") or {}
+    lines: dict[str, Any] = {
+        "held book": (
+            f"{len(weights)} names ({block.get('long')} long / {block.get('short')} short), gross "
+            f"{_fmt_num(block.get('gross'))}x equity: the venue's positions at bar {block.get('bar')}, before "
+            f"that cycle's orders ({_fmt_pct(block.get('coverage'))} of gross_before)"
+        ),
+    }
+    for label, window in windows.items():
+        lines[label] = (
+            f"weighted pairwise corr {_fmt_num(window['all_pairs']['weighted_mean'])}; same side "
+            f"{_fmt_num(window['same_side']['weighted_mean'])} over {window['same_side']['pairs']} pairs, opposite "
+            f"side {_fmt_num(window['opposite_side']['weighted_mean'])} over {window['opposite_side']['pairs']}; "
+            f"effective bets {_fmt_num(window['effective_bets'])} of {len(weights)}; "
+            f"{window['bars']} bars to {window['last_bar']}"
+            if window.get("measured")
+            else f"not measured ({window.get('why')})"
+        )
+    lines[f"corr with {BTC} ({' / '.join(windows)})"] = json_dumps(
+        {
+            symbol: " / ".join(_fmt_num((window.get("vs_btc") or {}).get(symbol)) for window in windows.values())
+            for symbol in weights
+        }
+    )
+    lines["effective bets"] = (
+        'Meucci (2009) "Managing Diversification", Risk 22: exp(-sum p_n ln p_n), p_n = lambda_n (e_n\'w)^2 / '
+        "w'Sigma w over the principal components of the window's covariance; 1 = one bet, N = N equal "
+        "uncorrelated bets"
+    )
+    lines["相关读法"] = (
+        "同向持仓的相关越高，这本书分散得越少。反向持仓的正相关是对冲，不是集中。"
+        "effective bets 接近 1，风险几乎全压在一个共同因子上。只报告，不告警：没有预登记的阈值。"
+    )
+    return {**lines, **engine}
