@@ -111,6 +111,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     RISK_COMPRESSION_LIMIT,
     TAIL_VOL_TARGET,
     _collateral_drift_lines,
+    _holdings_correlation_lines,
     _noise_scale_lines,
     _risk_adaptation_lines,
     _risk_budget_lines,
@@ -118,6 +119,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     _tradable_drawdown_line,
     _weight_cap_line,
     collateral_share,
+    holdings_correlation,
     latest_risk_adaptation,
     leg_split,
     margin_and_rejections,
@@ -260,6 +262,8 @@ def daily_payload(
         # part and the rest.  Over the whole USDT-equity record rather than the day, as `report beta`.
         "beta": market_beta(store, closes=closes, root=data_root),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
+        # #3.4 / #8.9 beside M-014, which reads sleeves against each other: this reads the held names.
+        "holdings_correlation": holdings_correlation(store, day, closes=closes, root=data_root),
         "events": exit_and_pool_events(store, day),
         # Beside the exit COUNT rather than inside it: that block says what the overlay did today,
         # and this says which thresholds it could not have reached whatever the price did.  A zero
@@ -705,6 +709,12 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     for pair, row in (payload.get("probe_correlation") or {}).items()
                 }
                 or {"none": 0},
+            ),
+            (
+                "Holdings correlation (#3.4 / #8.9, reported only)",
+                _holdings_correlation_lines(
+                    payload.get("holdings_correlation") or {}, payload.get("risk_budget") or {}
+                ),
             ),
             (
                 # D-025: not an alert, but every timestamp above is the host's, so say how far off it is
