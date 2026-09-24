@@ -208,3 +208,9 @@ CYSUSDT、TUTUSDT 回填，`report beta` 因缺价跳过的 symbol-bar 从 236 �
 
 `config/alpha_registry.yaml` 里 09-08 审计那段注释仍引 k=0.30 的崩盘窗口读数（FTX −3.3%）。
 #123 在冻结期内有意不改，现行读数只在 RESEARCH_LOG 的 G4 一节。冻结结束、k 重裁之后一起更新。
+
+## 第二轮（2026-09-25）
+
+操作者 09-25 选定四块：拆监控层、第二批补缺、预登记加第九项、10-13 的准备。本方案「冻结结束后」的
+G11、G12 有了预登记草稿，在 `docs/analysis/2026-09-25-october-13-readiness.md` 第 4、5 节，仍等冻结结束。
+执行记录见 `docs/analysis/2026-09-25-external-checklist-round-two.md`。
