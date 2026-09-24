@@ -3265,7 +3265,102 @@ CEILING = {
     # 读数变的只有 09-08 与 09-23 两天，各有一根这种形状的 bar。
     #
     # 余量本来放得下（还剩 26 行）。这次照「加行就在同一提交抬顶并写理由」抬 +8，余量仍是 26 行。
-    "beidou_live": 11_978,
+    #
+    # 2026-09-25（不编号，同上）。+283 beidou_live，11_952 -> 12_235，抬到 12_275。
+    #
+    # 监控层按外部清单的领域拆开。`reports.py` 原来 3,175 行，日报、周报与 beta 报告的读数全在里面。
+    # 09-23 那批并行合并的冲突，就集中在它和这张表上。现在它只剩五个组装函数，837 行。读数按 09-23
+    # 清点的领域分住七个 `report_*` 模块，共用的读取与格式化放 `report_common`。
+    #
+    # 函数体一个字节没动。每个定义连同紧贴其上的注释块整段切走（`scratchpad/reports_split_by_area.py`）。
+    # 两道验收都在 `scratchpad/reports_split_byte_identity.py`：81 个定义逐字相同；实盘状态快照上
+    # 22 天日报、4 份周报、2 份 beta 报告，81 个产物逐字节相同。
+    #
+    # 花在哪：import 净 +147。`reports.py` 98 行，大半是调用方写死的 56 个名字的再导出（照 M6，不改
+    # 别人的 import 行）；八个新模块各自 82 行；减去原来的 33 行。模块 docstring 净 +78，写每个模块
+    # 答清单的哪一项、`reports.py` 为什么只组装、为什么只再导出契约。模块头部的空行 +36。`__all__`
+    # 与它的注释 +22：mypy 的 strict 模式不认隐式再导出，`live_cmd` 与引擎从这里取的 9 个名字要声明。
+    #
+    # 买到什么：往日报加一个读数，代码落进它所属领域的模块，`reports.py` 只多挂接的几行。各领域只依赖
+    # `report_common`，互不 import。两条都由 `tests/live/test_the_report_layer_kept_its_addresses.py`
+    # 钉住。
+    #
+    # 留 40 行（12_235 -> 12_275），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+266 beidou_live，12_235 -> 12_501，抬到 12_541。
+    #
+    # 第二批补缺之一（清点 3.4 / 8.9）：日报加「持仓间相关」。此前只有 sleeve 之间的 M-014，持仓之间
+    # 没有读数。实盘 09-24T17:00Z 读到：17 个多头、0 个空头；7 天加权平均两两相关 0.53；effective
+    # number of bets 2.10 个（Meucci 2009）。17 个名字实际约等于 2 个 bet，第一主成分占方差 83%。
+    #
+    # 花在哪：`report_risk.py` 新增 250 行，其中 docstring 88 行，记持仓为什么要从订单与 skip 行
+    # 重建（行里没有持仓字段）、`gross_before` 对账、`ex_ante` 为什么按构造等于 target；代码 144 行；
+    # import 与空行 +6。`reports.py` 挂接 +10。
+    #
+    # 复核：同一份状态快照上独立重算，7 天与 30 天的加权平均相关、effective bets、ETH 对 BTC 的相关，
+    # 与读数逐位相同到小数点后 10 位。日报 json 只多一个键，md 只多一节，其余 37 个产物逐字节相同。
+    # 巡检耗时 +36 ms。
+    #
+    # 留 40 行（12_501 -> 12_541），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+386 beidou_live，12_501 -> 12_887，抬到 12_927。
+    #
+    # 第二批补缺之一（清点 10.9 / 10.10）：日报加逐单 TCA。此前事前成本是平的 7 bps，逐单的事前估计
+    # 不产出也不记录；把滑点拆开只做过一次。事前估计离线重建：成本模型加冲击项，只用决策 bar 及以前的
+    # 数据，不改循环，也就不用为它重启。事后以 decision_close 为基准，在下一根开盘价处拆成跳空与成交
+    # 两段，手续费另列。
+    #
+    # 读数（实盘副本，09-24，M-Q08 的 30 天窗口）：125 笔，实际 +5.87 ± 1.81 bps，与 M-Q08 的全书、
+    # 主书两个读数逐位相同。跳空 +0.01，成交 +5.93：滑点全在成交段。事前估计 +2.76（2.00 加冲击 0.76），
+    # 预测减实际 −3.17 ± 1.79 bps。入账手续费 4.24 bps，模型按 5.00 平收。
+    #
+    # 花在哪：`report_execution.py` 净 +381。`per_order_tca` 52 行，其中 docstring 39 行，写清为什么
+    # 离线重建、价差为什么不拆（demo 盘口不是主网的；bookTicker 归档止于 2024-04）；`_tca` 120 行；
+    # `_against_the_archive` 44 行；`tca_lines` 57 行；8 个小函数 64 行；其余是常量、注释、空行与 import。
+    # `reports.py` 挂接 +5。
+    #
+    # 留 40 行（12_887 -> 12_927），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+606 beidou_live，12_887 -> 13_493，抬到 13_533。
+    #
+    # 第二批补缺之一（清点 6.4 / 6.9）：多因子载荷。此前书对 BTC、size、低波、资金费的载荷没人算，
+    # D-045 的两个回归各只有一个回归元。因子只用时点信息构造：候选取当周期的 universe，排序只读该 bar
+    # 收盘前已收盘的 K 线与已结算的资金费，收益取 t -> t+1。
+    #
+    # 读数（实盘副本，09-07T14:00Z 至 09-24T17:00Z，397 根 bar）：市场 0.92（t 14.8），BTC −0.02，
+    # size 0.09（t 3.8），低波 0.15（t 5.1），资金费 0.00。R² 0.92，只用市场是 0.79。信号有空头的
+    # 194 根 bar 上 alpha 1.87 bps/h，t 1.51，不显著。size 与低波相关 0.81，市场与低波的 VIF 都在 5 以上。
+    #
+    # 花在哪：新模块 `factor_loadings.py` 395 行，其中 docstring 77 行、代码 286 行（`factor_reading`
+    # 103、`_fit` 68、`sort_keys` 60、`factor_returns` 44）。`report_beta.py` +173：`report beta` 的因子页
+    # 69、拟合的 lines 31、日报 lines 23、日报包装 20、共线性一行 9。`benchmark.py` +29：`nw_covariance`
+    # 与 `window_prices` 从 D-045 抽出来共用，不复制；`series_from_cycles` 多返回 `gross`。`reports.py`
+    # 挂接 +9。
+    #
+    # 验收：前视测试打乱 t 之后的数据，比 t 时刻的排名逐位相同，另带一条植入一根前视的阴性对照。只用
+    # 市场一个回归元时，与 D-045 的 conditional beta 逐位相同（0.6830913472622752）。合并方在另一份
+    # 快照上重跑：日报只多一个键、一节，beta 报告两份产物逐字节不变。巡检耗时 +63 至 +107 ms。
+    #
+    # 留 40 行（13_493 -> 13_533），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+282 beidou_live，13_493 -> 13_775，抬到 13_815。
+    #
+    # 第二批补缺之一（清点 3.9）：平仓流动性。此前有成交额选池、2% 参与率与容量表，没有持仓级「平掉
+    # 要多久、花多少」的读数。先核实了一件事：循环对完全平仓豁免参与率上限（`rebalancer.py` 的
+    # `closing`），所以完全平仓是一根 bar 的市价单，代价在冲击上，不在时间上；限速只对纯减仓成立。
+    #
+    # 读数（实盘副本，09-24T17:00Z，本周期成交后的 16 个持仓）：整本书一次完全平仓，冲击 0.57 U，
+    # 名义加权 0.44 bps。最难平的 TRUMPUSDT 只占小时成交额的 0.0088%，离 2% 上限约 227 倍。
+    #
+    # 花在哪：`_liquidity_to_close` 90 行，取持仓、叠加本周期成交、读归档；`_liquidity_to_close_lines`
+    # 74 行；`liquidity_to_close` 49 行，其中 docstring 37 行，写豁免怎么核实的、限速那一列为什么只是
+    # 下限；`_closing_cost` 45 行；import、常量与空行 16 行。`reports.py` 挂接 +8。
+    #
+    # 验收：小时均量与 `LiveEngine._liquidity` 逐位相同，冲击与 `impact_costs` 的相对差不超过 2e-14。
+    # 7 处变异各有测试变红。合并方在另一份快照上重跑：日报只多一个键、一节，其余逐字节相同。
+    #
+    # 留 40 行（13_775 -> 13_815），理由与上面几格逐字相同，不重述。
+    "beidou_live": 13_815,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3568,7 +3663,16 @@ CEILING = {
     # `LivePool.select` 本来就把上一版池子留在候选里，这里补上同一条。成员表原地写，每小时巡检可能读到
     # 半张表；默认 MS 出的月表，巡检自己判「不是日表」。测试见 `tests/cli/test_data_sync_keeps_the_pool.py` 与
     # `tests/cli/test_pool_history_writes_a_daily_table_atomically.py`。
-    "beidou_cli": 7_841,
+    #
+    # 2026-09-25（不编号，同上）。+16 beidou_cli，7_841 -> 7_857，抬到 7_897。
+    #
+    # 多因子载荷（清点 6.4 / 6.9）的第二个读者。`report beta` 在 D-045 那一页之后印因子页，与日报的
+    # `factor_loadings` 块是同一次调用；`--out` 另写 `factors-*.md/json`，`beta-*.json` 仍与日报的
+    # `beta` 块逐位相同。花在哪：调用与渲染 10 行，写文件改成一个两项的循环净 +2，import 4 行。
+    #
+    # 留 40 行（7_857 -> 7_897）。这一格此前按实测抬到齐平；零余量让下一个诚实的改动先交税，理由与
+    # `beidou_live` 那几格逐字相同，不重述。
+    "beidou_cli": 7_897,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
