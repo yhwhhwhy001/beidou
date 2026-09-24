@@ -106,12 +106,14 @@ def test_a_bar_that_failed_and_then_completed_is_not_charged() -> None:
     assert restart_cost([_failed(), _completed()])["missed_rebalances"] == 0
 
 
-def test_a_failed_bar_already_charged_as_a_skip_is_charged_once() -> None:
+def test_a_failed_bar_a_late_restart_then_skipped_is_charged_once_to_the_failure() -> None:
     """The same 2026-09-08 bar, but reconciled by a restart OUTSIDE the window, which writes its own
-    miss row.  Two rows, one lost bar, one charge."""
+    miss row.  Two rows, one lost bar, one charge - the failure's.  Until 2026-09-24 the skip row took
+    that charge over; see `test_a_restart_does_not_take_over_a_bar_a_failed_cycle_lost`."""
     cost = restart_cost([_failed(), _skipped(BAR, MISSED_REBALANCE_REASON)])
 
     assert cost["missed_rebalances"] == 1
+    assert (cost["failed_bars"], cost["skipped_bars"]) == (1, 0)
     assert cost["restarts"] == 1, "the restart is still counted as a restart"
 
 
