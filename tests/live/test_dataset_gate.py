@@ -108,19 +108,6 @@ def test_a_disabled_strategy_is_not_checked(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not (ROOT / ".beidou" / "data").exists(), reason="live data root is not in this checkout")
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "2026-09-18: tsmom's cited evidence is blocked on `membership` and there is no way to unblock it "
-        "today.  Rebuilding .beidou/data/membership.parquet (2,042 -> 2,056 refreshes, union 211 -> 212) "
-        "moved a BLOCKING manifest field; re-issuing the evidence on the rebuilt table came back FAIL by "
-        "0.0106 (OOS 1.5628 vs a 1.5733 threshold, p_family 0.0547), so the new report blocks on its "
-        "verdict instead.  The old table has no copy anywhere.  Account: docs/RESEARCH_LOG.md 2026-09-18.  "
-        "STRICT ON PURPOSE: while the bind holds this xfails and the suite stays honest-green, and the day "
-        "tsmom qualifies again this test PASSES UNEXPECTEDLY and turns the suite red - which is the signal "
-        "to delete this marker.  It is a detector of resolution, not a silencer."
-    ),
-)
 def test_the_shipped_registry_is_not_blocked_on_the_machine_that_runs_the_loop() -> None:
     """The operator-facing guard: adding this gate must not stop what is already running.
 
@@ -134,6 +121,17 @@ def test_the_shipped_registry_is_not_blocked_on_the_machine_that_runs_the_loop()
     both: the condition is measured, its current state is declared, and a change in either direction is
     loud.  The `deploy/run_live.sh` bridge does NOT make this pass - it lets the loop start anyway, which
     is a different claim from "the evidence matches the data".
+
+    2026-09-25: the `xfail(strict=True)` is gone, because it had done its job.  It went on 2026-09-18,
+    when rebuilding `.beidou/data/membership.parquet` (2,042 -> 2,056 refreshes, union 211 -> 212) moved
+    a BLOCKING manifest field under tsmom's cited evidence.  On 2026-09-19 `16a52547` pointed tsmom at the
+    16-cell report, whose manifest was taken on the rebuilt table, and this gate has been clear since -
+    so from that day this test passed unexpectedly on the machine that runs the loop and failed there
+    under strict, while CI (no `.beidou/data`) skipped it and could not see it.  The marker's reason said
+    it would pass "the day tsmom qualifies again", which folded two gates into one: this test measures the
+    DATASET gate only.  The evidence verdict is still FAIL on 2026-09-25; that half is the startup
+    evidence gate's (`live run`'s refusal, bypassed by the D-041 bridge until 2026-10-13), not this one's.
+    Found by `docs/analysis/2026-09-25-october-13-readiness.md` and confirmed by running this test there.
     """
     registry = load_registry(ROOT / "config" / "alpha_registry.yaml")
     check = registry_dataset_problems(registry, data_root=ROOT / ".beidou" / "data")
