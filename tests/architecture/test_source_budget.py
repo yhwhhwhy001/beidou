@@ -3252,7 +3252,20 @@ CEILING = {
     # 线外，只是不再掺 probe 的成交，标准误从 1.88 变宽到 2.44。
     #
     # 留 40 行（11_930 -> 11_970），理由与上面几格逐字相同，不重述。
-    "beidou_live": 11_970,
+    #
+    # 2026-09-24（不编号，同上）。+8 beidou_live，11_944 -> 11_952，抬到 11_978。
+    # 修 M-Q03 的归因。周期失败丢掉一根 bar 后，重启又给同一根 bar 补了一条 SKIPPED 行。
+    # 统计把这根 bar 记成了重启。09-23 的 15:00 那根就是这样：17:11Z 起原因变成「查重启原因」，
+    # 「周期失败丢掉 1 根 bar」那条告警也不再发。
+    #
+    # 花在哪：全在 `reports.restart_cost`。注释净 +5，记 09-23 那一晚的读数，和为什么归因比次数要紧。
+    # 代码净 +3：跳过行先记下自己的 bar，算完失败 bar 再结算。落在失败 bar 上的跳过行不另计。
+    #
+    # 买到什么：漏掉次数不变，归因回到失败，告警按 09-16 的裁定照发。在全部实盘记录上重放，
+    # 读数变的只有 09-08 与 09-23 两天，各有一根这种形状的 bar。
+    #
+    # 余量本来放得下（还剩 26 行）。这次照「加行就在同一提交抬顶并写理由」抬 +8，余量仍是 26 行。
+    "beidou_live": 11_978,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

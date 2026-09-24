@@ -1963,16 +1963,21 @@ def restart_cost(
     held.  KILL-R6 named the per-cycle share as the acceptable reading and that is what is judged.
     """
     params = params or RiskBudgetParams()
-    skips = restarts = unreadable = 0
+    restarts = unreadable = 0
     # The bar a cycle FAILED on, charged here from 2026-09-16.  The 2026-09-13 work charged the bars
     # the backoff SLEPT THROUGH and left this one open in its own docstring; four bars since
     # 2026-09-08 have no successful cycle and M-Q03 read zero on every one of those days.  Charged by
     # BAR rather than by row, because a bar is what a rebalance belongs to: `lost` collects the bars
-    # that failed deciding nothing, `accounted` the bars that need no second charge - they got there
-    # anyway (a later retry, or a restart that found the book already set), or a skip row above has
-    # already charged them - and the difference is what is owed.
+    # that failed deciding nothing, `reached` the bars that got there anyway (a later retry, or a
+    # restart that found the book already set), and the difference is what is owed.
     lost: set[int] = set()
-    accounted: set[int] = set()
+    reached: set[int] = set()
+    # The bar each charging skip row names, settled against the failed bars at the end.  Until
+    # 2026-09-24 a skip row's bar went into `reached` as it was read, so a restart that found a bar a
+    # failed cycle had already lost took the charge over: restart #56 turned the 16:01Z proxy 503 on
+    # 2026-09-23's 15:00 bar into "查重启原因" and withdrew the failed-bar page.  The miss was one bar
+    # either way; which row owns it is what sends the reader somewhere.
+    skip_charges: list[object] = []
     failures: list[str] = []
     windows: list[float] = []
     # How late each SCHEDULED cycle woke, from its own row, paired with the bar that row allowed it.
@@ -1996,11 +2001,11 @@ def restart_cost(
                 restarts += 1
             # A bar that was already rebalanced cannot have had its rebalance missed.  The row still
             # carries the window the engine allowed, so `widest_window_seconds` keeps it; only the miss
-            # COUNT declines to charge it.
+            # COUNT declines to charge it, and a failure on the same bar is excused: the book did get set.
             if reason != ALREADY_REBALANCED_REASON:
-                skips += 1
-            if isinstance(bar := row.get("bar_open_ms"), int):
-                accounted.add(bar)
+                skip_charges.append(row.get("bar_open_ms"))
+            elif isinstance(bar := row.get("bar_open_ms"), int):
+                reached.add(bar)
             if isinstance(window := row.get("window_seconds"), int | float):
                 windows.append(float(window))
             if reason != BACKOFF_REASON and isinstance(value := row.get("late_seconds"), int | float):
@@ -2020,7 +2025,7 @@ def restart_cost(
                 lost.add(bar)
                 failures.append(str(row.get("error") or "未记录"))
             else:
-                accounted.add(bar)
+                reached.add(bar)
         woke = _woke_seconds_after_close(row, interval_ms)
         if woke is None:
             unreadable += 1
@@ -2036,7 +2041,10 @@ def restart_cost(
     late = [value for value, bar in judged if bar is not None and value > bar]
     measurable = [value for value, bar in judged if bar is not None]
     share = (len(late) / len(measurable)) if measurable else None
-    failed_bars = len(lost - accounted)
+    failed = lost - reached
+    # A skip row on a failed bar is the restart finding that bar already lost: not a second miss.
+    skips = sum(1 for bar in skip_charges if bar not in failed)
+    failed_bars = len(failed)
     missed = skips + failed_bars
     reasons: list[str] = []
     if missed > params.max_missed_rebalances:
