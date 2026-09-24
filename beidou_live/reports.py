@@ -45,8 +45,10 @@ from beidou_live.execution_fidelity import ReplayInputs, execution_fidelity, fid
 from beidou_live.probe import ProbeParams
 from beidou_live.report_beta import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     _beta_regression_lines,
+    _factor_loadings_lines,
     _market_beta_lines,
     beta_markdown,
+    factor_loadings,
     market_beta,
 )
 from beidou_live.report_common import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
@@ -261,6 +263,9 @@ def daily_payload(
         # D-045 beside the legs, which split the same money by side: this splits it into the market's
         # part and the rest.  Over the whole USDT-equity record rather than the day, as `report beta`.
         "beta": market_beta(store, closes=closes, root=data_root),
+        # #6.4 / #6.9 beside it: what the same book loaded on besides the market.  Reads the archive
+        # itself rather than `closes`, because its sorts need volume and funding as well as prices.
+        "factor_loadings": factor_loadings(store, root=data_root),
         "probe_correlation": probe_correlation(store, probes, since_ms=window["since_ms"]),
         # #3.4 / #8.9 beside M-014, which reads sleeves against each other: this reads the held names.
         "holdings_correlation": holdings_correlation(store, day, closes=closes, root=data_root),
@@ -702,6 +707,10 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 or {"none": 0},
             ),
             ("Market beta (D-045, reported only)", _market_beta_lines(payload.get("beta") or {})),
+            (
+                "Factor loadings (#6.4 / #6.9, reported only)",
+                _factor_loadings_lines(payload.get("factor_loadings") or {}),
+            ),
             (
                 "Probe correlation (M-014)",
                 {

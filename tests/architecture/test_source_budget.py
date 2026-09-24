@@ -3320,7 +3320,29 @@ CEILING = {
     # `reports.py` 挂接 +5。
     #
     # 留 40 行（12_887 -> 12_927），理由与上面几格逐字相同，不重述。
-    "beidou_live": 12_927,
+    #
+    # 2026-09-25（不编号，同上）。+606 beidou_live，12_887 -> 13_493，抬到 13_533。
+    #
+    # 第二批补缺之一（清点 6.4 / 6.9）：多因子载荷。此前书对 BTC、size、低波、资金费的载荷没人算，
+    # D-045 的两个回归各只有一个回归元。因子只用时点信息构造：候选取当周期的 universe，排序只读该 bar
+    # 收盘前已收盘的 K 线与已结算的资金费，收益取 t -> t+1。
+    #
+    # 读数（实盘副本，09-07T14:00Z 至 09-24T17:00Z，397 根 bar）：市场 0.92（t 14.8），BTC −0.02，
+    # size 0.09（t 3.8），低波 0.15（t 5.1），资金费 0.00。R² 0.92，只用市场是 0.79。信号有空头的
+    # 194 根 bar 上 alpha 1.87 bps/h，t 1.51，不显著。size 与低波相关 0.81，市场与低波的 VIF 都在 5 以上。
+    #
+    # 花在哪：新模块 `factor_loadings.py` 395 行，其中 docstring 77 行、代码 286 行（`factor_reading`
+    # 103、`_fit` 68、`sort_keys` 60、`factor_returns` 44）。`report_beta.py` +173：`report beta` 的因子页
+    # 69、拟合的 lines 31、日报 lines 23、日报包装 20、共线性一行 9。`benchmark.py` +29：`nw_covariance`
+    # 与 `window_prices` 从 D-045 抽出来共用，不复制；`series_from_cycles` 多返回 `gross`。`reports.py`
+    # 挂接 +9。
+    #
+    # 验收：前视测试打乱 t 之后的数据，比 t 时刻的排名逐位相同，另带一条植入一根前视的阴性对照。只用
+    # 市场一个回归元时，与 D-045 的 conditional beta 逐位相同（0.6830913472622752）。合并方在另一份
+    # 快照上重跑：日报只多一个键、一节，beta 报告两份产物逐字节不变。巡检耗时 +63 至 +107 ms。
+    #
+    # 留 40 行（13_493 -> 13_533），理由与上面几格逐字相同，不重述。
+    "beidou_live": 13_533,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3623,7 +3645,16 @@ CEILING = {
     # `LivePool.select` 本来就把上一版池子留在候选里，这里补上同一条。成员表原地写，每小时巡检可能读到
     # 半张表；默认 MS 出的月表，巡检自己判「不是日表」。测试见 `tests/cli/test_data_sync_keeps_the_pool.py` 与
     # `tests/cli/test_pool_history_writes_a_daily_table_atomically.py`。
-    "beidou_cli": 7_841,
+    #
+    # 2026-09-25（不编号，同上）。+16 beidou_cli，7_841 -> 7_857，抬到 7_897。
+    #
+    # 多因子载荷（清点 6.4 / 6.9）的第二个读者。`report beta` 在 D-045 那一页之后印因子页，与日报的
+    # `factor_loadings` 块是同一次调用；`--out` 另写 `factors-*.md/json`，`beta-*.json` 仍与日报的
+    # `beta` 块逐位相同。花在哪：调用与渲染 10 行，写文件改成一个两项的循环净 +2，import 4 行。
+    #
+    # 留 40 行（7_857 -> 7_897）。这一格此前按实测抬到齐平；零余量让下一个诚实的改动先交税，理由与
+    # `beidou_live` 那几格逐字相同，不重述。
+    "beidou_cli": 7_897,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
