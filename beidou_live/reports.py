@@ -87,8 +87,10 @@ from beidou_live.report_decay import (  # noqa: F401  (re-exported at its histor
 from beidou_live.report_execution import (
     _restart_cost_lines,
     clock_health,
+    per_order_tca,
     plan_gaps,
     restart_cost,
+    tca_lines,
 )
 from beidou_live.report_exits import (
     exit_and_pool_events,
@@ -217,6 +219,8 @@ def daily_payload(
         "restarts": restart_cost(cycles, trades, risk_budget or RiskBudgetParams()),
         # M-Q08's turnover clause (it had no instrument), its digest clause and slippage by week: see the module.
         "execution_fidelity": execution_fidelity(store, fidelity),
+        # #10.9 / #10.10: each fill's pre-trade estimate, rebuilt offline, beside its post-trade cost.
+        "tca": per_order_tca(store, risk_budget or RiskBudgetParams(), data_root=data_root),
         "last_targets": cycles[-1].get("targets") if cycles else {},
         "expectations": expectations or {},
         "risk_budget": risk_budget_status(
@@ -598,6 +602,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 _restart_cost_lines(payload.get("restarts") or {}),
             ),
             ("Execution fidelity (M-Q08, four clauses)", fidelity_lines(payload)),
+            ("Per-order TCA (#10.9 / #10.10, reported only)", tca_lines(payload.get("tca") or {})),
             (
                 # D-041: the manifest was written into every report and read by nothing.  It is read now,
                 # and this is where a human sees the answer after startup has scrolled away.
