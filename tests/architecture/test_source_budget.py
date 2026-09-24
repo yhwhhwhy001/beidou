@@ -3286,7 +3286,23 @@ CEILING = {
     # 钉住。
     #
     # 留 40 行（12_235 -> 12_275），理由与上面几格逐字相同，不重述。
-    "beidou_live": 12_275,
+    #
+    # 2026-09-25（不编号，同上）。+266 beidou_live，12_235 -> 12_501，抬到 12_541。
+    #
+    # 第二批补缺之一（清点 3.4 / 8.9）：日报加「持仓间相关」。此前只有 sleeve 之间的 M-014，持仓之间
+    # 没有读数。实盘 09-24T17:00Z 读到：17 个多头、0 个空头；7 天加权平均两两相关 0.53；effective
+    # number of bets 2.10 个（Meucci 2009）。17 个名字实际约等于 2 个 bet，第一主成分占方差 83%。
+    #
+    # 花在哪：`report_risk.py` 新增 250 行，其中 docstring 88 行，记持仓为什么要从订单与 skip 行
+    # 重建（行里没有持仓字段）、`gross_before` 对账、`ex_ante` 为什么按构造等于 target；代码 144 行；
+    # import 与空行 +6。`reports.py` 挂接 +10。
+    #
+    # 复核：同一份状态快照上独立重算，7 天与 30 天的加权平均相关、effective bets、ETH 对 BTC 的相关，
+    # 与读数逐位相同到小数点后 10 位。日报 json 只多一个键，md 只多一节，其余 37 个产物逐字节相同。
+    # 巡检耗时 +36 ms。
+    #
+    # 留 40 行（12_501 -> 12_541），理由与上面几格逐字相同，不重述。
+    "beidou_live": 12_541,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

@@ -33,6 +33,7 @@
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
 | beta | 贝塔 | `rolling_beta`、`beidou report beta` |
 | VaR、ES | 在险价值、预期损失 | `BACKTEST_DAILY_VAR`、`BACKTEST_DAILY_ES`、`tail_readings`（2026-09-23 起） |
+| effective number of bets、effective bets | 有效押注数、有效赌注数 | `report_risk.effective_bets`（2026-09-25 起） |
 | cutoff | 截断点 | `_shuffle_future` 的 `cutoff` |
 | bar sanity | 数值合理性检查、价格合理性检查 | `beidou_live/bar_sanity.py`、`cycles.jsonl` 的 `bar_sanity` |
 | frozen bar | 冻结 bar（与「构造冻结」撞词）、死 bar | `bar_sanity` 的 `frozen` |
