@@ -114,6 +114,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     TAIL_VOL_TARGET,
     _collateral_drift_lines,
     _holdings_correlation_lines,
+    _liquidity_to_close_lines,
     _noise_scale_lines,
     _risk_adaptation_lines,
     _risk_budget_lines,
@@ -124,6 +125,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     holdings_correlation,
     latest_risk_adaptation,
     leg_split,
+    liquidity_to_close,
     margin_and_rejections,
     max_weight_of,
     noise_scale,
@@ -287,6 +289,8 @@ def daily_payload(
         # G6: bars the loop fed its model that did not look like prices, split into first-seen-today and not.
         "bar_sanity": sanity_status(store.read_jsonl(store.cycles_path), day, day_of=_day_of),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
+        # 3.9, reported only: a full close is one market order, so what it costs is impact, not bars.
+        "liquidity_to_close": liquidity_to_close(store, day, root=data_root),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
         "dataset": _dataset_block(dataset),
@@ -763,6 +767,10 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),
                     "rejections_by_code": json_dumps((payload.get("margin") or {}).get("rejections") or {}),
                 },
+            ),
+            (
+                "Liquidity to close (3.9, reported only)",
+                _liquidity_to_close_lines(payload.get("liquidity_to_close") or {}),
             ),
             (
                 "Exits and pool (M-005 / M-006)",

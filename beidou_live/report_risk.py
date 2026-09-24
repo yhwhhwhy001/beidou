@@ -3,7 +3,8 @@
 Checklist area #3 of `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`: the risk
 budget and its ladder (P13), the sigma ruler (DL-EX0) with the backtest VaR / ES beside it (G4),
 margin (M-007), collateral (L1-10 / RISK-G11), the long and short legs (M-008), per-symbol risk
-adaptation (M-015, D-046) and the correlation between the positions held (#3.4, #8.9).
+adaptation (M-015, D-046) and the correlation between the positions held (#3.4, #8.9).  Item 3.9,
+what closing each held position would take, sits beside margin.
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from beidou_alpha.backtest import ImpactModel
 from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.registry import MAIN_BOOK
+from beidou_data.store import KlineStore, interval_ms
 from beidou_live.report_common import (
     DAY_MS,
     _cycles,
@@ -225,6 +228,277 @@ def margin_and_rejections(
         "rejections": rejections,
         "insufficient_margin": sum(count for code, count in rejections.items() if "-2019" in code),
     }
+
+
+# The bars `LiveEngine._liquidity` averages for the participation cap: the profile's `pool.liquidity_window`.
+# The cycle record does not carry it, so it is written here and a test holds it to the profile.
+LIQUIDITY_WINDOW_BARS = 24
+
+
+def liquidity_to_close(
+    store: StateStore, day: str, *, root: str | Path = ".beidou/data", interval: str = "1h"
+) -> dict[str, Any]:
+    """Checklist 3.9: how long, and at what cost, each held position could be closed.  Reported, never alerted.
+
+    The book is the last traded cycle on or before `day` that planned at all - a guard skip places no
+    order, so what it holds is what the cycle before it left.  Cycle rows carry no `positions`.  What
+    they carry is `current_notional` on the `skipped` and `orders` entries: the planner's qty x mark for
+    each managed symbol it holds.  Rows since 2026-09-14T19:00Z carry it on every band-held entry, and on
+    all 232 of them it adds up to the row's own `gross_before` within 0.06% (the two marks are read a
+    moment apart); older rows carry it on orders only.  Both sums are returned, so a row that does not
+    account for its whole book says so.  The cycle's own fills are then applied at the price the planner
+    used, so a position that cycle closed is not reported as one still to close.
+
+    Two rulers, kept apart because they measure different things (the 2026-09-09 VWAP entry in
+    `docs/RESEARCH_LOG.md` makes the same point about fills):
+      participation  |notional| / the mean quote volume of the last `LIQUIDITY_WINDOW_BARS` bars: an
+                     HOUR of volume, `LiveEngine._liquidity`'s quantity, the one `max_participation`
+                     is a fraction of;
+      impact         `ImpactModel`'s square-root law, coefficient x sigma_daily x sqrt(|notional| / ADV),
+                     with ADV a DAY of volume (the 720-bar mean x 24) and sigma_daily the 720-bar std
+                     of the open-to-close returns `run_backtest` hands `impact_costs` by default.  The
+                     coefficient is the shipped default, 1.0: an assumption, not a calibration - demo
+                     fills are too small to separate impact from spread (`config/costs.yaml`, `impact`).
+
+    **A full close is not rate-limited, and that was checked before it was written here.**
+    `plan_rebalance` exempts `closing` (target 0 while holding) from the cap whatever
+    `exempt_reductions` says, sizes it to the whole position and never applies `max_order_notional` to
+    it; with `exempt_crossings` on, as the running construction has it, the absolute band cannot hold it
+    back either.  The exit overlay and a symbol leaving the universe both reach the venue that way, and
+    `live flatten` does not go through the planner at all.  So a full close is one market order in one
+    bar: its cost is impact, not time.  `bars_under_cap`, ceil(participation / max_participation), is
+    the other path.  A pure reduction - R8's ladder shrinking every weight - is capped each bar while
+    `exempt_reductions` is off, and the column is how many bars the cap would stretch a reduction of
+    the whole position over.  It is a floor: each capped order is rounded down to the step, so a real
+    walk-down can take a bar more.  Both knobs are read off the record (`construction_full.rebalance`)
+    rather than the config, for `max_weight_of`'s reason.
+
+    The kline archive can lag the loop by a bar or more, so each window ends at the newest archived bar
+    at or before the cycle's, and how far behind that is gets returned rather than hidden.
+
+    It gates nothing, so it must not take the report down with it (`market_beta`'s rule): whatever it
+    raises comes back as the block's `why`, and a symbol whose archive cannot be read is listed with the
+    reason while the others are still priced.
+    """
+    try:
+        return _liquidity_to_close(store, day, root=root, interval=interval)
+    except Exception as exc:
+        return {"enforced": False, "why": f"{type(exc).__name__}: {exc}"}
+
+
+def _liquidity_to_close(store: StateStore, day: str, *, root: str | Path, interval: str) -> dict[str, Any]:
+    cycles = [row for row in _cycles(store) if (_day_of(row) or "") <= day]
+    at = next((i for i in range(len(cycles) - 1, -1, -1) if not cycles[i].get("skip")), None)
+    if at is None:
+        return {"enforced": False, "why": f"no traded cycle on or before {day}"}
+    row = cycles[at]
+    rebalance: Mapping[str, Any] = {}
+    for earlier in reversed(cycles[: at + 1]):
+        full = earlier.get("construction_full")
+        if isinstance(full, Mapping) and isinstance(full.get("rebalance"), Mapping):
+            rebalance = full["rebalance"]
+            break
+    raw_cap, raw_exempt = rebalance.get("max_participation"), rebalance.get("exempt_reductions")
+    cap = float(raw_cap) if isinstance(raw_cap, int | float) else None
+    before: dict[str, float] = {}
+    for entry in [*(row.get("skipped") or []), *(row.get("orders") or [])]:
+        if isinstance(entry.get("current_notional"), int | float):
+            before[str(entry.get("symbol"))] = float(entry["current_notional"])
+    held = dict(before)
+    for order in row.get("orders") or []:
+        try:
+            filled = float(order.get("executed_qty") or 0.0) * float(order.get("price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        symbol = str(order.get("symbol"))
+        held[symbol] = held.get(symbol, 0.0) + (filled if str(order.get("side")) == "BUY" else -filled)
+    # Flat after the cycle: a fill that took the position to zero leaves float dust, not a position.
+    book = {symbol: value for symbol, value in held.items() if abs(value) > 1e-6 * abs(before.get(symbol, 0.0))}
+    step = interval_ms(interval)
+    decision_ms = int(row.get("as_of_ms") or row.get("bar_open_ms") or 0)
+    impact = ImpactModel()
+    klines = KlineStore(root)
+    rows: list[dict[str, Any]] = []
+    unpriced: dict[str, str] = {}
+    for symbol, notional in sorted(book.items()):
+        try:
+            frame = klines.load(symbol, interval, end_ms=decision_ms + step)
+        except FileNotFoundError:
+            unpriced[symbol] = f"no {interval} archive"
+            continue
+        except Exception as exc:  # a half-written parquet raises ArrowInvalid: that symbol's problem only
+            unpriced[symbol] = f"archive unreadable: {type(exc).__name__}: {exc}"
+            continue
+        if frame.empty:
+            unpriced[symbol] = "no archived bar at or before this cycle"
+            continue
+        rows.append(_closing_cost(symbol, notional, frame, cap, impact, bars_per_day=DAY_MS // step))
+    rows.sort(key=lambda entry: (entry["participation"] is None, -(entry["participation"] or 0.0)))
+    priced = [entry for entry in rows if entry["impact_u"] is not None]
+    priced_gross = sum(abs(entry["notional_u"]) for entry in priced)
+    total = sum(entry["impact_u"] for entry in priced)
+    through = min((entry["volume_through_ms"] for entry in rows), default=None)
+    accounted = sum(abs(value) for value in before.values())
+    gross_before = row.get("gross_before")
+    return {
+        "enforced": True,
+        "bar": row.get("bar"),
+        "decision_ms": decision_ms,
+        "equity_u": row.get("equity"),
+        "gross_before_u": gross_before,
+        "accounted_before_u": accounted,
+        # False on a row that names positions without their notional, the shape rows had before
+        # 2026-09-14T19:00Z: the reading covers part of the book, and "0 positions" means "not recorded".
+        "book_complete": (
+            abs(accounted - float(gross_before)) <= 0.01 * float(gross_before)
+            if isinstance(gross_before, int | float)
+            else None
+        ),
+        "positions": len(book),
+        "gross_u": sum(abs(value) for value in book.values()),
+        "max_participation": cap,
+        "exempt_reductions": raw_exempt if isinstance(raw_exempt, bool) else None,
+        "liquidity_window_bars": LIQUIDITY_WINDOW_BARS,
+        "impact_model": {
+            "coefficient": impact.coefficient,
+            "adv_window_bars": impact.adv_window,
+            "vol_window_bars": impact.vol_window,
+        },
+        # None, not 0.0, when no position could be priced: a zero would read as "closing costs nothing".
+        "impact_u": total if priced else None,
+        "impact_bps": 1e4 * total / priced_gross if priced_gross else None,
+        "slowest_bars_under_cap": max(
+            (entry["bars_under_cap"] for entry in rows if entry["bars_under_cap"] is not None), default=None
+        ),
+        "hardest": [entry["symbol"] for entry in rows if entry["participation"] is not None][:3],
+        "volume_through_ms": through,
+        "volume_lag_bars": (decision_ms - through) // step if through is not None else None,
+        "rows": rows,
+        "unpriced": unpriced,
+    }
+
+
+def _closing_cost(
+    symbol: str,
+    notional: float,
+    frame: pd.DataFrame,
+    max_participation: float | None,
+    impact: ImpactModel,
+    *,
+    bars_per_day: int,
+) -> dict[str, Any]:
+    """One position against its own bars, each ruler computed the way its owner computes it.
+
+    The hourly mean is `LiveEngine._liquidity` line for line, fallback included (volume x close where
+    `quote_volume` is missing), and a mean that is not positive is None: the loop applies no cap then.
+    ADV and sigma are `impact_costs`' - its ADV takes whatever bars exist, its sigma needs a quarter of
+    the window - and an unreadable one is None, never the 0.0 the backtest fills it with.
+    """
+    quote = (
+        frame["quote_volume"].astype(float)
+        if "quote_volume" in frame.columns
+        else frame["volume"].astype(float) * frame["close"].astype(float)
+    )
+    hourly = float(quote.tail(LIQUIDITY_WINDOW_BARS).mean())
+    adv = float(quote.tail(impact.adv_window).mean()) * bars_per_day
+    returns = (frame["close"].astype(float) / frame["open"].astype(float) - 1.0).tail(impact.vol_window)
+    sigma = float(returns.std()) * math.sqrt(bars_per_day) if returns.count() >= impact.vol_window // 4 else None
+    size = abs(notional)
+    participation = size / hourly if hourly > 0 else None
+    fraction = impact.coefficient * sigma * math.sqrt(size / adv) if sigma is not None and adv > 0 else None
+    return {
+        "symbol": symbol,
+        "notional_u": notional,
+        "hourly_quote_volume_u": hourly if hourly > 0 else None,
+        "participation": participation,
+        # ceil, with a hair of slack so a reduction of exactly k caps is k bars and not k + 1
+        "bars_under_cap": (
+            max(1, math.ceil(participation / max_participation - 1e-9))
+            if participation is not None and max_participation
+            else None
+        ),
+        "adv_u": adv if adv > 0 else None,
+        "sigma_daily": sigma,
+        "impact_bps": 1e4 * fraction if fraction is not None else None,
+        "impact_u": size * fraction if fraction is not None else None,
+        "volume_through_ms": int(frame["open_time"].iloc[-1]),
+    }
+
+
+def _liquidity_to_close_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """3.9 in the daily report: the book, how a close goes out, the model, then positions hardest first."""
+    if not block.get("enforced"):
+        return {"status": "n/a", "why": block.get("why") or "no reading"}
+    cap, window = block.get("max_participation"), block.get("liquidity_window_bars")
+    if cap is None:
+        reductions = "读不出：没有周期记下 max_participation。"
+    elif cap <= 0:
+        reductions = "循环没有参与率上限，纯减仓也是一根 bar。"
+    elif block.get("exempt_reductions"):
+        reductions = "exempt_reductions 开着，纯减仓也不受限。限速那一列不描述任何平仓路径。"
+    else:
+        reductions = (
+            f"每单不超过近 {window} 根 bar 平均小时成交额的 {100 * cap:g}%。"
+            "限速那一列只对纯减仓成立，不对完全平仓成立。"
+        )
+    model = block.get("impact_model") or {}
+    rows = block.get("rows") or []
+    gross_before = block.get("gross_before_u")
+    partial = block.get("book_complete") is False
+    # What an empty table means depends on whether the row accounted for its book: a flat record, or one
+    # that named its positions without their notional.
+    empty = "读不出：这一行没有按币记下名义额" if partial else "这一行没有记下持仓"
+    lines: dict[str, Any] = {
+        "持仓（本周期成交后）": f"{block['positions']} 个，gross {block['gross_u']:,.2f} U；bar {block.get('bar')}",
+        "按币合计 / gross_before（成交前）": (
+            f"{block['accounted_before_u']:,.2f} / "
+            + (f"{gross_before:,.2f} U" if isinstance(gross_before, int | float) else "n/a")
+        ),
+    }
+    if partial and isinstance(gross_before, int | float):  # `book_complete` is only False beside a number
+        gap = abs(block["accounted_before_u"] - float(gross_before))
+        lines["按币记录不全"] = f"按币合计与 gross_before 差 {gap:,.2f} U，超过 1%。下面只覆盖按币记下的部分。"
+    lines |= {
+        "完全平仓": "一笔市价单，一根 bar 内发完。参与率上限豁免完全平仓。代价在冲击上，不在时间上。",
+        "纯减仓限速": reductions,
+        "冲击模型（平方根律）": (
+            f"c·σ_d·√(名义额/ADV_d)。c={model.get('coefficient')}，"
+            f"ADV 取 {model.get('adv_window_bars')} 根 bar，σ_d 取 {model.get('vol_window_bars')} 根。"
+        ),
+        "c 没有校准": "c 是假设。demo 成交太小，冲击与价差分不开。见 config/costs.yaml 的 impact 段。",
+        "整本书一次完全平仓": (
+            f"冲击 {_fmt_num(block.get('impact_u'))} U，名义加权 {_fmt_num(block.get('impact_bps'))} bps；"
+            f"纯减仓限速下最慢 {block.get('slowest_bars_under_cap') or 'n/a'} 根 bar"
+        ),
+        "最难平的三个（按完全平仓的参与率）": "、".join(
+            f"{entry['symbol']} {entry['participation']:.4%}" for entry in rows if entry["symbol"] in block["hardest"]
+        )
+        or (empty if not block["positions"] else "读不出，见下面各仓"),
+    }
+    for entry in rows:
+        pace = (
+            f"参与率 {entry['participation']:.4%}（小时均量 {entry['hourly_quote_volume_u'] / 1e6:,.2f}M U）；"
+            f"纯减仓 {entry['bars_under_cap'] or 'n/a'} bar"
+            if entry.get("participation") is not None
+            else "参与率读不出（窗口里没有成交额）"
+        )
+        cost = (
+            f"冲击 {entry['impact_bps']:.2f} bps = {entry['impact_u']:.2f} U"
+            f"（σ_d {entry['sigma_daily']:.2%}，ADV {entry['adv_u'] / 1e6:,.1f}M U）"
+            if entry.get("impact_bps") is not None
+            else "冲击读不出（σ_d 的 bar 不够，或没有成交额）"
+        )
+        lines[str(entry["symbol"])] = f"{entry['notional_u']:+,.2f} U；{pace}；{cost}"
+    for symbol, why in (block.get("unpriced") or {}).items():
+        lines[str(symbol)] = f"读不出：{why}"
+    through, lag = block.get("volume_through_ms"), block.get("volume_lag_bars")
+    lines["成交额截至"] = (
+        (empty if not block["positions"] else "没有读到成交额")
+        if through is None
+        else f"归档最后一根 {pd.Timestamp(through, unit='ms', tz='UTC').isoformat()}"
+        + (f"，比决策 bar 早 {lag} 根" if lag else "，就是决策 bar")
+    )
+    return lines
 
 
 BACKTEST_EXITS_PER_WEEK = 562.0 / 49_735.0 * 24.0 * 7.0  # P11: 544 take-profits + 18 stops over 49,735 hourly bars

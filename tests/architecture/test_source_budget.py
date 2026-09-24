@@ -3342,7 +3342,25 @@ CEILING = {
     # 快照上重跑：日报只多一个键、一节，beta 报告两份产物逐字节不变。巡检耗时 +63 至 +107 ms。
     #
     # 留 40 行（13_493 -> 13_533），理由与上面几格逐字相同，不重述。
-    "beidou_live": 13_533,
+    #
+    # 2026-09-25（不编号，同上）。+282 beidou_live，13_493 -> 13_775，抬到 13_815。
+    #
+    # 第二批补缺之一（清点 3.9）：平仓流动性。此前有成交额选池、2% 参与率与容量表，没有持仓级「平掉
+    # 要多久、花多少」的读数。先核实了一件事：循环对完全平仓豁免参与率上限（`rebalancer.py` 的
+    # `closing`），所以完全平仓是一根 bar 的市价单，代价在冲击上，不在时间上；限速只对纯减仓成立。
+    #
+    # 读数（实盘副本，09-24T17:00Z，本周期成交后的 16 个持仓）：整本书一次完全平仓，冲击 0.57 U，
+    # 名义加权 0.44 bps。最难平的 TRUMPUSDT 只占小时成交额的 0.0088%，离 2% 上限约 227 倍。
+    #
+    # 花在哪：`_liquidity_to_close` 90 行，取持仓、叠加本周期成交、读归档；`_liquidity_to_close_lines`
+    # 74 行；`liquidity_to_close` 49 行，其中 docstring 37 行，写豁免怎么核实的、限速那一列为什么只是
+    # 下限；`_closing_cost` 45 行；import、常量与空行 16 行。`reports.py` 挂接 +8。
+    #
+    # 验收：小时均量与 `LiveEngine._liquidity` 逐位相同，冲击与 `impact_costs` 的相对差不超过 2e-14。
+    # 7 处变异各有测试变红。合并方在另一份快照上重跑：日报只多一个键、一节，其余逐字节相同。
+    #
+    # 留 40 行（13_775 -> 13_815），理由与上面几格逐字相同，不重述。
+    "beidou_live": 13_815,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
