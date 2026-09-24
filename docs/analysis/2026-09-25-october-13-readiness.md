@@ -33,6 +33,15 @@ sha256 都是 `09245c34…99d`（附录 A8）。实盘文件只读副本，副�
 - **F2 没动。** 10-13 起那 9 条测试怎么处理，跟着第 2 节选哪个选项走。
 - **「顺带发现」第 2 条实测属实，已修。** 在主 checkout 上单跑那条测试，读到 `XPASS(strict)`，
   记为 FAILED。#143 删掉了那个 xfail 标记，断言一字未改。它只量数据集门，09-19 换指针之后就不挡了。
+- **1.5 节的 9 条复现属实，但它是下界。** 用附录 A5 的同一个插件重跑，同样 9 条红，名单相同。那个插件
+  只改了 `tests.shipped_evidence._today`，只跑三个文件。仓库里另有测试直接读当前日期，其中一条带着
+  更早的到期日。
+- **CI 在 10-03 就会先红一条，比 10-13 早 10 天。** `tests/governance/test_the_single_window_mine_opening_is_returned.py`
+  在 `SINGLE_WINDOW_MINE_OPENING_ENDS`（`2026-10-03T00:00:00+00:00`）之后断言
+  `max_mine_rounds_per_window` 已退回 `STANDING_MINE_ROUNDS`。今天前者是 5，后者是 4
+  （`beidou_governance/policy.py:106`–`:107`、`:139`）。这是有意设的绊线：到点要么退回 4 并升
+  `POLICY_VERSION`，要么宣布 5 常设并挪 `STANDING_MINE_ROUNDS`。两者都是治理裁定，本文不替操作者定。
+  它补进第 6 节的裁定表，记为 #14，最晚 10-02。
 - 本文其余部分保持写成时的样子，行号仍以 `5fe1e6b3` 为准。
 
 ## 1. 10-13 那一刻会发生什么
@@ -721,6 +730,7 @@ size 一族（`xs_size`）：按 30 日成交额排序，做多小、做空大�
 | 11 | flow 与 main 的 probe 复审 | 按 D-019 复审 | 10-02 到 10-03 | 日报标 REVIEW_DUE |
 | 12 | G11、G12 的预登记 | 批，或不批 | 冻结结束后，无期限 | 不跑 |
 | 13 | registry 里 k=0.30 的崩盘窗口注释 | 随 #3 更新 | #3 之后 | 注释继续引旧读数 |
+| 14 | 挖掘窗口的第五轮（`max_mine_rounds_per_window` 5，10-03 到期）——本行由「后续」补入 | 退回 4 并升 `POLICY_VERSION`，或宣布 5 常设 | 10-02 | 10-03T00:00Z 起 `test_the_single_window_mine_opening_is_returned` 红，比 10-13 那 9 条早 10 天 |
 
 #6 与 #7 的数出自 `research power`（附录 A2）与 `governance-gate.stdout.log` 的每日读数。
 
