@@ -3265,7 +3265,28 @@ CEILING = {
     # 读数变的只有 09-08 与 09-23 两天，各有一根这种形状的 bar。
     #
     # 余量本来放得下（还剩 26 行）。这次照「加行就在同一提交抬顶并写理由」抬 +8，余量仍是 26 行。
-    "beidou_live": 11_978,
+    #
+    # 2026-09-25（不编号，同上）。+283 beidou_live，11_952 -> 12_235，抬到 12_275。
+    #
+    # 监控层按外部清单的领域拆开。`reports.py` 原来 3,175 行，日报、周报与 beta 报告的读数全在里面。
+    # 09-23 那批并行合并的冲突，就集中在它和这张表上。现在它只剩五个组装函数，837 行。读数按 09-23
+    # 清点的领域分住七个 `report_*` 模块，共用的读取与格式化放 `report_common`。
+    #
+    # 函数体一个字节没动。每个定义连同紧贴其上的注释块整段切走（`scratchpad/reports_split_by_area.py`）。
+    # 两道验收都在 `scratchpad/reports_split_byte_identity.py`：81 个定义逐字相同；实盘状态快照上
+    # 22 天日报、4 份周报、2 份 beta 报告，81 个产物逐字节相同。
+    #
+    # 花在哪：import 净 +147。`reports.py` 98 行，大半是调用方写死的 56 个名字的再导出（照 M6，不改
+    # 别人的 import 行）；八个新模块各自 82 行；减去原来的 33 行。模块 docstring 净 +78，写每个模块
+    # 答清单的哪一项、`reports.py` 为什么只组装、为什么只再导出契约。模块头部的空行 +36。`__all__`
+    # 与它的注释 +22：mypy 的 strict 模式不认隐式再导出，`live_cmd` 与引擎从这里取的 9 个名字要声明。
+    #
+    # 买到什么：往日报加一个读数，代码落进它所属领域的模块，`reports.py` 只多挂接的几行。各领域只依赖
+    # `report_common`，互不 import。两条都由 `tests/live/test_the_report_layer_kept_its_addresses.py`
+    # 钉住。
+    #
+    # 留 40 行（12_235 -> 12_275），理由与上面几格逐字相同，不重述。
+    "beidou_live": 12_275,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
