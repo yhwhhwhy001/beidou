@@ -57,23 +57,6 @@ research = [
     "matplotlib>=3.8",
 ]
 
-# TypeSafe System One（Jev）的客户端。**故意不进 `[project].dependencies`，也不进
-# `requirements.lock`**：仓库里目前没有任何代码 import 它，而它的传递闭包是 8 个新包——
-# httpx2 / httpcore2 / truststore，pydantic / pydantic-core / annotated-types /
-# typing-inspection，tenacity。其中 httpx2 是与已钉的 `httpx==0.28.1` 并存的第二个
-# HTTP 客户端。理由与 `research` extras 同一条，逐字见 `requirements.lock` 头注的
-# 「不在这里的东西」：把 CI 不需要的包混进锁里，会让安装面无谓地扩大。
-#
-# 2026-09-20 用 `pip install --dry-run -r requirements.lock "typesafe-sdk>=0.7"` 验过：
-# 锁里每一个版本都原样存活（httpx 0.28.1、numpy 2.5.2、pandas 3.0.5、mypy 2.3.1 都没被顶）。
-# 所以拦在锁外面的理由是安装面，不是冲突——这两件事将来会被混为一谈，先写清楚。
-#
-# 等到有代码真的 import 它，再决定升为运行时依赖并重跑闭包、还是单开一份 lock——
-# 那时 numpy/pandas 那一节「决定回测与实盘数值」的说法要不要对它成立，是一个要单独想的问题。
-typesafe = [
-    "typesafe-sdk>=0.7",
-]
-
 [project.scripts]
 beidou = "beidou_cli:main"
 
