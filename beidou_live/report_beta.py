@@ -3,6 +3,8 @@
 Checklist item #6.9 (performance attribution) of
 `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`.  The computation is
 `benchmark.beta_reading`; this module feeds it the archive's closes and renders what it returns.
+Since 2026-09-25 also #6.4's loadings on BTC, size, low volatility and funding beside the market:
+`factor_loadings.factor_reading`, fed and rendered the same way.
 """
 
 from __future__ import annotations
@@ -14,7 +16,9 @@ from typing import Any
 import pandas as pd
 
 from beidou_alpha.report import render_markdown
+from beidou_data.store import interval_ms
 from beidou_live.benchmark import beta_reading
+from beidou_live.factor_loadings import archive_funding, archive_history, factor_reading
 from beidou_live.report_common import _fmt_num, _fmt_pct, _store_closes, json_dumps
 from beidou_live.state import StateStore
 
@@ -200,6 +204,175 @@ def beta_markdown(payload: dict[str, Any]) -> str:
                 # is the size of the error a constant-beta reading makes on this book.
                 "Conditional (exposure x market)",
                 _beta_regression_lines(decomposition.get("conditional") or {}),
+            ),
+        ],
+    )
+
+
+#: Display names, in print order.  The three sorts also say which way they point.
+FACTOR_LABELS = {"market": "市场", "btc": "BTC", "size": "size", "low_vol": "低波", "funding": "资金费"}
+FACTOR_SIGNS = {"size": "成交额大减小", "low_vol": "低减高", "funding": "高减低"}
+#: The textbook rule of thumb for a variance inflation factor.  It labels a line; it pages nothing.
+HIGH_VIF = 5.0
+
+
+def factor_loadings(
+    store: StateStore, *, root: str | Path = ".beidou/data", interval: str = "1h", strategy: str = "tsmom"
+) -> dict[str, Any]:
+    """#6.4 / #6.9 in the daily report: `report beta`'s factor page, taken by the same `factor_reading`.
+
+    Reported, never judged, for `market_beta`'s reason: no loading had a threshold registered before
+    the book went live.  The catch is broad for the same reason too, and the failure stays visible -
+    the block carries its reason, and `report beta` on the same state raises it whole.
+    """
+    try:
+        return factor_reading(
+            store.read_jsonl(store.cycles_path),
+            store.read_jsonl(store.attribution_path),
+            archive_history(root, interval),
+            archive_funding(root),
+            strategy,
+            step_ms=interval_ms(interval),
+        )
+    except Exception as exc:
+        return {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _factor_fit_lines(fit: Mapping[str, Any]) -> dict[str, Any]:
+    """One multi-factor regression's readout: a loading and its NW t per factor, then what is left."""
+    loadings = fit.get("loadings") or {}
+    lines: dict[str, Any] = {
+        (f"{label}（{FACTOR_SIGNS[name]}）" if name in FACTOR_SIGNS else label): (
+            f"{_fmt_num(loadings[name].get('loading'))}（t {_fmt_num(loadings[name].get('t'))}）"
+        )
+        for name, label in FACTOR_LABELS.items()
+        if name in loadings
+    }
+    clamped = fit.get("nw_covers_intended_horizon") is False
+    if fit.get("alpha_why") is not None:
+        lines["alpha"] = f"不谈：{fit['alpha_why']}"
+    else:
+        lines["alpha"] = (
+            f"{_fmt_num(fit.get('alpha_bps_per_hour'))} bps/h（t {_fmt_num(fit.get('alpha_t'))}），"
+            f"只算信号有空头的 {fit.get('alpha_bars')} 根 bar；"
+            + (
+                f"年化 {_fmt_pct(fit['alpha_annualised'])}"
+                if fit.get("alpha_annualised") is not None
+                else ("不年化（NW 带宽被夹住）" if clamped else "不年化（t 在 ±2 以内）")
+            )
+        )
+    return {
+        **lines,
+        "R^2": _fmt_num(fit.get("r2")),
+        "残差波动（年化）": _fmt_pct(fit.get("residual_vol_annualised")),
+        "因子部分 / 残差部分": f"{_fmt_pct(fit.get('factor_part'))} / {_fmt_pct(fit.get('residual_part'))}",
+        "NW 带宽": f"{fit.get('nw_lags')} bar"
+        + ("（被夹住：样本不足 4 × 48，够不到两天自相关）" if clamped else "（= NW_LAGS，同 D-045）"),
+    }
+
+
+def _collinearity_line(fit: Mapping[str, Any]) -> str:
+    """The pair that moves most together, and the factors whose loadings it makes unstable."""
+    collinear = fit.get("collinearity") or {}
+    vif = collinear.get("vif") or {}
+    pair = "~".join(FACTOR_LABELS.get(name, name) for name in collinear.get("max_pair") or [])
+    high = "、".join(label for name, label in FACTOR_LABELS.items() if vif.get(name, 0.0) >= HIGH_VIF)
+    return f"相关最高的一对 {pair or 'n/a'}：{_fmt_num(collinear.get('max_abs_correlation'))}。" + (
+        f"{high} 的 VIF ≥ {HIGH_VIF:g}：载荷不稳、t 偏小，要合起来读" if high else f"VIF 都低于 {HIGH_VIF:g}"
+    )
+
+
+def _factor_loadings_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    """The daily report's view of `factor_loadings`: the exposure-conditioned regression, and no verdict.
+
+    Short on purpose, as `_market_beta_lines` is.  The unconditioned regression, every VIF and the
+    sorts' coverage are on `beidou report beta`'s page, and its numbers are these numbers.
+    """
+    regression = block.get("regression") or {}
+    if not regression.get("measured"):
+        return {"measured": "no", "reason": regression.get("reason") or block.get("reason") or "not computed"}
+    fit = regression.get("conditional") or {}
+    only_market = (regression.get("market_only") or {}).get("r2")
+    return {
+        "回归样本": (
+            f"{regression.get('bars')} 根 bar（D-032 剔除 {regression.get('excluded_bars')}，"
+            f"因子缺值剔除 {regression.get('short_of_factors_bars')}）"
+        ),
+        "全多头的 bar": f"{regression.get('all_long_bars')}/{regression.get('bars')}：单列截距，不算进 alpha",
+        **_factor_fit_lines(fit),
+        "R^2": f"{_fmt_num(fit.get('r2'))}；同一样本只用市场 {_fmt_num(only_market)}",
+        "共线性": _collinearity_line(fit),
+        "conditional（敞口 × 因子）": "市场与 BTC 乘净敞口，三个多空因子乘毛敞口。简化：假设权重在三分位间的形状不变",
+        "读法": "只报告不告警：载荷没有预登记的阈值。t 按 Newey-West，带宽规则同 D-045。完整一页见 `beidou report beta`",
+    }
+
+
+def factor_markdown(payload: Mapping[str, Any]) -> str:
+    """`beidou report beta`'s second page: the multi-factor loadings, both regressions and their inputs."""
+    regression = payload.get("regression") or {}
+    head: list[tuple[str, Any]] = [("Window", payload.get("window") or {})]
+    if not regression.get("measured"):
+        head.append(("无法分解", {"reason": regression.get("reason") or payload.get("reason") or "unknown"}))
+        return render_markdown("Factor loadings (#6.4 / #6.9)", head)
+    conditional, constant = regression.get("conditional") or {}, regression.get("constant") or {}
+    return render_markdown(
+        "Factor loadings (#6.4 / #6.9)",
+        [
+            *head,
+            (
+                # First, for `beta_markdown`'s reason: it bounds what the alpha lines can mean.
+                "Signal state",
+                {
+                    "全多头的 bar（回归样本内）": f"{regression.get('all_long_bars')}/{regression.get('bars')}",
+                    "信号取值": json_dumps((payload.get("signal") or {}).get("values") or {}),
+                    "读法": "全多头的 bar 另给截距。alpha 只在信号有空头的 bar 上估",
+                },
+            ),
+            (
+                "Factors (point-in-time)",
+                {
+                    "市场": "时点等权基准，与 D-045 同一个篮子",
+                    "BTC": "BTCUSDT",
+                    "size": "按 30 天成交额排名，前三分之一减后三分之一",
+                    "低波": "按 30 天实现波动排名，低三分之一减高三分之一",
+                    "资金费": "按 7 天累计资金费率排名，高三分之一减低三分之一",
+                    "候选": "每根 bar 当时的 universe。排名只读该 bar 收盘前的数据",
+                    "收益": "价格收益，t → t+1。多空两腿各自等权",
+                },
+            ),
+            ("Conditional (exposure x factors)", _factor_fit_lines(conditional)),
+            ("Constant", _factor_fit_lines(constant)),
+            (
+                "Collinearity",
+                {
+                    "conditional": _collinearity_line(conditional),
+                    "constant": _collinearity_line(constant),
+                    **{
+                        f"VIF（{kind}）": "；".join(
+                            f"{label} {_fmt_num(vif[name])}" for name, label in FACTOR_LABELS.items() if name in vif
+                        )
+                        for kind, vif in (
+                            ("conditional", (conditional.get("collinearity") or {}).get("vif") or {}),
+                            ("constant", (constant.get("collinearity") or {}).get("vif") or {}),
+                        )
+                    },
+                },
+            ),
+            (
+                "Sample and sorts",
+                {
+                    "回归样本": regression.get("bars"),
+                    "D-032 剔除": regression.get("excluded_bars"),
+                    "因子缺值剔除": f"{regression.get('short_of_factors_bars')}；按因子 "
+                    + json_dumps(regression.get("factor_missing_bars") or {}),
+                    **{
+                        FACTOR_LABELS[name]: (
+                            f"每根 bar 排名 {_fmt_num(row.get('ranked_per_bar'))} 个币，每腿 "
+                            f"{_fmt_num(row.get('names_per_leg'))} 个；缺价跳过 {row.get('leg_names_without_price')}"
+                        )
+                        for name, row in (payload.get("sorts") or {}).items()
+                    },
+                },
             ),
         ],
     )

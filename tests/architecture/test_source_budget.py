@@ -3286,7 +3286,63 @@ CEILING = {
     # 钉住。
     #
     # 留 40 行（12_235 -> 12_275），理由与上面几格逐字相同，不重述。
-    "beidou_live": 12_275,
+    #
+    # 2026-09-25（不编号，同上）。+266 beidou_live，12_235 -> 12_501，抬到 12_541。
+    #
+    # 第二批补缺之一（清点 3.4 / 8.9）：日报加「持仓间相关」。此前只有 sleeve 之间的 M-014，持仓之间
+    # 没有读数。实盘 09-24T17:00Z 读到：17 个多头、0 个空头；7 天加权平均两两相关 0.53；effective
+    # number of bets 2.10 个（Meucci 2009）。17 个名字实际约等于 2 个 bet，第一主成分占方差 83%。
+    #
+    # 花在哪：`report_risk.py` 新增 250 行，其中 docstring 88 行，记持仓为什么要从订单与 skip 行
+    # 重建（行里没有持仓字段）、`gross_before` 对账、`ex_ante` 为什么按构造等于 target；代码 144 行；
+    # import 与空行 +6。`reports.py` 挂接 +10。
+    #
+    # 复核：同一份状态快照上独立重算，7 天与 30 天的加权平均相关、effective bets、ETH 对 BTC 的相关，
+    # 与读数逐位相同到小数点后 10 位。日报 json 只多一个键，md 只多一节，其余 37 个产物逐字节相同。
+    # 巡检耗时 +36 ms。
+    #
+    # 留 40 行（12_501 -> 12_541），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+386 beidou_live，12_501 -> 12_887，抬到 12_927。
+    #
+    # 第二批补缺之一（清点 10.9 / 10.10）：日报加逐单 TCA。此前事前成本是平的 7 bps，逐单的事前估计
+    # 不产出也不记录；把滑点拆开只做过一次。事前估计离线重建：成本模型加冲击项，只用决策 bar 及以前的
+    # 数据，不改循环，也就不用为它重启。事后以 decision_close 为基准，在下一根开盘价处拆成跳空与成交
+    # 两段，手续费另列。
+    #
+    # 读数（实盘副本，09-24，M-Q08 的 30 天窗口）：125 笔，实际 +5.87 ± 1.81 bps，与 M-Q08 的全书、
+    # 主书两个读数逐位相同。跳空 +0.01，成交 +5.93：滑点全在成交段。事前估计 +2.76（2.00 加冲击 0.76），
+    # 预测减实际 −3.17 ± 1.79 bps。入账手续费 4.24 bps，模型按 5.00 平收。
+    #
+    # 花在哪：`report_execution.py` 净 +381。`per_order_tca` 52 行，其中 docstring 39 行，写清为什么
+    # 离线重建、价差为什么不拆（demo 盘口不是主网的；bookTicker 归档止于 2024-04）；`_tca` 120 行；
+    # `_against_the_archive` 44 行；`tca_lines` 57 行；8 个小函数 64 行；其余是常量、注释、空行与 import。
+    # `reports.py` 挂接 +5。
+    #
+    # 留 40 行（12_887 -> 12_927），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+606 beidou_live，12_887 -> 13_493，抬到 13_533。
+    #
+    # 第二批补缺之一（清点 6.4 / 6.9）：多因子载荷。此前书对 BTC、size、低波、资金费的载荷没人算，
+    # D-045 的两个回归各只有一个回归元。因子只用时点信息构造：候选取当周期的 universe，排序只读该 bar
+    # 收盘前已收盘的 K 线与已结算的资金费，收益取 t -> t+1。
+    #
+    # 读数（实盘副本，09-07T14:00Z 至 09-24T17:00Z，397 根 bar）：市场 0.92（t 14.8），BTC −0.02，
+    # size 0.09（t 3.8），低波 0.15（t 5.1），资金费 0.00。R² 0.92，只用市场是 0.79。信号有空头的
+    # 194 根 bar 上 alpha 1.87 bps/h，t 1.51，不显著。size 与低波相关 0.81，市场与低波的 VIF 都在 5 以上。
+    #
+    # 花在哪：新模块 `factor_loadings.py` 395 行，其中 docstring 77 行、代码 286 行（`factor_reading`
+    # 103、`_fit` 68、`sort_keys` 60、`factor_returns` 44）。`report_beta.py` +173：`report beta` 的因子页
+    # 69、拟合的 lines 31、日报 lines 23、日报包装 20、共线性一行 9。`benchmark.py` +29：`nw_covariance`
+    # 与 `window_prices` 从 D-045 抽出来共用，不复制；`series_from_cycles` 多返回 `gross`。`reports.py`
+    # 挂接 +9。
+    #
+    # 验收：前视测试打乱 t 之后的数据，比 t 时刻的排名逐位相同，另带一条植入一根前视的阴性对照。只用
+    # 市场一个回归元时，与 D-045 的 conditional beta 逐位相同（0.6830913472622752）。合并方在另一份
+    # 快照上重跑：日报只多一个键、一节，beta 报告两份产物逐字节不变。巡检耗时 +63 至 +107 ms。
+    #
+    # 留 40 行（13_493 -> 13_533），理由与上面几格逐字相同，不重述。
+    "beidou_live": 13_533,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3589,7 +3645,16 @@ CEILING = {
     # `LivePool.select` 本来就把上一版池子留在候选里，这里补上同一条。成员表原地写，每小时巡检可能读到
     # 半张表；默认 MS 出的月表，巡检自己判「不是日表」。测试见 `tests/cli/test_data_sync_keeps_the_pool.py` 与
     # `tests/cli/test_pool_history_writes_a_daily_table_atomically.py`。
-    "beidou_cli": 7_841,
+    #
+    # 2026-09-25（不编号，同上）。+16 beidou_cli，7_841 -> 7_857，抬到 7_897。
+    #
+    # 多因子载荷（清点 6.4 / 6.9）的第二个读者。`report beta` 在 D-045 那一页之后印因子页，与日报的
+    # `factor_loadings` 块是同一次调用；`--out` 另写 `factors-*.md/json`，`beta-*.json` 仍与日报的
+    # `beta` 块逐位相同。花在哪：调用与渲染 10 行，写文件改成一个两项的循环净 +2，import 4 行。
+    #
+    # 留 40 行（7_857 -> 7_897）。这一格此前按实测抬到齐平；零余量让下一个诚实的改动先交税，理由与
+    # `beidou_live` 那几格逐字相同，不重述。
+    "beidou_cli": 7_897,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

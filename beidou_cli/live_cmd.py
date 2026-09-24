@@ -26,7 +26,7 @@ from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, 
 from beidou_cli import live, report
 from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
-from beidou_data.store import MetricsStore
+from beidou_data.store import MetricsStore, interval_ms
 from beidou_governance.policy import policy_digest
 from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
 from beidou_live.benchmark import beta_reading
@@ -54,11 +54,13 @@ from beidou_live.engine import (
     release_kill_switches,
 )
 from beidou_live.execution_fidelity import ReplayInputs
+from beidou_live.factor_loadings import archive_funding, archive_history, factor_reading
 from beidou_live.health import STUCK_IN_ERROR_STREAK, cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
 from beidou_live.probe import probes_from_registry
+from beidou_live.report_beta import factor_markdown
 from beidou_live.reports import (
     PREREGISTRATION_EFFECTIVE_FROM,
     _store_closes,
@@ -1059,15 +1061,29 @@ def report_beta(profile: str, paper: bool, strategy: str, data_root: str, out: s
         raise click.ClickException(str(data["reason"]))
     markdown = beta_markdown(data)
     click.echo(markdown)
+    # #6.4 / #6.9's second page, the daily report's `factor_loadings` block by the same call.  Its own
+    # files, so `beta-*.json` stays the daily `beta` block to the bit.
+    factors = factor_reading(
+        store.read_jsonl(store.cycles_path),
+        store.read_jsonl(store.attribution_path),
+        archive_history(data_root, _interval(payload)),
+        archive_funding(data_root),
+        strategy,
+        step_ms=interval_ms(_interval(payload)),
+    )
+    factor_page = factor_markdown(factors)
+    click.echo(factor_page)
     if out:
         directory = Path(out)
         directory.mkdir(parents=True, exist_ok=True)
         today = datetime.now(UTC).strftime("%Y-%m-%d")
-        (directory / f"beta-{today}.md").write_text(markdown, encoding="utf-8")
-        (directory / f"beta-{today}.json").write_text(
-            json.dumps(data, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
-        )
+        for name, page, body in (("beta", markdown, data), ("factors", factor_page, factors)):
+            (directory / f"{name}-{today}.md").write_text(page, encoding="utf-8")
+            (directory / f"{name}-{today}.json").write_text(
+                json.dumps(body, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
+            )
         click.echo(f"已写入 {directory / f'beta-{today}.md'}")
+        click.echo(f"已写入 {directory / f'factors-{today}.md'}")
 
 
 __all__ = [
