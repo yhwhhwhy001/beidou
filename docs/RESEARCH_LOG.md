@@ -14056,58 +14056,6 @@ registry 继续引用一份「没做过选择」的证据。两边的代价第�
 
 按预登记第 5 节:不申诉门,不换判据,不回来加格子。16 笔已花,结论已记,这条线到此为止。
 
-## 2026-09-19 · 重启 #55：把 typesafe-sdk 装进实盘 venv 后的一次主动重启
-
-**谁**：本会话，主动，操作者要求。不是崩溃，不是别的会话。
-
-**为什么**：PR #86 把 `typesafe-sdk` 声明为 optional extra 之后，操作者要求装进主 checkout 的
-`.venv`——也就是实盘循环正在用的那个——然后重启，让循环加载装好的环境。
-
-**装了什么**：`pip install -c requirements.lock "typesafe-sdk>=0.7"`。用 `-c` 是为了让锁里的版本
-在机械上不可能被顶，而不是靠事后检查。实际新增 4 个包：`typesafe-sdk 0.7.0`、`httpx2 2.13.0`、
-`httpcore2 2.13.0`、`truststore 0.10.4`。`pydantic` / `pydantic-core` / `annotated-types` /
-`tenacity` / `typing-inspection` 那个 venv 里本来就有，所以闭包是 8 个但增量只有 4 个。
-`pip freeze` 前后 79 → 83 个包，**没有一个已有包被改动或降级**（`comm -23` 输出为空）。
-`numpy 2.5.2` / `pandas 3.0.5` / `httpx 0.28.1` / `pyarrow 25.0.1` / `mypy 2.3.1` / `pytest 9.1.1`
-逐个核过，与 `requirements.lock` 一致。
-
-**窗口**：kickstart 于 **17:49:09Z**，整点后 49 分，安全窗口（5–50 分）之内。
-
-**前置**：两个构造测试
-`tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py` +
-`test_construction_identity.py`，**15 passed in 0.24s**。构造未变，所以这是重启，不是构造变更。
-
-**可观测事实**：
-
-| | 重启前 | 重启后 |
-| --- | --- | --- |
-| PID | 22743 | **30351** |
-| 进程启动 | 2026-09-19T00:09:45Z | **2026-09-19T17:49:39Z** |
-| `state.restarts` | 54 | **55** |
-| `state.restarted_at` | 2026-09-18T16:09:45Z | **2026-09-19T17:49:40Z** |
-
-**没有吃掉任何一根 bar 的退出检查。** 这是从 `cycles.jsonl` 读出来的，不是推断：
-
-| `at` | `bar` | `phase` | |
-| --- | --- | --- | --- |
-| `2026-09-19T17:00:27Z` | `16:00` | （完整周期） | 旧进程，收盘后 27s |
-| `2026-09-19T17:49:46Z` | `16:00` | `SKIPPED` | 新进程 `--immediate`；`late_seconds 2986.607`、`missed_rebalances 0`、`orders []` |
-
-下一根 bar（`17:00`，18:00Z 收盘）时新进程已在位。`live.stderr.log` 对应那条
-`restart was 2986.6s after the bar close (window 86.2s); reconciled but did not rebalance`
-正是落在周期之间该有的样子，与 #53（460.4s）、#54（592.6s）同形态。无 ERROR。
-
-**一并换掉的代码**：比旧进程启动时刻（2026-09-19T00:09:45Z）更新的源文件有 6 个——
-`beidou_cli/live_cmd.py`、`beidou_live/reports.py`、`beidou_live/benchmark.py`、
-`beidou_alpha/registry.py`、`beidou_alpha/validation/metrics.py`、
-`beidou_alpha/validation/multiple_testing.py`。所以这次重启不只是让 SDK 可用，**也让循环开始跑
-这 6 个文件的当前版本**。这是比较 mtime 与进程启动时刻得到的，不是按时间相关性归因；
-两个构造测试绿，说明其中不含构造变更。
-
-**没做的事**：没有任何代码 import `typesafe-sdk`。它此刻只是装在环境里，实盘路径一行未动。
-`TYPESAFE_API_KEY` 加在 `~/.zshrc` 第 57 行，而 `deploy/run_live.sh:17` 只 eval
-`^export BEIDOU_[A-Z0-9_]+=`——没有那个前缀，所以它不在循环的环境里，这是选的不是漏的。
-
 ## 2026-09-20 · F4 的读数在一段下跌里复核：两端对称，回撤幅度就是市场 × 敞口
 
 09-19 的盘点末尾留了一句：那份「市场解释了全部收益」的读数是在一次单边上涨里拿到的，
