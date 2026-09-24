@@ -70,7 +70,7 @@ TAMPERED = "TAMPERED"  # 参数与上板时对不上，这一条作废
 #: 继续变长。所以出口和入口一起写死，两个方向都写：过门要走哪四步，没过门要退役。
 BOARD_PASS_CONTRACT = (
     "过了按今天板大小算的门。**这不是裁定**，它买到的是「一份新预登记的资格」，四步缺一不可：\n"
-    "(1) 新预登记按 docs/PREREGISTRATION.md 八项写，假设必须是**前向的**"
+    "(1) 新预登记按 docs/PREREGISTRATION.md 九项写，假设必须是**前向的**"
     "（「这个板位自 entered_at 起交付了 X」），不得回头再搜历史网格；\n"
     "(2) 功效读数（模板第 5 项）用**板自己的 N** 与 `board_threshold`，不是 validate 的桶；\n"
     "(3) 申请的是 **probe 位**（`Policy.max_concurrent_probes = 2`），不是主书。probe 要 registry 里"

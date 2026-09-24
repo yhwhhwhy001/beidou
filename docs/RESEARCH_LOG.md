@@ -15869,3 +15869,20 @@ rebalance`，与 #53–#55 同形态。`missed_rebalances` 是 1 而不是 0，�
   ERROR 行进 `lost`，重启后的 SKIPPED 行又把它加进 `accounted`，于是 `failed_bars` 从 1 变成 0。
 - 漏掉的次数没错，错在归因：失败发生在重启前 40 分钟，重启只是给同一根 bar 补了一条跳过记录。
   按现在的写法，任何一次失败之后的重启，都会把失败读成重启、把告警提前撤掉。
+
+## 2026-09-25 · 预登记模板加第九项：实盘失效方式
+
+操作者 09-25 在会话里选定。
+
+- **来源**：X 账号 @TechElyra 2026-09-19 发过一条 thread，另有一份整理稿。这一项取自整理稿的第二条使用纪律。
+  09-23 的清点把它编为 D.1，判「已有」。同一行记了缺口：预登记模板里没有这一项
+  （`docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`）。整理稿不在仓库里。
+- **改了四处**：
+  - `docs/PREREGISTRATION.md`：加第 9 项；「必写的八项」与「按上面八项」改成九项。
+  - `beidou_alpha/validation/forward_board.py`：`BOARD_PASS_CONTRACT` 里的「八项」改成「九项」。等长替换，不加行。
+  - `tests/live/test_the_preregistration_template_keeps_its_items.py`：`REQUIRED_ITEMS` 加第 9 项；
+    第 8 项的正文检查改成止于下一项的标题。
+  - `docs/GLOSSARY.md`：`实盘失效方式`写中文。
+- **适用范围**：2026-09-25 起新写的预登记。之前的不回填。
+- **不强制**：`research validate` 不读模板，测试只防有人删掉这一项。做成拒跑要改 CLI，而 `beidou_cli` 的
+  source budget 今天是零 headroom（7,841 / 7,841）。这次不做。
