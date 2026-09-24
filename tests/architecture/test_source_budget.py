@@ -3302,7 +3302,25 @@ CEILING = {
     # 巡检耗时 +36 ms。
     #
     # 留 40 行（12_501 -> 12_541），理由与上面几格逐字相同，不重述。
-    "beidou_live": 12_541,
+    #
+    # 2026-09-25（不编号，同上）。+386 beidou_live，12_501 -> 12_887，抬到 12_927。
+    #
+    # 第二批补缺之一（清点 10.9 / 10.10）：日报加逐单 TCA。此前事前成本是平的 7 bps，逐单的事前估计
+    # 不产出也不记录；把滑点拆开只做过一次。事前估计离线重建：成本模型加冲击项，只用决策 bar 及以前的
+    # 数据，不改循环，也就不用为它重启。事后以 decision_close 为基准，在下一根开盘价处拆成跳空与成交
+    # 两段，手续费另列。
+    #
+    # 读数（实盘副本，09-24，M-Q08 的 30 天窗口）：125 笔，实际 +5.87 ± 1.81 bps，与 M-Q08 的全书、
+    # 主书两个读数逐位相同。跳空 +0.01，成交 +5.93：滑点全在成交段。事前估计 +2.76（2.00 加冲击 0.76），
+    # 预测减实际 −3.17 ± 1.79 bps。入账手续费 4.24 bps，模型按 5.00 平收。
+    #
+    # 花在哪：`report_execution.py` 净 +381。`per_order_tca` 52 行，其中 docstring 39 行，写清为什么
+    # 离线重建、价差为什么不拆（demo 盘口不是主网的；bookTicker 归档止于 2024-04）；`_tca` 120 行；
+    # `_against_the_archive` 44 行；`tca_lines` 57 行；8 个小函数 64 行；其余是常量、注释、空行与 import。
+    # `reports.py` 挂接 +5。
+    #
+    # 留 40 行（12_887 -> 12_927），理由与上面几格逐字相同，不重述。
+    "beidou_live": 12_927,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
