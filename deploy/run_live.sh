@@ -57,4 +57,11 @@ fi
 # Exit code 0 (clean stop, e.g. --cycles reached) is not relaunched; any failure is, after ThrottleInterval.
 # --armed is what makes a real-order run explicit (DL-L1).  This launcher is the only caller that
 # should carry it; a loop started by hand in a worktree has to type it, which is the point.
-exec "$REPO/.venv/bin/beidou" live run --profile config/live.demo.yaml --immediate --armed "${BRIDGE[@]}" "$@"
+#
+# `${BRIDGE[@]+"${BRIDGE[@]}"}`, not `"${BRIDGE[@]}"` (2026-09-25).  launchd runs this with /bin/bash,
+# which on macOS is 3.2.57, and before bash 4.4 expanding an EMPTY array under `set -u` is an
+# "unbound variable" error.  So the day the bridge expired and BRIDGE stayed empty, this line would
+# have exited 1 before `beidou` ever ran - the strict evidence gate above would never have been
+# reached, and every relaunch would have died the same way.  CI's bash is 5.x and cannot see it:
+# tests/cli/test_the_bridge_expiry_survives_the_bash_launchd_runs.py checks the expansion by text.
+exec "$REPO/.venv/bin/beidou" live run --profile config/live.demo.yaml --immediate --armed ${BRIDGE[@]+"${BRIDGE[@]}"} "$@"

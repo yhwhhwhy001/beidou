@@ -33,6 +33,7 @@
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
 | beta | 贝塔 | `rolling_beta`、`beidou report beta` |
 | VaR、ES | 在险价值、预期损失 | `BACKTEST_DAILY_VAR`、`BACKTEST_DAILY_ES`、`tail_readings`（2026-09-23 起） |
+| effective number of bets、effective bets | 有效押注数、有效赌注数 | `report_risk.effective_bets`（2026-09-25 起） |
 | cutoff | 截断点 | `_shuffle_future` 的 `cutoff` |
 | bar sanity | 数值合理性检查、价格合理性检查 | `beidou_live/bar_sanity.py`、`cycles.jsonl` 的 `bar_sanity` |
 | frozen bar | 冻结 bar（与「构造冻结」撞词）、死 bar | `bar_sanity` 的 `frozen` |
@@ -44,6 +45,9 @@
 ## 写中文
 
 这些词有现成的中文说法，不要改成英文：回撤、最大回撤、夏普、杠杆、敞口、毛敞口、净敞口、再平衡、再平衡带、止盈、止损、移动止损、样本外、样本内、置信区间、风险预算、风险预算阶梯、换手、滑点、成交、权益、波动率、逆波动率定价、基准、三分位、前视、逐位、阴性对照、跳变、重新计价、保本成本倍数。
+
+执行成本这一族也写中文：跳空、价差、冲击、参与率、手续费（2026-09-25，日报的 per-order TCA 一节）。
+`TCA` 写英文，它在代码里是 `per_order_tca`。
 
 `载荷`（因子载荷）、`低波`、`共线性`写中文，出处是 `beidou_live/factor_loadings.py`（2026-09-25）。
 旧文里「载荷」还指 digest 的 payload，那是另一个意思，旧文不改。因子名 `size` 写英文：它按 30 天
