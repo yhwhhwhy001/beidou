@@ -41,6 +41,37 @@ beta 报告的读数全在里面，09-23 那批并行合并的冲突也集中在
 `tests/live/test_the_report_layer_kept_its_addresses.py` 钉住。拆分只搬代码：81 个定义逐字相同，实盘状态
 快照上 81 个报告产物逐字节相同（`scratchpad/reports_split_byte_identity.py`）。
 
+2026-09-25 起，研究侧有一个 feature store（外部清单 #9.6）：`beidou_cli/research_feature_store.py`。它按内容
+寻址、读穿透，缓存的单元是一个 signal 的分数帧，默认关。
+
+**为什么在 signal 这一层**，是先量后定的（`scratchpad/feature_store_where_research_time_goes_20260925.py`）。
+在时点面板上跑一次 validate 形状的运行：tsmom 默认网格 16 格加 flow sleeve，共 17 次评估。
+`beidou_alpha.features` 的原语只占约 5%，signal 层约 13%。大头是依赖权重的递推：`ewma_portfolio_vol` 约
+38%，exit overlay 约 20%。它们离了权重就算不出来，不是特征。一个原语 10–110 ms，从盘上核验着读一帧约
+30 ms，缓存原语几乎省不下什么。一次 signal 计算要 0.3–33 s，chanlun 最贵。
+
+**实盘碰不到它。** 研究层用子类 `StoredScoresModel` 覆盖 `AlphaModel.strategy_scores`，实盘执行的文件一个
+没改。`beidou_live` 按 import 规则不能 import `beidou_cli`。实盘的建模入口 `composition.build_model` 也不经过
+`with_feature_store`。跑实盘的 `beidou` 进程会 import 这个模块，因为 `beidou_cli/__init__.py` 注册全部命令组，
+但 import 只定义名字。研究侧设 `BEIDOU_FEATURE_STORE` 才打开：`1` 指 `<checkout>/.beidou/features`，其它非空
+值是目录，不设、空或 `0` 就是关。先例是 `BEIDOU_TRIALS_LEDGER`：打开时命令会在 stderr 说一句，不静默。
+
+**键与失效。** 键覆盖面板每个字段的值、索引、列、block 结构、内存序，以及哪些字段共用一个索引对象。键
+还覆盖 `beidou_alpha` 的全部源码、这个模块本身、解释器与库的版本、signal id 与参数。代码或数据改一个字节，
+旧条目就再也读不到。进程加载之后源码被改过，store 在这个进程里整个停用，照常现算。
+
+**逐位，而且连布局一起。** 命中返回的帧，block 结构与内存序都与现算的相同。实测过只保证值不够：同一组
+权重换成另一种内存序，`ewma_portfolio_vol` 在 50,225 根里有 6,467 根末位不同。写入前先读回核验，读不回原样
+的帧不落盘。这用到 pandas 的私有 block 结构；它哪天变了，store 退回现算并在 stderr 说一句，不会读出错数。
+
+**磁盘与清理。** 时点面板上一个条目约 86 MB。默认上限 8 GiB，超了按最近最少使用淘汰到八成。store 只删
+自己写的文件名，过期一小时的临时文件也清掉。整个目录随时可以删，里面没有算不回来的东西。坏条目当未命中，
+重算后原位重写。
+
+冷热对比见 `scratchpad/feature_store_cold_warm_20260925.py`，176 项逐位比对全部相同。validate 形状的那 17 次
+评估，冷的一轮 store 自己多花约 2.2 s，写盘 1.46 GB；热的一轮 evaluate 从 70.0 s 降到 55.9 s，整轮少约 14%。
+meanrev 加 chanlun 各一次，热的一轮 evaluate 从 43.3 s 降到 6.8 s。只改组合参数的扫描，冷的一轮就开始命中。
+
 2026-09-16 操作者裁定**撤出三条数据源**：`beidou_data` 的 `index_price.py`(307) / `macro.py`(844) / `onchain.py`(606)，连同 `beidou data index|macro|onchain` 三个命令与五个测试文件，共 1,757 行源码 + 2,092 行测试。它们 2026-09-10 落地，**建成了、也一直可达**，但没有任何读取方：`research_cmd._load` 只 join `metrics` 与 `spot`，`beidou_alpha` 没有任何叶子或信号读它们的列，`deploy/run_data.sh` 从落地当天起就把三者排除在日程外并写明了理由，`.beidou/data/` 里从来没有过它们的 store。
 
 **这件事对本文件的意义不是少了三行，而是一类缺陷没有仪器**：`test_every_module_is_reachable_from_an_entry_point` 问的是「每个模块能不能被跑到」，三者都能，所以它一路全绿；没有任何东西问过「有没有东西真的在跑它」。唯一判断对了的是 `run_data.sh` 里的一段注释，而注释不是任何守卫会去读的东西。撤出前后五条命令的输出**逐字节相同**（`governance reopen|replay|next`、`report weekly`、`live run --dry-run --cycles 0`），这也是它们确实没被读过的最后一道证明。要拉回来：`git show 71863e9e`。

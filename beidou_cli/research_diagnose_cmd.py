@@ -10,7 +10,6 @@ import click
 import numpy as np
 
 from beidou_alpha.backtest import CostModel, run_backtest
-from beidou_alpha.signals import get_signal
 from beidou_alpha.signals.base import scores_to_targets
 from beidou_alpha.validation.labels import forward_returns
 from beidou_alpha.validation.metrics import (
@@ -20,6 +19,7 @@ from beidou_alpha.validation.metrics import (
     time_series_ic,
 )
 from beidou_cli import research
+from beidou_cli.research_feature_store import feature_scores
 from beidou_cli.research_options import _common_options
 
 # The panel layer now lives in `beidou_cli/research_panel.py` (M6 step 1) and is re-exported here.
@@ -81,7 +81,7 @@ def research_diagnose(
     membership = _membership(root, universe_mode, panel, min_tenure)
     if membership is not None:
         eligible &= membership
-    scores = get_signal(strategy).compute(panel, entry.params).where(eligible)
+    scores = feature_scores(strategy, entry.params, panel).where(eligible)
     coverage = float(scores.notna().mean().mean())
     click.echo(f"{strategy} on {len(panel.symbols)} symbols x {len(panel.index)} bars; score coverage={coverage:.2f}")
     click.echo("horizon | ts-IC mean (spearman, per-symbol avg) | xs-IC mean | NW t | NW p")

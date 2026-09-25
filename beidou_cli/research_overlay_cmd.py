@@ -27,6 +27,7 @@ from beidou_alpha.validation.ledger import (
 from beidou_alpha.validation.walk_forward import param_key
 from beidou_cli import research
 from beidou_cli.research_book_eval import _overlay_metrics
+from beidou_cli.research_feature_store import with_feature_store
 from beidou_cli.research_grids import (
     DEFAULT_EXIT_GRID,
     DEFAULT_THROTTLE_GRID,
@@ -118,6 +119,7 @@ def research_overlay(
         # `--min-history` died on any registry declaring a sleeve - the shipped one does (D-018) - before
         # it could reach the data.  Re-listing fields is the bug; carrying them all is the fix.
         model = replace(model, min_history_bars=min_history)
+    model = with_feature_store(model)  # after `replace`, so the store rides on the final model
     chosen = _resolve_symbols(root, symbols, interval, universe_mode)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding(model.entries, panel)
