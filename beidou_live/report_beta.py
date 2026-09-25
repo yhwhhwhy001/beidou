@@ -271,6 +271,19 @@ def _factor_fit_lines(fit: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _archive_line(block: Mapping[str, Any]) -> str:
+    """Where the archive stopped.  The keys after it are provisional until the next daily sync revises them."""
+    archive = block.get("archive") or {}
+    last, behind = archive.get("last_bar"), archive.get("bars_behind_sample_end")
+    if last is None:
+        return "n/a（归档里读不到最后一根 bar 持有的名字）"
+    if behind is None:
+        return str(last)
+    if behind == 0:
+        return f"{last}，已覆盖回归样本末端"
+    return f"{last}，比回归样本末端早 {behind} 根。归档每天只同步一次，此后的排名是临时的，下次同步会回改"
+
+
 def _collinearity_line(fit: Mapping[str, Any]) -> str:
     """The pair that moves most together, and the factors whose loadings it makes unstable."""
     collinear = fit.get("collinearity") or {}
@@ -298,9 +311,13 @@ def _factor_loadings_lines(block: Mapping[str, Any]) -> dict[str, Any]:
             f"{regression.get('bars')} 根 bar（D-032 剔除 {regression.get('excluded_bars')}，"
             f"因子缺值剔除 {regression.get('short_of_factors_bars')}）"
         ),
-        "全多头的 bar": f"{regression.get('all_long_bars')}/{regression.get('bars')}：单列截距，不算进 alpha",
+        "归档的最后一根 bar": _archive_line(block),
+        # "回归样本内" because the D-045 section above counts the same name over every bar of the window.
+        "全多头的 bar（回归样本内）": (
+            f"{regression.get('all_long_bars')}/{regression.get('bars')}：单列截距，不算进 alpha"
+        ),
         **_factor_fit_lines(fit),
-        "R^2": f"{_fmt_num(fit.get('r2'))}；同一样本只用市场 {_fmt_num(only_market)}",
+        "R^2": f"{_fmt_num(fit.get('r2'))}；同一样本只用市场（含全多头截距） {_fmt_num(only_market)}",
         "共线性": _collinearity_line(fit),
         "conditional（敞口 × 因子）": "市场与 BTC 乘净敞口，三个多空因子乘毛敞口。简化：假设权重在三分位间的形状不变",
         "读法": "只报告不告警：载荷没有预登记的阈值。t 按 Newey-West，带宽规则同 D-045。完整一页见 `beidou report beta`",
@@ -365,6 +382,7 @@ def factor_markdown(payload: Mapping[str, Any]) -> str:
                     "D-032 剔除": regression.get("excluded_bars"),
                     "因子缺值剔除": f"{regression.get('short_of_factors_bars')}；按因子 "
                     + json_dumps(regression.get("factor_missing_bars") or {}),
+                    "归档的最后一根 bar": _archive_line(payload),
                     **{
                         FACTOR_LABELS[name]: (
                             f"每根 bar 排名 {_fmt_num(row.get('ranked_per_bar'))} 个币，每腿 "

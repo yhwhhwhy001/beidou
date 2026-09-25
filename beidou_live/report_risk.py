@@ -26,6 +26,7 @@ from beidou_data.store import KlineStore, interval_ms
 from beidou_live.composition import impact_model
 from beidou_live.report_common import (
     DAY_MS,
+    LIQUIDITY_WINDOW_BARS,
     _cycles,
     _day_of,
     _fmt_num,
@@ -230,11 +231,6 @@ def margin_and_rejections(
         "rejections": rejections,
         "insufficient_margin": sum(count for code, count in rejections.items() if "-2019" in code),
     }
-
-
-# The bars `LiveEngine._liquidity` averages for the participation cap: the profile's `pool.liquidity_window`.
-# The cycle record does not carry it, so it is written here and a test holds it to the profile.
-LIQUIDITY_WINDOW_BARS = 24
 
 
 # How far a book rebuilt from a row's `current_notional` may miss the row's `gross_before` and still count as the
