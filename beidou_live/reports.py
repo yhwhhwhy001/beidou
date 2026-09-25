@@ -770,7 +770,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 },
             ),
             (
-                "Liquidity to close (3.9, reported only)",
+                "Liquidity to close (#3.9, reported only)",
                 _liquidity_to_close_lines(payload.get("liquidity_to_close") or {}),
             ),
             (
