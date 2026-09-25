@@ -3400,7 +3400,24 @@ CEILING = {
     # 验收：每条修复改回去都有测试变红。今天的读数逐位不变；告警、周报、beta、status 逐字节相同。
     #
     # 留 40 行（14_124 -> 14_164），理由与上面几格逐字相同，不重述。
-    "beidou_live": 14_164,
+    #
+    # 2026-09-25（不编号，同上）。+514 beidou_live，14_139 -> 14_653，抬到 14_693。14_124 -> 14_139 那 15 行是
+    # #155（单币 400 不拖垮周期）在余量内加的，不在这里。
+    #
+    # 清点 8.10（事件风险）的第一期：`beidou_live/report_events.py`（新，508 行），日报一节「Event risk
+    # (#8.10, reported only)」，只报告不告警，`daily_alerts` 不读它。三个读数各自兜底：稳定币锚定（币安现货
+    # USDC/USDT，归档里唯一的稳定币对，约 60 行）；交易所事故（周期失败、退避吃掉的 bar、行情陈旧、K 线拿不到、
+    # 没成交的订单、隔离、池子重排失败，只读循环自己写的记录，不联网，约 90 行）；极端行情（BTC 与在管池子
+    # 等权篮子的小时收益，按其前 720 根的波动打分，约 95 行）。日报渲染约 90 行；模块说明、常量与共用的小函数
+    # 约 170 行：锚定对子为什么脆、FTX 那段为什么读不到、窗口为什么止于归档最新一根而不是决策 bar，都写在旁边。
+    # `reports.py` 挂接 +6。按事件调仓的规则是构造变更，草稿在 `docs/analysis/2026-09-25-event-risk-rule-prereg-draft.md`，
+    # 这里一行都不动交易。
+    #
+    # 验收：同一份状态副本，新旧各出一遍：84 个产物里告警、周报、beta、status 逐字节相同；23 份日报的 json
+    # 只多 `event_risk` 一个键，md 只多这一节、删行为 0（合并方另起一份副本复核过）。20 个变异全部有测试变红。
+    #
+    # 留 40 行（14_653 -> 14_693），理由与上面几格逐字相同，不重述。
+    "beidou_live": 14_693,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

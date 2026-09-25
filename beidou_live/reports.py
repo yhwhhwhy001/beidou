@@ -10,6 +10,7 @@ answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
     report_exits       #1.5 / #3.2 the exit overlay
     report_execution   #10 execution, with #10.9 / #10.10 per-order TCA (M-Q08 itself is execution_fidelity.py)
     report_data        #9 data (bar sanity is bar_sanity.py)
+    report_events      #8.10 event risk: the stablecoin peg, venue incidents and extreme moves, reported only
     report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
     report_governance  the weekly's effort share and pre-registration order
     report_common      what all of them read the state files with
@@ -86,6 +87,7 @@ from beidou_live.report_decay import (  # noqa: F401  (re-exported at its histor
     probe_correlation,
     probe_rows,
 )
+from beidou_live.report_events import _event_risk_lines, event_risk
 from beidou_live.report_execution import (
     _restart_cost_lines,
     clock_health,
@@ -279,6 +281,9 @@ def daily_payload(
         "exit_reachability": exit_reachability(store, exits),
         "noise_scale": noise_scale(store, day, vol_target=vol_target),
         "tail": tail_readings(store, day, vol_target=vol_target),  # G4: the backtest tail beside the sigma ruler
+        # #8.10, reported only: the stablecoin peg, what the loop recorded going wrong on its way to the venue,
+        # and the market's newest moves in units of its own vol.  Beside the book's tail, which it is not.
+        "event_risk": event_risk(store, day, closes=closes, root=data_root),
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
@@ -791,6 +796,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ),
             ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
             ("Tail beside the sigma ruler (G4)", _tail_readings_lines(payload.get("tail") or {})),
+            ("Event risk (#8.10, reported only)", _event_risk_lines(payload.get("event_risk") or {})),
             (
                 "Exit counterfactuals (M-005, monitoring only)",
                 {

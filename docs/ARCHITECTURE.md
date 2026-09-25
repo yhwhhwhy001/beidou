@@ -32,6 +32,7 @@ beta 报告的读数全在里面，09-23 那批并行合并的冲突也集中在
 | `report_exits` | #1.5 / #3.2 exit overlay：退出与池子事件、够不着的阈值、反事实 |
 | `report_execution` | #10 执行：重启代价与失败 bar（M-Q03）、无交易带的计划缺口、主机时钟；逐单 TCA（#10.9 / #10.10，#139）。M-Q08 本身在 `execution_fidelity.py` |
 | `report_data` | #9 数据：研究归档覆盖、metrics 同源比对、数据集清单。bar sanity 在 `bar_sanity.py` |
+| `report_events` | #8.10 事件风险：稳定币脱锚（币安现货 USDC/USDT）、交易所事故（循环自己写下的周期与成交记录，不联网）、极端行情（BTCUSDT 与 universe 等权篮子的小时收益对自身波动的倍数）。只报告，不告警 |
 | `report_beta` | #6.4 / #6.9 归因：市场 beta（D-045）与多因子载荷（#140，计算在 `factor_loadings.py`），日报两节与 `report beta` 两页 |
 | `report_governance` | 周报的 alpha 投入占比与预登记顺序 |
 | `report_common` | 各领域共用的状态读取与格式化 |
