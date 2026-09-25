@@ -5,6 +5,7 @@
 | 目的 | 命令 |
 | --- | --- |
 | 拉取/刷新研究数据并选 universe | `beidou data sync` |
+| 修补研究归档里的缺口（9.4）。默认干跑：列出每个缺口要取的日归档文件、REST 调用数和估计字节数，不联网、不写盘。`--apply` 才下载和合并，源头也没有的记进 `confirmed_gaps.json`（confirmed gap）。不要和每日 01:20 的数据任务同时跑，两者改写同一批 parquet | `beidou data repair [--symbols A,B] [--apply]` |
 | 手动刷新实盘交易池（30 日成交量 + 滞回） | `beidou data pool refresh`（实盘循环每个 UTC 日也会自动做一次） |
 | 重建时点成员表（研究用，先同步 878 个候选的日线；出日表：2026-09-04 起研究口径逐日重选，2026-09-23 起 `--refresh` 默认就是 `D`，传 `MS` 出的是月表）。**重建会挡住 armed 启动**，先读下面「成员表落后告警」 | `beidou data pool history --refresh D [--sync-members]` |
 | 时点成员表落后几天（每小时巡检带 `--check` 跑它） | `beidou data pool lag [--check]` |
@@ -144,7 +145,8 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 **收到告警怎么办。**
 
 1. 告警正文逐条列出标的、时刻、哪一项，跳变还带倍数与有没有成交衔接。
-2. 断档跳变：先查是不是同名重新计价或换了合约，看币安公告。本地归档的缺口用 `beidou data status` 看。
+2. 断档跳变：先查是不是同名重新计价或换了合约，看币安公告。本地归档的缺口用 `beidou data status` 看，
+   修补用 `beidou data repair`（见上面日常命令表）。
    同名下两段序列的例子见 `beidou_data/store.py` 的 `gaps`：BNXUSDT 2023-02-22、PUMPUSDT 2025-07-10。
 3. frozen bar：多半是停牌或下架前的死尾巴。先用 `beidou live status` 看循环是否持有它。
 4. OHLC 矛盾：拿交易所网页上同一根 bar 比对。

@@ -73,6 +73,11 @@ def archive_path(symbol: str, interval: str, month: Month, market: str = FUTURES
     return f"/data/{market}/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{month}.zip"
 
 
+def daily_archive_path(symbol: str, interval: str, day: str, market: str = FUTURES_MARKET) -> str:
+    """The same file cut per UTC day (``day`` is YYYY-MM-DD).  Only `beidou data repair` asks for these."""
+    return f"/data/{market}/daily/klines/{symbol}/{interval}/{symbol}-{interval}-{day}.zip"
+
+
 def parse_checksum(text: str) -> str:
     """CHECKSUM files contain ``<sha256>  <filename>``."""
     token = text.strip().split()[0] if text.strip() else ""
@@ -106,8 +111,13 @@ def zip_to_frame(payload: bytes) -> pd.DataFrame:
 
 
 class ArchiveClient:
-    def __init__(self, base_url: str = ARCHIVE_BASE_URL, timeout: float = 60.0) -> None:
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout, headers={"User-Agent": "beidou-v5"})
+    def __init__(
+        self, base_url: str = ARCHIVE_BASE_URL, timeout: float = 60.0, transport: httpx.BaseTransport | None = None
+    ) -> None:
+        # `transport` is a test seam, as in `MetricsArchiveClient`: the repair tests serve real rows through it.
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/"), timeout=timeout, headers={"User-Agent": "beidou-v5"}, transport=transport
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -139,7 +149,13 @@ class ArchiveClient:
         self, symbol: str, interval: str, month: Month, market: str = FUTURES_MARKET
     ) -> pd.DataFrame | None:
         """Return the verified month frame, or ``None`` when the archive has no file for that month (404)."""
-        path = archive_path(symbol, interval, month, market)
+        return self._fetch(archive_path(symbol, interval, month, market))
+
+    def fetch_day(self, symbol: str, interval: str, day: str, market: str = FUTURES_MARKET) -> pd.DataFrame | None:
+        """One verified UTC day, or ``None`` on 404.  Same checksum and parser as the month."""
+        return self._fetch(daily_archive_path(symbol, interval, day, market))
+
+    def _fetch(self, path: str) -> pd.DataFrame | None:
         response = self._client.get(path)
         if response.status_code == 404:
             return None
