@@ -16869,3 +16869,63 @@ REST 共 6 次，没有日归档文件。6 个都没有新行，全部记为已�
 **从现在到 10-13，成员表不再重建。** 新表的末行是 09-24，落后满 14 天是 10-08；从那天起告警每天推送一次，
 照收，不动它。
 
+## 2026-09-25 · tsmom 在 k = 0.175 上重出：WEAK_PASS，样本外 1.83，门 1.57
+
+按「预登记：tsmom 在 k = 0.175 上重出证据」一节的协议，一字不改地跑。
+
+- 预登记提交 `b76de7a0`，提交时刻 2026-09-25T14:25:19Z；报告写于 14:38:36Z。
+- worktree 里只把 `config/live.demo.yaml` 的 `vol_target` 从 0.60 改成 0.175。跑完撤回，这次只提交报告与 ledger 行。
+- 用时 75 秒：14:37:21Z 到 14:38:36Z。开跑前没有别的 `beidou data` 或 `research` 进程，`BEIDOU_TRIALS_LEDGER` 没设。
+- 报告：`reports/research/tsmom-validation-20260925T143836Z.json`，sha256 `d06162dd803e42c897ff85311cb7b413dbde2c098a797827894179978405f0a5`。
+
+### 读数
+
+| 项 | 值 |
+| --- | --- |
+| verdict | **WEAK_PASS**，理由是 `oos_is_full_sample_tail`：两折都选了同一格，样本外是全样本的尾巴（D-043 的封顶） |
+| 样本外 Sharpe（`oos_selection.oos_sharpe_annual`） | 1.8329 |
+| family gate（`threshold_annual`） | 1.5733，N = 341，α 0.05，选择门 binding |
+| 余量 | +0.2596 |
+| N 的构成 | ledger 167 + 申报 172 + 本次 2 = 341，与预登记第 4 项一致 |
+| CPCV | 均值 1.92，q05 1.58，负路径 0.00 |
+| DSR p / PBO | 0.24 / 0.01 |
+| 成本加倍 | 1.92（×1）、1.81（×1.5）、1.70（×2） |
+
+门比预登记里两张功效表的估计低：1.5733，对 1.5868 与 1.5965。门用的是本次运行自己量的样本外方差
+（2.1627e-05），不是借来的那一份。
+
+### 判据逐条
+
+| 判据 | 要求 | 结果 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS` | WEAK_PASS，过 |
+| 样本外 Sharpe 对 family gate | 高于门，差不到 1e-9 读作未过 | 1.8329 > 1.5733，过 |
+| 构造 | 报告 `portfolio.vol_target` 是 0.175，其余 `CONSTRUCTION_KEYS` 与 profile 相同 | 过：`registry_evidence_problems` 返回空列表（见下） |
+| dataset manifest | 报告的 `membership` 与切换当天磁盘上的一致 | 今天一致：`registry_dataset_problems` 的 blocking 为空。10-13 那天要再读一次 |
+
+**按预登记，判为过门，降级为 WEAK_PASS。** 预期写的是「过门，但 WEAK_PASS 的可能大于 PASS」，样本外约 1.81；
+实测 1.83。
+
+### 启动门的预演（零 ledger，不改任何在用文件）
+
+做法：把 `config/alpha_registry.yaml` 复制一份，只把 tsmom 的 `evidence` 指到新报告；profile 用 0.175 那一份。
+用这两份跑 `live run` 启动时的两道检查：
+
+- `registry_evidence_problems`：空列表。
+- `registry_dataset_problems`：blocking 为空；advisory 只有 flow 没有 manifest 那一条，原来就有。
+
+新报告是 pit 验证，`universe` 字段对它豁免（`_universe_drift_blocks`），循环每天重排池子挡不住它。
+挡得住它的只有成员表，所以到 10-13 不重建成员表。
+
+### 下一步：10-13 的切换，与 #149 同批
+
+下面几件放进同一个 PR，先开成草稿，10-13T00:00Z 之后合入：
+
+- `config/live.demo.yaml`：`vol_target` 0.60 → 0.175；`risk_budget:` 报告副本改为 0.2803 / 0.4005 / 0.13125 / 0.0875。
+- `Policy.drawdown_ladder` 改为 ((−0.2803, 0.13125), (−0.4005, 0.0875))，升 `POLICY_VERSION`（R10）。
+- registry 的 tsmom `evidence` 指到本报告，写明 WEAK_PASS 的降级理由。
+- 删 exemption 与它的三处调用。
+
+合入后快进主 checkout，跑两个构造测试，在安全窗口重启一次，并按 CLAUDE.md 记重启。构造清零 M-010、M-G06
+与 `realised_vol`，这是改 k 的已知代价。
+
