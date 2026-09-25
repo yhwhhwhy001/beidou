@@ -3770,7 +3770,13 @@ CEILING = {
     # 相同，manifest 的读数不变。另 +1 是 `gaps` 的 docstring：PUMPUSDT 那句按归档改写。1h 文件从
     # 2025-04-12 起，前一段以 639 根零成交的 0.0471 收尾，隔 7 小时的缺口，07-10 07:00 起另一段，价位
     # 低约 9 倍。原文说「第一根 bar 是 07-10」，G6 的扫描发现它不对。
-    "beidou_data": 3_181,
+    # +19 beidou_data，2026-09-25（3_181 -> 3_200）：`live_feed._one` 把单个币 klines 的 HTTP 400 当作这根没有
+    # K 线，交给引擎已有的 `_hold_dropped`，不再从 `gather` 里抛出、让整个周期失败。400 在 klines 上实际就是
+    # 交易所不认识这个币（-1121，下架或改名）：以前每个周期都失败，连续 12 次熔断停掉循环，为的是一个币。
+    # 429/418、重试后仍是 5xx、传输错误照旧让周期失败，那是通路的问题，不是币的问题。19 行里 7 行是那段
+    # 注释，写的正是为什么只放行 400。没有它，兜底很容易被放宽成所有异常，那样一次限频就会被读成十七个币
+    # 同时下架。
+    "beidou_data": 3_200,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
@@ -3778,7 +3784,14 @@ CEILING = {
     # loud when it stopped asking rather than when the window ended.  The rest is the two write-only
     # counters finally being read (a warning, never a sleep - the loop is holding positions) and the
     # correction to `ARCHITECTURE.md`, which had claimed 限频 this package does not do.
-    "beidou_exchange": 714,
+    # +20 beidou_exchange，2026-09-25（714 -> 734）：下单重试的两处缺陷（当天全系统审查的 A1、A2）。
+    # -1007 原本在可重试的码里，写请求会被重新签名、原样重发；它是「等后端超时，执行状态未知」，HTTP 408
+    # 是同一种超时的状态码。`newClientOrderId` 只要求在未完成订单里唯一，第一笔已成交时重发就是第二笔成交。
+    # 在 mock 上复现过：两次 POST，报 FILLED。现在读请求照旧重试，写请求抛 `OrderOutcomeUnknown`、按
+    # client id 去查。代理拒绝 CONNECT 的 `ProxyError`（本机最常见的故障）与 `PoolTimeout` 并入「没发出、
+    # 可以重试」。三处拼 `OrderOutcomeUnknown` 的代码收成一个 `_ambiguous`；净增的大半是解释 -1007 为什么
+    # 不能重发的注释。
+    "beidou_exchange": 734,
     "beidou_shared": 289,
     # +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
     # an `all(isinstance(...))` generator that mypy 2.x stopped reading - part of the 30 type errors that

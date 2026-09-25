@@ -171,7 +171,7 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 **10-13 之后循环起不来时**：
 
 - 症状：`~/Library/Application Support/beidou/live.stderr.log` 里先有 `bridge EXPIRED`，接着是证据门的拒绝；
-  每小时巡检报「心跳已过期」，阈值 7,200 秒。
+  每小时巡检报「心跳已过期」，阈值 4,000 秒（2026-09-25 起；循环停在某根 bar 之后，下一次 :10 就会报）。
 - 先平仓：`beidou live flatten --yes`。它不经过证据门，会挂上持久的 kill switch。恢复要先
   `beidou live kill-switch --release`，再启动，那时仍要过证据门。
 - 不要为了让循环起来去改 `BRIDGE_UNTIL` 或 `EXEMPT_UNTIL`。两者由测试钉成相等，挪日期就是延长 bridge，
