@@ -16186,3 +16186,271 @@ prior-trials 申报归它。
 
 p32h 与 D3 那次的全精度输出，只在另外两个会话的 worktree 里（路径见全文第 6 节）。那两个 worktree 一旦
 清掉，12/12 的对照就重做不了。要不要归档，也交操作者定。
+
+**后续（同日）**：操作者裁定归档，见下一节「操作者三条裁定」。
+
+## 2026-09-25 · 操作者三条裁定：k 取 0.45 并换抵押品，做 8.10、9.4、9.6，归档 k 扫描的全精度输出
+
+执行记录「查漏补缺」一节末尾列了三件要操作者定的事
+（`docs/analysis/2026-09-25-external-checklist-round-two.md`）。操作者同日答复：
+
+| 事项 | 裁定 |
+| --- | --- |
+| k | 按建议：换抵押品，k = 0.45 |
+| 8.10、9.4、9.6 | 做 |
+| p32h 与 D3 那次的全精度输出 | 归档 |
+
+本节记落地安排，只写可观测事实与计划。
+
+### 一、k = 0.45 并换抵押品
+
+依据是上一节「k 的重测」：换抵押品之后，诚实漂移下 D-035 给 0.45，headroom pit +2.09pp、static +3.40pp。
+落地分四步，顺序不能反。
+
+1. **换抵押品。** 操作者在交易所把 USDⓈ-M 账户里的 BTC 抵押品换成 USDT。这是交易所上的操作，agent
+   不做。09-25T10:10Z 的日报读数：抵押品 5,748.6 U，占权益 43.50%。
+   - 循环侧不用改代码。`COIN_SWAP_DEPOSIT`、`COIN_SWAP_WITHDRAW`、`AUTO_EXCHANGE`、
+     `CROSS_COLLATERAL_TRANSFER`、`TRANSFER` 都在 `attribution.EXTERNAL_FLOW_TYPES` 里。循环读到它们，
+     就把日初权益与高水位重置到当前权益（`engine.py` 外部资金流那一支）。R8 的尺子只读归因收入与
+     未实现盈亏，不读这类流水。
+   - 要在两个整点之间一次做完。若分成转出、兑换、转入三步，中间又跨过一个周期，那个周期看到的权益会
+     少掉抵押品那一块，可能触发 `DAILY_LOSS_PAUSE`（`guards.py`，−5%）。
+   - 做完的判据：日报「Collateral in equity (L1-10)」的 share 约为 0；
+     `risk_budget.usdt_drawdown.vs_total_equity` 约为 1.0。
+2. **先把数据修好。** 9.4 的缺口修复与成员表重建，都放在重出之前。成员表是 dataset manifest 的阻断
+   字段（`beidou_data/manifest.py`），重出之后再重建，新证据就失效；K 线不是阻断字段。两件都要下载，
+   先报操作者。成员表重建照 RUNBOOK「membership」一节的四条做。
+3. **重出。** 按下一节的预登记，在 worktree 里把 `config/live.demo.yaml` 的 `portfolio.vol_target` 改成
+   0.45，跑 `research validate`。
+4. **10-13 之后切换。** 过门时，下面几件放进同一个 PR：改 k；改档位（走 R10）；换指针；删 exemption。
+   这个 PR 在 10-13T00:00Z 之后合入，与 #149（R8 尺子）同批。然后快进主 checkout，在安全窗口重启一次。
+   不过门时，10-12 前在准备文档第 2.2 节的 C、E、F 里选一个，交操作者定。
+
+档位按 K-4 的规则取 ((−0.49, 0.3375), (−0.70, 0.225))。改 `Policy.drawdown_ladder` 要升
+`POLICY_VERSION`，`risk_budget:` 报告副本同步改。
+
+**价钱比报给操作者的略高。** 执行记录写的是「2 格加约 16 笔申报，N = 337，门 1.5855」，出自 10-13
+准备文档。那个门的方差借自 09-18 的报告。`research power` 的规则是借同族最近一份，也就是 09-19 的报告；
+按它算，N = 339 时门是 1.5959。多申报的 2 笔（p32i 的 0.15）只让门高 0.0006，差额主要在方差借自哪份
+报告。门最终以跑出来的报告为准，下一节把两种算法都列出。
+
+### 二、8.10、9.4、9.6
+
+三项分给三个 worker，各用一个 worktree。都是零 ledger，不改交易行为：
+
+- **9.4 缺口修复。** 先只读扫描真实归档，再做一个修复命令：从源头重取；源头也没有的记为已确认缺口；
+  绝不插值。它默认只干跑，真正写数据前先报操作者，因为要下载。
+- **9.6 feature store。** 做一个内容寻址的落盘缓存，与直接计算逐位相同，实盘默认不开。收益太小就照实报。
+- **8.10 事件风险。** 第一期是日报读数，覆盖稳定币锚定、交易所事故信号、极端行情，只报告不告警。
+  第二期是「按事件调仓」规则的预登记草稿。它要花 trial，所以排在 k = 0.45 重出之后、10-13 之后，
+  否则会先抬高重出那道门。
+
+### 三、归档
+
+p32h 与 D3 那次的全精度输出，归档到 `reports/research/k-scan-20260923/`，共 8 个文件：
+
+| 文件 | 字节 | sha256 前 16 位 | 写出它的脚本 |
+| --- | --- | --- | --- |
+| `p32h-pit.json` | 16,644 | `713a20f48275c896` | `scratchpad/p32h_k_sweep_at_the_base_in_force.py`（#112） |
+| `p32h-static.json` | 16,949 | `ab0a896ea864ddb6` | 同上 |
+| `kgrid-pit-2000.json` | 6,856 | `cce354534b77adcb` | `scratchpad/d3_multibook_kgrid_bootstrap.py`（#115） |
+| `kgrid-static-2000.json` | 6,855 | `5dc84eb6a3c41155` | 同上 |
+| `impact-pit.json` | 5,755 | `89be63fff8126102` | `scratchpad/d3_multibook_band_impact.py`（#115） |
+| `impact-static.json` | 5,724 | `09556db03ae291de` | 同上 |
+| `series-pit.npz` | 4,332,489 | `44200678d3c8a1a7` | 同上：4 个 k × D2/D3 × mark/realised，每条 49,456 根 |
+| `series-static.npz` | 3,983,155 | `c24316c674b6bea1` | 同上，每条 49,457 根 |
+
+- 放子目录而不放 `reports/research/` 顶层，是因为 `governance replay` 读顶层的字典形状 JSON
+  （`governance_cmd._payloads`），而 p32h 那两份是字典。递归扫描的测试只认带 `verdict` 的字典，或文件名
+  含 `validation` 的报告，这 8 个都不是。
+- 二进制入库有先例：`reports/research/mine-measurement-20260914T143632Z-corr_matrix.npy`。
+- 现在可以在仓库里直接复现 12/12 的对照：
+  `scratchpad/k_remeasure_honest_drift_20260925.py --reference-dir reports/research/k-scan-20260923`。
+  对照只读这些存下来的序列，不依赖今天的数据。
+
+## 2026-09-25 · 预登记：tsmom 在 k = 0.45 上重出证据
+
+**写在跑之前。** 起因是上一节的裁定：k 取 0.45，并换抵押品。`vol_target` 在 `CONSTRUCTION_KEYS` 里。
+改了它，tsmom 引用的证据（`tsmom-validation-20260919T081914Z.json`，k = 0.60）就对不上，启动门拒绝
+（`beidou_alpha/registry.py` 的 `construction_problems`）。所以改 k 要同时换证据。flow 引用的是一份
+book 报告，没有 `portfolio` 块，构造比对跳过它，不用重出。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务：G-C（更高吞吐）为主，G-B（同收益下更小回撤）为次。它不产出新 alpha。它买回的是 10-13 之后的
+可重启性，并让 k 回到 D-035 的回撤预算以内。
+
+### 1. 假设
+
+tsmom 的已采纳配置在 k = 0.45 下，在修好的数据与重建后的成员表上，仍然通过 D-020/D-028：样本外 Sharpe
+高于它的 family gate。若不成立，报告的 `oos_selection` 会读出样本外 Sharpe 低于门，verdict 是 FAIL。
+
+### 2. 这是「新信息」还是「新网格」
+
+两种读法都说得通：
+
+- 新网格：k 是构造参数，换一个 k 再验证，等于在 k 这条轴上多看一格。
+- 新信息：k 不是按 Sharpe 挑的。它由 D-035 事先写下的回撤规则决定，读的是 bootstrap 的 q95 回撤。
+
+偏向第二种，但按第一种计费。选择污染已经发生，先声明：
+
+1. k = 0.45 是看过 K-4 的 bootstrap 表之后选的（本文件「k 的重测」一节）。规则是 2026-09-04 写下的，
+   表是照规则读的。
+2. p32g、p32h 与同日的 k 重测，看过 8 个 k（0.60 到 0.20）在两个 universe 上的回撤与 CAGR。另一个会话的
+   p32i 看过 0.15。共 9 个 k × 2 个 universe = 18 个配置，全部申报。
+3. 同一策略在别的 k 上的样本外 Sharpe 已经看过：
+   - k = 0.30，09-13 的数据，2 格：1.8087（registry 的注释；P31 的先例）；
+   - k = 0.60，09-18，2 格：1.5628，FAIL；
+   - k = 0.60，09-19，16 格：1.2306，FAIL。
+
+### 3. 协议（照抄 09-18 那一份，只改 k）
+
+```bash
+# 在 worktree 里：config/live.demo.yaml 只改 portfolio.vol_target 0.60 -> 0.45，别的一个字不动
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 170 --charge 2 --prereg <本节的 commit>
+```
+
+- `--folds 5`、`--min-train 4000`、`--purge 50`、`--embargo`（跟随 purge）、`--cpcv-groups 6`、`--guards`、
+  `--exits`、`--capital 0.0` 全部用默认值，与 09-18 那一份相同。
+- `--to` 不钉：证据要描述跑的那天的数据。
+- `--prior-trials 170` 是 09-18 起申报的 152，加上面第 2 项的 18。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+
+**开跑前三件事，顺序不能反：**
+
+1. 9.4 的缺口修复在共享归档上执行完。它要下载，先报操作者。
+2. 成员表按 RUNBOOK「membership」一节重建，出日表（`--refresh D`）。它也要下载，同样先报操作者。
+3. 确认没有别的会话在写 `.beidou/data`（RISK-LD05）。开跑时间放在整点后 5 分到下一个整点前 10 分之间，
+   并避开 17:20Z 的数据任务。
+
+**跑完之后到 10-13，成员表不再重建。** 重建会让新证据的 dataset manifest 失效（`membership` 是阻断字段）。
+成员表落后满 14 天起，告警每天推送一次；这段时间照收，不动它。
+
+### 4. 计费与桶
+
+2 笔，进 `tsmom` 桶（`grid_size: 2`）。今天 ledger 去重后 167 行，`reports/research/trials.jsonl` 的
+sha256 前 16 位是 `09245c344b922ddc`。
+
+- 今天的 N：167 + 152 + 18 = 337。
+- 跑完的 N：339。
+
+k 变了，construction digest 也跟着变。ledger 里 k = 0.60 的行不算这次网格的重放，全部照计。
+
+### 5. 功效读数
+
+方差借自同族最近一份报告（09-19），这是 `research power` 的规则：
+
+```
+evidence: reports/research/tsmom-validation-20260919T081914Z.json sha256=3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
+  interval=1h bars_per_year=8760 n_obs=44640 variance=2.22706e-05 (这份报告自己量的样本外方差)
+  N 由 --trials 指定为 337，证据报告自己的是 167
+
+## N=337
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5952  [selection binds]
+      D-028 selection threshold: 1.5952 at N=337, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.9%
+    P(clear | true annual Sharpe = 1.2): 20.5%
+    P(clear | true annual Sharpe = 1.5): 41.5%
+    P(clear | true annual Sharpe = 1.6): 47.1%
+    P(clear | true annual Sharpe = 1.8): 68.6%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+## N=339（这次跑完的 N）
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5959  [selection binds]
+      D-028 selection threshold: 1.5959 at N=339, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.9%
+    P(clear | true annual Sharpe = 1.2): 20.4%
+    P(clear | true annual Sharpe = 1.5): 41.4%
+    P(clear | true annual Sharpe = 1.6): 47.0%
+    P(clear | true annual Sharpe = 1.8): 68.5%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+把上面这张表抄进预登记，紧挨着网格与桶（M-SY01）。方差是借来的——它是样本外序列长度与矩的函数，换一个候选会变，所以这是一个**估计**，不是这次运行的读数。
+零 ledger：本命令不写 trials.jsonl，不写报告，不碰面板。
+```
+
+方差改借 09-18 那一份（与本次同一个 2 格协议）时，两张表的门与功效：
+
+```
+evidence: reports/research/tsmom-validation-20260918T154025Z.json sha256=2729128fdbaac483d70a19820effb7a84f883f69e62b6634431ca1c201425deb
+  interval=1h bars_per_year=8760 n_obs=45351 variance=2.20003e-05 (这份报告自己量的样本外方差)
+## N=337
+    gate (max of the two halves): 1.5855  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.3%
+    P(clear | true annual Sharpe = 1.6): 47.9%
+    P(clear | true annual Sharpe = 1.8): 69.4%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+## N=339（这次跑完的 N）
+    gate (max of the two halves): 1.5861  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.2%
+    P(clear | true annual Sharpe = 1.6): 47.9%
+    P(clear | true annual Sharpe = 1.8): 69.4%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+```
+
+两次都零 ledger，`trials.jsonl` 的 sha256 前后都是 `09245c344b922ddc`。两张表都是上界：不含 CPCV 负路径、
+PBO、fold 一致性、成本 ×2。门最终以报告的 `oos_selection` 为准。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS`（`registry.py` 的上线口径） | — |
+| 样本外 Sharpe 对 family gate | 报告 `oos_selection` 的 `oos_sharpe_annual` 高于它的门 | 直接读报告，不手算；相差不到 1e-9 读作未过 |
+| 构造 | 报告 `portfolio` 的 `vol_target` 是 0.45，其余 `CONSTRUCTION_KEYS` 与 profile 相同 | 由 `construction_problems` 判（相对 1e-9） |
+| dataset manifest | 报告记下的 `membership` 与切换当天磁盘上的一致 | 由 `registry_dataset_problems` 判，不目测 |
+
+**判负之后做什么，先写死：**
+
+- **FAIL**：不重跑、不换网格、不换 k、不申诉门。10-13 之前 k 维持 0.60。10-12 前由操作者在准备文档
+  第 2.2 节的 C（延长 bridge）、E（停 tsmom，只留 flow）、F（有计划地平仓）里选一个。换抵押品照做，
+  它不依赖这次结果。
+- **WEAK_PASS**：按上线口径仍可换指针，报告里写明降级。2 格协议两折同选时，样本外就是全样本尾巴，
+  D-043 把它封顶在 WEAK_PASS。
+- **PASS 或 WEAK_PASS 之后**：下面几件放进同一个 PR，10-13T00:00Z 之后合入，与 #149 同批：
+  - 改 k；
+  - 改档位（R10，升 `POLICY_VERSION`），`risk_budget:` 报告副本同步；
+  - 换指针；
+  - 删 exemption 与它的三处调用。
+
+  然后快进主 checkout，按 CLAUDE.md「重启实盘循环」一节在安全窗口重启一次。
+
+### 7. 预期
+
+最可能挂在「样本外 Sharpe 对 family gate」这一条，而且接近刀刃：
+
+- k = 0.60、同一个 2 格协议，09-18 读 1.5628，门 1.5746，差 0.012 没过。
+- 降 k 应当抬高样本外。09-13 的数据上，k 从 0.30 升到 0.60，2 格的样本外从 1.8087 降到 1.5919，
+  封顶的 bar 从 390 增到 4,070（`config/alpha_registry.yaml` 的注释）。0.45 在两者之间。按 09-18 在重建
+  成员表上读到的比例折算，约 1.67–1.70。
+- 门比 09-18 高：1.5861 或 1.5959，对 1.5746。
+
+预期过门，但 WEAK_PASS 的可能大于 PASS：2 格协议两折常常同选。按功效表，真 Sharpe 在 1.7 上下时，
+过门约五成到六成。
+
+两种结果各值多少：
+
+- 过门：10-13 之后能按 k = 0.45 armed 启动。回撤预算在诚实漂移下守得住（K-4，headroom pit +2.09pp、
+  static +3.40pp）。
+- 不过门：知道 tsmom 在 0.45 下也过不了门，D-041 走 C、E、F。这本身是比「重启不了」更大的发现，按 D-020 走。
+
+### 9. 实盘失效方式（How this fails）
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若抵押品没换或没换完，则可动用 USDT 的回撤仍被放大，0.45 的档位与 K-4 的 q95 对不上，预算被高估 | 日报「Collateral in equity (L1-10)」的 share；`risk_budget.usdt_drawdown.vs_total_equity` | share > 0.05，或 vs_total_equity > 1.05，即证伪「K-4 成立」 | 10-13 重启前读这两个数；不满足就不按 K-4 的档位上线，交操作者 |
+| 2 | 若真实 Sharpe 接近诚实读数 1.23（2 格过门是乐观的），则 0.45 的实盘回撤按诚实漂移那张表走，深于 2 格证据描述的 | 日报「Risk budget (P13)」的归因回撤；「Drift vs expectation (attributed income, M-002/M-010)」 | 归因回撤触第一档 −49% 即证伪「0.45 在预算内」；M-010 z < −2，构造变更后 60 天才读得出 | 60 天内没有 M-010，靠 R8 阶梯兜底：−49% 降到 0.3375，−70% 降到 0.225。亏了才看得见 |
+| 3 | 若 10-13 的切换没做全（k、档位、指针、exemption 分开合入），则 armed 启动被挡，持仓没有退出检查 | `live.stderr.log` 的「portfolio vol_target is X live but Y in the cited evidence」；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 几件事放进同一个 PR；合入前跑 `test_the_shipped_registry_runs_what_its_evidence_validated`；起不来时由操作者执行 `live flatten --yes`（RUNBOOK「D-041 bridge 到期（2026-10-13）」） |
