@@ -1,15 +1,17 @@
-"""The three ambiguity branches: not sent (retry), maybe sent (unknown), 5xx (unknown).
+"""The four ambiguity branches: not sent (retry), maybe sent (unknown), 5xx (unknown), backend timeout (unknown).
 
 A write whose response never arrived is NOT a write that did not happen.  Re-submitting it is how a
 loop doubles a position, and the whole `bd-<bar_open_ms>-<symbol>` idempotency scheme (D-003) exists
 so the caller can ask the venue what happened instead.  The client's job is to tell the two apart:
 
-* `ConnectError` / `ConnectTimeout` - the connection was never established, so nothing left the
-  process.  Retryable for reads and writes alike.
+* `ConnectError` / `ConnectTimeout` / `ProxyError` / `PoolTimeout` - the connection to the venue was
+  never established, so nothing left the process.  Retryable for reads and writes alike.
 * any other `TransportError` (`ReadTimeout`, `WriteError`, `RemoteProtocolError`, ...) - the request
   was on the wire.  For a mutating method this raises `OrderOutcomeUnknown` immediately; for a read
   it is just another retry.
 * HTTP 5xx - the venue answered, but the answer says nothing about the order.  Same rule.
+* HTTP 408 / code -1007 - the venue's own "timed out waiting for the backend, execution status
+  unknown".  Same rule; it sat in the retryable codes until 2026-09-25, so a write was re-sent.
 
 There was one file of exchange tests against 611 lines of package and this whole table sat under a
 single case of it, which is what these fill in.  DELETE is covered alongside POST because it is
@@ -86,6 +88,80 @@ async def test_a_connect_error_that_never_clears_ends_as_a_retryable_venue_error
         await client.post("/fapi/v1/order", ORDER)
     assert not isinstance(info.value, OrderOutcomeUnknown)
     assert info.value.retryable, "the cycle is skipped and retried, not killed"
+    await client.aclose()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ProxyError("503 Service Unavailable"), httpx.PoolTimeout("no free connection")],
+    ids=["proxy_refused_the_connect", "pool_timeout"],
+)
+async def test_a_proxy_that_refused_the_tunnel_never_reached_the_venue_either(error: httpx.TransportError) -> None:
+    """The local proxy's 503 arrives as `ProxyError`, which is not a `ConnectError`.
+
+    It is the commonest failure on the Mac - five of the seven ERROR cycles in the 14 days to
+    2026-09-25 - and on an order it fell into the "may have been sent" branch: an order that never
+    left the machine would come back `UNKNOWN` after five reconciliation queries, unsent for the bar.
+    """
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise type(error)(str(error), request=request)
+        return httpx.Response(200, json={"orderId": 7, "symbol": "BTCUSDT", "status": "NEW"})
+
+    client = _client(handler)
+    assert (await client.post("/fapi/v1/order", ORDER))["orderId"] == 7
+    assert attempts["n"] == 2, "refused once, sent once"
+    await client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (408, {"code": -1007, "msg": "Timeout waiting for response from backend server."}),
+        (408, None),
+        (400, {"code": -1007, "msg": "Timeout waiting for response from backend server."}),
+    ],
+    ids=["408_with_code", "bare_408", "code_without_408"],
+)
+async def test_a_backend_timeout_on_a_write_is_unknown_and_is_sent_once(
+    status: int, body: dict[str, object] | None
+) -> None:
+    """-1007 was in the retryable codes, so the client signed the order again and re-sent it.
+
+    The first may already have filled, and the same `newClientOrderId` does not stop the second: the id
+    only has to be unique among open orders.  Reproduced on a mock transport before the fix: two POSTs
+    and a FILLED report for one bar's one order.  A bare 408 was worse in the other direction - a
+    non-retryable rejection, so the caller recorded REJECTED for an order that may have filled.
+    """
+    attempts = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(status, json=body) if body is not None else httpx.Response(status, text="timeout")
+
+    client = _client(handler)
+    with pytest.raises(OrderOutcomeUnknown) as info:
+        await client.post("/fapi/v1/order", ORDER)
+    assert attempts["n"] == 1, "never re-sent"
+    assert info.value.client_order_id == "bd-1757000000000-BTCUSDT" and info.value.symbol == "BTCUSDT"
+    await client.aclose()
+
+
+async def test_the_same_backend_timeout_on_a_read_is_asked_again() -> None:
+    attempts = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return httpx.Response(408, json={"code": -1007, "msg": "Timeout waiting for response from backend server."})
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(handler)
+    assert await client.get("/fapi/v2/account", signed=True) == {"ok": True}
+    assert attempts["n"] == 2
     await client.aclose()
 
 

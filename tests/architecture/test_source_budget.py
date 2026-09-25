@@ -3712,7 +3712,16 @@ CEILING = {
     #
     # 留 40 行（7_857 -> 7_897）。这一格此前按实测抬到齐平；零余量让下一个诚实的改动先交税，理由与
     # `beidou_live` 那几格逐字相同，不重述。
-    "beidou_cli": 7_897,
+    #
+    # 2026-09-25（不编号，同上）。+89 beidou_cli，7_865 -> 7_954，抬到 7_994。
+    #
+    # 清点 9.4「缺口只检测不修」的命令一半：`beidou data repair`。默认干跑，列出每个缺口要取的日归档
+    # 文件、REST 次数与估计字节，不联网、不写盘；`--apply` 才取、才写，源头没有的记进
+    # `confirmed_gaps.json`。花在哪：命令与 docstring 约 60 行，写明不能与 17:20Z 的 `data sync` 同跑；
+    # `data status` 不再把已确认缺口算进 GAPS、另起一行计数，+8；import 12 行。
+    #
+    # 留 40 行（7_954 -> 7_994），理由同上，不重述。
+    "beidou_cli": 7_994,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3770,7 +3779,26 @@ CEILING = {
     # 相同，manifest 的读数不变。另 +1 是 `gaps` 的 docstring：PUMPUSDT 那句按归档改写。1h 文件从
     # 2025-04-12 起，前一段以 639 根零成交的 0.0471 收尾，隔 7 小时的缺口，07-10 07:00 起另一段，价位
     # 低约 9 倍。原文说「第一根 bar 是 07-10」，G6 的扫描发现它不对。
-    "beidou_data": 3_181,
+    # +19 beidou_data，2026-09-25（3_181 -> 3_200）：`live_feed._one` 把单个币 klines 的 HTTP 400 当作这根没有
+    # K 线，交给引擎已有的 `_hold_dropped`，不再从 `gather` 里抛出、让整个周期失败。400 在 klines 上实际就是
+    # 交易所不认识这个币（-1121，下架或改名）：以前每个周期都失败，连续 12 次熔断停掉循环，为的是一个币。
+    # 429/418、重试后仍是 5xx、传输错误照旧让周期失败，那是通路的问题，不是币的问题。19 行里 7 行是那段
+    # 注释，写的正是为什么只放行 400。没有它，兜底很容易被放宽成所有异常，那样一次限频就会被读成撞上它的
+    # 那几个币下架了，而线上 `dropped_after` 是 1，当根就平。
+    #
+    # 2026-09-25（不编号，同上）。+370 beidou_data，3_200 -> 3_570，抬到 3_610。
+    #
+    # 清点 9.4 的数据一半：`beidou_data/repair.py`（新，349 行），缺口向日归档与 REST 各问一次，只把缺口
+    # 内、已收盘的行经 store 自己的 `append` 写进去，已存的行一行不改、同步水位不动；源头与已存行有一处
+    # 对不上就整批不用；源头也没有的记成 confirmed gap。不插值，不前向填充。资金费的缺口按标的自己的
+    # 结算节奏判（前后各 6 步的中位），4h 与 8h 之间的切换不误报。其余：`ArchiveClient.fetch_day` 与测试
+    # 用的 transport 接缝 +17，`is_invalid_symbol` 从 `spot.py` 抽出 +5。
+    #
+    # 验收：真实归档上干跑，K 线 51 个缺口（4,235 根、29 个标的），资金费 154 个，一个文件都没动。
+    # 15 个变异全部有测试变红。4 份 fixture 在主 checkout 的归档上逐位核对过（`_bit_for_bit`）。
+    #
+    # 留 40 行（3_570 -> 3_610）。这一格此前是零余量，理由与 `beidou_live` 那几格逐字相同，不重述。
+    "beidou_data": 3_610,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
@@ -3778,7 +3806,14 @@ CEILING = {
     # loud when it stopped asking rather than when the window ended.  The rest is the two write-only
     # counters finally being read (a warning, never a sleep - the loop is holding positions) and the
     # correction to `ARCHITECTURE.md`, which had claimed 限频 this package does not do.
-    "beidou_exchange": 714,
+    # +20 beidou_exchange，2026-09-25（714 -> 734）：下单重试的两处缺陷（当天全系统审查的 A1、A2）。
+    # -1007 原本在可重试的码里，写请求会被重新签名、原样重发；它是「等后端超时，执行状态未知」，HTTP 408
+    # 是同一种超时的状态码。`newClientOrderId` 只要求在未完成订单里唯一，第一笔已成交时重发就是第二笔成交。
+    # 在 mock 上复现过：两次 POST，报 FILLED。现在读请求照旧重试，写请求抛 `OrderOutcomeUnknown`、按
+    # client id 去查。代理拒绝 CONNECT 的 `ProxyError`（本机最常见的故障）与 `PoolTimeout` 并入「没发出、
+    # 可以重试」。三处拼 `OrderOutcomeUnknown` 的代码收成一个 `_ambiguous`；净增的大半是解释 -1007 为什么
+    # 不能重发的注释。
+    "beidou_exchange": 734,
     "beidou_shared": 289,
     # +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
     # an `all(isinstance(...))` generator that mypy 2.x stopped reading - part of the 30 type errors that

@@ -1030,17 +1030,32 @@ class LiveEngine:
         the completion order was), so the record is the same sequence at any concurrency.
 
         Turning it on is a wiring decision, taken outside this file.
+
+        Two rules hold at any concurrency (2026-09-25).  Reductions are sent first: they free margin,
+        and they are the orders a bar can least afford to lose.  And one order raising no longer
+        cancels the orders behind it: the serial path used to stop at the first raise, so a 503 that
+        outlasted the retries of one order's pre-submit query kept every order planned after it -
+        exits included - from being sent.  Both paths now send everything, record what came back, and
+        only then re-raise the first failure, so the ERROR row still says the cycle failed.
         """
+        orders = sorted(orders, key=lambda order: not order.reduce_only)
         if self.config.dry_run:
             for order in orders:
                 record["orders"].append({**order.to_dict(), "status": "DRY_RUN"})
             return []
         if self.order_concurrency <= 1 or len(orders) < 2:
             reports: list[ExecutionReport] = []
+            failure: Exception | None = None
             for order in orders:
-                report = await self._place(order)
+                try:
+                    report = await self._place(order)
+                except Exception as exc:
+                    failure = failure or exc
+                    continue
                 reports.append(report)
                 self._record_fill(report, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
+            if failure is not None:
+                raise failure
             return reports
         gate = asyncio.Semaphore(self.order_concurrency)
 
