@@ -41,6 +41,7 @@ from beidou_data.repair import (
     venue_sources,
 )
 from beidou_data.spot import (
+    ALWAYS_MAPPED,
     SPOT_MARKET,
     SpotClient,
     SpotMapping,
@@ -286,7 +287,12 @@ def data_spot(universe_path: str, root: str, symbols: str, interval: str, start:
     history_start = Month.parse(start or config.history_start)
     perp_store = KlineStore(root)
     spot_store = KlineStore(root, kind=SPOT_KLINE_KIND)
-    wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()] or perp_store.symbols(interval)
+    held = perp_store.symbols(interval)
+    # An explicit --symbols is taken as asked.  The default run is the daily job's, and it also maps the legs a
+    # reading needs whatever the store holds (`ALWAYS_MAPPED`); an empty store still has nothing to map.
+    wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()] or (
+        sorted({*held, *ALWAYS_MAPPED}) if held else []
+    )
     if not wanted:
         raise click.ClickException(f"no perpetuals to map: {perp_store.directory} holds no {interval} klines")
     with SpotClient(spot_url) as client, ArchiveClient() as archive:
