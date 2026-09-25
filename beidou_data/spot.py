@@ -65,7 +65,7 @@ import httpx
 import numpy as np
 import pandas as pd
 
-from beidou_data.binance_public import PublicClient
+from beidou_data.binance_public import PublicClient, is_invalid_symbol
 
 SPOT_BASE_URL = "https://api.binance.com"
 SPOT_MARKET = "spot"  # the `market` segment of a data.binance.vision archive path
@@ -357,6 +357,6 @@ class SpotClient(PublicClient):
         try:
             return super().klines(symbol, interval, start_ms=start_ms, end_ms=end_ms, limit=limit)
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 400 and '"code":-1121' in exc.response.text.replace(" ", ""):
+            if is_invalid_symbol(exc):
                 raise SymbolNotListed(symbol) from exc
             raise

@@ -246,6 +246,8 @@ k = 0.60 时每根 bar 减 3.22e-05（pit）/ 3.16e-05（static），乘 8,760 �
 - **09-23 的序列上逐位复现。** pit 12/12、static 12/12 行，对 p32h 的全精度输出（7 行）与 D3 那次的输出（5 行），比中位回撤、q95、CAGR、q95(USDT)、P 五个量。
   那三份文件不在仓库里：p32h 的在 `.claude/worktrees/intelligent-grothendieck-891607/scratchpad/`，
   D3 的在 `.claude/worktrees/intelligent-tharp-412f0b/scratchpad/d3_multibook_out/`。
+  **后续（同日）**：操作者裁定归档。它们现在在 `reports/research/k-scan-20260923/`，8 个文件的大小与 sha256 见
+  RESEARCH_LOG「操作者三条裁定」一节。
 - **今天的面板只在尾部不同。** pit 从 2026-09-03 12:00Z 起共 461 根，static 从 09-18 17:00Z 起。
   原因是 09-23 修的数据同步（`beidou_cli/data_cmd.py` 的 `_pool_and_leavers`）补回了缺的 K 线。
   把 TUTUSDT ≤ 09-03 11:00Z、CYSUSDT ≤ 09-04 06:00Z、LSKUSDT ≤ 09-18 16:00Z 截回（K 线与 funding）再建，
@@ -280,6 +282,7 @@ k = 0.60 时每根 bar 减 3.22e-05（pit）/ 3.16e-05（static），乘 8,760 �
 ```bash
 PYTHONPATH=. .venv/bin/python scratchpad/k_remeasure_honest_drift_20260925.py --workers 12
 # 可选：--out DIR；--reference-dir DIR（放 09-23 的 series-{pit,static}.npz、p32h-{pit,static}.json、kgrid-{pit,static}-2000.json）
+# 这三组文件 2026-09-25 起归档在 reports/research/k-scan-20260923/，可以直接传这个目录
 ```
 
 2026-09-25 实测：建 4 组面板 197 秒。168 个臂里 104 个带梯子循环，机器空闲时单核每个 130–180 秒（首次运行，66 个循环臂的范围）。

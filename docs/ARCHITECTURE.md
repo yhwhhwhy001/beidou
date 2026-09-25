@@ -12,11 +12,11 @@ demo venue (Binance USDⓈ-M) ◄── beidou_exchange ◄── beidou_live (s
 | 包 | 职责 | 允许依赖 |
 | --- | --- | --- |
 | `beidou_shared` | 值类型（Side、InstrumentRules、Position、OrderRequest/Ack）、YAML/env 配置加载 | stdlib、pyyaml |
-| `beidou_data` | 官方月度归档下载与校验、REST 补齐、parquet 存储、universe 排名滞回、**交易池**（`pool.py`：日线同步、时点成员表、实盘每日刷新）、实盘闭合 K 线 | shared |
+| `beidou_data` | 官方月度归档下载与校验、REST 补齐、parquet 存储、universe 排名滞回、**交易池**（`pool.py`：日线同步、时点成员表、实盘每日刷新）、实盘闭合 K 线、**缺口修补**（`repair.py`：K 线与资金费的缺口向日归档和 REST 各问一次，只合并缺口内的行；源头也没有的记进数据根目录的 `confirmed_gaps.json`，即 confirmed gap；不插值、不前向填充） | shared |
 | `beidou_alpha` | 特征、信号、集成、组合构建、**overlays**（exit overlay、回撤节流、风险预算阶梯）、回测、验证、报告。**纯函数，零 I/O** | numpy、pandas |
 | `beidou_exchange` | Binance USDⓈ-M REST：签名与时钟重同步、**限频错误的退避**（被动）、写入歧义语义（`OrderOutcomeUnknown`）、规则量化、下单/查单/仓位、杠杆档位、时间窗分页；host allowlist + kill-switch | shared、httpx |
 | `beidou_live` | bar 驱动循环：目标权重 → 节流 → exit overlay → 护栏 → 与真实仓位求差 → 参与率/保证金缩放 → 幂等下单 → 对账 → 归因/心跳/日报（含 P13 风险预算监控）；每日池刷新与显式平仓 | alpha、data、exchange、shared |
-| `beidou_cli` | `beidou data sync\|pool\|status\|spot\|metrics`、`research backtest\|validate\|diagnose\|correlate\|overlay\|book\|decompose\|mine\|list\|power\|forward`（`forward add\|status\|retire`）、`governance`（17 个子命令：`next\|advance\|plan\|gate\|apply\|canary\|replay\|status\|tenure\|transactions\|verdicts\|review\|divergence\|reopen\|window\|enable\|disable`）、`live run\|status\|verify\|soak\|flatten\|kill-switch\|alert-test`、`report daily\|weekly\|beta` | 全部 |
+| `beidou_cli` | `beidou data sync\|pool\|status\|spot\|metrics\|repair`、`research backtest\|validate\|diagnose\|correlate\|overlay\|book\|decompose\|mine\|list\|power\|forward`（`forward add\|status\|retire`）、`governance`（17 个子命令：`next\|advance\|plan\|gate\|apply\|canary\|replay\|status\|tenure\|transactions\|verdicts\|review\|divergence\|reopen\|window\|enable\|disable`）、`live run\|status\|verify\|soak\|flatten\|kill-switch\|alert-test`、`report daily\|weekly\|beta` | 全部 |
 
 上表 2026-09-13 更正过一处：`beidou_exchange` 原本写的是「限频、熔断」，而代码里从来没有主动配额管理，也没有断路器——只有被动的 429/418 + `Retry-After` 退避重试。`X-MBX-USED-WEIGHT-*` 被记进 `used_weight` 但没有任何读取方，`consecutive_transport_failures` 同样只写不读，所以一个正走向权重上限的客户端和一个闲着的客户端在日志里长得一模一样。现在两者各有一条**边沿触发的 warning**（`USED_WEIGHT_WARN` / `TRANSPORT_FAILURE_WARN`），**仍然不 sleep**：主动节流会改变实盘循环运行中的行为，那是一次要单独定价的改动，不是补文档的副产品。这个包里唯一的「熔断」是 kill-switch 文件加 host allowlist（`guard.py`），已单列。循环层另有一道连续失败熔断（`beidou_live/engine.py` 的 `breaker_stop`），不在这个包里。
 

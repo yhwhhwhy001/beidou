@@ -28,6 +28,18 @@ from beidou_data.pool import (
     point_in_time_membership,
     sync_daily,
 )
+from beidou_data.repair import (
+    CONFIRMED_GAPS_FILE,
+    FUNDING,
+    Gap,
+    find_gaps,
+    plan,
+    read_confirmed,
+    record_confirmed,
+    repair,
+    utc,
+    venue_sources,
+)
 from beidou_data.spot import (
     SPOT_MARKET,
     SpotClient,
@@ -328,20 +340,97 @@ def data_status(root: str, interval: str) -> None:
     """Show stored symbols, row counts and last bar."""
     store = KlineStore(root)
     universe = read_universe(root)
-    holes = 0
+    confirmed = read_confirmed(root)
+    holes = known = 0
     for symbol in store.symbols(interval):
         last = store.last_open_time(symbol, interval)
         stamp = "" if last is None else time.strftime("%Y-%m-%d %H:%M", time.gmtime(last / 1000))
         flag = "*" if symbol in universe else " "
-        # T-D01: a monthly archive plus a REST tail can leave a hole that a backtest reads as a jump
-        gaps = store.gaps(symbol, interval)
-        holes += len(gaps)
+        # T-D01: a monthly archive plus a REST tail can leave a hole that a backtest reads as a jump.
+        # One the sources were asked for and do not hold is a confirmed gap, counted once below.
+        found = store.gaps(symbol, interval)
+        gaps = [(a, b) for a, b in found if (f"klines/{interval}", symbol, a, b) not in confirmed]
+        holes, known = holes + len(gaps), known + len(found) - len(gaps)
         note = (
             "" if not gaps else f"  GAPS={len(gaps)} first={time.strftime('%Y-%m-%d', time.gmtime(gaps[0][0] / 1000))}"
         )
         click.echo(f"{flag} {symbol:<12} rows={store.count(symbol, interval):>7} last={stamp} UTC{note}")
     click.echo(f"universe: {', '.join(universe) if universe else '<not selected>'}")
-    click.echo(f"gaps: {holes} missing stretch(es) across {len(store.symbols(interval))} symbols")
+    click.echo(
+        f"gaps: {holes} missing stretch(es) across {len(store.symbols(interval))} symbols; "
+        f"{known} confirmed absent upstream ({CONFIRMED_GAPS_FILE}), not counted"
+    )
+
+
+def _hole(gap: Gap) -> str:
+    """First and last missing bar for klines; the two settlements around the hole for funding."""
+    if gap.dataset == FUNDING:
+        return f"{utc(gap.after)} -> {utc(gap.before)}  ~{gap.missing} settlement(s)"
+    step = interval_ms(gap.dataset.split("/", 1)[1])
+    return f"{utc(gap.after + step)} .. {utc(gap.before - step)}  {gap.missing} bar(s)"
+
+
+@data.command("repair")
+@click.option("--root", default=".beidou/data", show_default=True, help="parquet store root")
+@click.option("--interval", default="1h", show_default=True)
+@click.option("--symbols", default="", help="comma-separated (default: every symbol either store holds)")
+@click.option("--klines/--no-klines", default=True, show_default=True)
+@click.option("--funding/--no-funding", default=True, show_default=True)
+@click.option("--market-url", default="https://fapi.binance.com", show_default=True)
+@click.option("--apply", "apply_", is_flag=True, help="fetch and write; without it nothing is fetched or written")
+def data_repair(
+    root: str, interval: str, symbols: str, klines: bool, funding: bool, market_url: str, apply_: bool
+) -> None:
+    """Ask the sources once for every hole in the stored klines and funding (9.4).
+
+    A dry run unless --apply: it lists each hole with the daily archive files and REST calls it would
+    make and an estimate of the bytes, and opens neither the network nor anything for writing.  --apply
+    merges what the sources hold, only strictly inside a hole, and records what they do not hold in
+    confirmed_gaps.json; holes recorded there are not asked for again.  Nothing is interpolated or
+    filled.  Not while `data sync` runs (17:20Z): both rewrite the same parquet files.
+    """
+    wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()] or None
+    confirmed = read_confirmed(root)
+    found = find_gaps(root, interval, wanted, klines=klines, funding=funding)
+    todo = [gap for gap in found if gap.key not in confirmed]
+    plans = [plan(gap) for gap in todo]
+    for fetch in plans:
+        rest = f"{fetch.rest_calls} REST call(s)"
+        cost = f"{len(fetch.days)} archive day file(s), {rest}" if fetch.days else rest
+        click.echo(f"{fetch.gap.dataset:<9} {fetch.gap.symbol:<14} {_hole(fetch.gap)}: {cost}")
+    for dataset in sorted({gap.dataset for gap in found}):
+        mine = [gap for gap in todo if gap.dataset == dataset]
+        click.echo(
+            f"{dataset}: {len(mine)} hole(s), {sum(g.missing for g in mine)} missing, "
+            f"{len({g.symbol for g in mine})} symbol(s); already confirmed, not asked: "
+            f"{sum(1 for gap in found if gap.dataset == dataset) - len(mine)}"
+        )
+    days = sum(len(fetch.days) for fetch in plans)
+    click.echo(
+        f"fetch: {days} archive day file(s) (+{days} CHECKSUM), up to {sum(f.rest_calls for f in plans)} REST "
+        f"call(s), about {sum(f.est_bytes for f in plans) / 1e6:.2f} MB"
+    )
+    if not apply_ or not todo:
+        click.echo("dry run: nothing fetched, nothing written (--apply does both)" if todo else "nothing to ask for")
+        return
+    with PublicClient(market_url) as public, ArchiveClient() as archive:
+        now_ms = public.server_time_ms()
+        sources = venue_sources(archive, public)
+        outcomes = []
+        for gap in todo:
+            outcome = repair(gap, root=root, sources=sources, now_ms=now_ms)
+            outcomes.append(outcome)
+            answers = "; ".join(f"{source}: {answer}" for source, answer in outcome.answers.items())
+            status = (
+                f"ERRORS: {' | '.join(outcome.errors)}" if outcome.errors else f"confirmed {len(outcome.confirmed)}"
+            )
+            click.echo(f"{gap.dataset:<9} {gap.symbol:<14} +{outcome.added} row(s), {status} ({answers})")
+    path, new = record_confirmed(root, outcomes, now_ms)
+    failed = sum(1 for outcome in outcomes if outcome.errors)
+    click.echo(
+        f"repaired {sum(o.added for o in outcomes)} row(s); {new} newly confirmed -> {path}; "
+        f"{failed} hole(s) with errors, not recorded (run again)"
+    )
 
 
 @data.group("pool")
@@ -581,4 +670,4 @@ def pool_lag(root: str, day: str | None, alert_days: int, check: bool) -> None:
     click.echo(line)
 
 
-__all__ = ["data_status", "data_sync", "pool_history", "pool_lag", "pool_refresh"]
+__all__ = ["data_repair", "data_status", "data_sync", "pool_history", "pool_lag", "pool_refresh"]
