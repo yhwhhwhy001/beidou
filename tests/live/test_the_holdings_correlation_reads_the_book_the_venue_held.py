@@ -1,15 +1,20 @@
 """#3.4 / #8.9: the correlation between holdings is read off the book the venue held, never off the targets.
 
-`beidou_live.report_risk.holdings_correlation` rebuilds the held book from a cycle row's order and skip rows
-(`current_notional`), checks the rebuild against `gross_before`, and reads the archive's hourly closes over 7
-and 30 days.  The first fixture is the live row of bar 2026-09-24T17:00Z (demo account), its plan section
-copied field for field from `cycles.jsonl`: one order - D3 closing AKEUSDT while `targets` still carried it -
-and a NO_TRADE_BAND skip row for each of the other sixteen names.  The restart row after it copies the keys
-of the one written over bar 2026-09-19T16:00Z.  Those are the shapes a hand-made row gets wrong: the held
-weight sits up to 40% of itself away from the target, and a SKIPPED row can follow a traded one on its bar.
+`beidou_live.report_risk.holdings_correlation` rebuilds the held book - the loop's managed positions - from a
+cycle row's order and skip rows (`current_notional`), checks the rebuild against `gross_before`, and reads the
+archive's hourly closes over 7 and 30 days.  The first fixture is the live row of bar 2026-09-24T17:00Z (demo
+account), its plan section copied field for field from `cycles.jsonl`: one order - D3 closing AKEUSDT while
+`targets` still carried it - and a NO_TRADE_BAND skip row for each of the other sixteen names.  The restart
+row after it copies the keys of the one written over bar 2026-09-19T16:00Z.  Those are the shapes a hand-made
+row gets wrong: the held weight sits up to 40% of itself away from the target, and a SKIPPED row can follow a
+traded one on its bar.
 
 The numbers are checked on the real August 2026 closes against an independent pandas computation, and the
 effective number of bets against the three cases where Meucci's definition has a closed form.
+
+The 2026-09-25 review added the rest: the reconciliation's tolerance pinned from both sides (the widest gap
+the record has shown reads, the 2026-09-24T17:00Z book without AKEUSDT does not, nor does a NaN), a guard skip
+walked past, the whole reading inside the catch, and where the archive stopped.
 """
 
 from __future__ import annotations
@@ -99,6 +104,20 @@ BAND_HELD = {
 }
 
 
+def _band_held() -> list[dict[str, Any]]:
+    """The row's sixteen NO_TRADE_BAND skip rows, under the row's own key names."""
+    return [
+        {
+            "current_notional": current,
+            "delta_notional": delta,
+            "reason": "NO_TRADE_BAND",
+            "symbol": symbol,
+            "threshold": threshold,
+        }
+        for symbol, (current, delta, threshold) in BAND_HELD.items()
+    ]
+
+
 def _live_row(**overrides: Any) -> dict[str, Any]:
     """The live row of bar 2026-09-24T17:00Z, with every field this reading, or the report around it, reads."""
     return {
@@ -115,19 +134,29 @@ def _live_row(**overrides: Any) -> dict[str, Any]:
         "gross_before": GROSS_BEFORE,
         "orders": [dict(ORDER)],
         "skip": False,
-        "skipped": [
-            {
-                "current_notional": current,
-                "delta_notional": delta,
-                "reason": "NO_TRADE_BAND",
-                "symbol": symbol,
-                "threshold": threshold,
-            }
-            for symbol, (current, delta, threshold) in BAND_HELD.items()
-        ],
+        "skipped": _band_held(),
         "targets": dict(TARGETS),
         **overrides,
     }
+
+
+def _guard_skip(bar_ms: int, as_of_ms: int) -> dict[str, Any]:
+    """What `LiveEngine.run_cycle` writes when a guard skips the bar: the whole record, with no plan in it.
+
+    `evaluate_guards` sets `skip_cycle` on STALE_MARKET_DATA alone, and `run_cycle` returns before
+    `plan_rebalance`, so `orders` and `skipped` stay the empty lists the record was built with.  The record
+    has held none so far (0 of the 539 traded rows to 2026-09-25T05:00Z), so the keys follow the engine.
+    """
+    return _live_row(
+        at=pd.Timestamp(bar_ms + HOUR + 31_000, unit="ms", tz="UTC").isoformat(),
+        bar=pd.Timestamp(bar_ms, unit="ms", tz="UTC").isoformat(),
+        bar_open_ms=bar_ms,
+        as_of_ms=as_of_ms,
+        guard_reasons=["STALE_MARKET_DATA"],
+        skip=True,
+        orders=[],
+        skipped=[],
+    )
 
 
 def _restart_row() -> dict[str, Any]:
@@ -197,6 +226,10 @@ def test_the_weights_are_the_venues_positions_not_the_targets(tmp_path: Path) ->
         assert 1.0 <= window["effective_bets"] <= 17.0
         assert window["vs_btc"]["BTCUSDT"] == pytest.approx(1.0, abs=1e-12)
         assert window["last_bar"] == "2026-09-24T17:00:00+00:00"
+    # The rows only ever see managed positions, and the weights are fractions of TOTAL equity: say both.
+    held = _holdings_correlation_lines(block, {})["held book"]
+    assert "gross 1.00x total equity (collateral included): the loop's managed positions at bar 2026-09-24T17" in held
+    assert "venue" not in held
 
 
 def test_on_real_august_closes_every_number_is_the_independent_pandas_reading(tmp_path: Path, august_dir: Path) -> None:
@@ -319,6 +352,22 @@ def _never(symbol: str) -> pd.Series:
         # 2026-09-03: `gross_before` read 0.0 on an invested book - the zero `Position.notional`'s docstring records.
         ({"gross_before": 0.0}, "gross_before 0.0"),
         ({"gross_before": ORDER["current_notional"], "skipped": []}, "a correlation needs two"),
+        # The same row with AKEUSDT (0.89% of gross) skipped for a reason that records no notional, under
+        # `plan_rebalance`'s own keys for it.  The old 1% tolerance read this as sixteen names and 1.72
+        # effective bets over 7 days, against seventeen and 2.10.
+        (
+            {
+                "orders": [],
+                "skipped": [
+                    *_band_held(),
+                    {"symbol": "AKEUSDT", "reason": "QUANTITY_ROUNDS_TO_ZERO", "delta_notional": -115.49588661},
+                ],
+            },
+            "99.11% of gross_before",
+        ),
+        # A NaN passed `abs(nan - 1) > 0.01`, and its weights made `effective_bets` read 1.0.
+        ({"skipped": [{**_band_held()[0], "current_notional": math.nan}, *_band_held()[1:]]}, "nan% of gross_before"),
+        ({"gross_before": math.nan}, "gross_before nan"),
     ],
 )
 def test_a_book_the_rows_cannot_account_for_is_refused_not_read_short(
@@ -332,6 +381,66 @@ def test_a_book_the_rows_cannot_account_for_is_refused_not_read_short(
         lines["measured"] == "no"
         and lines["book_vol ex_ante / target / clipped_risk_share"] == "60.00% / 60.00% / 0.00%"
     )
+
+
+def test_the_widest_gap_the_record_has_shown_still_reads(tmp_path: Path) -> None:
+    """0.055% (bar 2026-09-20T02:00Z) is two marks read a moment apart, not a missing name: the tolerance's floor."""
+    row = _live_row(gross_before=GROSS_BEFORE * 1.00055)
+    block = holdings_correlation(_store(tmp_path, [row]), "2026-09-24", closes=_walks(sorted(TARGETS)).__getitem__)
+    assert block["measured"] is True and block["coverage"] == pytest.approx(1.0 / 1.00055, rel=1e-9)
+    assert len(block["weights"]) == 17
+
+
+def test_a_guard_skip_is_walked_past_and_a_later_day_is_never_read(tmp_path: Path) -> None:
+    """A guard skip plans nothing, so its rows account for 0% of `gross_before`: the cycle before it is read.
+
+    `liquidity_to_close`'s rule, day boundary included: a day whose only cycle was skipped reads the last one
+    that planned before it, and a past day's report never sees a row written after it.
+    """
+    later = _live_row(as_of_ms=BAR + 2 * DAY, bar_open_ms=BAR + 2 * DAY, bar="2026-09-26T17:00:00+00:00")
+    rows = [_live_row(), _guard_skip(BAR + HOUR, BAR), _guard_skip(BAR + DAY, BAR + DAY - HOUR), later]
+    store = _store(tmp_path, rows)
+    closes = _walks(sorted(TARGETS)).__getitem__
+    for day in ("2026-09-24", "2026-09-25"):
+        block = holdings_correlation(store, day, closes=closes)
+        assert block["measured"] is True and block["bar"] == "2026-09-24T17:00:00+00:00", day
+        assert block["coverage"] == pytest.approx(1.0, abs=1e-9)
+    before = holdings_correlation(store, "2026-09-23", closes=_never)
+    assert before["measured"] is False and before["reason"] == "no traded cycle on or before 2026-09-23"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [({"skipped": ["not an entry"]}, "AttributeError"), ({"equity": "n/a"}, "ValueError")],
+)
+def test_a_garbled_row_costs_the_block_and_not_the_report(
+    tmp_path: Path, overrides: dict[str, Any], error: str
+) -> None:
+    """The catch covers the rebuild too, not only the archive: it runs inside the hourly check."""
+    block = holdings_correlation(_store(tmp_path, [_live_row(**overrides)]), "2026-09-24", closes=_never)
+    assert block["measured"] is False and block["reason"].startswith(f"{error}: ")
+    assert _holdings_correlation_lines(block, {})["measured"] == "no"
+
+
+def test_where_the_archive_stopped_is_printed_and_both_windows_lose_those_bars(tmp_path: Path) -> None:
+    """The archive syncs once a day, so it can stop a day short of the decision bar: the page has to say where.
+
+    Seven bars is the lag the 2026-09-24 report carried when rendered on 09-25: its last cycle decided on
+    23:00Z and the archive stopped at the 16:00Z bar of the 17:20Z sync.
+    """
+    short = _walks(sorted(TARGETS), end=BAR - 7 * HOUR)
+    block = holdings_correlation(_store(tmp_path / "a", [_live_row()]), "2026-09-24", closes=short.__getitem__)
+    assert block["closes_through_ms"] == BAR - 7 * HOUR and block["closes_lag_bars"] == 7
+    assert (block["windows"]["7d"]["bars"], block["windows"]["30d"]["bars"]) == (168 - 7, 720 - 7)
+    assert block["windows"]["7d"]["last_bar"] == block["windows"]["30d"]["last_bar"] == "2026-09-24T10:00:00+00:00"
+    assert _holdings_correlation_lines(block, {})["收盘价截至"].startswith(
+        "归档最后一根 2026-09-24T10:00:00+00:00，比决策 bar 早 7 根。"
+    )
+    level = holdings_correlation(
+        _store(tmp_path / "b", [_live_row()]), "2026-09-24", closes=_walks(sorted(TARGETS)).__getitem__
+    )
+    assert level["closes_through_ms"] == BAR and level["closes_lag_bars"] == 0
+    assert "，就是决策 bar。" in _holdings_correlation_lines(level, {})["收盘价截至"]
 
 
 def test_a_window_short_of_half_its_bars_or_on_a_frozen_price_says_so(tmp_path: Path) -> None:
@@ -360,6 +469,9 @@ def test_the_daily_report_prints_it_after_m014_and_pages_on_nothing(tmp_path: Pa
     assert m014 < ours < markdown.index("## Clock (D-025)") and markdown.count("\n## ", m014, ours) == 0
     # Quoted, not recomputed: the realised line is the Risk budget (P13) section's own text.
     assert f"| realised vol (P13, quoted) | {_risk_budget_lines(payload['risk_budget'])['realised vol']} |" in markdown
+    # One cycle, two snapshots: each section says which one it took and points at the other.
+    assert payload["liquidity_to_close"]["bar"] == payload["holdings_correlation"]["bar"]
+    assert "| 与 3.9 的快照不同 | 这里是本周期下单前的持仓" in markdown[ours:]
 
     without = {key: value for key, value in payload.items() if key != "holdings_correlation"}
     assert daily_alerts(payload) == daily_alerts(without)
