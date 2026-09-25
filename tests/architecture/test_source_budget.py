@@ -3774,8 +3774,8 @@ CEILING = {
     # K 线，交给引擎已有的 `_hold_dropped`，不再从 `gather` 里抛出、让整个周期失败。400 在 klines 上实际就是
     # 交易所不认识这个币（-1121，下架或改名）：以前每个周期都失败，连续 12 次熔断停掉循环，为的是一个币。
     # 429/418、重试后仍是 5xx、传输错误照旧让周期失败，那是通路的问题，不是币的问题。19 行里 7 行是那段
-    # 注释，写的正是为什么只放行 400。没有它，兜底很容易被放宽成所有异常，那样一次限频就会被读成十七个币
-    # 同时下架。
+    # 注释，写的正是为什么只放行 400。没有它，兜底很容易被放宽成所有异常，那样一次限频就会被读成撞上它的
+    # 那几个币下架了，而线上 `dropped_after` 是 1，当根就平。
     "beidou_data": 3_200,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
