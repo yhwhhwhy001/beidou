@@ -6,11 +6,11 @@ conflicts here and in the source budget table).  The readings now live by the ch
 answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
 
     report_decay       #1.10 edge decay, #4.10 signal monitoring, the automatic part of D.3
-    report_risk        #3 the daily risk dashboard
+    report_risk        #3 the daily risk dashboard, with #3.4 / #8.9 holdings correlation and #3.9 liquidity
     report_exits       #1.5 / #3.2 the exit overlay
-    report_execution   #10 execution (M-Q08 itself is execution_fidelity.py)
+    report_execution   #10 execution, with #10.9 / #10.10 per-order TCA (M-Q08 itself is execution_fidelity.py)
     report_data        #9 data (bar sanity is bar_sanity.py)
-    report_beta        #6.9 attribution: market beta (D-045)
+    report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
     report_governance  the weekly's effort share and pre-registration order
     report_common      what all of them read the state files with
 
