@@ -206,15 +206,21 @@ async def _second_cycle(engine: LiveEngine, market: FakeMarketData, venue: FakeV
     `deescalated` puts the loop in R8's acting state through R8's own inputs: an attribution row deep
     enough to sit between the two rungs, and a carried cycle count past the grace.  Faking the block
     itself would test nothing about the ladder.
+
+    Since 2026-09-25 the ruler adds an income at the row of the cycle that READ it, and a record's first
+    row is its baseline.  So the loss the second cycle's ladder reads is read by the FIRST cycle, on top
+    of one earlier row - the history a running loop always has.  Both arms get that row.
     """
+    before = market.bar_open_ms(market.cursor - 2)
+    engine.store.append_cycle({"bar_open_ms": before, "equity": venue.balance})
+    if deescalated:
+        engine.store.append_attribution(
+            {"bar_open_ms": before, "until_ms": before + 3_600_000, "total": -0.55 * venue.balance}
+        )
     await engine.startup()
     await engine.run_cycle(market.bar_open_ms(market.cursor - 1))
     if deescalated:
-        rows = engine.store.read_jsonl(engine.store.cycles_path)
-        bar = int(rows[-1]["bar_open_ms"])
-        engine.store.append_attribution(
-            {"bar_open_ms": bar, "until_ms": bar + 3_600_000, "total": -0.55 * float(rows[0]["equity"])}
-        )
+        bar = int(engine.store.read_jsonl(engine.store.cycles_path)[-1]["bar_open_ms"])
         engine.state.risk_ladder = {"cycles": 3, "rung": 0.45, "acting": True, "since_bar_ms": bar}
     market.cursor += 1
     for symbol in SYMBOLS:

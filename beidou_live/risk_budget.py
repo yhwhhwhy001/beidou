@@ -18,6 +18,7 @@ import math
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
 
@@ -327,6 +328,15 @@ def usdt_drawdown_state(rows: Sequence[Mapping[str, Any]], params: RiskBudgetPar
     }
 
 
+def _written_at(row: Mapping[str, Any]) -> float | None:
+    """When a ledger row was appended (`StateStore._append` stamps `at`), in seconds; ``None`` if unreadable."""
+    try:
+        stamp = datetime.fromisoformat(str(row["at"]))
+    except (KeyError, ValueError):
+        return None
+    return (stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)).timestamp()
+
+
 def attributed_drawdown_state(
     rows: Sequence[Mapping[str, Any]],
     attribution: Sequence[Mapping[str, Any]],
@@ -349,23 +359,51 @@ def attributed_drawdown_state(
     ``drawdown_state`` uses - a cycle whose external flows were re-baselined - because a demo reset
     arrives as a TRANSFER and carrying a pre-reset peak forward reports a drawdown nobody suffered.
 
+    Each income row is added at the row of the cycle that READ it, not at the bar it is stamped with
+    (operator ruling 2026-09-25, merged with the 2026-10-13 restart so the daily report and the loop
+    change rulers together).  `_ingest_income` stamps `state.last_bar_ms` - the previous cycle, whose
+    orders realised the income - while row k's `unrealized` is taken before cycle k's orders.  Added at
+    the stamped row, a close counted twice, once in that mark and once as income, and a winning one left
+    its spike in the running peak: over the 364 live cycles to 2026-09-24T18:00Z, 331 readings moved,
+    0.27pp deeper on average (1.58pp deeper, 0.51pp shallower at the extremes), the last -4.17% for
+    -2.89% (`scratchpad/r8_ruler_no_double_count.py`).  By the reading cycle's snapshot the closed
+    position has left `unrealized`, so income and mark describe one instant.
+
+    The reader is the first priced row whose bar is later than the stamp:
+
+    * SKIPPED and ERROR rows carry no equity and read nothing onto the path.  Income a failed cycle read
+      waits for the next priced row, as does income stamped with a bar whose row never got written.
+    * A re-run of the stamped bar (restarts wrote two to five priced rows for 16 bars, the last on
+      2026-09-06) is the reader only if written strictly after the income row.  The same second cannot
+      be ordered, so it goes to the next bar: that can err by a row, where reading the tie the other
+      way could put the income back on the stamped row itself, which is the double count.
+    * A baseline row - the first priced row, or a re-baselined one - already holds in its equity what
+      its cycle read, so that income is counted in ``in_base_rows`` and not added again.
+
+    Income newer than every written row is ``pending_rows``, off the reading: the last mark still holds
+    those positions.  The loop reads before it writes its own row, so both terms now come from the
+    same snapshot one cycle back, where only the unrealised one used to.
+
     Like every metric in this file it refuses to report zero when it cannot compute: a record with no
-    priced cycle, or with no attribution row inside it, says ``enforced: false`` and why.
+    priced cycle, or with no income landed past its baseline, says ``enforced: false`` and why.
     """
-    by_bar: dict[int, float] = {}
-    for row in attribution:
-        bar = row.get("bar_open_ms")
+    # (stamp, when read, file position, total), sorted so the incomes one row reads are a prefix - in
+    # any file order, as the per-bar dict this replaced was.
+    incomes: list[tuple[int, float | None, int, float]] = []
+    for position, row in enumerate(attribution):
         try:
-            key = int(bar)  # type: ignore[arg-type]
-            by_bar[key] = by_bar.get(key, 0.0) + float(row.get("total") or 0.0)
+            stamp = int(row.get("bar_open_ms"))  # type: ignore[arg-type]
+            incomes.append((stamp, _written_at(row), position, float(row.get("total") or 0.0)))
         except (TypeError, ValueError):
             continue
+    incomes.sort(key=lambda item: (item[0], item[1] is None, item[1] or 0.0, item[2]))
+    landed_up_to = 0
     base: float | None = None
     path = peak = 0.0
     drawdown = 0.0
     baseline_at: str | None = None
     bars = 0
-    used = 0
+    used = in_base = 0
     # 2026-09-14: the book's OPEN positions belong in this path.  Taking collateral repricing out is
     # what KILL-AR-05 asked for and is unchanged; taking the book's unrealised P&L out was never part
     # of that and is what made this ladder inert.  Measured over 2021-2026 at k=0.60: the
@@ -383,19 +421,28 @@ def attributed_drawdown_state(
         if not isinstance(value, int | float) or value <= 0:
             continue
         equity = float(value)
+        try:
+            bar_key: int | None = int(row.get("bar_open_ms"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            bar_key = None
+        written, first = _written_at(row), landed_up_to
+        while bar_key is not None and landed_up_to < len(incomes):
+            stamp, read_at, _, _ = incomes[landed_up_to]
+            rerun = bar_key == stamp and read_at is not None and written is not None and written > read_at
+            if bar_key <= stamp and not rerun:
+                break
+            landed_up_to += 1
+        landed = incomes[first:landed_up_to]
         if base is None or (row.get("external_flows") or {}).get("rebaselined"):
             base = path = peak = equity
             baseline_at = str(row.get("at") or "")
             bars = 0
             marked_from = None  # a re-baselined path re-anchors the open-position term too
+            in_base += len(landed)
+        elif landed:
+            path += sum(item[3] for item in landed)
+            used += len(landed)
         bars += 1
-        try:
-            bar_key = int(row.get("bar_open_ms"))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            bar_key = None
-        if bar_key is not None and bar_key in by_bar:
-            path += by_bar.pop(bar_key)
-            used += 1
         mark = row.get("unrealized")
         if isinstance(mark, int | float):
             marked_rows += 1
@@ -416,20 +463,23 @@ def attributed_drawdown_state(
             "action": None,
             "rows": 0,
         }
+    # Income no written row has read yet: in the loop, what this cycle just ingested, because the
+    # ladder runs before the cycle appends its row.  Off the reading by design, not lost - the last mark
+    # still holds the positions that income closed, and the next row adds it.  Income stamped on a bar
+    # no priced cycle covers was dropped as `orphaned` until 2026-09-25; it now lands on the next row.
+    pending = incomes[landed_up_to:]
+    waiting = {"pending_rows": len(pending), "pending_pnl": sum(item[3] for item in pending)}
     if used == 0:
         return {
             "enforced": False,
-            "why": "no attribution row lands on a priced cycle: the book has realised nothing to measure",
+            "why": "no income row has landed past the baseline: the book has realised nothing to measure yet",
             "value": None,
             "action": None,
             "rows": 0,
             "base": base,
             "baseline_at": baseline_at,
+            **waiting,
         }
-    # Attribution that landed on a bar no priced cycle covers is P&L this path never saw, and dropping
-    # it silently would understate the drawdown - the permissive direction.  Zero on the live record as
-    # of 2026-09-09; reported rather than assumed, because "it is zero today" is not a property.
-    orphaned = sum(by_bar.values())
     action: str | None = None
     if current <= -params.rollback_at:
         action = f"vol_target -> {params.rollback_to}"
@@ -449,8 +499,10 @@ def attributed_drawdown_state(
         # record whose rows predate `unrealized` reads `attributed_pnl` and means exactly what it used
         # to; one whose rows carry it reads `attributed_pnl+unrealized` and is the book's own
         # mark-to-market with collateral still excluded.  The two are not comparable across the
-        # boundary, and a name is the only thing that can say so after the fact.
-        "ruler": "attributed_pnl+unrealized" if marked_rows else "attributed_pnl",
+        # boundary, and a name is the only thing that can say so after the fact.  `_as_read` since the
+        # 2026-09-25 fix: income lands on the row that read it, so a close is counted once.  The rows a
+        # loop wrote before that restart read the old names, and this is how a reader tells them apart.
+        "ruler": "attributed_pnl_as_read+unrealized" if marked_rows else "attributed_pnl_as_read",
         "marked_rows": marked_rows,
         "path": path,
         "peak": peak,
@@ -471,11 +523,12 @@ def attributed_drawdown_state(
         "attributed": path - base,
         "baseline_at": baseline_at,
         "bars": bars,
+        # Each income row with a readable stamp is counted once: on the path, in a base, or pending.
         "rows": used,
+        "in_base_rows": in_base,
         "deescalate_at": -params.deescalate_at,
         "rollback_at": -params.rollback_at,
-        "orphaned_rows": len(by_bar),
-        "orphaned_pnl": orphaned,
+        **waiting,
         "action": action,
     }
 

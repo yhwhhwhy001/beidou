@@ -82,27 +82,33 @@ def test_the_profile_and_the_policy_cannot_disagree_about_the_rungs() -> None:
 
 
 async def test_a_fifty_percent_attributed_drawdown_alerts_then_acts_two_cycles_later(tmp_path: Path) -> None:
+    """Each loss is stamped with the bar that realised it and reaches the ruler on the NEXT row.
+
+    That row is the cycle that read the income (2026-09-25), so every `_attribute` below is followed by
+    the reader's `_cycle` before the ladder looks: the same readings as before, one row later.
+    """
     engine = _engine(tmp_path)
     store = engine.store
     bar = _cycle(store, 0, 10_000.0)
     _attribute(store, bar, 0.0)
+    bar = _cycle(store, 1, 10_000.0)
     first = await LiveEngine._risk_ladder(engine, bar)
     assert first["enforced"] and first["scalar"] == 1.0 and not first["acting"]
 
     # the book loses 50% of the account by trading; equity is left alone so only attribution moves
-    bar = _cycle(store, 1, 10_000.0)
     _attribute(store, bar, -5_000.0)
+    bar = _cycle(store, 2, 10_000.0)
     crossed = await LiveEngine._risk_ladder(engine, bar)
     assert crossed["drawdown"] == pytest.approx(-0.50)
     assert crossed["rung"] == 0.45 and crossed["cycles"] == 1
     assert crossed["scalar"] == 1.0 and not crossed["acting"], "the first crossing must not size anything"
     assert any("不缩仓" in m for m in engine.alerts.sent), engine.alerts.sent
 
-    bar = _cycle(store, 2, 10_000.0)
+    bar = _cycle(store, 3, 10_000.0)
     held = await LiveEngine._risk_ladder(engine, bar)
     assert held["cycles"] == 2 and held["scalar"] == 1.0 and not held["acting"]
 
-    bar = _cycle(store, 3, 10_000.0)
+    bar = _cycle(store, 4, 10_000.0)
     acting = await LiveEngine._risk_ladder(engine, bar)
     assert acting["cycles"] == 3 and acting["acting"]
     assert acting["scalar"] == pytest.approx(0.75), "AC-G7: vol_target 0.60 -> 0.45"
@@ -110,14 +116,14 @@ async def test_a_fifty_percent_attributed_drawdown_alerts_then_acts_two_cycles_l
     assert sum("已生效" in m for m in engine.alerts.sent) == 1
 
     # deepening past the second rung does not restart the grace - a worse loss must act faster, not slower
-    bar = _cycle(store, 4, 10_000.0)
     _attribute(store, bar, -2_100.0)  # -71% in total, past the second rung
+    bar = _cycle(store, 5, 10_000.0)
     deeper = await LiveEngine._risk_ladder(engine, bar)
     assert deeper["vol_target"] == 0.30 and deeper["scalar"] == pytest.approx(0.5) and deeper["acting"]
 
     # and it lifts when the drawdown does, with the recovery said out loud
-    bar = _cycle(store, 5, 10_000.0)
     _attribute(store, bar, 5_200.0)
+    bar = _cycle(store, 6, 10_000.0)
     lifted = await LiveEngine._risk_ladder(engine, bar)
     assert not lifted["acting"] and lifted["scalar"] == 1.0
     assert engine.state.risk_ladder == {}
@@ -181,20 +187,24 @@ async def test_a_reading_that_cannot_be_taken_does_not_lift_a_standing_action(tm
     assert block["held_blind"] and "realised nothing" in block["why"]
 
 
-def test_pnl_that_lands_on_no_priced_cycle_is_reported_rather_than_dropped(tmp_path: Path) -> None:
-    """The path is built off priced cycles, so attribution on an unpriced bar would vanish silently.
+def test_pnl_on_an_unpriced_bar_reaches_the_next_row_and_newer_pnl_is_reported_pending(tmp_path: Path) -> None:
+    """The path is built off priced cycles, so attribution on an unpriced bar used to vanish silently.
 
-    Vanishing understates the drawdown, which is the permissive direction, and "it is zero on today's
-    record" is not a property.  Zero on the live record as of 2026-09-09 - measured, and reported so the
-    day it stops being zero is visible.
+    Vanishing understates the drawdown, which is the permissive direction.  Until 2026-09-25 it was
+    reported as `orphaned`: the path was keyed on the stamped bar, and the stamp is `state.last_bar_ms`,
+    so a cycle that saved state and died before appending its row left a bar income could name and no
+    row could take.  Keyed on the reader, that income lands on the next priced row.  What no written row
+    has read yet is `pending` - reported, and neither dropped nor folded in.
     """
     store = StateStore(tmp_path)
     bar = _cycle(store, 0, 10_000.0)
-    _attribute(store, bar, -100.0)
-    _attribute(store, bar + 99 * BAR, -5_000.0)  # a bar no cycle ever priced
+    _attribute(store, bar, -100.0)  # read by the 01:00 cycle, which died before appending its row
+    _attribute(store, bar + BAR, -200.0)  # read by the 02:00 cycle, stamped with the bar that died
+    _cycle(store, 2, 10_000.0)
+    _attribute(store, bar + 99 * BAR, -5_000.0)  # a bar no cycle has priced yet
     reading = attributed_drawdown_state(
         store.read_jsonl(store.cycles_path), store.read_jsonl(store.attribution_path), RiskBudgetParams()
     )
-    assert reading["enforced"] and reading["rows"] == 1
-    assert reading["orphaned_rows"] == 1 and reading["orphaned_pnl"] == pytest.approx(-5_000.0)
-    assert reading["value"] == pytest.approx(-0.01), "the orphan is not silently folded in either"
+    assert reading["enforced"] and reading["rows"] == 2 and reading["path"] == pytest.approx(9_700.0)
+    assert reading["pending_rows"] == 1 and reading["pending_pnl"] == pytest.approx(-5_000.0)
+    assert reading["value"] == pytest.approx(-0.03), "the pending row is not silently folded in either"

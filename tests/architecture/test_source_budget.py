@@ -3400,7 +3400,20 @@ CEILING = {
     # 验收：每条修复改回去都有测试变红。今天的读数逐位不变；告警、周报、beta、status 逐字节相同。
     #
     # 留 40 行（14_124 -> 14_164），理由与上面几格逐字相同，不重述。
-    "beidou_live": 14_164,
+    #
+    # 2026-09-25（不编号，同上）。+53 beidou_live，14_124 -> 14_177，抬到 14_217。
+    #
+    # R8 的尺子不再把平仓的已实现盈亏算两次（操作者 09-25 裁定「修」，合入与 10-13 的重启同批）。第 k 行的
+    # `unrealized` 是下单前的快照，挂在第 k 行的收入却是下单后才实现的；盈利平仓的尖峰留在高水位里，亏损
+    # 平仓在读到它的那个周期读成两倍。现在每条收入挂在读入它的那一行。重放 364 个周期，与 W5 的「不重复
+    # 口径」逐位相同，09-24T18:00Z 从 −4.17% 变成 −2.89%（`scratchpad/r8_ruler_no_double_count.py`）。
+    #
+    # 花在哪：全在 `risk_budget.py`。docstring +25，写落点规则与三种边界（SKIPPED/ERROR 行、同一根 bar 的
+    # 重跑行、rebaseline）和实测影响；`_written_at` +9；落点逻辑净 +12；pending 与输出键 +4；import +1；
+    # 标签改名 `_as_read` 的注释 +2，让 10-13 之后的实盘记录自己说明用的是哪一把尺子。
+    #
+    # 留 40 行（14_177 -> 14_217），理由与上面几格逐字相同，不重述。
+    "beidou_live": 14_217,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
