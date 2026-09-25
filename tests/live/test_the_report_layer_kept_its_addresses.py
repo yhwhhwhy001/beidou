@@ -40,6 +40,7 @@ AREAS = (
     "report_exits",
     "report_execution",
     "report_data",
+    "report_events",
     "report_beta",
     "report_governance",
 )

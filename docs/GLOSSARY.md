@@ -41,6 +41,7 @@
 | bridge（D-041 bridge） | 桥 | `deploy/run_live.sh` 的 `BRIDGE_UNTIL`（2026-09-25 起） |
 | exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起） |
 | confirmed gap | 已确认缺口、真缺口 | `confirmed_gaps.json`、`beidou_data/repair.py`（2026-09-25 起） |
+| feature store | 特征库、特征存储、特征缓存 | `beidou_cli/research_feature_store.py`、`BEIDOU_FEATURE_STORE`（2026-09-25 起） |
 
 ## 保留中文的近形词
 
@@ -64,6 +65,11 @@
 `完全平仓`、`纯减仓`写中文。「每个币分别」写**按币**，不写「逐仓」：币安中文界面里「逐仓」指逐仓保证金，
 与全仓相对。2026-09-25 加日报的平仓流动性一节时定下。`参与率` 在代码里是 `max_participation`，`冲击`
 是 `ImpactModel`，两个词的写法见上面执行成本那一行。
+
+`事件风险`、`脱锚`、`交易所事故`、`极端行情`、`插针`写中文（2026-09-25，日报的 #8.10 一节）。代码里是
+`report_events.event_risk`、`stablecoin_peg`、`venue_incidents`、`market_extremes`。`CONTEXT.md` 把 venue
+写作「场地」，指下单去的 demo 端点；这一节读的是循环去两个 host 的整条路径（行情走 fapi，下单走 demo-fapi），
+分不出是哪一边，所以写**交易所事故**，不写场地事故。`插针`指一根 bar 的最高价或最低价远离收盘价。
 
 `书级` / `仓位级`这对说法改成**组合层** / **仓位层**——两个都是通用中文，不必用 `book-level`。
 
