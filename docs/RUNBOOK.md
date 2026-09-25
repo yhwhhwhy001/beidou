@@ -154,6 +154,11 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 
 ## D-041 bridge 到期（2026-10-13）
 
+**切换之后（2026-10-13 的切换 PR，分支 `live/k0175-switch-after-1013`）**：k 改为 0.175，tsmom 指向 k = 0.175 上的
+WEAK_PASS 证据，证据门清门；`tests/shipped_evidence.py` 的 exemption 已删除。bridge 那一段按设计留在脚本里，
+过期后不再生效；`BRIDGE_UNTIL` 改由 `test_the_bridge_stays_expired_on_the_date_it_was_given` 钉住。本节以下是切换
+之前写的处置，证据再次不清门时仍然适用。
+
 2026-10-13T00:00Z（北京 08:00）起，`deploy/run_live.sh` 不再给 armed 启动传 `--allow-unvalidated`，严格的
 证据门回来。同一刻，`tests/shipped_evidence.py` 的 exemption 与构造冻结也到期。分析、选项与裁定表在
 `docs/analysis/2026-09-25-october-13-readiness.md`；操作者 09-25 的裁定记在 RESEARCH_LOG「操作者四条裁定」一节。
@@ -176,8 +181,8 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
   每小时巡检报「心跳已过期」，阈值 4,000 秒（2026-09-25 起；循环停在某根 bar 之后，下一次 :10 就会报）。
 - 先平仓：`beidou live flatten --yes`。它不经过证据门，会挂上持久的 kill switch。恢复要先
   `beidou live kill-switch --release`，再启动，那时仍要过证据门。
-- 不要为了让循环起来去改 `BRIDGE_UNTIL` 或 `EXEMPT_UNTIL`。两者由测试钉成相等，挪日期就是延长 bridge，
-  是治理裁定。
+- 不要为了让循环起来去改 `BRIDGE_UNTIL`。挪日期就是延长 bridge，是治理裁定。切换之前它与 `EXEMPT_UNTIL`
+  由测试钉成相等；exemption 删除之后，由 `test_the_bridge_stays_expired_on_the_date_it_was_given` 钉住。
 
 ## 改了 registry / profile 之后
 
@@ -191,7 +196,7 @@ launchctl kickstart -k gui/$(id -u)/com.beidou.live
 
 ### 采纳 exit overlay / 信号改动的最短干净窗口（K-EX14，2026-09-07 操作者裁定）
 
-M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何 exit overlay 或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：风险预算阶梯（P13）触发，那是预登记的降档，不是采纳。档位以 `beidou_governance/policy.py` 的 `drawdown_ladder` 为准。2026-09-14 随预算重标，现为回撤 −49% / −70%（D-035）；此前的 −35% / −50% 已作废。
+M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录之前，不采纳任何 exit overlay 或信号改动——研究可以跑、结论可以写，但 `config/live.demo.yaml` 的 `exits` 与 registry 的信号参数不动。唯一例外：风险预算阶梯（P13）触发，那是预登记的降档，不是采纳。档位以 `beidou_governance/policy.py` 的 `drawdown_ladder` 为准。2026-10-13 随 k 0.175 按可动用口径重推，现为总权益口径的回撤 −28.03% / −40.05%（policy 0.3.6，D-035）；09-14 至 10-13 的 −49% / −70% 与更早的 −35% / −50% 都已作废。
 
 窗口起点**不写在这里**：它随每一次构造变更移动，写死在正文里的日期只会过期（这一段最初写的 2026-09-06T10:19Z / 最早采纳日 2026-10-06 就是如此，`unit_mode` 进指纹后一次重启即作废）。要当前答案，读这两处之一——`beidou report daily` 的 evidence-window 一节（`since_ms` 是起点、`bars` 是已积累的周期数），或 `cycles.jsonl` 里 `construction` 最后一次变化的那根 bar。最早采纳日 = 该起点 + 30 天。
 

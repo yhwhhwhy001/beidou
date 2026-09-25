@@ -34,24 +34,27 @@ def test_the_ladder_fires_at_its_two_thresholds_and_names_the_action() -> None:
     flat = [_cycle(i, 100.0) for i in range(5)]
     assert drawdown_state(flat, params)["action"] is None
     # 2026-09-14: the rungs moved to -49% / -70%, re-derived for the -70% budget declared with k=0.60.
-    assert drawdown_state([*flat, _cycle(5, 55.0)], params)["action"] is None  # -45%, inside
-    stepped = drawdown_state([*flat, _cycle(5, 50.0)], params)  # -50%
-    assert stepped["action"] == "vol_target -> 0.45"
-    rolled = drawdown_state([*flat, _cycle(5, 29.0)], params)  # -71%
-    assert rolled["action"] == "vol_target -> 0.3"
+    # 2026-10-13 (policy 0.3.6): -28.03% / -40.05%, the same rule at k=0.175 with the budget on tradable USDT.
+    assert drawdown_state([*flat, _cycle(5, 73.0)], params)["action"] is None  # -27%, inside
+    stepped = drawdown_state([*flat, _cycle(5, 70.0)], params)  # -30%
+    assert stepped["action"] == "vol_target -> 0.13125"
+    rolled = drawdown_state([*flat, _cycle(5, 59.0)], params)  # -41%
+    assert rolled["action"] == "vol_target -> 0.0875"
 
     # The thresholds THEMSELVES, which this test's name promised and the points above straddled: the
     # rungs compare with `>=`, and until now `>` passed here too.  `equity` is picked so the drawdown
-    # is exact in binary (1 - 51/100 == 0.49 and 1 - 30/100 == 0.70 both hold), so what this reads is
-    # the comparison rather than a rounding.  `risk_budget`'s four fields are the REPORTING copy of
-    # `Policy.drawdown_ladder`; the acting side's own boundary is pinned in
-    # `test_the_extracted_ladder_is_the_ladder_that_traded`, and these two must not disagree.
-    at_deescalate = drawdown_state([*flat, _cycle(5, 51.0)], params)  # exactly -49%
+    # is exact in binary (1 - 71.97/100 == 0.2803 holds), so what this reads is the comparison rather
+    # than a rounding.  `risk_budget`'s four fields are the REPORTING copy of `Policy.drawdown_ladder`;
+    # the acting side's own boundary is pinned in `test_the_extracted_ladder_is_the_ladder_that_traded`,
+    # and these two must not disagree.
+    at_deescalate = drawdown_state([*flat, _cycle(5, 71.97)], params)  # exactly -28.03%
     assert at_deescalate["value"] == params.deescalate_at
-    assert at_deescalate["action"] == "vol_target -> 0.45"
-    at_rollback = drawdown_state([*flat, _cycle(5, 30.0)], params)  # exactly -70%
-    assert at_rollback["value"] == params.rollback_at
-    assert at_rollback["action"] == "vol_target -> 0.3"
+    assert at_deescalate["action"] == "vol_target -> 0.13125"
+    # 0.4005 cannot be hit exactly: `1 - x` is exact for x in [0.5, 1] and 1 - 0.4005 is not a double, so
+    # no equity lands on it.  The rollback branch's `>=` is read on a rung that can be hit, 0.70.
+    at_rollback = drawdown_state([*flat, _cycle(5, 30.0)], RiskBudgetParams(rollback_at=0.70))  # exactly -70%
+    assert at_rollback["value"] == 0.70
+    assert at_rollback["action"] == "vol_target -> 0.0875"
 
 
 def test_a_rebaselined_cycle_resets_the_high_water_mark() -> None:

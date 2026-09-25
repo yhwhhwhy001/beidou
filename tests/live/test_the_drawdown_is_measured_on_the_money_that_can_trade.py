@@ -123,13 +123,15 @@ def test_a_zero_usdt_balance_is_not_a_reading() -> None:
 # --- the rung conversion, which is the part the ruling needs -------------------------------------------
 
 
-def test_the_shipped_rungs_convert_to_more_than_a_total_loss_and_that_is_reported_not_clamped() -> None:
-    """At 1.86x, `rollback_at` 0.70 lands at 130% of the tradable money - past zero.
+def test_the_shipped_rungs_convert_by_the_factor_and_past_a_total_loss_stay_reported_not_clamped() -> None:
+    """The conversion is the rungs times the factor, and a rung that lands past 100% is not clamped.
 
-    Not a defect in the ladder: it is calibrated on the operator's whole capital under cross margin,
-    where the collateral really does absorb losses.  It is the number the 2026-09-20 ruling needs, and
-    clamping it to 100% would hide exactly the fact that makes it a decision - that in this denominator
-    the rung has no reachable crossing at all.
+    Until 2026-10-13 the SHIPPED rungs were that case: `rollback_at` 0.70 was calibrated on total equity
+    and at 1.86x landed at 130% of the tradable money - past zero, no reachable crossing, the number the
+    2026-09-20 ruling needed.  Clamping it to 100% would have hidden exactly the fact that made it a
+    decision.  The 10-13 switch re-derived the rungs on the tradable caliber (policy 0.3.6), so at the
+    factor they were derived at they are the declared -49% / -70%, and the no-clamp half needs a factor
+    that has drifted much further (5x here) to be exercised.
     """
     rows = [_cycle(0, equity=10_000.0, usdt=5_000.0), _cycle(1, equity=9_000.0, usdt=4_000.0)]
 
@@ -137,7 +139,14 @@ def test_the_shipped_rungs_convert_to_more_than_a_total_loss_and_that_is_reporte
 
     assert rungs["deescalate_at"] == PARAMS.deescalate_at * 2.0
     assert rungs["rollback_at"] == PARAMS.rollback_at * 2.0
-    assert rungs["rollback_at"] > 1.0, "a rung past a total loss stays visible"
+    derived_at = 1.747858609376565  # 09-25 daily report's `vs_total_equity` (reports/daily/ is not in git)
+    assert PARAMS.deescalate_at * derived_at == pytest.approx(0.49, abs=1e-3)
+    assert PARAMS.rollback_at * derived_at == pytest.approx(0.70, abs=1e-3)
+
+    drifted = [_cycle(0, equity=10_000.0, usdt=2_000.0), _cycle(1, equity=9_000.0, usdt=1_000.0)]
+    past = usdt_drawdown_state(drifted, PARAMS)["rungs_in_this_denominator"]
+    assert past["rollback_at"] == PARAMS.rollback_at * 5.0
+    assert past["rollback_at"] > 1.0, "a rung past a total loss stays visible"
 
 
 def test_the_conversion_uses_each_series_own_peak_not_the_latest_ratio() -> None:

@@ -36,9 +36,9 @@ class _Alerts:
         self.sent.append(message)
 
 
-# 0.60 is the k the rungs are derived for since 2026-09-14; at a different k the scalars below mean
-# something else, which is the dependence `engine._risk_ladder` now clamps rather than hides.
-def _engine(tmp_path: Path, *, vol_target: float = 0.60) -> LiveEngine:
+# 0.175 is the k the rungs are derived for since 2026-10-13 (0.60 from 2026-09-14); at a different k the
+# scalars below mean something else, which is the dependence `engine._risk_ladder` now clamps rather than hides.
+def _engine(tmp_path: Path, *, vol_target: float = 0.175) -> LiveEngine:
     engine = LiveEngine.__new__(LiveEngine)
     engine.config = type("C", (), {"portfolio": type("P", (), {"vol_target": vol_target})()})()
     engine.store = StateStore(tmp_path)
@@ -81,7 +81,7 @@ def test_the_profile_and_the_policy_cannot_disagree_about_the_rungs() -> None:
 # --- T-G7-2: it fires, after the grace ---------------------------------------------------------
 
 
-async def test_a_fifty_percent_attributed_drawdown_alerts_then_acts_two_cycles_later(tmp_path: Path) -> None:
+async def test_a_thirty_percent_attributed_drawdown_alerts_then_acts_two_cycles_later(tmp_path: Path) -> None:
     engine = _engine(tmp_path)
     store = engine.store
     bar = _cycle(store, 0, 10_000.0)
@@ -89,12 +89,12 @@ async def test_a_fifty_percent_attributed_drawdown_alerts_then_acts_two_cycles_l
     first = await LiveEngine._risk_ladder(engine, bar)
     assert first["enforced"] and first["scalar"] == 1.0 and not first["acting"]
 
-    # the book loses 50% of the account by trading; equity is left alone so only attribution moves
+    # the book loses 30% of the account by trading; equity is left alone so only attribution moves
     bar = _cycle(store, 1, 10_000.0)
-    _attribute(store, bar, -5_000.0)
+    _attribute(store, bar, -3_000.0)
     crossed = await LiveEngine._risk_ladder(engine, bar)
-    assert crossed["drawdown"] == pytest.approx(-0.50)
-    assert crossed["rung"] == 0.45 and crossed["cycles"] == 1
+    assert crossed["drawdown"] == pytest.approx(-0.30)
+    assert crossed["rung"] == 0.13125 and crossed["cycles"] == 1
     assert crossed["scalar"] == 1.0 and not crossed["acting"], "the first crossing must not size anything"
     assert any("不缩仓" in m for m in engine.alerts.sent), engine.alerts.sent
 
@@ -105,15 +105,15 @@ async def test_a_fifty_percent_attributed_drawdown_alerts_then_acts_two_cycles_l
     bar = _cycle(store, 3, 10_000.0)
     acting = await LiveEngine._risk_ladder(engine, bar)
     assert acting["cycles"] == 3 and acting["acting"]
-    assert acting["scalar"] == pytest.approx(0.75), "AC-G7: vol_target 0.60 -> 0.45"
-    assert acting["vol_target"] == 0.45
+    assert acting["scalar"] == pytest.approx(0.75), "AC-G7: vol_target 0.175 -> 0.13125"
+    assert acting["vol_target"] == 0.13125
     assert sum("已生效" in m for m in engine.alerts.sent) == 1
 
     # deepening past the second rung does not restart the grace - a worse loss must act faster, not slower
     bar = _cycle(store, 4, 10_000.0)
-    _attribute(store, bar, -2_100.0)  # -71% in total, past the second rung
+    _attribute(store, bar, -1_100.0)  # -41% in total, past the second rung
     deeper = await LiveEngine._risk_ladder(engine, bar)
-    assert deeper["vol_target"] == 0.30 and deeper["scalar"] == pytest.approx(0.5) and deeper["acting"]
+    assert deeper["vol_target"] == 0.0875 and deeper["scalar"] == pytest.approx(0.5) and deeper["acting"]
 
     # and it lifts when the drawdown does, with the recovery said out loud
     bar = _cycle(store, 5, 10_000.0)
@@ -156,7 +156,7 @@ async def test_a_restart_does_not_hand_the_book_a_fresh_grace(tmp_path: Path) ->
     engine = _engine(tmp_path)
     store = engine.store
     bar = _cycle(store, 0, 10_000.0)
-    _attribute(store, bar, -5_500.0)  # -55%, on the first rung since 2026-09-14
+    _attribute(store, bar, -3_000.0)  # -30%, on the first rung since 2026-10-13
     for index in (1, 2, 3):
         bar = _cycle(store, index, 10_000.0)
         await LiveEngine._risk_ladder(engine, bar)

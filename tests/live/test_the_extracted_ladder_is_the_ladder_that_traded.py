@@ -26,7 +26,9 @@ from beidou_governance.policy import Policy
 
 GRACE = Policy().drawdown_grace_cycles
 RUNGS = Policy().drawdown_ladder
-BASE = 0.60
+# The k the shipped rungs are derived for (policy 0.3.6, 2026-10-13; it was 0.60 before).  At another k the
+# scalars below mean something else - `rung_scalar` divides by it.
+BASE = 0.175
 BAR = 1_757_000_000_000
 NOW = "2026-09-15T00:00:00+00:00"
 
@@ -61,15 +63,15 @@ def _step(reading: dict[str, Any], standing: dict[str, Any] | None = None) -> An
 
 def test_the_policy_and_the_pure_function_are_the_same_rule() -> None:
     """`Policy.throttle_scalar` now delegates; if the two ever disagree there are two ladders again."""
-    for drawdown in (0.0, -0.10, -0.48, -0.49, -0.50, -0.69, -0.70, -0.95):
+    for drawdown in (0.0, -0.10, -0.28, -0.2803, -0.30, -0.40, -0.4005, -0.95):
         assert Policy().throttle_scalar(drawdown) == rung_target(drawdown, RUNGS)
 
 
 def test_rungs_are_checked_deepest_first() -> None:
-    """-0.70 must get the deeper rung, not the first one it happens to clear."""
-    assert rung_target(-0.70, RUNGS) == 0.30
-    assert rung_target(-0.49, RUNGS) == 0.45
-    assert rung_target(-0.48, RUNGS) is None
+    """-0.4005 must get the deeper rung, not the first one it happens to clear."""
+    assert rung_target(-0.4005, RUNGS) == 0.0875
+    assert rung_target(-0.2803, RUNGS) == 0.13125
+    assert rung_target(-0.28, RUNGS) is None
 
 
 def test_a_rung_above_the_running_target_is_clamped_and_reported() -> None:
@@ -114,32 +116,32 @@ def test_the_first_crossing_alerts_and_does_not_cut() -> None:
 def test_it_acts_only_after_the_grace_is_spent() -> None:
     standing: dict[str, Any] = {}
     for cycle in range(1, GRACE + 2):
-        step = _step(_reading(value=-0.55), standing)
+        step = _step(_reading(value=-0.30), standing)
         standing = dict(step.standing or {})
         assert step.block["cycles"] == cycle
 
     assert standing["acting"] is True
     assert step.block["acting"] is True
-    assert step.block["scalar"] == pytest.approx(0.45 / BASE)
+    assert step.block["scalar"] == pytest.approx(0.13125 / BASE)
     assert "已生效" in step.alerts[0]
 
 
 def test_acting_pages_once_per_rung_not_once_per_cycle() -> None:
     """DL-L3 / KILL-R7's shape: a venue down for six hours says so once, not six times."""
-    acting = {"cycles": GRACE + 1, "rung": 0.45, "vol_target": 0.45, "scalar": 0.75, "acting": True}
+    acting = {"cycles": GRACE + 1, "rung": 0.13125, "vol_target": 0.13125, "scalar": 0.75, "acting": True}
 
-    step = _step(_reading(value=-0.55), acting)
+    step = _step(_reading(value=-0.30), acting)
 
     assert step.block["acting"] is True
     assert not step.alerts, "same rung, already acting - nothing new to say"
 
 
 def test_a_deeper_rung_pages_again() -> None:
-    acting = {"cycles": GRACE + 1, "rung": 0.45, "vol_target": 0.45, "scalar": 0.75, "acting": True}
+    acting = {"cycles": GRACE + 1, "rung": 0.13125, "vol_target": 0.13125, "scalar": 0.75, "acting": True}
 
-    step = _step(_reading(value=-0.75), acting)
+    step = _step(_reading(value=-0.45), acting)
 
-    assert step.block["rung"] == 0.30
+    assert step.block["rung"] == 0.0875
     assert step.alerts, "the rung moved, so the operator is told"
 
 

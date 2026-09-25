@@ -59,6 +59,13 @@
 # 不这么同步的另一条路是删掉上面的 NOTHING ELSE 声称,把本文件变成一个真正的 promotion
 # candidate。那不是今天发生的事——指针换了,构造一个字节没动(`registry_digest` 逐位不变,
 # 核过),所以它仍然是 armed 的副本,而不是一个候选。
+#
+# 2026-10-13，随切换再同步一次（分支 `live/k0175-switch-after-1013`）。整份按「头注 + armed」重新生成，
+# 本段以上是头注，以下逐字节是 armed 的 `alpha_registry.yaml`（此前漏同步的两行注释一并补上）。tsmom 指针换到
+# `tsmom-validation-20260925T143836Z.json`，verdict WEAK_PASS，是 k = 0.175 上的重出；profile 的
+# `vol_target` 在同一个 PR 里从 0.60 改成 0.175。上一段说的那条 `evidence verdict FAIL` 因此没了，
+# `tests/shipped_evidence.py` 的 exemption 也在这个 PR 里删掉。这个 POSITIVE CONTROL 回到第一段的
+# 字面意思：一份应当干净通过的 registry，不再「在一条被明示豁免的问题之下」通过。
 # Strategies the live loop is allowed to run.  A strategy may only be enabled
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
@@ -284,6 +291,10 @@ strategies:
     # Return shape over the whole sample, for the "is this short volatility wearing a hat" question:
     # hourly skew +1.08 / daily +0.83 (positive, i.e. the opposite sign), hit rate 51%/53%, payoff ratio
     # 1.02/1.16, worst UTC day -6.22%.  The hypothesis is refuted by measurement, not by argument.
+    # 2026-10-13 标注：上面两段（崩盘窗口与收益形状）量于 k = 0.30（09-08 审计），是历史，不是现行构造的读数。
+    # 09-23 的 G4 在 k = 0.60 与 0.30 上重放过同一组窗口（RESEARCH_LOG「G4：崩盘窗口在 k=0.60 下重跑」）：
+    # FTX 仍是唯一为负的窗口，0.60 下 -8.54%、0.30 下 -3.78%；窗口回撤 0.60 是 0.30 的 1.91 到 2.72 倍，
+    # 收益不按 k 等比放大。k = 0.175 上没有重放过，所以这里不给 0.175 的数。
     # 2026-09-06 P1-01/DL-Q1: re-validated under the corrected CROSS-SECTIONAL REFERENCE POPULATION.
     # The crowding modifier ranks trailing funding across symbols, and until now "across symbols" meant
     # whichever columns the caller had loaded: research ranked a name against the whole point-in-time
@@ -406,10 +417,27 @@ strategies:
     #
     # 构造未变:`evidence` 块不进 `registry_digest`,指纹逐位不动(改动前后都核过),所以
     # M-010 的 30 天窗口不重置,`realised_vol` 的单构造窗口也不断。
+    #
+    # **2026-10-13：指针换到 k = 0.175 上的重出，WEAK_PASS。** 与 `config/live.demo.yaml` 的 `vol_target`
+    # 0.60 -> 0.175 在同一个 PR 里。`vol_target` 在 `CONSTRUCTION_KEYS` 里，改 k 就要换证据，否则
+    # `construction_problems` 会报 `portfolio vol_target is 0.175 live but 0.6 in the cited evidence`。
+    #   * 协议：预登记 `b76de7a0`（RESEARCH_LOG 2026-09-25「预登记：tsmom 在 k = 0.175 上重出证据」），照抄
+    #     09-18 的 2 格协议，只改 k 与申报笔数：`--grid '{"crowding_window": [0, 72]}'`、`--prior-trials 172`、
+    #     `--charge 2`。判定规则写在跑之前，数字出来之后一个字没改。
+    #   * 读数：样本外 Sharpe 1.8329，family gate 1.5733（N = 341，即 ledger 167 + 申报 172 + 本次 2），
+    #     headroom +0.2596。CPCV 均值 1.92、q05 1.58、负路径 0；成本 x2 1.70；DSR p 0.24（只报不判）；PBO 0.01。
+    #   * 为什么是 WEAK_PASS 不是 PASS：`oos_is_full_sample_tail`。5 个 fold 都选了同一格（`crowding_window` 72），
+    #     没有一个 fold 真做了选择，样本外是一条全样本序列的尾巴，D-043 把它封顶在 WEAK_PASS。
+    #     `registry.evidence_problems` 允许 WEAK_PASS 上线。
+    #   * 1.8329 不是一次选择的样本外记录（DL-R4）。09-19 在 k = 0.60 上量过这个差：同一配置自己的
+    #     walk-forward 是 1.5292，各 fold 自选的混合是 1.2306。k = 0.175 上没有跑 16 格。
+    #   * dataset：报告记下的 `membership` 是 09-25 重建后的那张表，`registry_dataset_problems` 的 blocking 为空。
+    #     到切换为止不重建成员表；重建了，这个指针会被数据集门挡住。
+    # 构造变了：M-010、M-G06 与 `realised_vol` 的窗口从切换后的那次重启重新起算。
     evidence:
-      report: reports/research/tsmom-validation-20260919T081914Z.json
-      sha256: 3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
-      verdict: FAIL
+      report: reports/research/tsmom-validation-20260925T143836Z.json
+      sha256: d06162dd803e42c897ff85311cb7b413dbde2c098a797827894179978405f0a5
+      verdict: WEAK_PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，
     # 它的 30 天滚动归因盈亏既没有被约束，也从来没有被计算过。规则看不见的东西，规则就管不住。
@@ -474,6 +502,8 @@ strategies:
     # <= -1% of equity (about -2 sigma of the sleeve's 30-day P&L; a literal "negative P&L stops" rule would stop a
     # Sharpe-1 sleeve ~37% of the time in its first month), `review_after_days` flags the review date (2026-12-02)
     # in the daily report, and `beidou live run` refuses an ACCEPT verdict without this probe block (KILL-015).
+    # The 91% above is a backtest-period statistic.  Measured live on 2026-09-17 it was 0%: the two books shared
+    # three names and disagreed on all three, flow short against tsmom long (D-044, `beidou_live/attribution.py`).
     enabled: true
     book: flow_short
     weight: 1.0
