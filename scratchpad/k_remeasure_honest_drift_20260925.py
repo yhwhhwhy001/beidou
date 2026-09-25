@@ -45,7 +45,8 @@
 原因是 09-23 修的数据同步（`beidou_cli/data_cmd.py` 的 `_pool_and_leavers`）补回了 TUTUSDT、CYSUSDT、LSKUSDT
 缺的 K 线。把三者截回补数前的状态（TUT ≤ 09-03 11:00Z、CYS ≤ 09-04 06:00Z、LSK ≤ 09-18 16:00Z）再建，
 只剩边界上 1–2 根、最大 1e-5 的差。在那份 09-23 的序列上，这里的 bootstrap 逐位复现 p32h 与 D3 那次的全精度输出，
-每个 universe 12/12 行。复现需要那三份 09-23 的文件，它们不在仓库里，见 `--reference-dir`。
+每个 universe 12/12 行。复现需要那三份 09-23 的文件。它们 2026-09-25 起归档在
+`reports/research/k-scan-20260923/`，传 `--reference-dir reports/research/k-scan-20260923` 即可。
 
 输出
 ----
@@ -60,7 +61,7 @@ rungs=today 读 today，0922 读 0922，unit 读 unit；policy（running）读 t
     PYTHONPATH=. .venv/bin/python scratchpad/k_remeasure_honest_drift_20260925.py --workers 12
     # 可选：--out DIR（默认 scratchpad/k-remeasure-20260925/，被 .gitignore 挡住）
     #       --reference-dir DIR：含 09-23 的 series-{pit,static}.npz、p32h-{pit,static}.json、
-    #       kgrid-{pit,static}-2000.json 时，另跑 12 行对照并逐位比
+    #       kgrid-{pit,static}-2000.json 时，另跑 12 行对照并逐位比；归档目录是 reports/research/k-scan-20260923
 
 跑多久（2026-09-25 实测，16 核机，nice 10）：建 4 组面板 197 秒（4 个进程并行，pit 每个 k 约 15 秒，static 约 3 秒）。
 不带 `--reference-dir` 是 144 个臂，其中 96 个带梯子循环；带上是 168 个、104 个。机器空闲时循环臂单核每个 130–180 秒，
