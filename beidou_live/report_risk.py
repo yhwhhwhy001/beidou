@@ -23,8 +23,10 @@ from beidou_alpha.backtest import ImpactModel
 from beidou_alpha.overlays.exits import COOLDOWN
 from beidou_alpha.registry import MAIN_BOOK
 from beidou_data.store import KlineStore, interval_ms
+from beidou_live.composition import impact_model
 from beidou_live.report_common import (
     DAY_MS,
+    LIQUIDITY_WINDOW_BARS,
     _cycles,
     _day_of,
     _fmt_num,
@@ -36,6 +38,7 @@ from beidou_live.report_common import (
 )
 from beidou_live.risk_budget import books_by_symbol
 from beidou_live.state import StateStore
+from beidou_shared.config import load_yaml
 
 # A ratchet: raise it only in the commit that says why.  2026-09-08, 0.50 -> 0.76.  0.50 was declared
 # "not a derived threshold", placed between 0.13 measured 2026-09-05 and 1.0 for stage 1 deleted - and
@@ -230,63 +233,93 @@ def margin_and_rejections(
     }
 
 
-# The bars `LiveEngine._liquidity` averages for the participation cap: the profile's `pool.liquidity_window`.
-# The cycle record does not carry it, so it is written here and a test holds it to the profile.
-LIQUIDITY_WINDOW_BARS = 24
+# How far a book rebuilt from a row's `current_notional` may miss the row's `gross_before` and still count as the
+# whole book: `book_complete` below and `_held_at_snapshot`'s refusal read this one number.  Measured 2026-09-25
+# over the 244 traded rows since 2026-09-14T19:00Z, the first written with `current_notional` on every band-held
+# entry: the widest gap is 0.055% (bar 2026-09-20T02:00Z), the planner's marks and the venue's `notional` read a
+# moment apart.  The smallest position those rows held was 0.30% of gross, so a book short one of them fails; a
+# position under 0.2% can still go unseen.  It was 1% until the 2026-09-25 review, loose enough to pass the
+# 2026-09-24T17:00Z book without AKEUSDT (0.89% of gross): 16 names and 1.72 effective bets over 7 days, not 17
+# and 2.10.
+BOOK_TOLERANCE = 0.002
+
+
+# What `execute_order` writes when a restart finds this bar's order already at the venue.  That row pairs the NEW
+# plan's side and price with the OLD order's `executed_qty`, and nothing traded in the cycle that wrote it.
+ALREADY_SUBMITTED = "already submitted for this bar"
 
 
 def liquidity_to_close(
-    store: StateStore, day: str, *, root: str | Path = ".beidou/data", interval: str = "1h"
+    store: StateStore,
+    day: str,
+    *,
+    root: str | Path = ".beidou/data",
+    interval: str = "1h",
+    costs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Checklist 3.9: how long, and at what cost, each held position could be closed.  Reported, never alerted.
 
     The book is the last traded cycle on or before `day` that planned at all - a guard skip places no
     order, so what it holds is what the cycle before it left.  Cycle rows carry no `positions`.  What
     they carry is `current_notional` on the `skipped` and `orders` entries: the planner's qty x mark for
-    each managed symbol it holds.  Rows since 2026-09-14T19:00Z carry it on every band-held entry, and on
-    all 232 of them it adds up to the row's own `gross_before` within 0.06% (the two marks are read a
-    moment apart); older rows carry it on orders only.  Both sums are returned, so a row that does not
-    account for its whole book says so.  The cycle's own fills are then applied at the price the planner
-    used, so a position that cycle closed is not reported as one still to close.
+    each managed symbol it holds.  Rows since 2026-09-14T19:00Z carry it on every band-held entry, and
+    it adds up to the row's own `gross_before` within `BOOK_TOLERANCE` (the measurement is beside it);
+    older rows carry it on orders only.  Both sums are returned, so a row that does not account for its
+    whole book says so, and `unrecorded` names each entry that carries no notional, with the reason it
+    was skipped: seven skip reasons record none (`_held_at_snapshot` lists them), and among them are the
+    least liquid names, NOT_TRADABLE on the way to delisting.  The cycle's own fills are then applied at
+    the price the planner used, so a position that cycle closed is not reported as one still to close -
+    except an order marked `ALREADY_SUBMITTED`, whose fill is an earlier pass's and already in the book.
+
+    Not the book `holdings_correlation` reads, and on purpose: that section takes the same cycle BEFORE
+    its orders, the one book a row records symbol by symbol and `gross_before` checks, while what is
+    left to close is what the orders left.  The two can differ by a name the cycle opened or closed.
 
     Two rulers, kept apart because they measure different things (the 2026-09-09 VWAP entry in
     `docs/RESEARCH_LOG.md` makes the same point about fills):
       participation  |notional| / the mean quote volume of the last `LIQUIDITY_WINDOW_BARS` bars: an
-                     HOUR of volume, `LiveEngine._liquidity`'s quantity, the one `max_participation`
-                     is a fraction of;
+                     HOUR of volume, `LiveEngine._liquidity`'s formula, the one `max_participation` is a
+                     fraction of - over the archive's bars, not the ones the loop's feed returned;
       impact         `ImpactModel`'s square-root law, coefficient x sigma_daily x sqrt(|notional| / ADV),
                      with ADV a DAY of volume (the 720-bar mean x 24) and sigma_daily the 720-bar std
                      of the open-to-close returns `run_backtest` hands `impact_costs` by default.  The
-                     coefficient is the shipped default, 1.0: an assumption, not a calibration - demo
-                     fills are too small to separate impact from spread (`config/costs.yaml`, `impact`).
+                     model is `composition.impact_model` over `config/costs.yaml` (or `costs`), the entry
+                     research builds it with.  The coefficient, 1.0, is an assumption, not a calibration:
+                     demo fills are too small to separate impact from spread (that file, `impact`).
 
-    **A full close is not rate-limited, and that was checked before it was written here.**
+    **How a full close goes out depends on two knobs, and the page reads both off the record.**
     `plan_rebalance` exempts `closing` (target 0 while holding) from the cap whatever
     `exempt_reductions` says, sizes it to the whole position and never applies `max_order_notional` to
-    it; with `exempt_crossings` on, as the running construction has it, the absolute band cannot hold it
-    back either.  The exit overlay and a symbol leaving the universe both reach the venue that way, and
-    `live flatten` does not go through the planner at all.  So a full close is one market order in one
-    bar: its cost is impact, not time.  `bars_under_cap`, ceil(participation / max_participation), is
-    the other path.  A pure reduction - R8's ladder shrinking every weight - is capped each bar while
+    it.  The absolute band is the half that is a knob: with `exempt_crossings` on, as the construction
+    has run it since 2026-09-17T16:00Z, the band cannot hold a close back, so a full close is one market
+    order in one bar and its cost is impact, not time.  With it off - 2026-09-14T19:00Z to 09-17T16:00Z -
+    a position inside the band cannot be closed at all (`BAND_BLOCKS_EXIT`).  `flat_inside_band` decides
+    how often the path is taken: on, a target that lands inside the band closes the position.  The exit
+    overlay and a symbol leaving the universe reach the venue that way, and `live flatten` does not go
+    through the planner at all.  `bars_under_cap`, ceil(participation / max_participation), is the
+    other path.  A pure reduction - R8's ladder shrinking every weight - is capped each bar while
     `exempt_reductions` is off, and the column is how many bars the cap would stretch a reduction of
     the whole position over.  It is a floor: each capped order is rounded down to the step, so a real
-    walk-down can take a bar more.  Both knobs are read off the record (`construction_full.rebalance`)
+    walk-down can take a bar more.  Every knob is read off the record (`construction_full.rebalance`)
     rather than the config, for `max_weight_of`'s reason.
 
-    The kline archive can lag the loop by a bar or more, so each window ends at the newest archived bar
-    at or before the cycle's, and how far behind that is gets returned rather than hidden.
+    The kline archive lags the loop by up to a day - `holdings_correlation` says why - so each window
+    ends at the newest archived bar at or before the cycle's, and how far behind that is gets returned
+    rather than hidden.
 
     It gates nothing, so it must not take the report down with it (`market_beta`'s rule): whatever it
     raises comes back as the block's `why`, and a symbol whose archive cannot be read is listed with the
     reason while the others are still priced.
     """
     try:
-        return _liquidity_to_close(store, day, root=root, interval=interval)
+        return _liquidity_to_close(store, day, root=root, interval=interval, costs=costs)
     except Exception as exc:
         return {"enforced": False, "why": f"{type(exc).__name__}: {exc}"}
 
 
-def _liquidity_to_close(store: StateStore, day: str, *, root: str | Path, interval: str) -> dict[str, Any]:
+def _liquidity_to_close(
+    store: StateStore, day: str, *, root: str | Path, interval: str, costs: Mapping[str, Any] | None
+) -> dict[str, Any]:
     cycles = [row for row in _cycles(store) if (_day_of(row) or "") <= day]
     at = next((i for i in range(len(cycles) - 1, -1, -1) if not cycles[i].get("skip")), None)
     if at is None:
@@ -298,14 +331,26 @@ def _liquidity_to_close(store: StateStore, day: str, *, root: str | Path, interv
         if isinstance(full, Mapping) and isinstance(full.get("rebalance"), Mapping):
             rebalance = full["rebalance"]
             break
-    raw_cap, raw_exempt = rebalance.get("max_participation"), rebalance.get("exempt_reductions")
+    raw_cap, raw_band = rebalance.get("max_participation"), rebalance.get("no_trade_band")
     cap = float(raw_cap) if isinstance(raw_cap, int | float) else None
+    # The switches the page's two closing lines are written from; None where the record never carried one.
+    switches = {
+        name: value if isinstance(value := rebalance.get(name), bool) else None
+        for name in ("exempt_reductions", "exempt_crossings", "flat_inside_band")
+    }
     before: dict[str, float] = {}
+    unrecorded: dict[str, str] = {}
     for entry in [*(row.get("skipped") or []), *(row.get("orders") or [])]:
         if isinstance(entry.get("current_notional"), int | float):
             before[str(entry.get("symbol"))] = float(entry["current_notional"])
+        elif entry.get("symbol"):
+            unrecorded[str(entry["symbol"])] = str(entry.get("reason") or "no reason recorded")
     held = dict(before)
     for order in row.get("orders") or []:
+        # A restart's second pass over a bar: the fill is the first pass's, already inside `current_notional`.
+        # Applied again, it turned 2026-09-03T12:00Z's 1000PEPEUSDT from +40.07 U into +152.07 U.
+        if order.get("error") == ALREADY_SUBMITTED:
+            continue
         try:
             filled = float(order.get("executed_qty") or 0.0) * float(order.get("price") or 0.0)
         except (TypeError, ValueError):
@@ -316,7 +361,7 @@ def _liquidity_to_close(store: StateStore, day: str, *, root: str | Path, interv
     book = {symbol: value for symbol, value in held.items() if abs(value) > 1e-6 * abs(before.get(symbol, 0.0))}
     step = interval_ms(interval)
     decision_ms = int(row.get("as_of_ms") or row.get("bar_open_ms") or 0)
-    impact = ImpactModel()
+    impact = impact_model(load_yaml("config/costs.yaml") if costs is None else costs)
     klines = KlineStore(root)
     rows: list[dict[str, Any]] = []
     unpriced: dict[str, str] = {}
@@ -349,15 +394,19 @@ def _liquidity_to_close(store: StateStore, day: str, *, root: str | Path, interv
         "accounted_before_u": accounted,
         # False on a row that names positions without their notional, the shape rows had before
         # 2026-09-14T19:00Z: the reading covers part of the book, and "0 positions" means "not recorded".
+        # False on a NaN too, which `<=` refuses where a `>` would have passed it.
         "book_complete": (
-            abs(accounted - float(gross_before)) <= 0.01 * float(gross_before)
+            abs(accounted - float(gross_before)) <= BOOK_TOLERANCE * float(gross_before)
             if isinstance(gross_before, int | float)
             else None
         ),
+        # The entries with no `current_notional`, by symbol, with the reason each was skipped.
+        "unrecorded": unrecorded,
         "positions": len(book),
         "gross_u": sum(abs(value) for value in book.values()),
         "max_participation": cap,
-        "exempt_reductions": raw_exempt if isinstance(raw_exempt, bool) else None,
+        "no_trade_band": float(raw_band) if isinstance(raw_band, int | float) else None,
+        **switches,
         "liquidity_window_bars": LIQUIDITY_WINDOW_BARS,
         "impact_model": {
             "coefficient": impact.coefficient,
@@ -389,8 +438,10 @@ def _closing_cost(
 ) -> dict[str, Any]:
     """One position against its own bars, each ruler computed the way its owner computes it.
 
-    The hourly mean is `LiveEngine._liquidity` line for line, fallback included (volume x close where
+    The hourly mean is `LiveEngine._liquidity`'s formula, fallback included (volume x close where
     `quote_volume` is missing), and a mean that is not positive is None: the loop applies no cap then.
+    The formula, not the loop's number: the window is the archive's last bars, which can end a day
+    before the bars the loop's feed returned (`volume_lag_bars`).
     ADV and sigma are `impact_costs`' - its ADV takes whatever bars exist, its sigma needs a quarter of
     the window - and an unreadable one is None, never the 0.0 the backtest fills it with.
     """
@@ -425,6 +476,31 @@ def _closing_cost(
     }
 
 
+def _full_close_line(block: Mapping[str, Any]) -> str:
+    """How a full close reaches the venue under the knobs on record.  What it describes is `plan_rebalance`."""
+    crossings, snap, band = block.get("exempt_crossings"), block.get("flat_inside_band"), block.get("no_trade_band")
+    if crossings is None:
+        return "读不出：没有周期记下 exempt_crossings。"
+    if crossings:
+        line = (
+            "一笔市价单，一根 bar 内发完。参与率上限豁免完全平仓；exempt_crossings 开着，绝对带也不拦。"
+            "代价在冲击上，不在时间上。"
+        )
+    else:
+        inside = f"名义额不到权益 {100 * band:g}% 的仓" if isinstance(band, int | float) else "绝对带以内的仓"
+        line = (
+            "参与率上限豁免完全平仓，绝对带不豁免：exempt_crossings 关着。"
+            f"{inside}平不掉（BAND_BLOCKS_EXIT），要等价格把它推出带外。带外的仓仍是一笔市价单。"
+        )
+    if snap is None:
+        return line
+    return line + (
+        "flat_inside_band 开着（D2/D3）：目标落进带内的仓整笔平掉。"
+        if snap
+        else "flat_inside_band 关着：目标落进带内，仓按那个小目标调，不平掉。"
+    )
+
+
 def _liquidity_to_close_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     """3.9 in the daily report: the book, how a close goes out, the model, then positions hardest first."""
     if not block.get("enforced"):
@@ -450,6 +526,10 @@ def _liquidity_to_close_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     empty = "读不出：这一行没有按币记下名义额" if partial else "这一行没有记下持仓"
     lines: dict[str, Any] = {
         "持仓（本周期成交后）": f"{block['positions']} 个，gross {block['gross_u']:,.2f} U；bar {block.get('bar')}",
+        "与 #3.4 的快照不同": (
+            "这里是本周期成交后的持仓：本周期平掉的仓不用再平。"
+            "#3.4 持仓间相关读同一周期下单前的持仓，只有那一份能按币对上 gross_before。"
+        ),
         "按币合计 / gross_before（成交前）": (
             f"{block['accounted_before_u']:,.2f} / "
             + (f"{gross_before:,.2f} U" if isinstance(gross_before, int | float) else "n/a")
@@ -457,9 +537,22 @@ def _liquidity_to_close_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     }
     if partial and isinstance(gross_before, int | float):  # `book_complete` is only False beside a number
         gap = abs(block["accounted_before_u"] - float(gross_before))
-        lines["按币记录不全"] = f"按币合计与 gross_before 差 {gap:,.2f} U，超过 1%。下面只覆盖按币记下的部分。"
+        lines["按币记录不全"] = (
+            f"按币合计与 gross_before 差 {gap:,.2f} U，超过 {100 * BOOK_TOLERANCE:g}%。下面只覆盖按币记下的部分。"
+        )
+        # Named rather than left as a sum: the positions the table is short of are among these entries,
+        # and the entry alone cannot say which of them held anything.
+        by_reason: dict[str, list[str]] = {}
+        for symbol, reason in (block.get("unrecorded") or {}).items():
+            by_reason.setdefault(str(reason), []).append(str(symbol))
+        lines["没记名义额的条目"] = (
+            "；".join(f"{reason}：{'、'.join(symbols)}" for reason, symbols in by_reason.items())
+            + "。条目本身分不出持仓还是空仓。"
+            if by_reason
+            else "每个条目都记了名义额：差额是这一行根本没列出的仓。"
+        )
     lines |= {
-        "完全平仓": "一笔市价单，一根 bar 内发完。参与率上限豁免完全平仓。代价在冲击上，不在时间上。",
+        "完全平仓": _full_close_line(block),
         "纯减仓限速": reductions,
         "冲击模型（平方根律）": (
             f"c·σ_d·√(名义额/ADV_d)。c={model.get('coefficient')}，"
@@ -1177,25 +1270,31 @@ BTC = "BTCUSDT"
 
 
 def _held_at_snapshot(row: Mapping[str, Any]) -> tuple[dict[str, float], float | None, str | None]:
-    """The signed weight of each position the venue reported at this cycle's snapshot, before its orders.
+    """The signed weight of each managed position at this cycle's snapshot, before its orders.
 
     Returns the weights, the share of `gross_before` they account for, and the reason they cannot be read.
+    A weight is a fraction of the row's `equity`, which is TOTAL equity - collateral included - the same
+    denominator the loop's own targets are fractions of.
 
     No field of the row is that book, so it is rebuilt rather than read.  `targets` is what the planner was
     told to steer to, and the no-trade band leaves a position up to 40% of itself away from it: at bar
     2026-09-24T17:00Z ETHUSDT's target read 11.90% of equity while it held 10.07%, and AKEUSDT's target still
     read +1.00% on the cycle whose order closed it (D3).  `book_weights` are the model's per-book weights
     before the throttle, the exit overlay and the guards, and `contributions` are per-strategy convictions
-    (+1 / 0 / -1), not weights at all.  Symbol by symbol, the venue's positions reach the row only through
-    the planner: every symbol it looks at gets an order or a skip row carrying `current_notional`, except one
-    that is flat and stays flat - which holds nothing to miss (`rebalancer.plan_rebalance`).
+    (+1 / 0 / -1), not weights at all.  Symbol by symbol, the managed positions reach the row only through
+    the planner: every symbol it looks at gets an order or a skip row, except one that is flat and stays
+    flat - which holds nothing to miss (`rebalancer.plan_rebalance`).  A foreign position reaches neither
+    the planner nor `gross_before` (`reconciler.take_snapshot`), so none of this sees it.
 
-    `gross_before` sums |notional| over the same positions, which makes the rebuild checked rather than
-    trusted.  Skip rows before 2026-09-14T19:00Z carry no `current_notional`, and a skip for a reason that
-    records none (`MIN_NOTIONAL`, `QUANTITY_ROUNDS_TO_ZERO`) drops a name the same way, so a book the rows
-    cannot account for to within 1% is refused rather than read short.  Since 2026-09-14T19:00Z all 232
-    traded rows agree to within 0.06%: the planner prices at the marks it fetched, `gross_before` sums the
-    venue's own `notional`, and the two are read a moment apart.
+    `gross_before` sums |notional| over the same managed positions, which makes the rebuild checked rather
+    than trusted - and it has to be.  Seven skip reasons carry no `current_notional`: `NO_PRICE`,
+    `NOT_TRADABLE`, `QUANTITY_ROUNDS_TO_ZERO`, `ORDER_CAP_BELOW_STEP`, `PARTICIPATION_CAP_BELOW_STEP` and
+    `MIN_NOTIONAL` from `plan_rebalance`, `MARGIN_SCALED_BELOW_MIN` from `leverage.scale_orders_to_margin`.
+    No skip row carried one before 2026-09-14T19:00Z.  Any of those can drop a held name, and the entry
+    alone cannot say whether it did - a `MIN_NOTIONAL` can as well be a flat name asking for a small entry.
+    So the check is on the sum: a book that misses `gross_before` by more than `BOOK_TOLERANCE` is refused
+    rather than read short, and so is a NaN, which `abs(nan - 1) > tolerance` used to pass - and whose NaN
+    weights then made `effective_bets` read 1.0.  None of the seven had been written as of 2026-09-25.
     """
     notional: dict[str, float] = {}
     for entry in (*(row.get("orders") or []), *(row.get("skipped") or [])):
@@ -1203,10 +1302,11 @@ def _held_at_snapshot(row: Mapping[str, Any]) -> tuple[dict[str, float], float |
         if entry.get("symbol") and isinstance(value, int | float):
             notional[str(entry["symbol"])] = float(value)
     gross, equity = row.get("gross_before"), float(row.get("equity") or 0.0)
-    if not isinstance(gross, int | float) or gross <= 0 or equity <= 0:
+    # `not ... > 0` rather than `<= 0`, so a NaN is refused here too.
+    if not isinstance(gross, int | float) or not gross > 0 or not equity > 0:
         return {}, None, f"gross_before {gross} against equity {equity}: nothing to check a rebuilt book against"
     covered = sum(abs(value) for value in notional.values()) / float(gross)
-    if abs(covered - 1.0) > 0.01:
+    if not abs(covered - 1.0) <= BOOK_TOLERANCE:
         return {}, covered, f"the order and skip rows account for {covered:.2%} of gross_before, not the whole book"
     return {symbol: value / equity for symbol, value in sorted(notional.items()) if value}, covered, None
 
@@ -1292,11 +1392,26 @@ def holdings_correlation(
     only: no threshold was registered before the book went live, and one picked after reading the number is
     not a threshold, so nothing here pages.
 
-    The book is the day's last traded cycle's - through `_cycles`, so a SKIPPED row a restart writes over
-    the same bar cannot stand in for it - rebuilt by `_held_at_snapshot`.  The returns are the archive's
-    hourly closes over 7 and 30 days, ending at the bar that cycle decided on, and a window reads only the
-    bars on which every holding and BTCUSDT printed; `last_bar` says where the archive stopped, which can be
-    an hour or two short of the loop.  Per window:
+    The book is read off the last traded cycle on or before `day` that planned at all, rebuilt by
+    `_held_at_snapshot` - `liquidity_to_close`'s rule, so the two sections read one cycle.  Through
+    `_cycles`, so a SKIPPED row a restart writes over the same bar cannot stand in for it; past a guard
+    skip, which returns before `plan_rebalance` and writes no order or skip row, so its rows account for 0%
+    of `gross_before` and it used to be refused as a short book on a bar that planned nothing.  The cycle
+    before it left the book the skip held; `bar` says which cycle was read.  Not the book
+    `liquidity_to_close` prices, though: that one applies the cycle's fills, because what is left to close
+    is what the orders left, while this stops before them, the one book a row records symbol by symbol and
+    `gross_before` checks.  The two can differ by a name the cycle opened or closed.
+
+    The returns are the archive's hourly closes over 7 and 30 days, ending at the bar that cycle decided
+    on, and a window reads only the bars on which every holding and BTCUSDT printed.  The archive is not
+    the loop's feed: `deploy/com.beidou.data.plist` syncs it once a day, at 01:20 host time (17:20Z on this
+    +08:00 host), and `drop_unclosed` keeps closed bars only, so its newest bar is that day's 16:00Z.  In
+    the hourly check that is 1 to 24 bars short of the decision bar - 1 at the 17:00Z cycle, 24 at the next
+    day's 16:00Z one - and each window loses that many bars off its end.  So both windows' length and end
+    jump once a day, a sawtooth #8.9 ("is it moving?") must not read as the book moving.
+    `closes_through_ms` / `closes_lag_bars` say where the archive stopped, and the page prints them the way
+    `liquidity_to_close` prints its own.  (This said "an hour or two short" until the 2026-09-25 review.)
+    Per window:
 
       all_pairs, same_side, opposite_side  pairwise correlations weighted by |w_i| |w_j|, split by whether
                                            the two positions point the same way.  Apart on purpose: on a
@@ -1321,12 +1436,23 @@ def holdings_correlation(
     87% of the book's variance.  The count of names overstates the bets this book holds eight- to tenfold.
 
     The catch is broad for the reason `exit_counterfactuals` gives: this runs inside the hourly check, and a
-    reading that gates nothing must not take the report down with it.  The block carries the reason.
+    reading that gates nothing must not take the report down with it.  It covers the whole reading - a
+    garbled row raises in `_held_at_snapshot` as readily as an archive does - and the block carries the
+    reason.  An archive that raises still leaves the row's own `bar`, `coverage` and `book_vol`.
     """
-    rows = [row for row in _cycles(store) if _day_of(row) == day]
-    if not rows:
-        return {"measured": False, "reason": f"no traded cycle on {day}", "book_vol": {}}
-    last = rows[-1]
+    try:
+        return _holdings_correlation(store, day, closes=closes, root=root)
+    except Exception as exc:
+        return {"measured": False, "reason": f"{type(exc).__name__}: {exc}", "book_vol": {}}
+
+
+def _holdings_correlation(
+    store: StateStore, day: str, *, closes: Callable[[str], pd.Series] | None, root: str | Path
+) -> dict[str, Any]:
+    cycles = [row for row in _cycles(store) if (_day_of(row) or "") <= day]
+    last = next((row for row in reversed(cycles) if not row.get("skip")), None)
+    if last is None:
+        return {"measured": False, "reason": f"no traded cycle on or before {day}", "book_vol": {}}
     weights, coverage, why = _held_at_snapshot(last)
     base = {"bar": last.get("bar"), "coverage": coverage, "book_vol": dict(last.get("book_vol") or {})}
     if why is None and len(weights) < 2:
@@ -1347,8 +1473,10 @@ def holdings_correlation(
             f"{days}d": _correlation_window(returns.iloc[-days * 24 :], signed, days)
             for days in HOLDINGS_CORRELATION_DAYS
         }
+        complete = returns.dropna().index
     except Exception as exc:
         return {**base, "measured": False, "reason": f"{type(exc).__name__}: {exc}"}
+    through = int(complete[-1]) if len(complete) else None
     return {
         **base,
         "measured": True,
@@ -1358,6 +1486,9 @@ def holdings_correlation(
         "short": int((signed < 0).sum()),
         "gross": float(np.abs(signed).sum()),
         "windows": windows,
+        # The newest bar on which every name printed: where both windows end, whatever the decision bar.
+        "closes_through_ms": through,
+        "closes_lag_bars": (anchor - through) // hour if through is not None else None,
     }
 
 
@@ -1386,8 +1517,12 @@ def _holdings_correlation_lines(block: Mapping[str, Any], risk_budget: Mapping[s
     lines: dict[str, Any] = {
         "held book": (
             f"{len(weights)} names ({block.get('long')} long / {block.get('short')} short), gross "
-            f"{_fmt_num(block.get('gross'))}x equity: the venue's positions at bar {block.get('bar')}, before "
-            f"that cycle's orders ({_fmt_pct(block.get('coverage'))} of gross_before)"
+            f"{_fmt_num(block.get('gross'))}x total equity (collateral included): the loop's managed positions at "
+            f"bar {block.get('bar')}, before that cycle's orders ({_fmt_pct(block.get('coverage'))} of gross_before)"
+        ),
+        "与 #3.9 的快照不同": (
+            "这里是本周期下单前的持仓：只有这一份按币记下、能对上 gross_before。"
+            "#3.9 平仓流动性读同一周期成交后的持仓，两边可以差一个本周期新开或平掉的币。"
         ),
     }
     for label, window in windows.items():
@@ -1400,6 +1535,14 @@ def _holdings_correlation_lines(block: Mapping[str, Any], risk_budget: Mapping[s
             if window.get("measured")
             else f"not measured ({window.get('why')})"
         )
+    through, lag = block.get("closes_through_ms"), block.get("closes_lag_bars")
+    lines["收盘价截至"] = (
+        "没有读到收盘价"
+        if through is None
+        else f"归档最后一根 {datetime.fromtimestamp(int(through) / 1000, tz=UTC).isoformat()}"
+        + (f"，比决策 bar 早 {lag} 根。" if lag else "，就是决策 bar。")
+        + "归档每天只同步一次，这个差每天跳一次。两个窗口的长度与终点跟着跳，比较两天的读数前先看它。"
+    )
     lines[f"corr with {BTC} ({' / '.join(windows)})"] = json_dumps(
         {
             symbol: " / ".join(_fmt_num((window.get("vs_btc") or {}).get(symbol)) for window in windows.values())

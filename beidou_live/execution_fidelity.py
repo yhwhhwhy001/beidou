@@ -60,7 +60,7 @@ from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars
 from beidou_data.store import FundingStore, KlineStore
 from beidou_live.composition import build_model, cost_model, load_panel
 from beidou_live.construction import canonical_construction
-from beidou_live.risk_budget import _weighted, books_by_bar, fill_grouper
+from beidou_live.risk_budget import _weighted, books_by_bar, fill_grouper, one_row_per_order
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
@@ -266,14 +266,15 @@ def live_turnover(
     failed after placing orders and recorded none.  Operator flattens (`flatten`, `bdflat-` ids) carry no
     bar and are not the construction trading; they are left out, and the ones whose wall clock falls in
     the window are counted, because the rebuild after one is loop trading and shows up as a spike.  A fill
-    the backtest side cannot price (`priced_until`) goes to `excluded` by symbol.
+    the backtest side cannot price (`priced_until`) goes to `excluded` by symbol.  Each venue order is
+    counted once (`one_row_per_order`): a restart's "already submitted" row is the same fill again.
     """
     sized = sorted((int(row["bar_open_ms"]), float(row["equity"])) for row in rows if _bar(row) and row.get("equity"))
     bars = [bar for bar, _ in sized]
     by_bar: dict[int, float] = {}
     excluded: dict[str, float] = {}
     flattens = unsized = 0
-    for trade in trades:
+    for trade in one_row_per_order(trades):
         if trade.get("flatten"):
             try:
                 at_ms = int(pd.Timestamp(str(trade.get("at"))).timestamp() * 1000)
@@ -451,11 +452,11 @@ def slippage_by_week(
     `fill_grouper`: each fill by the books of its own cycle and the one before.  Until the operator's G9
     ruling (2026-09-23) the judged reading split all 30 days by the newest cycle's map instead, and this
     trend was the one reader that did not; now both read one rule.  A fill that cannot be attributed is
-    counted in `unsplit` and stays in `combined`.
+    counted in `unsplit` and stays in `combined`.  The fills are `slippage_bps`'s: each order once.
     """
     group_of = fill_grouper(books_by_bar(rows))
     buckets: dict[str, dict[str, Any]] = {}
-    for trade in trades:
+    for trade in one_row_per_order(trades):
         try:
             reference, filled, quantity = (float(trade[k]) for k in ("decision_close", "avg_price", "executed_qty"))
         except (KeyError, TypeError, ValueError):

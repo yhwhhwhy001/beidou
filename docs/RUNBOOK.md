@@ -150,6 +150,33 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 4. OHLC 矛盾：拿交易所网页上同一根 bar 比对。
 5. 这条告警不拦 bar，也不改目标。要不要对这个标的动手，由操作者定。
 
+## D-041 bridge 到期（2026-10-13）
+
+2026-10-13T00:00Z（北京 08:00）起，`deploy/run_live.sh` 不再给 armed 启动传 `--allow-unvalidated`，严格的
+证据门回来。同一刻，`tests/shipped_evidence.py` 的 exemption 与构造冻结也到期。分析、选项与裁定表在
+`docs/analysis/2026-09-25-october-13-readiness.md`；操作者 09-25 的裁定记在 RESEARCH_LOG「操作者四条裁定」一节。
+
+- 在跑的进程不受影响。受影响的是 10-13 之后的下一次启动。
+- bash 3.2 展开空数组的缺陷已由 #137 修掉，09-25 已快进主 checkout。launchd 读的就是主 checkout 里这份脚本。
+- 证据还没清门时，下一次 armed 启动会以 `tsmom: evidence verdict FAIL does not allow live use` 失败，launchd
+  每 60 秒重试一次。循环不在，持仓就没有退出检查：止盈止损从不在交易所挂单。
+- 10-13 起 CI 至少 9 条测试红，都跟 exemption 到期有关。那不是代码坏了，处理方式跟着 D-041 的裁定走。
+
+**10-12 之前**：
+
+- 确认主 checkout 含 #137：`grep -n 'BRIDGE\[@\]+' deploy/run_live.sh` 能找到一行。
+- 用 `ps -eo pid,lstart,command | grep "live run"` 确认在跑的进程是 10-13 之前起的。
+- 证据修好之前，不做有意重启。
+
+**10-13 之后循环起不来时**：
+
+- 症状：`~/Library/Application Support/beidou/live.stderr.log` 里先有 `bridge EXPIRED`，接着是证据门的拒绝；
+  每小时巡检报「心跳已过期」，阈值 7,200 秒。
+- 先平仓：`beidou live flatten --yes`。它不经过证据门，会挂上持久的 kill switch。恢复要先
+  `beidou live kill-switch --release`，再启动，那时仍要过证据门。
+- 不要为了让循环起来去改 `BRIDGE_UNTIL` 或 `EXEMPT_UNTIL`。两者由测试钉成相等，挪日期就是延长 bridge，
+  是治理裁定。
+
 ## 改了 registry / profile 之后
 
 实盘进程在启动时加载 registry、profile 与 universe；改动后必须重启：

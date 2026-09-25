@@ -38,6 +38,12 @@ often it is charged.  The legs are equal-weight and their returns are price retu
 legs would have paid is not in them, while the book's USDT line pays its own, so the book's funding
 lands in the residual.
 
+The archive is synced once a day (`deploy/com.beidou.data.plist`, 17:20Z) while the loop runs every
+hour.  At 17:20Z the archive ends at the 16:00Z bar, and by 17:00Z the next day the loop is 24 bars past
+it.  A key at a bar after the archive's last reads a window short of its newest klines and settlements,
+so it is provisional: the next sync fills the window in and can move the legs.  `archive` says where the
+archive stopped and how many bars short of the sample's end, and both readers print it.
+
 `factor_reading` is pure.  `archive_history` and `archive_funding` are the archive adapters its two
 callers share, so the daily block and `report beta` cannot read the archive two ways.  Nothing here
 writes, gates or pages.
@@ -278,6 +284,28 @@ def _fit(y: Sequence[float], regressors: Mapping[str, Sequence[float]], all_long
     }
 
 
+def _archive_reach(
+    frames: Mapping[str, pd.DataFrame | Exception], held: Sequence[str], end: int | None, step_ms: int
+) -> dict[str, Any]:
+    """Where the kline archive stops for the names the last bar held, and how many bars short of the sample's end.
+
+    The earliest stop among those names, because one name that stopped early is enough to leave its keys
+    provisional.  Names no longer held are not asked: their keys are no longer read, and the sync, which
+    refreshes the current pool, may have left them behind (CYSUSDT and TUTUSDT stop at 2026-09-23T15:00Z).
+    """
+    stops = [
+        int(frame["open_time"].max())
+        for symbol, frame in frames.items()
+        if symbol in held and not isinstance(frame, Exception) and len(frame)
+    ]
+    if not stops:
+        return {"last_bar": None, "bars_behind_sample_end": None}
+    return {
+        "last_bar": datetime.fromtimestamp(min(stops) / 1000, UTC).isoformat(),
+        "bars_behind_sample_end": None if end is None else max(0, (end - min(stops)) // step_ms),
+    }
+
+
 def factor_reading(
     cycles: Sequence[Mapping[str, Any]],
     attribution: Sequence[Mapping[str, Any]],
@@ -290,7 +318,8 @@ def factor_reading(
 
     The book is D-045's series: `series_from_cycles`' USDT line, the D-032 bars `foreign_bars` drops,
     and the exposure the loop carried into each bar.  A bar pair where any factor could not be formed
-    leaves the sample and is counted by factor.
+    leaves the sample and is counted by factor.  `archive` is `_archive_reach` against the last bar the
+    sample reaches.
     """
     series = series_from_cycles(cycles)
     bars = series["bars"]
@@ -325,6 +354,7 @@ def factor_reading(
     conditioned: dict[str, list[float]] = {name: [] for name in FACTORS}
     all_long: list[bool] = []
     entry: list[int] = []
+    end: int | None = None  # the last bar the sample reaches
     excluded = short_of_factors = 0
     missing = dict.fromkeys(FACTORS, 0)
     for i in range(1, len(bars)):
@@ -345,6 +375,7 @@ def factor_reading(
         state = signal_state(rows_at.get(bars[i - 1], ()), strategy)
         all_long.append(state["all_long_bars"] == state["bars"] if state["measured"] else True)
         entry.append(bars[i - 1])
+        end = bars[i]
     out: dict[str, Any] = {
         "window": {
             "from": datetime.fromtimestamp(bars[0] / 1000, UTC).isoformat(),
@@ -352,6 +383,7 @@ def factor_reading(
             "days": (bars[-1] - bars[0]) / 86_400_000,
             "cycles": len(bars),
         },
+        "archive": _archive_reach(frames, series["universe"][bars[-1]], end, step_ms),
         "sorts": built["sorts"],
         "signal": signal_state(cycles, strategy, entry) if entry else {"measured": False, "reason": "no usable bar"},
     }
@@ -366,6 +398,9 @@ def factor_reading(
         out["regression"] = {"measured": False, "reason": f"needs {MIN_BARS} usable bars, has {len(y)}", **counts}
         return out
     conditional = _fit(y, conditioned, all_long)
+    # Fitted with `conditional`'s intercepts, the all-long one included, so the R^2 gap between the two is the
+    # other four factors' and nothing else.  Without that intercept it is D-045's conditional regression to the
+    # bit (the dummy-off test), and the gap would mix the dummy in.  The label says which of the two it is.
     market_only = _fit(y, {"market": conditioned["market"]}, all_long)
     out["regression"] = {
         "measured": bool(conditional.get("measured")),

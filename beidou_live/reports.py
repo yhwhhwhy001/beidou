@@ -6,11 +6,11 @@ conflicts here and in the source budget table).  The readings now live by the ch
 answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
 
     report_decay       #1.10 edge decay, #4.10 signal monitoring, the automatic part of D.3
-    report_risk        #3 the daily risk dashboard
+    report_risk        #3 the daily risk dashboard, with #3.4 / #8.9 holdings correlation and #3.9 liquidity
     report_exits       #1.5 / #3.2 the exit overlay
-    report_execution   #10 execution (M-Q08 itself is execution_fidelity.py)
+    report_execution   #10 execution, with #10.9 / #10.10 per-order TCA (M-Q08 itself is execution_fidelity.py)
     report_data        #9 data (bar sanity is bar_sanity.py)
-    report_beta        #6.9 attribution: market beta (D-045)
+    report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
     report_governance  the weekly's effort share and pre-registration order
     report_common      what all of them read the state files with
 
@@ -134,7 +134,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     tail_readings,
     weight_cap_bindings,
 )
-from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, risk_budget_status
+from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, one_row_per_order, risk_budget_status
 from beidou_live.state import StateStore
 
 
@@ -183,10 +183,11 @@ def daily_payload(
             unreconciled += 1
     statuses: dict[str, int] = {}
     traded = 0.0
-    for row in trades:
-        statuses[str(row.get("status"))] = statuses.get(str(row.get("status")), 0) + 1
-        if row.get("executed_qty") and row.get("avg_price"):
-            traded += float(row["executed_qty"]) * float(row["avg_price"])
+    # Each venue order once: a restart's "already submitted" row repeats a fill the log already holds.
+    for trade in one_row_per_order(trades):
+        statuses[str(trade.get("status"))] = statuses.get(str(trade.get("status")), 0) + 1
+        if trade.get("executed_qty") and trade.get("avg_price"):
+            traded += float(trade["executed_qty"]) * float(trade["avg_price"])
     guard_events = [reason for row in cycles for reason in (row.get("guard_reasons") or [])]
     window = evidence_window(store)
     flows = [row.get("external_flows") or {} for row in cycles]
@@ -769,7 +770,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 },
             ),
             (
-                "Liquidity to close (3.9, reported only)",
+                "Liquidity to close (#3.9, reported only)",
                 _liquidity_to_close_lines(payload.get("liquidity_to_close") or {}),
             ),
             (

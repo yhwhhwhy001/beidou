@@ -1059,31 +1059,39 @@ def report_beta(profile: str, paper: bool, strategy: str, data_root: str, out: s
     )
     if "reason" in data:
         raise click.ClickException(str(data["reason"]))
-    markdown = beta_markdown(data)
-    click.echo(markdown)
-    # #6.4 / #6.9's second page, the daily report's `factor_loadings` block by the same call.  Its own
-    # files, so `beta-*.json` stays the daily `beta` block to the bit.
-    factors = factor_reading(
-        store.read_jsonl(store.cycles_path),
-        store.read_jsonl(store.attribution_path),
-        archive_history(data_root, _interval(payload)),
-        archive_funding(data_root),
-        strategy,
-        step_ms=interval_ms(_interval(payload)),
-    )
-    factor_page = factor_markdown(factors)
-    click.echo(factor_page)
-    if out:
-        directory = Path(out)
-        directory.mkdir(parents=True, exist_ok=True)
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
-        for name, page, body in (("beta", markdown, data), ("factors", factor_page, factors)):
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+
+    def show(name: str, page: str, body: dict[str, Any]) -> None:
+        click.echo(page)
+        if out:
+            directory = Path(out)
+            directory.mkdir(parents=True, exist_ok=True)
             (directory / f"{name}-{today}.md").write_text(page, encoding="utf-8")
             (directory / f"{name}-{today}.json").write_text(
                 json.dumps(body, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
             )
-        click.echo(f"已写入 {directory / f'beta-{today}.md'}")
-        click.echo(f"已写入 {directory / f'factors-{today}.md'}")
+            click.echo(f"已写入 {directory / f'{name}-{today}.md'}")
+
+    # D-045's page is written before the factor page is read, as it was before that page existed: a
+    # failure over there must not take this one down with it.
+    show("beta", beta_markdown(data), data)
+    # #6.4 / #6.9's second page, the daily report's `factor_loadings` block by the same call.  Its own
+    # files, so `beta-*.json` stays the daily `beta` block to the bit.  When it fails, its files say why
+    # and the exception still ends the command, whole, with a non-zero exit.
+    try:
+        factors = factor_reading(
+            store.read_jsonl(store.cycles_path),
+            store.read_jsonl(store.attribution_path),
+            archive_history(data_root, _interval(payload)),
+            archive_funding(data_root),
+            strategy,
+            step_ms=interval_ms(_interval(payload)),
+        )
+    except Exception as exc:
+        refusal: dict[str, Any] = {"measured": False, "reason": f"{type(exc).__name__}: {exc}"}
+        show("factors", factor_markdown(refusal), refusal)
+        raise
+    show("factors", factor_markdown(factors), factors)
 
 
 __all__ = [

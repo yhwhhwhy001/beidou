@@ -674,6 +674,33 @@ def _weighted(values: Sequence[float], sizes: Sequence[float]) -> dict[str, Any]
     }
 
 
+def one_row_per_order(trades: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The trade log with each venue order once: the row written when it was placed.
+
+    `execute_order` queries before it submits, and a restart that re-runs a bar whose order is already on
+    the venue gets back the ack it found under THIS run's plan: the new side, quantity and price beside
+    the old order's `executed_qty` and `avg_price`, and `_record_fill` writes that as a row.  It repeats a
+    fill the log already holds and can carry the opposite side - order 869468534 is a SELL of 32,080
+    1000PEPEUSDT at 2026-09-03T13:00:15Z and, at 13:37:34, a BUY of 33,010 with the same 32,080 filled
+    ("already submitted for this bar").  Read twice it doubles the fill, signed by the second row it
+    moves a mean the wrong way.
+
+    Keyed by symbol as well as `order_id`, so two symbols' orders cannot merge even if their ids collide;
+    a repeat is always the same symbol.  A row without an `order_id` never got an ack, so nothing marks it
+    as a repeat and it carries no fill: it is kept.
+    """
+    seen: set[tuple[str, str]] = set()
+    kept: list[Mapping[str, Any]] = []
+    for row in trades:
+        if row.get("order_id") not in (None, ""):
+            key = (str(row.get("symbol") or ""), str(row["order_id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(row)
+    return kept
+
+
 def slippage_bps(
     trades: Sequence[Mapping[str, Any]],
     params: RiskBudgetParams,
@@ -703,7 +730,10 @@ def slippage_bps(
 
     Rows without `decision_close` - every row written before this field existed - are counted in
     `without_reference` and excluded.  Falling back to the mark is exactly how the wrong number
-    would come back, and history is not backfilled."""
+    would come back, and history is not backfilled.
+
+    Each venue order is read once (`one_row_per_order`): a restart's "already submitted" row is the same
+    fill again, possibly under the other side."""
     cutoff = latest_ms - params.slippage_window_days * DAY_MS
     group_of = fill_grouper(books_at) if books_at else None
     values: list[float] = []
@@ -713,7 +743,7 @@ def slippage_bps(
     }
     by_symbol: dict[str, tuple[list[float], list[float]]] = {}
     without_reference = 0
-    for row in trades:
+    for row in one_row_per_order(trades):
         if int(row.get("bar_open_ms") or 0) < cutoff or row.get("flatten"):
             continue
         reference, filled = row.get("decision_close"), row.get("avg_price")
@@ -921,6 +951,7 @@ __all__ = [
     "collateral_drift",
     "drawdown_state",
     "guard_firings",
+    "one_row_per_order",
     "realised_vol",
     "risk_budget_status",
     "slippage_bps",
