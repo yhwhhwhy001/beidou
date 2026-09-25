@@ -3712,7 +3712,16 @@ CEILING = {
     #
     # 留 40 行（7_857 -> 7_897）。这一格此前按实测抬到齐平；零余量让下一个诚实的改动先交税，理由与
     # `beidou_live` 那几格逐字相同，不重述。
-    "beidou_cli": 7_897,
+    #
+    # 2026-09-25（不编号，同上）。+89 beidou_cli，7_865 -> 7_954，抬到 7_994。
+    #
+    # 清点 9.4「缺口只检测不修」的命令一半：`beidou data repair`。默认干跑，列出每个缺口要取的日归档
+    # 文件、REST 次数与估计字节，不联网、不写盘；`--apply` 才取、才写，源头没有的记进
+    # `confirmed_gaps.json`。花在哪：命令与 docstring 约 60 行，写明不能与 17:20Z 的 `data sync` 同跑；
+    # `data status` 不再把已确认缺口算进 GAPS、另起一行计数，+8；import 12 行。
+    #
+    # 留 40 行（7_954 -> 7_994），理由同上，不重述。
+    "beidou_cli": 7_994,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3776,7 +3785,20 @@ CEILING = {
     # 429/418、重试后仍是 5xx、传输错误照旧让周期失败，那是通路的问题，不是币的问题。19 行里 7 行是那段
     # 注释，写的正是为什么只放行 400。没有它，兜底很容易被放宽成所有异常，那样一次限频就会被读成撞上它的
     # 那几个币下架了，而线上 `dropped_after` 是 1，当根就平。
-    "beidou_data": 3_200,
+    #
+    # 2026-09-25（不编号，同上）。+370 beidou_data，3_200 -> 3_570，抬到 3_610。
+    #
+    # 清点 9.4 的数据一半：`beidou_data/repair.py`（新，349 行），缺口向日归档与 REST 各问一次，只把缺口
+    # 内、已收盘的行经 store 自己的 `append` 写进去，已存的行一行不改、同步水位不动；源头与已存行有一处
+    # 对不上就整批不用；源头也没有的记成 confirmed gap。不插值，不前向填充。资金费的缺口按标的自己的
+    # 结算节奏判（前后各 6 步的中位），4h 与 8h 之间的切换不误报。其余：`ArchiveClient.fetch_day` 与测试
+    # 用的 transport 接缝 +17，`is_invalid_symbol` 从 `spot.py` 抽出 +5。
+    #
+    # 验收：真实归档上干跑，K 线 51 个缺口（4,235 根、29 个标的），资金费 154 个，一个文件都没动。
+    # 15 个变异全部有测试变红。4 份 fixture 在主 checkout 的归档上逐位核对过（`_bit_for_bit`）。
+    #
+    # 留 40 行（3_570 -> 3_610）。这一格此前是零余量，理由与 `beidou_live` 那几格逐字相同，不重述。
+    "beidou_data": 3_610,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are

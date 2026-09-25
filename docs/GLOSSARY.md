@@ -40,6 +40,7 @@
 | probe | 探针、探针书 | `probe`、`PROBE_VERDICT`、`max_concurrent_probes`（2026-09-25 起） |
 | bridge（D-041 bridge） | 桥 | `deploy/run_live.sh` 的 `BRIDGE_UNTIL`（2026-09-25 起） |
 | exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起） |
+| confirmed gap | 已确认缺口、真缺口 | `confirmed_gaps.json`、`beidou_data/repair.py`（2026-09-25 起） |
 
 ## 保留中文的近形词
 
@@ -75,6 +76,10 @@
 使年化 Sharpe 等于诚实的选择程序交付的样本外读数（当天是 1.2306），波动与自相关不动。原漂移是不减的
 那条。出处是 #146 体检的「诚实 OOS」；代码里是 `drift` 字段的 `"honest"` / `"orig"`
 （`scratchpad/k_remeasure_honest_drift_20260925.py`）。
+
+`缺口`写中文，指存储里两根相邻 bar（或两次相邻结算）之间少掉的那段，代码里是 `KlineStore.gaps`。
+向源头问过、源头也没有、记进 `confirmed_gaps.json` 的那种写 **confirmed gap**，不写「已确认缺口」
+「真缺口」（2026-09-25，`beidou data repair`）。旧文里的「真缺口」不改。
 
 ## 没定的怎么办
 
