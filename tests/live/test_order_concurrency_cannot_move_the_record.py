@@ -17,18 +17,25 @@ can ever be turned on, and they are what this module pins:
 Double-sending is not among the risks: `client_order_id` is derived from the bar and `execute_order`
 queries before it submits (D-032 / T-L01).  What concurrency changes is latency and arrival order,
 which is why those two are the things under test.
+
+Two rules were added on 2026-09-25 and hold at any concurrency: reductions are sent before anything
+that adds risk, and one order raising no longer stops the orders behind it (the last two tests).
 """
 
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from beidou_alpha.panel import Panel
 from beidou_live.engine import LiveEngine
+from beidou_live.rebalancer import PlannedOrder, client_order_id
 from beidou_live.state import StateStore
-from beidou_shared.types import OrderAck, OrderRequest
+from beidou_shared.types import OrderAck, OrderRequest, Side
 from tests.fakes.fake_venue import FakeVenue
 from tests.live.fakes import FakeClock, FakeMarketData
 from tests.live.test_live_loop import _config, _model, _prices
@@ -153,3 +160,68 @@ async def test_one_order_blowing_up_still_records_the_ones_that_came_back(august
     assert isinstance(run["failure"], RuntimeError), "the cycle fails, as it does today"
     assert run["traded"] == [symbol for symbol in planned if symbol != victim]
     assert run["venue"].completions == list(reversed(run["traded"])), "they really were in flight together"
+
+
+async def test_the_serial_loop_no_longer_stops_at_the_first_order_that_raises(
+    august_panel: Panel, tmp_path: Path
+) -> None:
+    """2026-09-25: the serial path used to abort the batch at its first raise, so every order behind it -
+    exits included - waited for the next bar.  It now does what the concurrent path above always did."""
+    planned = (await _cycle(august_panel, tmp_path / "clean", concurrency=1))["planned"]
+    victim = planned[0]
+
+    run = await _cycle(august_panel, tmp_path / "failing", concurrency=1, fail_symbol=victim)
+
+    assert isinstance(run["failure"], RuntimeError), "the cycle still fails, and still says why"
+    assert run["traded"] == [symbol for symbol in planned if symbol != victim]
+    assert run["venue"].completions == run["traded"], "one at a time, in planned order"
+
+
+def _order(symbol: str, side: Side, quantity: str, *, reduce_only: bool) -> PlannedOrder:
+    return PlannedOrder(
+        symbol=symbol,
+        side=side,
+        quantity=Decimal(quantity),
+        reduce_only=reduce_only,
+        client_order_id=client_order_id("bd", symbol, 1_757_000_000_000),
+        target_weight=0.0,
+        current_notional=0.0,
+        target_notional=0.0,
+        price=0.0,
+    )
+
+
+async def test_reductions_go_first_and_a_failure_before_them_cannot_hold_them_back(
+    august_panel: Panel, tmp_path: Path
+) -> None:
+    """Planned order interleaves two openings with two reductions, and the first opening raises.
+
+    Reductions are sent first - they free margin, and they are what a bar can least afford to lose -
+    so the failure lands after them, and the opening behind it is still sent.
+    """
+    venue = _StaggeredVenue(fail_symbol="BTCUSDT")
+    venue.qty = {"ETHUSDT": 1.0, "BNBUSDT": 10.0}
+    venue.entry = {symbol: venue.prices[symbol] for symbol in venue.qty}
+    market = FakeMarketData(august_panel, 400)
+    engine = LiveEngine(
+        _config(tmp_path),
+        model=_model(),
+        market=market,
+        venue=venue,
+        clock=FakeClock(market.bar_open_ms(400) + 5_000),
+        store=StateStore(tmp_path / "live"),
+    )
+    planned = [
+        _order("BTCUSDT", Side.BUY, "0.010", reduce_only=False),
+        _order("ETHUSDT", Side.SELL, "0.500", reduce_only=True),
+        _order("SOLUSDT", Side.BUY, "10", reduce_only=False),
+        _order("BNBUSDT", Side.SELL, "5.00", reduce_only=True),
+    ]
+    record: dict[str, Any] = {"orders": []}
+
+    with pytest.raises(RuntimeError):
+        await engine._execute_orders(planned, record, bar_open_ms=1_757_000_000_000, decision_closes={})
+
+    assert venue.completions == ["ETHUSDT", "BNBUSDT", "SOLUSDT"]
+    assert [row["symbol"] for row in record["orders"]] == ["ETHUSDT", "BNBUSDT", "SOLUSDT"]
+    assert venue.qty["ETHUSDT"] == pytest.approx(0.5) and venue.qty["BNBUSDT"] == pytest.approx(5.0)
