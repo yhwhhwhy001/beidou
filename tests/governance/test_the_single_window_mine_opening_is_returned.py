@@ -12,6 +12,11 @@ still a control, and one that never fails is the thing being guarded against.
 
 Deliberately not a warning, a log line or a comment.  Each of those was available and each is what the
 audit kept finding in place of a gate.
+
+2026-09-25: the check did its job before its day.  Asked about the date ahead of it, the operator
+made the fifth round standing, so `STANDING_MINE_ROUNDS` moved 4 -> 5 and the number stayed 5.  From
+2026-10-03 the first test below holds because the standing value moved, not because the round was
+returned - the second of the two paths its own message names.  Why no `POLICY_VERSION` bump: see there.
 """
 
 from __future__ import annotations
@@ -38,10 +43,10 @@ def test_the_single_window_mine_opening_is_returned() -> None:
 
 
 def test_the_opening_is_one_round_and_not_more() -> None:
-    """Whatever else changes, the ruling was 4 -> 5.  A later edit to 6 is not this ruling."""
+    """An opening is one round above the standing value, as 0.3.1's was.  Two above is not that shape."""
     assert Policy().max_mine_rounds_per_window <= STANDING_MINE_ROUNDS + 1
 
 
-def test_the_standing_value_is_what_0_3_0_set() -> None:
-    """`STANDING_MINE_ROUNDS` is where it goes back TO, so it must not drift with the opening."""
-    assert STANDING_MINE_ROUNDS == 4
+def test_the_standing_value_is_what_the_operator_ruled() -> None:
+    """4 from 0.3.0; 5 from the operator's ruling of 2026-09-25.  Moving it again is a new ruling, not a drift."""
+    assert STANDING_MINE_ROUNDS == 5
