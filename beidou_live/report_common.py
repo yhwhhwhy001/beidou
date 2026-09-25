@@ -66,6 +66,10 @@ def _state_problem(store: StateStore) -> str:
 
 
 DAY_MS = 86_400_000
+# The bars `LiveEngine._liquidity` averages for the participation cap: the profile's `pool.liquidity_window`.
+# The cycle record does not carry it, so it is written here and a test holds it to the profile.  Here and
+# not in either reader, because the closing reading (3.9) and the per-order one (#10.9) must use one hour.
+LIQUIDITY_WINDOW_BARS = 24
 
 
 def _cycles(store: StateStore, *, window_days: int | None = None, now_ms: int | None = None) -> list[dict[str, Any]]:

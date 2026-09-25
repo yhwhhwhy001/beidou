@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from bisect import bisect_right
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -17,11 +18,20 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from beidou_data.store import KlineStore
 from beidou_data.store import interval_ms as bar_ms_of  # `interval_ms` is a parameter name in this module
-from beidou_live.report_common import DAY_MS, _cycles, _day_of, _fmt_num
-from beidou_live.risk_budget import RiskBudgetParams, _weighted, books_by_bar, fill_grouper, slippage_bps
+from beidou_live.composition import impact_model
+from beidou_live.report_common import DAY_MS, LIQUIDITY_WINDOW_BARS, _cycles, _day_of, _fmt_num, _parsed
+from beidou_live.risk_budget import (
+    RiskBudgetParams,
+    _weighted,
+    books_by_bar,
+    fill_grouper,
+    one_row_per_order,
+    slippage_bps,
+)
 from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
 from beidou_live.soak import _decided
 from beidou_live.state import StateStore
@@ -313,8 +323,15 @@ def restart_cost(
 #: `ReplayInputs.from_profile` reads for a profile that names no other, and the one the shipped profile names.
 COSTS_PATH = "config/costs.yaml"
 #: Decade edges of participation for the error's buckets.  Fixed rather than quantiles, so a bucket
-#: means the same thing next month; the 2026-09-24 window put 39 / 61 / 19 / 5 fills in them.
+#: means the same thing next month; the window to 2026-09-25T05:00Z put 38 / 68 / 16 / 2 fills in them.
 TCA_PARTICIPATION_EDGES = (1e-5, 1e-4, 1e-3)
+#: How far `decision_close` may sit from the archive's close of the decision bar and still be that bar's.
+#: Both are the venue's kline close read into a float, and on 2026-09-25 all 124 archived fills agreed
+#: bit for bit.  Another bar's close differs by at least a tick unless the price did not move, and the
+#: smallest tick relative to price among the names traded is 1.3e-6 (BTCUSDT, 0.1 on about 78,000).
+#: 1e-9 sits three orders under a tick and seven over the noise of reading a price into a float.
+DECISION_CLOSE_RTOL = 1e-9
+MISMATCHED_BAR = "决策 bar 对不上归档"
 
 
 def per_order_tca(
@@ -331,39 +348,54 @@ def per_order_tca(
     restart for a reading.  Everything the estimate needs is already on the trade row or in the archive,
     so rebuilding it here gives the number the loop would have written.  It is the cost model: taker
     fee, `slippage_bps`, and the square-root impact term the way `backtest.impact_costs` prices it -
-    coefficient x sigma_daily x sqrt(notional / ADV) over the trailing `vol_window_bars` and
-    `adv_window_bars` - on the PLANNED notional (`quantity` x `price`, both fixed before the order was
-    sent).  Participation is that notional over the decision bar's quote volume.  Every input is the
-    decision bar or older: it had closed when the order went out, and it is the last bar
-    `impact_costs` reads for the execution bar.  The coefficient is E5 and has never been calibrated
-    (demo fills are too small to measure it, `config/costs.yaml`), so the error below measures the
-    model, not execution.
+    coefficient x sigma_daily x sqrt(notional / ADV), sigma over the open-to-close returns `run_backtest`
+    hands it by default, both windows from `impact_model` (research's entry point) - on the PLANNED
+    notional (`quantity` x `price`, both fixed before the order was sent).  Participation is that
+    notional over the mean quote volume of the last `LIQUIDITY_WINDOW_BARS` bars: `LiveEngine._liquidity`'s
+    hour, the one `max_participation` is a fraction of.  The coefficient is E5 and has never been
+    calibrated (demo fills are too small to measure it, `config/costs.yaml`), so the error below measures
+    the model, not execution.
+
+    **Every input is the decision bar or older**, and the decision bar is the one the cycle row that
+    recorded the order names in `as_of_ms` - the klines' own bar - not the fill's `bar_open_ms`, which is
+    the host clock's label.  D-025 accepts a whole-bar offset between the two (21 rows on 2026-09-04 sat
+    3,600,000 ms apart), and a host one bar ahead would label an order with a bar that had not closed
+    when it went out.  The row's `decision_close` must also be the archive's close of that bar
+    (`DECISION_CLOSE_RTOL`); where it is not, the fill is counted as `MISMATCHED_BAR`, neither split nor
+    estimated.  The window, the book and the fee stay keyed by `bar_open_ms`, as M-Q08 and attribution are.
 
     **Post-trade, against `decision_close`**, signed so a cost is positive, over M-Q08's population
-    (its window, no flattens, a reference on the row) with its arithmetic (`_weighted`: notional-
-    weighted, Kish SE) and its split by book (`fill_grouper`) - which is what lets the mean reconcile
-    to both of M-Q08's readings, the whole book and the main book it judges, and the block checks that
-    it does.  Split at the next bar's archived open into the gap (decision close -> open) and the fill
-    (open -> average price), both in bps of the decision close so the two add up.  The fill part
-    carries the order's delay past the open, the spread and any impact; 1h bars cannot tell those
-    three apart.
+    (its window, no flattens, a reference on the row, each venue order once) with its arithmetic
+    (`_weighted`: notional-weighted, Kish SE) and its split by book (`fill_grouper`) - which is what lets
+    the mean reconcile to both of M-Q08's readings, the whole book and the main book it judges, and the
+    block checks that it does.  Split at the next bar's archived open into the gap (decision close ->
+    open) and the fill (open -> average price), both in bps of the decision close so the two add up.
+    The fill part carries the order's delay past the open, the spread, any impact, and the difference
+    between mainnet's price and demo's: the open is mainnet's archive and the fill is demo's.  1h bars
+    cannot tell those apart.  **The prediction is compared with the fill part alone**: `slippage_bps` is
+    an adverse fill against the next open (`config/costs.yaml`), so the gap is no part of what the model
+    predicts, and it keeps its own line.
 
     **The spread is not split out, for two reasons checked 2026-09-24.**  The fills trade on the demo
-    book, and it is not mainnet's: from 19:14 to 19:15Z demo BTCUSDT held its best bid / ask at
-    84457.9 / 84462.5 while mainnet's moved between 84580 and 84545, three demo AKEUSDT ask levels
-    each held 6,537,999, and demo's hourly quote volume on BTCUSDT ran 6-22x mainnet's on the four
-    bars sampled.  And the one archived top of book, data.binance.vision's `bookTicker`, stops in
-    2024-04 (BTCUSDT daily 2023-05-16 to 2024-03-30; none at all for AKEUSDT or ENAUSDT).  `bookDepth`
-    runs to date, but it is mainnet's book.
+    book, and it does not behave like mainnet's: from 19:14 to 19:15Z demo BTCUSDT held its best bid /
+    ask at 84457.9 / 84462.5 while mainnet's moved between 84580 and 84545, three demo AKEUSDT ask levels
+    each held 6,537,999, and demo's hourly quote volume on BTCUSDT ran 6-22x mainnet's on the four bars
+    sampled.  That its depth is synthetic is an inference from those samples; the venue does not say so.
+    And the one archived top of book, data.binance.vision's `bookTicker`, stops in 2024-04 (BTCUSDT daily
+    2023-05-16 to 2024-03-30; none at all for AKEUSDT or ENAUSDT).  `bookDepth` runs to date, but it is
+    mainnet's book.
 
     **The fee is listed apart**, as booked: the commission over the fill's notional.  An attribution
     row carries `state.last_bar_ms` - the bar of the cycle BEFORE the one that read the income, which
     is the cycle that placed the fills the commission came from - so (bar, symbol) keys a fill to its
-    commission, and only a key with one row on each side is read.  On 2026-09-24 that booked 4.0 bps
-    on thirteen names and 5.0 on seven, against the model's flat 5.0.
+    commission, and only a key with one row on each side is read.  A `live flatten` fill has no bar, so
+    that count cannot see it, and a key whose income window also held one is not read either
+    (`_booked_fees`).  On 2026-09-24 that booked 4.0 bps on thirteen names and 5.0 on seven, against the
+    model's flat 5.0.
 
     The catch is broad for `execution_fidelity`'s reason: this runs in the hourly check and judges
-    nothing, so it must not take the report or its alerts down.  The block carries the reason instead.
+    nothing, so it must not take the report or its alerts down.  The block carries the reason instead,
+    and an archive that cannot be read costs only its own symbol the split and the estimate.
     """
     try:
         return _tca(store, params or RiskBudgetParams(), Path(data_root), costs, interval)
@@ -375,31 +407,27 @@ def _tca(
     store: StateStore, params: RiskBudgetParams, root: Path, costs: Mapping[str, Any] | None, interval: str
 ) -> dict[str, Any]:
     costs = load_yaml(COSTS_PATH) if costs is None else costs
-    impact = costs.get("impact") or {}
+    impact = impact_model(costs)
     model: dict[str, Any] = {
         "taker_fee_bps": float(costs.get("taker_fee_bps", 5.0)),
         "slippage_bps": float(costs.get("slippage_bps", 2.0)),
-        "impact_coefficient": float(impact.get("coefficient", 1.0)),
-        "adv_window_bars": int(impact.get("adv_window_bars", 720)),
-        "vol_window_bars": int(impact.get("vol_window_bars", 720)),
+        "impact_coefficient": impact.coefficient,
+        "adv_window_bars": impact.adv_window,
+        "vol_window_bars": impact.vol_window,
     }
     # The report's own rows, the ones `risk_budget_status` is handed.  Read from every row, a restart's
     # SKIPPED row would end the window on a bar that never traded; on 2026-09-23 such rows also took
     # over their bars' books and re-split 67 main-book fills as 52 (`books_by_bar` now skips them).
-    rows, trades = _cycles(store), store.read_jsonl(store.trades_path)
+    rows, trades = _cycles(store), one_row_per_order(store.read_jsonl(store.trades_path))
     books = books_by_bar(rows)
     book_of = fill_grouper(books)
+    decided = _decision_bars(rows)
     latest = int(rows[-1].get("bar_open_ms") or 0) if rows else 0
     since = latest - params.slippage_window_days * DAY_MS
-    fees: dict[tuple[int, str], list[float]] = {}
-    for row in store.read_jsonl(store.attribution_path):
-        for symbol, bucket in (row.get("by_symbol") or {}).items():
-            if isinstance(row.get("bar_open_ms"), int) and (paid := float(bucket.get("COMMISSION") or 0.0)):
-                fees.setdefault((row["bar_open_ms"], str(symbol)), []).append(paid)
+    fees, mixed = _booked_fees(store.read_jsonl(store.attribution_path), trades)
     placed = Counter((row.get("bar_open_ms"), str(row.get("symbol") or "")) for row in trades)
     bar_ms = bar_ms_of(interval)
-    start_ms = since - (max(model["adv_window_bars"], model["vol_window_bars"]) + 1) * bar_ms
-    archive: dict[str, dict[str, np.ndarray] | None] = {}
+    archive: dict[str, dict[str, np.ndarray] | str] = {}
     fills: list[dict[str, Any]] = []
     without_reference = 0
     for trade in trades:
@@ -428,22 +456,29 @@ def _tca(
             "slippage": side * (filled - reference) / reference * 10_000.0,
             "late_seconds": trade.get("late_seconds"),
         }
-        if len(paid_rows := fees.get((bar, symbol), [])) == 1 and placed[(bar, symbol)] == 1:
+        paid_rows = fees.get((bar, symbol), [])
+        if len(paid_rows) == 1 and placed[(bar, symbol)] == 1 and (bar, symbol) not in mixed:
             reading["fee"] = -paid_rows[0] / reading["notional"] * 10_000.0
         if symbol not in archive:
-            archive[symbol] = _archived_bars(root, symbol, interval, start_ms)
-        reading.update(_against_the_archive(trade, archive[symbol], bar, bar_ms, side, reference, model))
+            archive[symbol] = _archived_bars(root, symbol, interval)
+        # An order no traded cycle recorded - one placed by a cycle that then raised - keeps its own
+        # label, and the close check below is what stands between that guess and a wrong bar.
+        decision = decided.get((symbol, str(trade.get("order_id"))), bar)
+        reading.update(_against_the_archive(trade, archive[symbol], decision, bar_ms, side, reference, model))
         fills.append(reading)
     split = [reading for reading in fills if "gap" in reading]
     for reading in split:
         reading["fill"] = reading["slippage"] - reading["gap"]  # in bps of the decision close, so they add up
     estimated = [reading for reading in fills if "predicted" in reading]
-    for reading in estimated:
-        reading["error"] = reading["predicted"] - reading["slippage"]
+    # The model's `slippage_bps` is against the next open, so what it predicts is the fill part.
+    compared = [reading for reading in estimated if "fill" in reading]
+    for reading in compared:
+        reading["error"] = reading["predicted"] - reading["fill"]
     late = [float(r["late_seconds"]) for r in split if isinstance(r.get("late_seconds"), int | float)]
     # The newest bar's commission is read by the NEXT cycle's income window, so it is not missing yet.
     booked_until = max((bar for bar, _symbol in fees), default=0)
-    unbooked = [reading for reading in fills if "fee" not in reading]
+    unbooked = [reading for reading in fills if "fee" not in reading and reading["bar"] <= booked_until]
+    with_flatten = sum(1 for reading in unbooked if (reading["bar"], reading["symbol"]) in mixed)
     participation = sorted(float(reading["participation"]) for reading in estimated)
     measured = _tca_mean(fills, "slippage")
     mq08 = slippage_bps(trades, params, latest_ms=latest, books_at=books)
@@ -466,8 +501,9 @@ def _tca(
             "fee": {
                 "model_bps": model["taker_fee_bps"],
                 "booked": _tca_mean(fills, "fee"),
-                "not_yet_read": sum(1 for reading in unbooked if reading["bar"] > booked_until),
-                "unmatched": sum(1 for reading in unbooked if reading["bar"] <= booked_until),
+                "not_yet_read": sum(1 for reading in fills if "fee" not in reading and reading["bar"] > booked_until),
+                "unmatched": len(unbooked) - with_flatten,
+                "flatten_in_window": with_flatten,
             },
         },
         # Against both of M-Q08's readings: the whole book, and the one it judges (G9's split, per fill).
@@ -486,27 +522,85 @@ def _tca(
             "participation": {"median": statistics.median(participation), "max": participation[-1]}
             if participation
             else None,
+            "liquidity_window_bars": LIQUIDITY_WINDOW_BARS,
             "unestimated": dict(Counter(f"{r['symbol']} {r['unestimated']}" for r in fills if "unestimated" in r)),
         },
-        "predicted_minus_actual": _tca_mean(estimated, "error"),
-        "by_participation": _by_participation(estimated),
+        "predicted_minus_actual": _tca_mean(compared, "error"),
+        "by_participation": _by_participation(compared),
     }
 
 
-def _archived_bars(root: Path, symbol: str, interval: str, start_ms: int) -> dict[str, np.ndarray] | None:
-    """One symbol's archived bars from `start_ms` on, as arrays; None when the archive never held it."""
+def _decision_bars(rows: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str], int]:
+    """(symbol, order_id) -> the bar the order was decided on: `as_of_ms` of the first cycle row listing it.
+
+    The first row is the cycle that placed it; a restart that re-runs the bar lists it again.  A row
+    without `as_of_ms` gives its `bar_open_ms`, `liquidity_to_close`'s rule for the same field.
+    """
+    decided: dict[tuple[str, str], int] = {}
+    for row in rows:
+        bar = row.get("as_of_ms") or row.get("bar_open_ms")
+        if not isinstance(bar, int | float) or isinstance(bar, bool):
+            continue
+        for order in row.get("orders") or []:
+            if isinstance(order, Mapping) and order.get("order_id") not in (None, ""):
+                decided.setdefault((str(order.get("symbol") or ""), str(order["order_id"])), int(bar))
+    return decided
+
+
+def _booked_fees(
+    attribution: Sequence[Mapping[str, Any]], trades: Sequence[Mapping[str, Any]]
+) -> tuple[dict[tuple[int, str], list[float]], set[tuple[int, str]]]:
+    """Each (bar, symbol)'s booked commissions, and the keys whose income window also held a flatten fill.
+
+    A `live flatten` fill carries no bar, and its commission goes into the first attribution row written
+    after it, whatever bar that row is keyed by.  Both `at` stamps are the host clock's
+    (`StateStore._append`), so their order needs no conversion; the row's own `since_ms` / `until_ms` are
+    the venue's (D-030) and would need the offset D-025 accepts.  A commission that reached the venue's
+    income feed only after the next row was written would land one row later, and nothing recorded can
+    tell that apart.
+    """
+    fees: dict[tuple[int, str], list[float]] = {}
+    written: list[tuple[datetime, int]] = []
+    for row in attribution:
+        if not isinstance(bar := row.get("bar_open_ms"), int):
+            continue
+        for symbol, bucket in (row.get("by_symbol") or {}).items():
+            if paid := float(bucket.get("COMMISSION") or 0.0):
+                fees.setdefault((bar, str(symbol)), []).append(paid)
+        if (stamp := _parsed(row.get("at"))) is not None:
+            written.append((stamp, bar))
+    written.sort()
+    stamps = [stamp for stamp, _bar in written]
+    mixed: set[tuple[int, str]] = set()
+    for trade in trades:
+        stamp = _parsed(trade.get("at")) if trade.get("flatten") else None
+        if stamp is not None and (after := bisect_right(stamps, stamp)) < len(written):
+            mixed.add((written[after][1], str(trade.get("symbol") or "")))
+    return fees, mixed
+
+
+def _archived_bars(root: Path, symbol: str, interval: str) -> dict[str, np.ndarray] | str:
+    """One symbol's archived bars as arrays, or the reason they cannot be read.
+
+    Read whole, because D-025's offset can put a decision bar before the window, and a slice cut at the
+    window would shorten its sigma and ADV without saying so.  A file that will not open is its own
+    symbol's problem (a half-written parquet raises ArrowInvalid, not FileNotFoundError): the reason goes
+    on that symbol's fills and the others are still priced, `liquidity_to_close`'s rule.
+    """
     try:
-        frame = KlineStore(root).load(symbol, interval, start_ms=start_ms)
+        frame = KlineStore(root).load(symbol, interval)
+        columns = {name: frame[name].to_numpy(dtype=float) for name in ("open", "close", "quote_volume")}
+        return {"open_time": frame["open_time"].to_numpy(dtype=np.int64), **columns}
     except FileNotFoundError:
-        return None
-    columns = {name: frame[name].to_numpy(dtype=float) for name in ("open", "close", "quote_volume")}
-    return {"open_time": frame["open_time"].to_numpy(dtype=np.int64), **columns}
+        return "归档没有这个标的"
+    except Exception as error:
+        return f"归档读不出：{type(error).__name__}: {error}"
 
 
 def _against_the_archive(
     trade: Mapping[str, Any],
-    bars: Mapping[str, np.ndarray] | None,
-    bar: int,
+    bars: Mapping[str, np.ndarray] | str,
+    decision: int,
     bar_ms: int,
     side: float,
     reference: float,
@@ -514,38 +608,43 @@ def _against_the_archive(
 ) -> dict[str, Any]:
     """What the archive adds to one fill: the gap to the next open, and the estimate made before it was sent.
 
-    Each is there or replaced by the reason it is not, and the block counts the reasons: a fill the
-    archive cannot price is not a fill that cost nothing.
+    `decision` is the bar the order was decided on (`_decision_bars`).  The estimate reads it and the
+    bars before it; the split reads the next bar's open as well, which is the gap's other end.  Each is
+    there or replaced by the reason it is not, and the block counts the reasons: a fill the archive
+    cannot price is not a fill that cost nothing.
     """
-    if bars is None:
-        return {"unsplit": "归档没有这个标的", "unestimated": "归档没有这个标的"}
+    if isinstance(bars, str):
+        return {"unsplit": bars, "unestimated": bars}
     times = bars["open_time"]
-    at = int(np.searchsorted(times, bar))
-    if at >= len(times) or int(times[at]) != bar:
+    at = int(np.searchsorted(times, decision))
+    if at >= len(times) or int(times[at]) != decision:
         # Past the archive's last bar is the daily sync not having caught up; inside it is a hole.
         why = "归档还没到决策 bar" if at >= len(times) else "归档缺决策 bar"
         return {"unsplit": why, "unestimated": why}
+    if not math.isclose(reference, float(bars["close"][at]), rel_tol=DECISION_CLOSE_RTOL):
+        return {"unsplit": MISMATCHED_BAR, "unestimated": MISMATCHED_BAR}
     out: dict[str, Any] = {}
-    if at + 1 < len(times) and int(times[at + 1]) == bar + bar_ms:
+    if at + 1 < len(times) and int(times[at + 1]) == decision + bar_ms:
         out["gap"] = side * (float(bars["open"][at + 1]) - reference) / reference * 10_000.0
     else:
         out["unsplit"] = "归档还没到下一根 bar" if at + 1 >= len(times) else "归档缺下一根 bar"
     bars_per_day = DAY_MS / bar_ms
     planned = float(trade.get("quantity") or 0.0) * float(trade.get("price") or 0.0)
-    volume = float(bars["quote_volume"][at])
+    # `LiveEngine._liquidity`, computed the way it computes it, on the archive's copy of the bars it held.
+    hourly = float(pd.Series(bars["quote_volume"][max(0, at - LIQUIDITY_WINDOW_BARS + 1) : at + 1]).mean())
     adv = float(np.mean(bars["quote_volume"][max(0, at - model["adv_window_bars"] + 1) : at + 1])) * bars_per_day
-    closes = bars["close"][max(0, at - model["vol_window_bars"]) : at + 1]
-    returns = closes[1:] / closes[:-1] - 1.0
+    first = max(0, at - model["vol_window_bars"] + 1)
+    returns = bars["close"][first : at + 1] / bars["open"][first : at + 1] - 1.0  # `run_backtest`'s default
     fewest = model["vol_window_bars"] // 4  # `impact_costs`' own min_periods
     if len(returns) < fewest:
         out["unestimated"] = f"决策 bar 之前不足 {fewest} 根收益"
         return out
     sigma_daily = float(np.std(returns, ddof=1)) * math.sqrt(bars_per_day)
-    if not (planned > 0 and volume > 0 and adv > 0 and math.isfinite(sigma_daily)):
+    if not (planned > 0 and hourly > 0 and adv > 0 and math.isfinite(sigma_daily)):
         out["unestimated"] = "计划名义额、成交额或波动率读不出"
         return out
     impact = model["impact_coefficient"] * sigma_daily * math.sqrt(planned / adv) * 10_000.0
-    out.update(participation=planned / volume, impact=impact, predicted=model["slippage_bps"] + impact)
+    out.update(participation=planned / hourly, impact=impact, predicted=model["slippage_bps"] + impact)
     return out
 
 
@@ -589,7 +688,7 @@ def _by_participation(readings: Sequence[Mapping[str, Any]]) -> list[dict[str, A
             {
                 "bucket": label,
                 "predicted_minus_actual": _tca_mean(chosen, "error"),
-                "slippage": _tca_mean(chosen, "slippage")["value"],
+                "fill": _tca_mean(chosen, "fill")["value"],
                 "predicted": _tca_mean(chosen, "predicted")["value"],
             }
         )
@@ -620,7 +719,7 @@ def _reconciled_line(row: Mapping[str, Any]) -> str:
 
 
 def tca_lines(block: Mapping[str, Any]) -> dict[str, Any]:
-    """#10.9 / #10.10 on the page, with the estimate's three caveats as lines of their own."""
+    """#10.9 / #10.10 on the page, with the estimate's caveats as lines of their own.  Readings only."""
     if not block:
         return {"none": 0}
     if block.get("error"):
@@ -645,28 +744,41 @@ def tca_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "成交段里有什么": (
             ("下单延迟" if late is None else f"下单延迟（中位 {late:.0f} 秒）")
-            + f"、价差与冲击。归档只有 {window.get('interval')} bar，拆不开"
+            + "、价差、冲击，以及主网与 demo 的价格差：开盘价取主网归档，成交在 demo 上。"
+            + f"归档只有 {window.get('interval')} bar，拆不开"
         ),
-        "价差为什么不单拆": "成交打在 demo 盘口上，demo 的深度是合成的。主网 bookTicker 归档止于 2024-04",
+        "价差为什么不单拆": (
+            "成交打在 demo 盘口上。demo 的深度像是合成的，这是推断：2026-09-24 抽查时，"
+            "一分钟里 demo 的买一卖一没动，主网在动。主网 bookTicker 归档止于 2024-04"
+        ),
         "手续费（另列，不在滑点里）": (
             f"入账 {_tca_bps(booked)}；成本模型 taker {_fmt_num(fee.get('model_bps'))} bps"
             + (f"；{fee['not_yet_read']} 笔下个周期才读到手续费" if fee.get("not_yet_read") else "")
             + (f"；{fee['unmatched']} 笔在 attribution 里对不上唯一一行" if fee.get("unmatched") else "")
+            + (
+                f"；{fee['flatten_in_window']} 笔的入账窗口里有 live flatten 的成交，不读"
+                if fee.get("flatten_in_window")
+                else ""
+            )
         ),
         "事前估计（离线重建，循环没有记录）": (
             f"{_tca_bps(pre.get('predicted'))} = slippage_bps {_fmt_num(model.get('slippage_bps'))}"
             f" + 冲击 {_fmt_num((pre.get('impact') or {}).get('value'))}；taker 另计"
         ),
-        "事前估计的输入": "只用决策时刻已收盘的 bar。参与率 = 计划名义额 ÷ 决策 bar 成交额",
+        "事前估计的输入": "只用决策时刻已收盘的 bar。决策 bar 取周期行的 as_of_ms，不取主机时钟的 bar_open_ms",
+        "参与率的口径": (
+            f"计划名义额 ÷ 近 {pre.get('liquidity_window_bars')} 根 bar 的平均小时成交额，与 max_participation 同一口径"
+        ),
         "冲击系数": f"{model.get('impact_coefficient')}，没校准（costs.yaml 标 E5）",
         "参与率 中位 / 最大": (
             f"{participation['median']:.1e} / {participation['max']:.1e}" if participation else "无"
         ),
-        "预测 − 实际（滑点部分，名义额加权）": _tca_bps(block.get("predicted_minus_actual")),
+        "预测比的是哪一段": "成交段。slippage_bps 按下一根开盘价定义，跳空不在预测里",
+        "预测 − 成交段（名义额加权）": _tca_bps(block.get("predicted_minus_actual")),
     }
     for row in block.get("by_participation") or []:
-        lines[f"预测 − 实际，参与率 {row['bucket']}"] = (
-            f"{_tca_bps(row.get('predicted_minus_actual'))}；实际 {_signed(row.get('slippage'))}，"
+        lines[f"预测 − 成交段，参与率 {row['bucket']}"] = (
+            f"{_tca_bps(row.get('predicted_minus_actual'))}；成交段 {_signed(row.get('fill'))}，"
             f"预测 {_signed(row.get('predicted'))}"
         )
     for key, label in (("unestimated", "没有事前估计的"), ("unsplit", "没拆两段的")):
