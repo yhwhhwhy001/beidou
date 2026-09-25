@@ -224,7 +224,9 @@ def test_a_book_that_closes_nothing_reads_bit_for_bit_what_it_read_before() -> N
     ]
     reading = attributed_drawdown_state(rows, [_foreign_only(0, 1), _foreign_only(2, 3)], PARAMS)
 
-    assert reading["enforced"] and reading["ruler"] == "attributed_pnl+unrealized" and reading["marked_rows"] == 4
+    assert (
+        reading["enforced"] and reading["ruler"] == "attributed_pnl_as_read+unrealized" and reading["marked_rows"] == 4
+    )
     assert reading["peak"] == 10_000.0 + (400.0 - 0.0)
     assert reading["value"] == (10_000.0 + (250.0 - 0.0)) / (10_000.0 + (400.0 - 0.0)) - 1.0
     assert reading["max_drawdown"] == reading["value"]

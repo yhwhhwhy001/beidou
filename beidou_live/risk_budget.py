@@ -499,8 +499,10 @@ def attributed_drawdown_state(
         # record whose rows predate `unrealized` reads `attributed_pnl` and means exactly what it used
         # to; one whose rows carry it reads `attributed_pnl+unrealized` and is the book's own
         # mark-to-market with collateral still excluded.  The two are not comparable across the
-        # boundary, and a name is the only thing that can say so after the fact.
-        "ruler": "attributed_pnl+unrealized" if marked_rows else "attributed_pnl",
+        # boundary, and a name is the only thing that can say so after the fact.  `_as_read` since the
+        # 2026-09-25 fix: income lands on the row that read it, so a close is counted once.  The rows a
+        # loop wrote before that restart read the old names, and this is how a reader tells them apart.
+        "ruler": "attributed_pnl_as_read+unrealized" if marked_rows else "attributed_pnl_as_read",
         "marked_rows": marked_rows,
         "path": path,
         "peak": peak,
