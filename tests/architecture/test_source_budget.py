@@ -3360,7 +3360,18 @@ CEILING = {
     # 7 处变异各有测试变红。合并方在另一份快照上重跑：日报只多一个键、一节，其余逐字节相同。
     #
     # 留 40 行（13_775 -> 13_815），理由与上面几格逐字相同，不重述。
-    "beidou_live": 13_815,
+    #
+    # 2026-09-25（不编号，同上）。+53 beidou_live，13_775 -> 13_828，抬到 13_868。
+    #
+    # 多因子载荷（#140）的对抗式审查五条，修在 `factor_loadings.py` 与 `report_beta.py`。代码的计算本来是对的，
+    # 缺的是：前视测试抓不到三种一根的前视（资金费多读一根、选腿用了 t+1 的键、敞口用了当根）；归档每天只
+    # 同步一次，滞后 1-25 小时，页面不报；「只用市场」那一行其实带着全多头截距；同页两个「全多头的 bar」
+    # 样本不同。花在哪：`_archive_reach` 与归档一行（页面说明排名是临时的、下次同步会回改）；两处标签；
+    # docstring 写明滞后与截距。测试另加，不计入。`beidou_cli` 另 +8（`report beta --out` 先写 D-045 那一页，
+    # 因子页出错时写拒读原因再重新抛出），7_857 -> 7_865，在余量之内，不抬。
+    #
+    # 留 40 行（13_828 -> 13_868），理由与上面几格逐字相同，不重述。
+    "beidou_live": 13_868,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
