@@ -31,7 +31,28 @@ from dataclasses import asdict, dataclass, field
 from beidou_alpha.overlays.ladder import rung_target
 
 POLICY_VERSION = "0.3.5"
-"""0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
+"""2026-09-25, no version change: the fifth mine round stands, by operator ruling.
+
+0.3.1 opened a fifth round for the window 2026-09-03..2026-10-03 only, and wired a test to fail on
+the day it expired unless somebody acted.  Asked before that day, the operator ruled the fifth round
+standing ("5 轮常设").  So `STANDING_MINE_ROUNDS` moves 4 -> 5 and `max_mine_rounds_per_window` stays
+5: the reversion test holds because the standing value moved, which is the path its own message
+offers ("say so at POLICY_VERSION and move STANDING_MINE_ROUNDS, which is a decision rather than a
+lapse").
+
+Why the version does not move.  `version` is a `Policy` field, so it is inside `policy_digest()`, and
+the live loop records that digest every cycle for `live status --check` to compare with this file.
+No rule the machine enforces changed here - every `Policy` field keeps its value - so a new version
+would move the digest and make the hourly check report, every hour until a restart, that the loop
+runs stale rules.  That report would be false.  The ruling is written here instead, at POLICY_VERSION,
+as the test asks.
+
+What it costs is 0.3.0's argument unchanged: R1 is a rate limit, not the multiple-testing control.
+A round is one selection event; every row it scores still enters the ledger and the family's N, and
+the gate rises with N.  One more round per 30-day window buys search and spends power and compute.
+R2 still refuses a round on an unchanged space, so five rounds cannot be one round five times.
+
+0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
 unrealised P&L.  One decision in two halves - see `drawdown_ladder` for why they cannot ship apart.
 The short version: measured over 2021-2026 at k=0.60 the ladder as it stood NEVER FIRED, because the
 ruler counted only realised P&L while a momentum book holds its losers; and the rungs it would have
@@ -102,8 +123,10 @@ question really is "best of how many", and that number really is 514.
 """
 
 
-#: What `max_mine_rounds_per_window` goes back to when the 0.3.1 opening expires, and when.
-STANDING_MINE_ROUNDS = 4
+#: The standing number of mine rounds per window, and when 0.3.1's one-window opening was due to close.
+#: 4 from 0.3.0; 5 from 2026-09-25, when the operator made the opened round standing (no version change;
+#: see POLICY_VERSION).
+STANDING_MINE_ROUNDS = 5
 SINGLE_WINDOW_MINE_OPENING_ENDS = "2026-10-03T00:00:00+00:00"
 
 
@@ -132,10 +155,10 @@ class Policy:
     # four after it - roughly weekly inside a monthly window.  R2 still refuses a space that has not
     # changed, so four rounds cannot become the same round four times.
     #
-    # 5 for the window ending `SINGLE_WINDOW_MINE_OPENING_ENDS` only; see 0.3.1 at POLICY_VERSION for
-    # the reason and the price.  Return it to `STANDING_MINE_ROUNDS` when that window closes - a test
-    # fails from that date until somebody does, because "just this once" without an executing check is
-    # a promise, and this repository has spent a day counting promises that were taken for controls.
+    # 5 was opened for the window ending `SINGLE_WINDOW_MINE_OPENING_ENDS` only (0.3.1), with a test that
+    # fails from that date until the number and `STANDING_MINE_ROUNDS` agree - because "just this once"
+    # without an executing check is a promise.  On 2026-09-25 the operator made it standing, so
+    # they agree by `STANDING_MINE_ROUNDS` moving to 5, not by this going back to 4.
     max_mine_rounds_per_window: int = 5
 
     # R2: `research mine` runs only when the search space changed.  Re-running the same space and

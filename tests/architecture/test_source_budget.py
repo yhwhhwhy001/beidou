@@ -3754,7 +3754,13 @@ CEILING = {
     # leaves a probe a probe (retiring the probe would turn the demotion into a delay), and
     # `family_gate.refusals` is the event's first producer - the 09-19 refusal of tsmom sat in the verdict
     # ledger four days with no consequence.  About half is the docstrings recording the ruling.
-    "beidou_governance": 3_971,
+    # +23 beidou_governance (3_971 -> 3_994), 2026-09-25, operator ruling "5 轮常设": the fifth mine round
+    # that 0.3.1 opened for one window stands.  One constant moves (`STANDING_MINE_ROUNDS` 4 -> 5); the
+    # lines are the note at POLICY_VERSION recording the ruling and why the version does NOT move -
+    # `version` is inside `policy_digest()`, and bumping it would make `live status --check` report every
+    # hour that the loop runs stale rules when no enforced rule changed.  Left 40 lines above, as the
+    # beidou_live cells do since 2026-09-17: a ratchet at zero taxes the next honest change.
+    "beidou_governance": 4_034,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
