@@ -426,7 +426,7 @@ def _event_risk_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     lines["脱锚读法"] = (
         "偏离 = USDC/USDT − 1。为正：USDT 比 USDC 便宜，USDT 脱锚往这边走。为负：USDC 比 USDT 便宜，2023-03 往这边走。"
         "两个币一起离开美元时它不动：归档里没有法币交易对。最大偏离读每根 bar 的最高价与最低价，插针也算。"
-        "这条序列 2022-09-26 至 2023-03-11 断档，FTX 那段没有数据。"
+        "这条序列 2022-09-26 至 2023-03-11 有一段 3,996 小时的缺口，FTX 那段没有数据。"
     )
     venue = block.get("venue") or {}
     if venue.get("measured"):
