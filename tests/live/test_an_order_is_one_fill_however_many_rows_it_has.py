@@ -7,7 +7,8 @@
 
 读两次，成交就算了两遍；按第二行的方向记，滑点的符号还是反的。这里钉住每个读者都只读第一行：
 M-Q08 的滑点（`risk_budget.slippage_bps`）与它的按周读数（`execution_fidelity.slippage_by_week`）、
-M-Q08 的实盘换手（`execution_fidelity.live_turnover`）、逐单 TCA（`report_execution.per_order_tca`）。
+M-Q08 的实盘换手（`execution_fidelity.live_turnover`）、逐单 TCA（`report_execution.per_order_tca`）、
+日报的订单状态计数与成交额（`reports.daily_payload`），以及 M-Q03 的成交迟到（`report_execution.restart_cost`）。
 
 fixture 是 `trades.jsonl` 2026-09-25 那份的第 18 行与第 20 行，逐字照抄；周期行取 `cycles.jsonl`
 同一根 bar 的两行，只抄这些读者读的字段。
@@ -15,14 +16,17 @@ fixture 是 `trades.jsonl` 2026-09-25 那份的第 18 行与第 20 行，逐字�
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from beidou_live.execution_fidelity import live_turnover, slippage_by_week
-from beidou_live.report_execution import per_order_tca
+from beidou_live.report_execution import per_order_tca, restart_cost
+from beidou_live.reports import daily_payload
 from beidou_live.risk_budget import RiskBudgetParams, one_row_per_order, slippage_bps
+from beidou_live.scheduler import late_seconds
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
@@ -118,3 +122,33 @@ def test_tca_reads_the_order_once_and_still_agrees_with_mq08(tmp_path: Path) -> 
     sell = -(0.0035042 - DECISION_CLOSE) / DECISION_CLOSE * 1e4
     assert block["fills"] == 1 and block["post_trade"]["slippage"]["value"] == pytest.approx(sell, rel=1e-12)
     assert block["reconciliation"]["combined"]["agrees"] is True
+
+
+def test_the_daily_report_counts_the_order_and_its_notional_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-09-03's `orders` and `traded_notional`: one FILLED order of 112.41 USDT, not two."""
+    monkeypatch.chdir(ROOT)  # the TCA block reads `config/costs.yaml` from the working directory
+    store = StateStore(tmp_path / "live")
+    for row in CYCLES:
+        store.append_cycle(row)
+    store.append_trade(FIRST)
+    store.append_trade(AGAIN)
+    payload = daily_payload(store, "2026-09-03", {}, data_root=tmp_path / "no-archive")
+    assert payload["orders"] == {"FILLED": 1}
+    assert payload["traded_notional"] == pytest.approx(32080 * 0.0035042, rel=1e-12)
+
+
+def test_restart_cost_times_the_fill_and_not_the_rerun_that_listed_it_again() -> None:
+    """M-Q03's fill half.  `late_seconds` arrived on 2026-09-07, after these rows, so it is added the way
+    `_record_fill` writes it: when the row is written.  The repeat would read 2,254 s late only because
+    the restart wrote it then."""
+
+    def timed(row: dict[str, Any]) -> dict[str, Any]:
+        written = int(datetime.fromisoformat(row["at"]).timestamp() * 1000)
+        return {**row, "late_seconds": late_seconds(BAR, 3_600_000, at_ms=written)}
+
+    first, again = timed(FIRST), timed(AGAIN)
+    assert (first["late_seconds"], again["late_seconds"]) == (15.0, 2254.0)
+    block = restart_cost(list(CYCLES), [first, again])
+    assert block["fills_measured"] == 1 and block["worst_late_fill_seconds"] == 15.0

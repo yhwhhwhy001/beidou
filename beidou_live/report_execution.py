@@ -181,6 +181,8 @@ def restart_cost(
     picking a seconds bar for it would be the invented number KILL-R6 refuted.  The plan's preferred
     bar-hour weighting is not computable either: nothing records how long a late-entered position was
     held.  KILL-R6 named the per-cycle share as the acceptable reading and that is what is judged.
+    Each venue order is measured once (`one_row_per_order`): a restart's "already submitted" row
+    carries the lateness of the re-run that wrote it, not of the fill.
     """
     params = params or RiskBudgetParams()
     restarts = unreadable = 0
@@ -251,7 +253,9 @@ def restart_cost(
             unreadable += 1
         else:
             wakes.append((woke, float(window) if isinstance(window, int | float) else None))
-    fills = [float(t["late_seconds"]) for t in trades if isinstance(t.get("late_seconds"), int | float)]
+    fills = [
+        float(t["late_seconds"]) for t in one_row_per_order(trades) if isinstance(t.get("late_seconds"), int | float)
+    ]
     # The bar is the window the ENGINE allowed, read off the rows rather than recomputed here - the
     # same refusal `widest_window_seconds` already makes.  With no window in the record there is
     # nothing to measure against, and `None` says so; a day with nothing to compare is not a day
