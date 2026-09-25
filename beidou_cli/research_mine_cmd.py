@@ -40,6 +40,7 @@ from beidou_alpha.validation.multiple_testing import (
     effective_trials_from_correlation,
 )
 from beidou_cli import research
+from beidou_cli.research_feature_store import with_feature_store
 from beidou_cli.research_ledger_io import (
     _construction_digest,
     _prior_search,
@@ -308,7 +309,9 @@ def research_mine(
     # stayed open ("the ledger stores Sharpes, not return series").
     streams: dict[str, pd.Series] = {}
     for candidate, entry in zip(search.candidates, entries, strict=True):
-        model = AlphaModel(entries=(entry,), portfolio=portfolio, interval=interval, min_history_bars=history)
+        model = with_feature_store(
+            AlphaModel(entries=(entry,), portfolio=portfolio, interval=interval, min_history_bars=history)
+        )
         try:
             weights, _combined, _per = model.evaluate(panel, membership)
             result = run_backtest(panel, weights, cost, execution=execution)  # type: ignore[arg-type]

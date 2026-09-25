@@ -3738,7 +3738,24 @@ CEILING = {
     # `data status` 不再把已确认缺口算进 GAPS、另起一行计数，+8；import 12 行。
     #
     # 留 40 行（7_954 -> 7_994），理由同上，不重述。
-    "beidou_cli": 7_994,
+    #
+    # 2026-09-25（不编号，同上）。+520 beidou_cli，7_954 -> 8_474，抬到 8_514。
+    #
+    # 清点 9.6（feature store），操作者 09-25 裁定要做。`beidou_cli/research_feature_store.py`（新，504 行）：signal
+    # 分数的内容寻址落盘缓存，研究侧用环境变量 `BEIDOU_FEATURE_STORE` 显式打开，默认关，关的时候原样返回传进来的
+    # 模型。放在 cli 而不是 alpha：`beidou_alpha` 按约定是零 I/O 的纯函数，行数还进 alpha 投入占比；放在 cli 里，
+    # `beidou_live` 在结构上就 import 不到它，实盘碰不到。键覆盖面板的值、索引、列与 block 布局，`beidou_alpha` 的
+    # 全部源码，python/numpy/pandas 的版本与参数；写入原子，坏条目当未命中，读回核验不过的不落盘，源码在进程
+    # 运行中被改就整个停用。其余 +16 是六处建模点的包装与 `research diagnose` 改走同一个入口。
+    #
+    # 为什么值，说实话：冷跑慢约 2%，热跑整轮快约 13%，贵的 signal（meanrev、chanlun）快 84%；一个条目约
+    # 85 MB。所以默认关，只在同一份数据上反复跑研究时打开，不建议对 `research mine` 打开。
+    #
+    # 验收：开与关各跑两次真 `research validate`，报告除 `generated_at` 以外逐字相同；两个进程 352 项比对
+    # `_bit_for_bit` 全部相同；15 个变异全部有测试变红。
+    #
+    # 留 40 行（8_474 -> 8_514），理由同上，不重述。
+    "beidou_cli": 8_514,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
