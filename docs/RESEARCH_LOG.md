@@ -16458,6 +16458,8 @@ PBO、fold 一致性、成本 ×2。门最终以报告的 `oos_selection` 为准
 | 2 | 若真实 Sharpe 接近诚实读数 1.23（2 格过门是乐观的），则 0.45 的实盘回撤按诚实漂移那张表走，深于 2 格证据描述的 | 日报「Risk budget (P13)」的归因回撤；「Drift vs expectation (attributed income, M-002/M-010)」 | 归因回撤触第一档 −49% 即证伪「0.45 在预算内」；M-010 z < −2，构造变更后 60 天才读得出 | 60 天内没有 M-010，靠 R8 阶梯兜底：−49% 降到 0.3375，−70% 降到 0.225。亏了才看得见 |
 | 3 | 若 10-13 的切换没做全（k、档位、指针、exemption 分开合入），则 armed 启动被挡，持仓没有退出检查 | `live.stderr.log` 的「portfolio vol_target is X live but Y in the cited evidence」；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 几件事放进同一个 PR；合入前跑 `test_the_shipped_registry_runs_what_its_evidence_validated`；起不来时由操作者执行 `live flatten --yes`（RUNBOOK「D-041 bridge 到期（2026-10-13）」） |
 
+**后续（同日）**：前提不成立，操作者回报抵押品无法置换。本预登记作废，没有运行，零 ledger。见下文「抵押品换不了」一节。
+
 ## 2026-09-25 · p32i：诚实漂移下补测 0.15，守住线约 0.19–0.20；从 store 重建发表时的面板要截回三个名字
 
 本节是「k 的重测」一节「与另一个会话的 p32i」一段说的那个会话的记录。操作者同日点头入库。
@@ -16614,3 +16616,256 @@ PBO、fold 一致性、成本 ×2。门最终以报告的 `oos_selection` 为准
 
 实盘侧 `bar_sanity` 只告警。下一次同名重新计价落在持仓名字上，模型会照假动量交易约一个月。审查那条
 写过这一半，本节没测，也没改。
+
+## 2026-09-25 · 抵押品换不了：k = 0.45 作废，细化到 0.175；修缺口已执行
+
+### 一、k = 0.45 的前提不成立
+
+操作者回报「抵押品无法置换」。k = 0.45 依据的是 K-4：换完抵押品之后可动用等于总权益，换算因子是 1.0。
+换不了，就还是 09-25 的因子 1.7479：书的亏损全落在约 57% 的 USDT 上。「预登记：tsmom 在 k = 0.45 上重出证据」那一节因此作废，
+没有运行，零 ledger。
+
+按 D-035 在诚实漂移、现有抵押品下重定 k。「k 的重测」一节里，0.20 在 pit 压线（+0.07pp）、
+static 超线（−1.68pp）；另一个会话的 p32i 量过 0.15，两边都守得住，但当时它不在仓库里（同日那个会话开了
+#159 入库）。操作者给了四个带价的
+选项，选的是「细化」：补量 0.175；0.175 两个 universe 都守得住就取 0.175，否则取 0.15。
+
+### 二、补量：k = 0.175
+
+脚本 `scratchpad/k_bisect_0175_20260925.py`，输出 `reports/research/k-bisect-0175-20260925.json`。
+臂的计算直接调用 `k_remeasure_honest_drift_20260925.run_arm`，一行不改；面板与「k 的重测」同一条路径：
+数据末端 09-22T16:00Z，D2 + D3，因子 1.7479，block 起点照抄 p32h，2000 draws。零 ledger：`trials.jsonl`
+的 sha256 前后都是 `09245c34…`。
+
+诚实漂移下，可动用 USDT 的 q95 与 headroom：
+
+| k | pit | static | 两边都守得住 |
+| --- | --- | --- | --- |
+| 0.20 | −69.93%（+0.07pp），CAGR 中位 26.1% | −71.68%（−1.68pp），CAGR 中位 27.8% | 否 |
+| **0.175** | **−63.30%（+6.70pp），CAGR 中位 22.5%** | **−65.60%（+4.40pp），CAGR 中位 24.3%** | **是** |
+| 0.15 | −55.37%（+14.63pp），CAGR 中位 18.8% | −58.82%（+11.18pp），CAGR 中位 20.9% | 是 |
+
+**按规则取 k = 0.175。** 原漂移下它的 CAGR 中位是 40.5%（pit）/ 40.1%（static），k = 0.60 是 112.1% / 111.2%。
+
+两处核对：
+
+- **0.20 是对照。** 四行（两个 universe × 两条漂移）与已入库的 `k-remeasure-honest-drift-20260925.json`
+  逐位相同，比的是中位回撤、q95、CAGR 中位、block 起点、漂移常数、全样本 Sharpe。
+- **0.15 与 p32i 对得上。** p32i 印的是 pit −55.4%、static −58.8%，CAGR 中位 18.8% / 20.9%。
+
+pit 的面板摘要变了（`73684a977602a4c4` → `999da4c1da37d7e1`），static 的没变。原因是下面第三条的修缺口：
+pit 候选里 BNX 等标的补上了 2022 年的 K 线，求和的次序跟着变。逐位比对 k = 0.20 的新旧序列：mark 有 137 根、
+realised 有 32 根差在末位，落在序列第 14,896 到 15,521 根之间，绝对差不超过 3.5e-18，相对差不超过 6e-14。
+bootstrap 的读数没有一个变。
+
+档位按 D-035 的同一条规则，可动用口径：((−0.2803, 0.13125), (−0.4005, 0.0875))，即 `rescaled(0.175,
+budget=0.70 / 1.7479)`。`risk_budget:` 报告副本是 0.2803 / 0.4005 / 0.13125 / 0.0875。
+
+### 三、修缺口已执行（9.4，操作者批准下载）
+
+`beidou data repair --apply`，在 `0c565d5a` 的 worktree 里对共享数据目录跑，2026-09-25T11:35:39Z 到 11:38:52Z。
+开跑前在两个整点之间，没有别的 `beidou` 进程在写数据。开跑前再干跑一次，下载量与批准时的一致：183 个日归档
+文件（另 183 个 CHECKSUM），REST 至多 207 次，约 1.35 MB。
+
+| 数据集 | 缺口 | 从源头补上 | 补进的行 | 记为已确认缺口 |
+| --- | --- | --- | --- | --- |
+| K 线 1h | 51 | 42 | 3,984 | 12 段 |
+| 资金费 | 154 | 0 | 0 | 154 |
+
+- K 线补上的是 21 个标的：18 个标的在 2022-02-26～28 与 04-01～02 的批量缺口（各 120 根），以及 BNX 624 根、
+  ICP 504 根、TLM 696 根。后三段扫描时归为「上市前后的边界」，源头其实有数据，而且与已存的行一处不差。
+- 资金费的 154 个缺口，REST 一条都没有，全部记为已确认，其中 142 个是 2026-06-24 04:00 那一次。
+- 没有一个缺口报错。跑完再干跑：未确认的缺口是 0。已确认的记在 `.beidou/data/confirmed_gaps.json`。
+- manifest 的 `klines` 字段随之变化，它只提示、不挡启动。
+
+## 2026-09-25 · 预登记：tsmom 在 k = 0.175 上重出证据
+
+**写在跑之前。** 起因是「抵押品换不了」一节：k 按 D-035 细化到 0.175。改 `vol_target` 就要换 tsmom 的证据
+（`construction_problems`）；flow 引用的 book 报告没有 `portfolio` 块，不用重出。本节取代作废的 k = 0.45 那一份，
+协议只改 k 与申报笔数。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务：G-C（更高吞吐）为主，G-B（同收益下更小回撤）为次。它不产出新 alpha。它买回的是 10-13 之后的
+可重启性，并让 k 回到 D-035 的回撤预算以内。
+
+### 1. 假设
+
+tsmom 的已采纳配置在 k = 0.175 下，在修好的数据与重建后的成员表上，仍然通过 D-020/D-028：样本外 Sharpe
+高于它的 family gate。若不成立，报告的 `oos_selection` 会读出样本外 Sharpe 低于门，verdict 是 FAIL。
+
+### 2. 这是「新信息」还是「新网格」
+
+两种读法与 0.45 那一份相同：k 是构造参数，按「新网格」计费；它由 D-035 的回撤规则选出，不是按 Sharpe 挑的。
+选择污染先声明：
+
+1. k = 0.175 是看过上一节的补量表之后按规则取的；取值规则（「0.175 守得住就取它，否则 0.15」）在跑之前由
+   操作者定下。
+2. 看过回撤与 CAGR 的 k 共 10 个：p32g、p32h 与「k 的重测」的 8 个（0.60 到 0.20），p32i 与上一节的 0.15，
+   上一节的 0.175。10 个 k × 2 个 universe = 20 个配置，全部申报。
+3. 同一策略在别的 k 上的样本外 Sharpe 已经看过：k = 0.30、09-13、2 格 1.8087；k = 0.60、09-18、2 格 1.5628
+   （FAIL）；k = 0.60、09-19、16 格 1.2306（FAIL）。
+
+### 3. 协议（照抄 09-18 那一份，只改 k）
+
+```bash
+# 在 worktree 里：config/live.demo.yaml 只改 portfolio.vol_target 0.60 -> 0.175，别的一个字不动
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 172 --charge 2 --prereg <本节的 commit>
+```
+
+- 其余参数全部用默认值，与 09-18 那一份相同：`--folds 5`、`--min-train 4000`、`--purge 50`、`--embargo`
+  （跟随 purge）、`--cpcv-groups 6`、`--guards`、`--exits`、`--capital 0.0`。`--to` 不钉。
+- `--prior-trials 172` 是 09-18 起申报的 152，加上面第 2 项的 20。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+- 开跑前：修缺口已执行（上一节）；成员表按 RUNBOOK「membership」一节重建（本节末尾记读数）；确认没有别的
+  会话在写 `.beidou/data`；避开 17:20Z 的数据任务。
+- 跑完之后到 10-13，成员表不再重建。
+
+### 4. 计费与桶
+
+2 笔，进 `tsmom` 桶。今天 ledger 去重后 167 行，`trials.jsonl` 的 sha256 前 16 位是 `09245c344b922ddc`。
+
+- 今天的 N：167 + 152 + 20 = 339。
+- 跑完的 N：341。
+
+### 5. 功效读数
+
+方差借自同族最近一份报告（09-19）：
+
+```
+evidence: reports/research/tsmom-validation-20260919T081914Z.json sha256=3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
+  interval=1h bars_per_year=8760 n_obs=44640 variance=2.22706e-05 (这份报告自己量的样本外方差)
+  N 由 --trials 指定为 339，证据报告自己的是 167
+
+## N=339
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5959  [selection binds]
+      D-028 selection threshold: 1.5959 at N=339, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.9%
+    P(clear | true annual Sharpe = 1.2): 20.4%
+    P(clear | true annual Sharpe = 1.5): 41.4%
+    P(clear | true annual Sharpe = 1.6): 47.0%
+    P(clear | true annual Sharpe = 1.8): 68.5%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+## N=341（这次跑完的 N）
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5965  [selection binds]
+      D-028 selection threshold: 1.5965 at N=341, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.8%
+    P(clear | true annual Sharpe = 1.2): 20.4%
+    P(clear | true annual Sharpe = 1.5): 41.3%
+    P(clear | true annual Sharpe = 1.6): 47.0%
+    P(clear | true annual Sharpe = 1.8): 68.5%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+把上面这张表抄进预登记，紧挨着网格与桶（M-SY01）。方差是借来的——它是样本外序列长度与矩的函数，换一个候选会变，所以这是一个**估计**，不是这次运行的读数。
+零 ledger：本命令不写 trials.jsonl，不写报告，不碰面板。
+```
+
+方差改借 09-18 那一份（同一个 2 格协议）：
+
+```
+evidence: reports/research/tsmom-validation-20260918T154025Z.json sha256=2729128fdbaac483d70a19820effb7a84f883f69e62b6634431ca1c201425deb
+  interval=1h bars_per_year=8760 n_obs=45351 variance=2.20003e-05 (这份报告自己量的样本外方差)
+## N=339
+    gate (max of the two halves): 1.5861  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.2%
+    P(clear | true annual Sharpe = 1.6): 47.9%
+    P(clear | true annual Sharpe = 1.8): 69.4%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+## N=341（这次跑完的 N）
+    gate (max of the two halves): 1.5868  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.2%
+    P(clear | true annual Sharpe = 1.6): 47.8%
+    P(clear | true annual Sharpe = 1.8): 69.3%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+```
+
+两次都零 ledger。两张表都是上界，门最终以报告的 `oos_selection` 为准。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS`（`registry.py` 的上线口径） | — |
+| 样本外 Sharpe 对 family gate | 报告 `oos_selection` 的 `oos_sharpe_annual` 高于它的门 | 直接读报告，不手算；相差不到 1e-9 读作未过 |
+| 构造 | 报告 `portfolio` 的 `vol_target` 是 0.175，其余 `CONSTRUCTION_KEYS` 与 profile 相同 | 由 `construction_problems` 判（相对 1e-9） |
+| dataset manifest | 报告记下的 `membership` 与切换当天磁盘上的一致 | 由 `registry_dataset_problems` 判，不目测 |
+
+**判负之后做什么，先写死：**
+
+- **FAIL**：不重跑、不换网格、不换 k、不申诉门。10-13 之前 k 维持 0.60。10-12 前由操作者在准备文档
+  第 2.2 节的 C（延长 bridge）、E（停 tsmom，只留 flow）、F（有计划地平仓）里选一个。
+- **WEAK_PASS**：按上线口径仍可换指针，报告里写明降级（D-043：2 格两折同选时样本外是全样本尾巴）。
+- **PASS 或 WEAK_PASS 之后**：下面几件放进同一个 PR，10-13T00:00Z 之后合入，与 #149 同批：
+  - 改 k 到 0.175；
+  - 改档位到 ((−0.2803, 0.13125), (−0.4005, 0.0875))（R10，升 `POLICY_VERSION`），`risk_budget:` 报告副本同步；
+  - 换指针；
+  - 删 exemption 与它的三处调用。
+
+  然后快进主 checkout，按 CLAUDE.md「重启实盘循环」一节在安全窗口重启一次。
+
+### 7. 预期
+
+最可能挂在「样本外 Sharpe 对 family gate」这一条，但预期过门：
+
+- 降 k 抬高了回测序列的全样本 Sharpe：pit 从 0.60 的 1.7016 到 0.175 的 1.9662（上一节的补量与「k 的重测」）。
+  按这个比例折算 09-18 在 0.60 上的 2 格读数 1.5628，0.175 约 1.81。门是 1.5868 或 1.5965。
+- 反方向的风险：绝对带（`no_trade_band` 0.005）不随 k 缩放。k 降到 0.175，目标权重约为 0.60 时的 29%，
+  更多小目标落进带内，D2 会把它们整笔平掉，持有的名字可能明显变少。上面的全样本 Sharpe 已经含这条规则，
+  所以它是方向上的提醒，不是另一个数。
+- 按功效表，真 Sharpe 在 1.8 上下时，过门约七成。2 格两折常常同选，WEAK_PASS 的可能大于 PASS。
+
+两种结果各值多少：
+
+- 过门：10-13 之后能按 k = 0.175 armed 启动。回撤预算在诚实漂移下守得住（headroom pit +6.70pp、
+  static +4.40pp）。代价是收益：诚实漂移下 CAGR 中位约 22–24%，原漂移下约 40%。
+- 不过门：知道 tsmom 在 0.175 下也过不了门，D-041 走 C、E、F。这比「重启不了」是更大的发现，按 D-020 走。
+
+### 9. 实盘失效方式（How this fails）
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若 BTC 抵押品相对 USDT 变多（BTC 涨、或 demo 重置改了余额），则换算因子变大，可动用口径的回撤被放大，0.175 的档位与预算对不上 | 日报「Collateral in equity (L1-10)」的 share；`risk_budget.usdt_drawdown.vs_total_equity` | vs_total_equity > 1.865 即证伪「0.175 在预算内」：static 的 q95 按比例越过 −70%（65.60% × 1.865 / 1.7479） | 每天读这个因子；越线交操作者，按 D-035 重算 k |
+| 2 | 若真实 Sharpe 低于诚实读数 1.23，则回撤深于诚实漂移那张表 | 日报「Risk budget (P13)」的归因回撤；「Drift vs expectation (attributed income, M-002/M-010)」 | 归因回撤触第一档 −28.03% 即证伪「0.175 在预算内」；M-010 z < −2，构造变更后 60 天才读得出 | 60 天内没有 M-010，靠 R8 阶梯兜底：−28.03% 降到 0.13125，−40.05% 降到 0.0875。亏了才看得见 |
+| 3 | 若 10-13 的切换没做全（k、档位、指针、exemption 分开合入），则 armed 启动被挡，持仓没有退出检查 | `live.stderr.log` 的「portfolio vol_target is X live but Y in the cited evidence」；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 几件事放进同一个 PR；合入前跑 `test_the_shipped_registry_runs_what_its_evidence_validated`；起不来时由操作者执行 `live flatten --yes`（RUNBOOK「D-041 bridge 到期（2026-10-13）」） |
+
+### 开跑前的数据：成员表重建与第二次修缺口（操作者批准下载）
+
+**成员表重建。** `beidou data pool history --refresh D --sync-members`，在 `0c565d5a` 的 worktree 里对共享数据
+目录跑，2026-09-25T14:05:17Z 到 14:23:07Z，退出码 0。开跑前没有别的 `beidou data` 进程。
+
+| 项 | 重建前 | 重建后 |
+| --- | --- | --- |
+| 刷新次数 | 2,056 | 2,063 |
+| 末行 | 2026-09-17 | 2026-09-24 |
+| 并集 | 212 | 212 |
+| `membership.parquet` sha256 前 16 位 | `aced36309191ee85` | `778986a79437ad28` |
+| `membership.json` sha256 前 16 位 | `dd1c52e58354eb28` | `dbad1f26d6633a3b` |
+
+- 日线同步 893 个候选，1 个报错：GAIBUSDT 返回 400，它从未当过成员。
+- 212 个曾经的成员补了小时线与资金费，211 个 OK。SXPUSDT 的资金费报了 1 个错，它的 K 线停在 2026-05-31，
+  是下架又上架的那个接缝。
+- 修缺口扫描时发现的两件事，这一步补上了：ALLO、BLESS、ENSO、RE、SKYAI 原来没有资金费文件，现在各有
+  593–3,000 次结算；ACEUSDT 原来停在 09-03，现在到 09-25T13:00Z，新表里它的成员期到 09-13。
+
+**第二次修缺口。** 重建新下载的资金费里出现 6 个缺口，14:24:33Z 到 14:24:47Z 用 `data repair --apply` 问了一遍，
+REST 共 6 次，没有日归档文件。6 个都没有新行，全部记为已确认：5 个是 ALLO、BLESS、ENSO、RE、SKYAI 在
+2026-06-24 04:00 的那一次（与第一次修缺口里 142 个标的缺的是同一次），1 个是 LSKUSDT 今天 08:00 到 12:00 之间。
+跑完再干跑，未确认的缺口是 0。
+
+**从现在到 10-13，成员表不再重建。** 新表的末行是 09-24，落后满 14 天是 10-08；从那天起告警每天推送一次，
+照收，不动它。
+
