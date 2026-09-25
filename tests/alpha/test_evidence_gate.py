@@ -25,7 +25,6 @@ from beidou_alpha.signals import get_signal
 from beidou_live.composition import load_registry
 from beidou_live.config import registry_evidence_problems
 from beidou_shared.config import load_yaml
-from tests.shipped_evidence import unexempted
 
 ROOT = Path(__file__).resolve().parents[2]
 WEEKLY: dict[str, Any] = {"horizons": [168, 336, 720], "horizon_weights": [0.2, 0.3, 0.5], "entry_threshold": 0.2}
@@ -127,12 +126,11 @@ def test_the_shipped_registry_runs_what_its_evidence_validated() -> None:
         load_registry(ROOT / "config" / "alpha_registry.yaml"),
         load_yaml(ROOT / "config" / "live.demo.yaml"),
     )
-    # 2026-09-19: the operator moved tsmom's pointer to evidence whose verdict is FAIL, so this pair
-    # deliberately does not clear until the construction freeze ends.  `unexempted` drops exactly that
-    # one string and expires on `run_live.sh`'s own date - everything this test was written to catch
-    # (params, construction, digest, a second strategy) still fails here.  The reasoning, and why both
-    # available pointers were already refused, is in `tests/shipped_evidence.py`.
-    assert unexempted(problems) == [], problems
+    # 2026-09-19 to 2026-10-13 this pair deliberately did not clear: tsmom pointed at FAIL evidence and
+    # `tests/shipped_evidence.py` exempted exactly that one string until `run_live.sh`'s bridge expired.
+    # 2026-10-13: k went to 0.175 and the pointer to the WEAK_PASS re-issue on it, in the same PR, so the
+    # pair clears the real gate again and the exemption was deleted with its reason.
+    assert problems == [], problems
 
 
 @pytest.mark.parametrize("signal_id", sorted(get_signal(s).id for s in ("tsmom", "xsmom", "carry", "flow")))
@@ -303,14 +301,14 @@ def test_an_unreadable_or_absent_verdict_is_skipped_not_guessed() -> None:
 def test_the_shipped_registry_passes_the_new_check() -> None:
     """The guard against shipping a rule that refuses the configuration currently holding positions.
 
-    Same exemption as above and for the same one string.  What this test is actually about is the
-    verdict-ordering rule: it must not refuse the shipped pair for being STRICTER than its report.
-    Today that pair declares FAIL against a report that says FAIL, so the ordering is satisfied and
-    the only problem left is the one the startup gate is meant to raise.
+    What this test is actually about is the verdict-ordering rule: it must not refuse the shipped pair
+    for being STRICTER than its report.  From 2026-10-13 that pair declares WEAK_PASS against a report
+    that says WEAK_PASS, so the ordering is satisfied and nothing is left for the startup gate to raise.
+    (2026-09-19 to 10-13 it declared FAIL against FAIL, under the exemption deleted with that pointer.)
     """
     problems = registry_evidence_problems(
         load_registry(ROOT / "config" / "alpha_registry.yaml"),
         load_yaml(ROOT / "config" / "live.demo.yaml"),
     )
-    assert unexempted(problems) == [], problems
+    assert problems == [], problems
     assert not [p for p in problems if "stricter" in p], problems

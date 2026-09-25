@@ -52,7 +52,10 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # case, and the choice is not load-bearing here: 7 / 14 / 30 all give `mined` 1,559, `tsmom` 101,
 # `flow` 43.  The measured half of Q4c went the other way - the second universe is worth 1.90x, so
 # cross-universe re-charges stay charged.  The old digest was 75764f646ca6.
-PINNED_DIGEST = "d62ac59fa95c"
+# 0.3.6（2026-10-13 的切换）：R8 的两档随 k 0.60 -> 0.175 按可动用口径重推，
+# ((-0.49, 0.45), (-0.70, 0.30)) -> ((-0.2803, 0.13125), (-0.4005, 0.0875))。理由写在 POLICY_VERSION。
+# 旧摘要 d62ac59fa95c。#148 关闭时带走的那个 0.3.6（89e19b1706b4）是另一份规则，从没进过 main。
+PINNED_DIGEST = "9cc96461276f"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:
@@ -77,15 +80,18 @@ def test_the_judgement_calls_are_labelled_as_such() -> None:
 
 @pytest.mark.parametrize(
     ("drawdown", "expected"),
-    [(0.0, None), (-0.48, None), (-0.49, 0.45), (-0.69, 0.45), (-0.70, 0.30), (-0.90, 0.30)],
+    [(0.0, None), (-0.28, None), (-0.2803, 0.13125), (-0.40, 0.13125), (-0.4005, 0.0875), (-0.90, 0.0875)],
 )
 def test_the_ladder_takes_the_deepest_rung_that_applies(drawdown: float, expected: float | None) -> None:
-    """A -90% drawdown must get 0.30, not the 0.45 it also qualifies for.
+    """A -90% drawdown must get the second rung's target, not the first one it also qualifies for.
 
     2026-09-14: the rungs moved from (-0.35, 0.225) / (-0.50, 0.15) to (-0.49, 0.45) / (-0.70, 0.30),
     re-derived by the shipped rule for the -70% budget declared with `vol_target` 0.60.  The cases
     below moved with them; what this test is about - deepest rung wins, and nothing above the first -
     did not.
+
+    2026-10-13（policy 0.3.6）：两档随 k 0.175 与可动用口径的预算移到 (-0.2803, 0.13125) / (-0.4005, 0.0875)，
+    各个样例跟着移，测的还是同一件事。
     """
     assert Policy().throttle_scalar(drawdown) == expected
 

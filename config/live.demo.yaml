@@ -158,6 +158,7 @@ portfolio:
   # The two agree, which is the property this paragraph originally existed to protect.  The -35%/-50%
   # numbers survive nowhere in the code and must not be quoted from here as current behaviour; three
   # readers of this file (2026-09-15) each had to go to `policy.py` to find that out.
+  # 2026-10-13：上面两行也成了历史。现行档位是 ((-0.2803, 0.13125), (-0.4005, 0.0875))，见 policy 0.3.6。
   #
   # KNOWN, UNFIXED, AND NOT CREATED BY THIS CHANGE: R8's first rung is ALREADY dead at vol_target 0.30
   # (0.225/0.30 = 0.75, swallowed by the same band), so the shipped ladder has been running one rung
@@ -210,7 +211,27 @@ portfolio:
   # 全记录 376 个周期里 GROSS_CAPPED 出现 0 次，所以今天它是精确值，日报会在不精确时自己说明。
   # 也就是说：这一条从此不必靠重放脚本去量，改 k 或改 `max_weight` 之后下一份日报就会说话。
   # Reverting is this one line (and `vol_band` below).
-  vol_target: 0.60            # annualised portfolio volatility target
+  #
+  # 2026-10-13（切换 PR，分支 `live/k0175-switch-after-1013`）：0.60 -> 0.175。与上面两次一样，这是风险预算
+  # 的决定，不是研究发现。取值规则是 D-035 那条（09-04 先写后跑）：两个 universe 的自助 q95 回撤都在声明
+  # 预算以内的最大 k。这次在量之前就由操作者 09-25 的裁定点了名，09-14 那次不是（见上面 PROVENANCE 一段）。
+  # 与 09-14 不同的还有三处：
+  #   * 预算口径。-70% 按可动用 USDT 计，不按总权益。按「书的亏损全落在 USDT 上」换算，因子取 09-25 日报的
+  #     `risk_budget.usdt_drawdown.vs_total_equity` 1.7479。操作者 09-25 回报 BTC 抵押品换不了，所以因子
+  #     回不到 1.0，k = 0.45 那一版（K-4）作废。
+  #   * 漂移。bootstrap 的每条序列减去同一个常数，使年化 Sharpe 等于诚实的样本外 1.2306
+  #     （`tsmom-validation-20260919T081914Z.json`，16 格那次真做了选择的读数）。
+  #   * 读数。诚实漂移、可动用口径、2000 draws（`reports/research/k-bisect-0175-20260925.json`）：
+  #         k       q95 pit / static      headroom pit / static    CAGR 中位 pit / static
+  #       0.20    -69.93% / -71.68%       +0.07 / -1.68pp          26.1% / 27.8%
+  #       0.175   -63.30% / -65.60%       +6.70 / +4.40pp          22.5% / 24.3%    <- 取这个
+  #       0.15    -55.37% / -58.82%       +14.63 / +11.18pp        18.8% / 20.9%
+  #     0.20 在 static 上越线，按规则取 0.175。价钱：原漂移下 CAGR 中位从约 112%（0.60）降到约 40%。
+  # 证据跟着换。`vol_target` 在 `CONSTRUCTION_KEYS` 里，所以 tsmom 在 0.175 上按预登记 `b76de7a0` 重出，
+  # WEAK_PASS（样本外 1.8329，family gate 1.5733，N = 341），registry 的 `evidence` 指到它。档位见下面的
+  # `risk_budget:` 与 `beidou_governance/policy.py` 0.3.6。这是构造变更，清零 M-010、M-G06 与 `realised_vol`。
+  # 本段之前各段里的「现行」「WHAT IS SHIPPED」都是写它那天的状态，其中的 k 与档位是历史。
+  vol_target: 0.175           # annualised portfolio volatility target
   max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
@@ -418,21 +439,31 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   # a breach alerts through `report daily --check` and the hourly job, and this block does not trade:
   # rewriting live position sizing from a cron job is a different risk from measuring it.  The acting is
   # R8's, inside the loop, on the attributed drawdown (`Policy.drawdown_ladder`, `LiveEngine._risk_ladder`).
-  # 2026-09-14: re-derived for the -70% budget declared when `vol_target` went to 0.60, by the shipped
-  # rule transcribed - `deescalate_at` = 70% of budget, `rollback_at` = budget, `deescalate_to` = 75%
-  # of k, `rollback_to` = 50% of k.  `Policy.drawdown_ladder` is what ACTS; these four are the
-  # reporting copy and the two must not disagree.  The old numbers were calibrated at k=0.30 against a
-  # 50% budget, and left alone they would have de-risked at -35%, far inside the budget chosen to buy
-  # return - a measured median 20.5pp of CAGR (`scratchpad/p32d_ladder_bootstrap_pathwise.py`, both
-  # universes).  The rescaled ladder costs 0.4pp and puts q95 at -66.5%, inside the declared -70%.
-  deescalate_at: 0.49         # drawdown from the high-water mark -> vol_target 0.45
-  rollback_at: 0.70           # -> vol_target 0.30, the declared budget
-  deescalate_to: 0.45
-  rollback_to: 0.30
-  # 2026-09-14: scaled x2 with `vol_target` 0.30 -> 0.60.  This is a transcription, not a new choice -
-  # the band keeps exactly its old relative width.  It has to move with the target or M-002 alerts every
-  # cycle by construction; it measures and never trades.
-  vol_band: [0.52, 0.76]      # 30-day realised annualised vol; 0.60 target, same relative width as before
+  # `Policy.drawdown_ladder` 是动手的那份，下面四个数是它的报告副本，两边不许不一致
+  # （`test_the_profile_and_the_policy_cannot_disagree_about_the_rungs` 管着这一条）。
+  #
+  # 2026-10-13（policy 0.3.6）：按同一条规则重推。规则是 0.3.3 转写的那条：`deescalate_at` = 预算的 70%，
+  # `rollback_at` = 预算，`deescalate_to` = 0.75k，`rollback_to` = 0.50k。变的是两个输入：
+  #   * k 取 0.175，是 D-035 在诚实漂移、现有抵押品下的答案（见上面 `vol_target` 那段）。
+  #   * -70% 的预算按可动用 USDT 计。回撤以总权益为分母，按「书的亏损全落在 USDT 上」换算，
+  #     因子取 09-25 日报的 1.7479：0.70 / 1.7479 = 0.4005，它的 70% 是 0.2803。
+  # 即 `rescaled(0.175, budget=0.70 / 1.747858609376565)`。精确值是 0.280343 与 0.400490，写 4 位是为了与
+  # 预登记 `b76de7a0` 逐字相同。在 1.7479 下，这两档折成可动用口径约是 -49% 与 -70%。
+  # 因子是读数不是常数：09-20 1.861，09-22 1.769，09-25 1.748。它变大，同一档折成可动用口径就更深。
+  # 越过 1.865 时，static 的 q95 按比例越过 -70%（预登记第 9 项第 1 条）。日报的
+  # `rungs_in_this_denominator` 按当天的因子现算，读它，别读这里的「约 -49% / -70%」。
+  # 以前的数是历史。09-14 到 10-13 是 0.49 / 0.70 / 0.45 / 0.30（k=0.60，总权益口径）；再往前是 k=0.30、
+  # 预算 50% 下的 0.35 / 0.50 / 0.225 / 0.15。09-14 那段写的「重标只花 0.4pp、q95 -66.5%」与「旧档位要花
+  # 20.5pp」都是 k=0.60、总权益口径的读数，不描述现在这一版。
+  deescalate_at: 0.2803       # drawdown from the high-water mark (total equity) -> vol_target 0.13125
+  rollback_at: 0.4005         # -> vol_target 0.0875; the declared -70% of tradable USDT at factor 1.7479
+  deescalate_to: 0.13125
+  rollback_to: 0.0875
+  # 2026-10-13：随 `vol_target` 0.60 -> 0.175 等比缩放。仍是转写，不是新选择：带宽保持 k=0.30 那一对
+  # (0.26, 0.38) 的相对宽度，即 target 的 0.8667 倍与 1.2667 倍。写 10 位小数，是因为
+  # `test_the_band_moves_with_the_vol_target_it_was_derived_against` 按 1e-9 钉这个比例。
+  # 它必须跟着 target 走，否则 M-002 按构造每个周期都报 outside；它只量，不交易。09-14 到 10-13 是 [0.52, 0.76]。
+  vol_band: [0.1516666667, 0.2216666667]  # 30-day realised annualised vol; 0.175 target, same relative width
   vol_window_days: 30
   min_vol_bars: 240           # ten days of hourly cycles before this estimate is allowed to say anything
   # L1-04, fixed 2026-09-07.  The bar is M-Q08's "slippage <= 2x model", so it is written that way

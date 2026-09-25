@@ -1,7 +1,8 @@
 """P13's pre-registered monitoring: is the book still inside the risk budget it was sized for?
 
-`vol_target` is 0.60 against a declared 70% drawdown budget (2026-09-14, D-035); before that, 0.30 against
-50%, from a bootstrap whose q95 sat at -43.7%/-49.5%.  That bootstrap resamples weekly blocks, so it keeps
+`vol_target` is 0.175 against 70% of tradable USDT (2026-10-13, D-035 under honest drift); 0.60 against 70%
+of total equity from 2026-09-14; before that 0.30 against 50%, from a bootstrap whose q95 sat at
+-43.7%/-49.5%.  That bootstrap resamples weekly blocks, so it keeps
 within-week autocorrelation and destroys the multi-month regime structure real bear markets have — it is
 optimistic by construction, and the de-escalation ladder below is what covers the gap.  The thresholds were
 written before the change went live and are not renegotiated when they fire.  Acting on the EQUITY reading
@@ -30,15 +31,15 @@ DAY_MS = 86_400_000
 
 @dataclass(frozen=True)
 class RiskBudgetParams:
-    # 2026-09-14: re-derived for the -70% budget declared when `vol_target` went to 0.60, by the
-    # shipped rule transcribed (see `Policy.drawdown_ladder`, which is what ACTS - these four are the
-    # reporting copy and the two must not disagree).  A mismatch here does not raise; it just makes
-    # `action` describe a rung the ladder does not have.
-    deescalate_at: float = 0.49  # drawdown from the high-water mark -> step vol_target down
-    rollback_at: float = 0.70  # -> all the way back
-    deescalate_to: float = 0.45
-    rollback_to: float = 0.30
-    vol_band: tuple[float, float] = (0.52, 0.76)  # k=0.60, x2 of the k=0.30 pair; profile is authority
+    # 2026-10-13 (policy 0.3.6): re-derived with k 0.60 -> 0.175 and the -70% budget read on tradable
+    # USDT at factor 1.7479, by the shipped rule transcribed (see `Policy.drawdown_ladder`, which is what
+    # ACTS - these four are the reporting copy and the two must not disagree).  0.49/0.70/0.45/0.30 were
+    # k=0.60's.  A mismatch here does not raise; it just makes `action` describe a rung the ladder does not have.
+    deescalate_at: float = 0.2803  # drawdown from the high-water mark -> step vol_target down
+    rollback_at: float = 0.4005  # -> all the way back
+    deescalate_to: float = 0.13125
+    rollback_to: float = 0.0875
+    vol_band: tuple[float, float] = (0.1516666667, 0.2216666667)  # k=0.175, k=0.30 pair's width; profile rules
     vol_window_days: int = 30
     min_vol_bars: int = 240  # ten days of hourly cycles before the vol estimate says anything
     # M-Q08 states the bar as "slippage <= 2x model", so it is expressed that way rather than as a

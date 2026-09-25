@@ -30,8 +30,21 @@ from dataclasses import asdict, dataclass, field
 
 from beidou_alpha.overlays.ladder import rung_target
 
-POLICY_VERSION = "0.3.5"
-"""2026-09-25, no version change: the fifth mine round stands, by operator ruling.
+POLICY_VERSION = "0.3.6"
+"""0.3.6（2026-10-13 的切换，与 k 0.60 -> 0.175 同一个 PR）：R8 的两档按可动用口径重推。
+
+`drawdown_ladder` 从 ((-0.49, 0.45), (-0.70, 0.30)) 改为 ((-0.2803, 0.13125), (-0.4005, 0.0875))。规则没变，
+仍是 0.3.3 转写的那条：`deescalate_at` = 预算的 70%，`rollback_at` = 预算，`deescalate_to` = 0.75k，
+`rollback_to` = 0.50k。变的是两个输入：k 按 D-035 在诚实漂移、现有抵押品下取 0.175（RESEARCH_LOG 2026-09-25
+「抵押品换不了」一节）；-70% 预算改按可动用 USDT 计。R8 的尺子以总权益为分母，按「书的亏损全落在 USDT 上」
+换算，预算折成总权益是 0.70 / 1.747858609376565 = 0.4005。换算因子取 09-25 日报的 `vs_total_equity`。
+
+写 4 位小数，与预登记 `b76de7a0` 逐字相同。精确值是 -0.280343 与 -0.400490：第一档浅 4.3e-5，早一点响；
+第二档深 9.9e-6，晚一点响。两个差都比换算因子几天之内的漂移（09-20 1.861，09-25 1.748）小两个数量级以上。
+
+0.3.6 这个号在 #148（交还第五轮挖掘）上用过一次。那个 PR 关闭未合入，它的摘要 89e19b1706b4 从没进过 main。
+
+2026-09-25, no version change: the fifth mine round stands, by operator ruling.
 
 0.3.1 opened a fifth round for the window 2026-09-03..2026-10-03 only, and wired a test to fail on
 the day it expired unless somebody acted.  Asked before that day, the operator ruled the fifth round
@@ -239,7 +252,11 @@ class Policy:
     # They move together on purpose.  Fixing the ruler alone would have made the OLD rungs bite for
     # the first time, i.e. silently adopted the 20.5pp arm the operator did not choose; re-scaling the
     # rungs alone would have re-tuned a ladder that never fires.
-    drawdown_ladder: tuple[tuple[float, float], ...] = ((-0.49, 0.45), (-0.70, 0.30))
+    #
+    # 2026-10-13（0.3.6）：同一条规则，两个输入变了。k 0.60 -> 0.175；-70% 预算改按可动用 USDT 计，
+    # 折成这把尺子的总权益单位是 0.70 / 1.7479 = 0.4005。(a) 里的数是 k=0.60 那一版，是历史。
+    # 为什么写 4 位小数，见 POLICY_VERSION。
+    drawdown_ladder: tuple[tuple[float, float], ...] = ((-0.2803, 0.13125), (-0.4005, 0.0875))
     drawdown_grace_cycles: int = 2
 
     # R9 / R10: the digest is recorded every cycle, and it is what makes an edit here visible.

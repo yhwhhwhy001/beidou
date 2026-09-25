@@ -67,6 +67,19 @@ def _bridge_until() -> date:
     return date.fromisoformat(match.group(1))
 
 
+def test_the_bridge_stays_expired_on_the_date_it_was_given() -> None:
+    """Moving `BRIDGE_UNTIL` later is extending the bridge: a governance ruling, never a fix for red CI.
+
+    Until 2026-10-13 `tests/test_the_exemption_is_still_about_something_real.py` pinned this date to the
+    test side's `EXEMPT_UNTIL`, so moving one forced a diff in the other.  The 10-13 switch deleted the
+    exemption with its reason and KEPT the bridge block: it expires in place by design ("IT REMOVES ITSELF
+    BY EXPIRY"), and deleting it would edit the launcher launchd runs in the same PR as a construction
+    change.  This pin is what is left of that coupling.  A later date re-arms `--allow-unvalidated` on every
+    launchd start - write the ruling first, then change the date and this line in the same commit.
+    """
+    assert _bridge_until() == date(2026, 10, 13)
+
+
 def _bridge_script() -> str:
     """The launcher's options, then its block from `BRIDGE_UNTIL=` through the `exec`, date and exec stubbed."""
     text = LAUNCHER.read_text(encoding="utf-8")

@@ -39,7 +39,7 @@
 | frozen bar | 冻结 bar（与「构造冻结」撞词）、死 bar | `bar_sanity` 的 `frozen` |
 | probe | 探针、探针书 | `probe`、`PROBE_VERDICT`、`max_concurrent_probes`（2026-09-25 起） |
 | bridge（D-041 bridge） | 桥 | `deploy/run_live.sh` 的 `BRIDGE_UNTIL`（2026-09-25 起） |
-| exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起） |
+| exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起；2026-10-13 随切换删除，只在历史记录里出现） |
 | confirmed gap | 已确认缺口、真缺口 | `confirmed_gaps.json`、`beidou_data/repair.py`（2026-09-25 起） |
 | feature store | 特征库、特征存储、特征缓存 | `beidou_cli/research_feature_store.py`、`BEIDOU_FEATURE_STORE`（2026-09-25 起） |
 

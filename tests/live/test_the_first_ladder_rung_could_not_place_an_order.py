@@ -187,7 +187,8 @@ def _world(panel: Panel, tmp_path: Path, cursor: int = 400) -> tuple[LiveEngine,
         # 0.60 since 2026-09-14: the rungs are absolute vol targets derived for that k, and
         # `_risk_ladder` now clamps a scalar above 1 rather than letting a ladder add size, so at
         # 0.30 the first rung (0.45) would read as "no cut" and this test would observe nothing.
-        portfolio=PortfolioParams(vol_target=0.60),
+        # 0.175 since 2026-10-13 (policy 0.3.6): the rungs moved with k, and 0.13125 / 0.175 is the same 0.75.
+        portfolio=PortfolioParams(vol_target=0.175),
     )
     engine = LiveEngine(
         config,
@@ -213,9 +214,9 @@ async def _second_cycle(engine: LiveEngine, market: FakeMarketData, venue: FakeV
         rows = engine.store.read_jsonl(engine.store.cycles_path)
         bar = int(rows[-1]["bar_open_ms"])
         engine.store.append_attribution(
-            {"bar_open_ms": bar, "until_ms": bar + 3_600_000, "total": -0.55 * float(rows[0]["equity"])}
+            {"bar_open_ms": bar, "until_ms": bar + 3_600_000, "total": -0.30 * float(rows[0]["equity"])}
         )
-        engine.state.risk_ladder = {"cycles": 3, "rung": 0.45, "acting": True, "since_bar_ms": bar}
+        engine.state.risk_ladder = {"cycles": 3, "rung": 0.13125, "acting": True, "since_bar_ms": bar}
     market.cursor += 1
     for symbol in SYMBOLS:
         venue.set_price(symbol, float(market.panel.close[symbol].iloc[market.cursor - 1]))
