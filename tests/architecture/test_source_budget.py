@@ -3360,7 +3360,33 @@ CEILING = {
     # 7 处变异各有测试变红。合并方在另一份快照上重跑：日报只多一个键、一节，其余逐字节相同。
     #
     # 留 40 行（13_775 -> 13_815），理由与上面几格逐字相同，不重述。
-    "beidou_live": 13_815,
+    #
+    # 2026-09-25（不编号，同上）。+53 beidou_live，13_775 -> 13_828，抬到 13_868。
+    #
+    # 多因子载荷（#140）的对抗式审查五条，修在 `factor_loadings.py` 与 `report_beta.py`。代码的计算本来是对的，
+    # 缺的是：前视测试抓不到三种一根的前视（资金费多读一根、选腿用了 t+1 的键、敞口用了当根）；归档每天只
+    # 同步一次，滞后 1-25 小时，页面不报；「只用市场」那一行其实带着全多头截距；同页两个「全多头的 bar」
+    # 样本不同。花在哪：`_archive_reach` 与归档一行（页面说明排名是临时的、下次同步会回改）；两处标签；
+    # docstring 写明滞后与截距。测试另加，不计入。`beidou_cli` 另 +8（`report beta --out` 先写 D-045 那一页，
+    # 因子页出错时写拒读原因再重新抛出），7_857 -> 7_865，在余量之内，不抬。
+    #
+    # 留 40 行（13_828 -> 13_868），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-25（不编号，同上）。+149 beidou_live，13_828 -> 13_977，抬到 14_017。
+    #
+    # 逐单 TCA（#139）的对抗式审查：中级三条、低级六条。`report_execution.py` +116。决策 bar 改取周期行的
+    # `as_of_ms`，不取主机时钟的 `bar_open_ms`，并核 `decision_close` 等于归档收盘价：D-025 容许整根 bar 的
+    # 时钟偏移，主机快一根就是前视。参与率改成 `max_participation` 的口径（24 根均值）；σ 改成开盘到收盘；
+    # 预测只和成交段比；入账窗口里有 flatten 成交的不读手续费；归档出错按标的隔离。
+    # `risk_budget.one_row_per_order` +31：「already submitted」行是同一笔成交再写一遍，还可能带着反方向。
+    # M-Q08、`live_turnover`、周滑点、日报的订单计数与成交额、`restart_cost` 都改走它，各 +1 左右。
+    # `LIQUIDITY_WINDOW_BARS` 挪到 `report_common`，平仓流动性与 TCA 共用一个小时均量，净 0。
+    #
+    # 验收：09-03 那天的日报成交额少 112.41、FILLED 40 -> 39；其余 22 天的日报、告警、周报、beta 与状态
+    # 产物逐字节相同。21 个变异杀掉 20 个，存活的是等价变异（pandas 的 mean 换成 np.mean）。
+    #
+    # 留 40 行（13_977 -> 14_017），理由与上面几格逐字相同，不重述。
+    "beidou_live": 14_017,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
