@@ -71,6 +71,10 @@ SPOT_BASE_URL = "https://api.binance.com"
 SPOT_MARKET = "spot"  # the `market` segment of a data.binance.vision archive path
 SPOT_MAX_KLINE_LIMIT = 1000
 SPOT_MAP_FILE = "spot_map.json"
+# Perpetual names whose spot leg the daily `beidou data spot` maps and syncs whatever the kline store holds.
+# USDCUSDT is the stablecoin peg `beidou_live/report_events.py` reads (#8.10): the only stablecoin pair the
+# archive holds, and until 2026-09-25 it was synced only because a perpetual of that name happened to be stored.
+ALWAYS_MAPPED: tuple[str, ...] = ("USDCUSDT",)
 
 # Price columns are quoted in the perpetual's unit after scaling; `quote_volume` is USDT on both sides
 # and is carried unscaled.  Base `volume` is deliberately NOT carried: one unit differs between the two
