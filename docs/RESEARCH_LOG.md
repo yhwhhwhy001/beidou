@@ -16929,3 +16929,34 @@ REST 共 6 次，没有日归档文件。6 个都没有新行，全部记为已�
 合入后快进主 checkout，跑两个构造测试，在安全窗口重启一次，并按 CLAUDE.md 记重启。构造清零 M-010、M-G06
 与 `realised_vol`，这是改 k 的已知代价。
 
+## 2026-09-25 · 重启 #57：操作者要求重启；新进程载入 #155 的下单路径修复，构造不变
+
+只记可观测事实。
+
+- **谁、为什么**：操作者在会话里说「重启北斗量化交易系统」，由该会话执行。
+- **命令与窗口**：2026-09-25T17:08:51Z 发出 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，17:09:21Z 返回。
+  这个时刻在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
+- **重启前**：主 checkout 在 `5fbe4163`（15:47:38Z 快进，见 reflog）。两个构造测试 17:08:34Z 跑，15 passed。
+- **进程**：PID 51356（2026-09-23T16:41:38Z 启动）→ 75336（2026-09-25T17:09:21Z 启动）。`state.restarts` 56 → 57，
+  `restarted_at` 2026-09-25T17:09:21Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_live/engine.py`、`beidou_data/live_feed.py`、
+  `beidou_exchange/binance_usdm/rest_client.py` 都是 15:32:53Z；`beidou_governance/policy.py` 07:29:40Z；
+  `deploy/run_live.sh` 05:33:06Z；`config/live.demo.yaml` 09-23T04:55:35Z；`config/alpha_registry.yaml` 09-23T13:31:17Z。
+  全部早于 17:09:21Z，所以新进程跑的是 `5fbe4163` 的代码。旧进程启动时这些文件大多还没改，#155 的四条下单路径
+  修复（−1007 不再重发、代理 503 重试、平仓单先发、单个币 400 不拖垮周期）从这次重启起生效。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13`；
+  - 交易所时钟偏差 +1.9s；
+  - `restart was 569.1s after the bar close (window 87.2s); reconciled but did not rebalance`，为 16:00Z 那根 bar
+    写了一行 SKIPPED。那根 bar 旧进程已在 17:00:29Z 跑完，没有漏掉退出检查。
+- **启动时的证据门**：都由 bridge 的 `--allow-unvalidated` 放行，与 09-23 那次启动相同。
+  - tsmom 的证据是 FAIL；
+  - tsmom 引用的成员表变了（同日 14:05–14:23Z 重建）；
+  - flow 没有 manifest。
+- **`live status --check`（17:09:53Z）**：registry `7f8adb754962`、治理规则 `d62ac59fa95c` 与在跑的循环一致；
+  最近 24 小时 24 个周期，完成 100%。
+- **第一个真周期**：18:00:29Z 处理 17:00Z 的 bar，没有错误，没有护栏，0 单；心跳 OK，universe 17 个。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。
+
+构造没有变：k 仍是 0.60，档位、规则摘要都没动。改 k 的切换是 #163，按裁定在 2026-10-13T00:00Z 之后合入。
+
