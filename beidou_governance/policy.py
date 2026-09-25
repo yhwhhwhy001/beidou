@@ -30,8 +30,21 @@ from dataclasses import asdict, dataclass, field
 
 from beidou_alpha.overlays.ladder import rung_target
 
-POLICY_VERSION = "0.3.5"
-"""0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
+POLICY_VERSION = "0.3.6"
+"""0.3.6 (2026-09-25): the 0.3.1 opening returned - `max_mine_rounds_per_window` 5 -> 4, by operator
+ruling, eight days before `test_the_single_window_mine_opening_is_returned` would have forced it.
+
+Returned rather than made standing, because nobody has made the case for a standing fifth round: it
+was bought for one race (the 09-09 panel loaded before `spot_klines`), it was spent on 09-10 and the
+basis leaf came back REFUTED 0/18.  Since then R2b (0.3.4) has refused further rounds on this space on
+its own - the gate passed the best out-of-sample Sharpe the space ever produced - so the count is not
+the binding constraint, and `research mine --measure` never spends a round.  Returning it early costs
+nothing either: the closing window has spent 5 of 5, so `mine_refusals` refuses at 4 exactly as at 5.
+
+`SINGLE_WINDOW_MINE_OPENING_ENDS` and the test stay.  They now pass for the reason they were written
+for, and a later opening can reuse the same shape rather than invent a new one.
+
+0.3.3 (2026-09-14): R8's rungs re-derived for the -70% budget, and its ruler given the book's
 unrealised P&L.  One decision in two halves - see `drawdown_ladder` for why they cannot ship apart.
 The short version: measured over 2021-2026 at k=0.60 the ladder as it stood NEVER FIRED, because the
 ruler counted only realised P&L while a momentum book holds its losers; and the rungs it would have
@@ -102,7 +115,8 @@ question really is "best of how many", and that number really is 514.
 """
 
 
-#: What `max_mine_rounds_per_window` goes back to when the 0.3.1 opening expires, and when.
+#: What `max_mine_rounds_per_window` goes back to when the 0.3.1 opening expires, and when.  Returned
+#: early, at 0.3.6.
 STANDING_MINE_ROUNDS = 4
 SINGLE_WINDOW_MINE_OPENING_ENDS = "2026-10-03T00:00:00+00:00"
 
@@ -132,11 +146,11 @@ class Policy:
     # four after it - roughly weekly inside a monthly window.  R2 still refuses a space that has not
     # changed, so four rounds cannot become the same round four times.
     #
-    # 5 for the window ending `SINGLE_WINDOW_MINE_OPENING_ENDS` only; see 0.3.1 at POLICY_VERSION for
-    # the reason and the price.  Return it to `STANDING_MINE_ROUNDS` when that window closes - a test
-    # fails from that date until somebody does, because "just this once" without an executing check is
-    # a promise, and this repository has spent a day counting promises that were taken for controls.
-    max_mine_rounds_per_window: int = 5
+    # It was 5 for the window ending `SINGLE_WINDOW_MINE_OPENING_ENDS` only (0.3.1) and went back to
+    # `STANDING_MINE_ROUNDS` at 0.3.6; both reasons are at POLICY_VERSION.  The test that would have
+    # failed from that date still runs, because "just this once" without an executing check is a
+    # promise, and this repository has spent a day counting promises that were taken for controls.
+    max_mine_rounds_per_window: int = 4
 
     # R2: `research mine` runs only when the search space changed.  Re-running the same space and
     # keeping the rows charges the family twice for one hypothesis (the 2026-09-08 incident).

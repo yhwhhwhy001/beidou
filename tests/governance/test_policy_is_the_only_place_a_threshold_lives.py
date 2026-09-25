@@ -52,7 +52,11 @@ from beidou_governance.policy import POLICY_VERSION, PROVENANCE, Policy, policy_
 # case, and the choice is not load-bearing here: 7 / 14 / 30 all give `mined` 1,559, `tsmom` 101,
 # `flow` 43.  The measured half of Q4c went the other way - the second universe is worth 1.90x, so
 # cross-universe re-charges stay charged.  The old digest was 75764f646ca6.
-PINNED_DIGEST = "d62ac59fa95c"
+# 0.3.6 (2026-09-25): the 0.3.1 opening returned, `max_mine_rounds_per_window` 5 -> 4 by operator
+# ruling, before `test_the_single_window_mine_opening_is_returned` fails on 2026-10-03.  Returned rather
+# than made standing: the round was bought for one race and spent, and R2b already refuses the next
+# one on this space.  The old digest was d62ac59fa95c.
+PINNED_DIGEST = "89e19b1706b4"
 
 
 def test_the_digest_is_pinned_so_a_threshold_cannot_move_quietly() -> None:

@@ -3754,7 +3754,11 @@ CEILING = {
     # leaves a probe a probe (retiring the probe would turn the demotion into a delay), and
     # `family_gate.refusals` is the event's first producer - the 09-19 refusal of tsmom sat in the verdict
     # ledger four days with no consequence.  About half is the docstrings recording the ruling.
-    "beidou_governance": 3_971,
+    # +14 beidou_governance (3_971 -> 3_985), 2026-09-25, operator ruling: `max_mine_rounds_per_window`
+    # 5 -> 4, returning the 0.3.1 opening before its tripwire fires on 10-03.  The value change is one
+    # line; +14 is POLICY_VERSION 0.3.6 saying why it was returned rather than made standing (the round
+    # was bought for one race and spent, and R2b already refuses the next), measured at 3_985.
+    "beidou_governance": 3_985,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
