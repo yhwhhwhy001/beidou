@@ -471,7 +471,7 @@ def test_the_daily_report_prints_it_after_m014_and_pages_on_nothing(tmp_path: Pa
     assert f"| realised vol (P13, quoted) | {_risk_budget_lines(payload['risk_budget'])['realised vol']} |" in markdown
     # One cycle, two snapshots: each section says which one it took and points at the other.
     assert payload["liquidity_to_close"]["bar"] == payload["holdings_correlation"]["bar"]
-    assert "| 与 3.9 的快照不同 | 这里是本周期下单前的持仓" in markdown[ours:]
+    assert "| 与 #3.9 的快照不同 | 这里是本周期下单前的持仓" in markdown[ours:]
 
     without = {key: value for key, value in payload.items() if key != "holdings_correlation"}
     assert daily_alerts(payload) == daily_alerts(without)

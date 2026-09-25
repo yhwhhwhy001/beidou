@@ -1524,9 +1524,9 @@ def _holdings_correlation_lines(block: Mapping[str, Any], risk_budget: Mapping[s
             f"{_fmt_num(block.get('gross'))}x total equity (collateral included): the loop's managed positions at "
             f"bar {block.get('bar')}, before that cycle's orders ({_fmt_pct(block.get('coverage'))} of gross_before)"
         ),
-        "与 3.9 的快照不同": (
+        "与 #3.9 的快照不同": (
             "这里是本周期下单前的持仓：只有这一份按币记下、能对上 gross_before。"
-            "3.9 平仓流动性读同一周期成交后的持仓，两边可以差一个本周期新开或平掉的币。"
+            "#3.9 平仓流动性读同一周期成交后的持仓，两边可以差一个本周期新开或平掉的币。"
         ),
     }
     for label, window in windows.items():

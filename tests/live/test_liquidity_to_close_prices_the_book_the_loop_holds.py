@@ -647,7 +647,7 @@ def test_the_daily_report_prints_it_under_margin_and_never_pages_on_it(tmp_path:
     assert keys.index("liquidity_to_close") == keys.index("margin") + 1
     markdown = daily_markdown(payload)
     margin = markdown.index("## Margin and rejections (M-007)")
-    here = markdown.index("## Liquidity to close (3.9, reported only)")
+    here = markdown.index("## Liquidity to close (#3.9, reported only)")
     assert margin < here < markdown.index("## Exits and pool (M-005 / M-006)")
     assert "| BTCUSDT | +1,500.00 U；参与率 5.0000%" in markdown
     # One cycle, two snapshots: this section says it took the one after the fills, and points at the other.
