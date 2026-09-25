@@ -3386,7 +3386,21 @@ CEILING = {
     # 产物逐字节相同。21 个变异杀掉 20 个，存活的是等价变异（pandas 的 mean 换成 np.mean）。
     #
     # 留 40 行（13_977 -> 14_017），理由与上面几格逐字相同，不重述。
-    "beidou_live": 14_017,
+    #
+    # 2026-09-25（不编号，同上）。+147 beidou_live，13_977 -> 14_124，抬到 14_164。
+    #
+    # 持仓间相关（#138）与平仓流动性（#141）的对抗式审查：中级三条、低级八条，全在 `report_risk.py`。
+    # `BOOK_TOLERANCE` 1% -> 0.2%，比较改成拒 NaN 的写法：1% 放得过去掉 AKEUSDT（0.89%）的那本书，7 天
+    # effective bets 从 2.10 读成 1.72；NaN 过了检查，bets 读成 1.0。`ALREADY_SUBMITTED` 的单不再叠进持仓：
+    # 09-03 的 1000PEPEUSDT 从 +152.07 U 回到 +40.07 U。归档滞后是 1–24 根而不是「一到两小时」，块里加
+    # `closes_through_ms` / `closes_lag_bars`，页面印出来。其余：guard skip 越过去读上一个有计划的周期；
+    # 「完全平仓」按记录里的三个开关写；`unrecorded` 按原因列出缺名义额的币；两节快照互相指明；异常兜底
+    # 扩到整个函数；冲击参数走 `impact_model`。
+    #
+    # 验收：每条修复改回去都有测试变红。今天的读数逐位不变；告警、周报、beta、status 逐字节相同。
+    #
+    # 留 40 行（14_124 -> 14_164），理由与上面几格逐字相同，不重述。
+    "beidou_live": 14_164,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
