@@ -13,6 +13,12 @@
 #
 # It does NOT restart, promote or write the real registry.  `beidou governance apply` does that, and
 # only while the autonomy switch is on.
+#
+# It stops at the end of a soak because it asks the record first - not because of KeepAlive.  `live run`
+# exits 1 when any of its cycles failed, launchd relaunches every non-zero exit, and on 2026-09-23 that
+# silently began a second 168 in the same `cycles.jsonl` (and a clean exit would still meet RunAtLoad at
+# the next login).  So before every start: a finished round exits 0, which launchd leaves down; an
+# unfinished one (a crash, a reboot) runs only the cycles it still owes, so one record stays one soak.
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SUPPORT="$HOME/Library/Application Support/beidou"
@@ -26,7 +32,6 @@ cd "$REPO" || exit 78
 
 CANDIDATE="${1:-config/alpha_registry.candidate.yaml}"
 STATE_DIR="${2:-.beidou/live-shadow}"
-CYCLES="${3:-168}"
 
 if [ ! -f "$CANDIDATE" ]; then
   echo "shadow: no candidate registry at $CANDIDATE" >&2
@@ -38,6 +43,23 @@ if [ "$(cd "$(dirname "$CANDIDATE")" && pwd)/$(basename "$CANDIDATE")" = "$REPO/
   exit 64
 fi
 
+# The soak's length is the canary's (`SOAK_CYCLES`), read through the same cut it scores with; a second
+# number here is how a launcher and its reader end up disagreeing about where a soak ends.
+if ! CYCLES="$(.venv/bin/beidou governance canary --remaining --shadow-dir "$STATE_DIR")"; then
+  echo "shadow: could not read the soak record for $STATE_DIR; not starting" >&2
+  exit 70
+fi
+case "$CYCLES" in
+  '' | *[!0-9]*)
+    echo "shadow: expected a cycle count from the canary, got '$CYCLES'; not starting" >&2
+    exit 70
+    ;;
+esac
+if [ "$CYCLES" -eq 0 ]; then
+  echo "shadow: the latest soak in $STATE_DIR is finished; not starting another."
+  echo "shadow: score it with 'beidou governance canary'; to soak again, move the record away (docs/RUNBOOK.md)."
+  exit 0
+fi
 echo "shadow: soaking $CANDIDATE for $CYCLES cycles into $STATE_DIR"
 exec .venv/bin/beidou live run \
   --profile config/live.demo.yaml \

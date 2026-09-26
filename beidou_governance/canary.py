@@ -21,6 +21,41 @@ from typing import Any
 SOAK_CYCLES = 168
 
 
+def attempted(row: Mapping[str, Any]) -> bool:
+    """A cycle `engine.run` counts against `--cycles`: OK or ERROR.  SKIPPED rows are bars it slept through."""
+    return row.get("phase") != "SKIPPED"
+
+
+def rounds(rows: Sequence[Mapping[str, Any]], soak_cycles: int = SOAK_CYCLES) -> list[list[Mapping[str, Any]]]:
+    """The record cut into soaks of ``soak_cycles`` attempted cycles, oldest first; the last may be unfinished.
+
+    Cut by position because a row names no process and no soak.  Until 2026-09-26 the canary read the
+    whole record as one soak while it held two: `live run` exits 1 when any of its 168 cycles failed,
+    launchd relaunches a non-zero exit, and at 2026-09-23T08:00Z a second 168 began in the same file
+    under a new construction.  `construction_stable` then failed on two digests, each of them stable
+    inside its own soak.  `deploy/run_shadow.sh` asks `remaining` before it starts and a relaunch
+    finishes the open round instead of opening another, so these cuts are the launcher's own.
+
+    A SKIPPED row stays in the round it was written in: a backoff after a round's last cycle must not
+    open the next one, or the launcher would read a finished soak as a new one with 168 to go.
+    """
+    cut: list[list[Mapping[str, Any]]] = []
+    count = 0
+    for row in rows:
+        if not cut or (attempted(row) and count >= soak_cycles):
+            cut.append([])
+            count = 0
+        cut[-1].append(row)
+        count += attempted(row)
+    return cut
+
+
+def remaining(rows: Sequence[Mapping[str, Any]], soak_cycles: int = SOAK_CYCLES) -> int:
+    """Cycles the latest round still needs: all of them on an empty record, 0 once it is finished."""
+    latest = rounds(rows, soak_cycles)[-1] if rows else []
+    return max(0, soak_cycles - sum(map(attempted, latest)))
+
+
 @dataclass(frozen=True)
 class Check:
     name: str
@@ -77,7 +112,13 @@ def evaluate(
     pointing this function at the armed loop's own cycles: 6 distinct digests, and a candidate would
     have been called unhealthy for a deployment that never changed.  Passed in rather than imported
     so the package stays free of `beidou_live`.
+
+    ``shadow`` is the whole record and only its latest round is scored (`rounds`): `plan` and `apply`
+    reach this through `canary_health`, so cutting here rather than in one caller covers both.
     """
+    cut = rounds(shadow, soak_cycles)
+    shadow = cut[-1] if cut else []
+    soaked = sum(map(attempted, shadow))
     resolve = dict(aliases or {})
     decided = [row for row in shadow if row.get("phase") not in ("ERROR", "SKIPPED")]
     digests = {
@@ -104,7 +145,7 @@ def evaluate(
 
     checks = (
         Check("startup_gate", gate_refusals == 0, f"{gate_refusals} refusals"),
-        Check("soak", len(shadow) >= soak_cycles, f"{len(shadow)}/{soak_cycles} cycles"),
+        Check("soak", soaked >= soak_cycles, f"{soaked}/{soak_cycles} cycles in round {len(cut)} of {len(cut)}"),
         Check("construction_stable", len(digests) <= 1, f"{len(digests)} distinct construction digests"),
         # `<=` with a tolerance rather than `<`: guards firing at the same rate as the armed book is
         # the expected outcome, and a canary that demands an improvement is asking the wrong question.
@@ -120,4 +161,4 @@ def evaluate(
         Check("participation", not over_cap, f"{len(over_cap)} planned orders above the cap"),
         Check("targets_in_universe", not outside, f"{len(outside)} targets outside the managed universe"),
     )
-    return CanaryResult(checks, soaked=len(shadow))
+    return CanaryResult(checks, soaked=soaked)
