@@ -59,7 +59,8 @@ class ExceptionEntry:
     covers: tuple[str, ...]  # substrings of the artefacts or reasons this entry accounts for
 
 
-#: The seven rulings Phase 0 was told to account for, plus what each one costs the rule set.
+#: The seven rulings Phase 0 was told to account for, the rulings taken after it, and what each one costs
+#: the rule set.
 EXCEPTIONS: tuple[ExceptionEntry, ...] = (
     ExceptionEntry(
         id="D-019",
@@ -135,6 +136,24 @@ EXCEPTIONS: tuple[ExceptionEntry, ...] = (
         "它要求判断证伪线的前提是否还成立。两者都必须是人的一次具名裁定；R10 的作用是"
         "让机器不能悄悄做同样的事。",
         covers=("max_loss", "vol_target"),
+    ),
+    ExceptionEntry(
+        id="16a52547",
+        date="2026-09-19",
+        ruling="tsmom 的 evidence 指针从 `20260913T182325Z`（WEAK_PASS）换到 `20260919T081914Z`（FAIL），"
+        "理由是记账记准。新证据就在当天的成员表上跑，dataset 与磁盘一致；verdict 是诚实的 FAIL。"
+        "两个指针都过不了 armed 启动，只是挡在不同的门上。循环靠 D-041 bridge 照跑。"
+        "`tests/shipped_evidence.py` 的 exemption 只放过这一条精确字符串。它与 bridge 同于 2026-10-13 到期。",
+        rule_conflict="§3 candidate->validated 要求 D-020 的 verdict PASS，也要求过 R0 的分位门。"
+        "这份证据 verdict FAIL，样本外 1.2306，低于 N=167 时的门 1.5129。",
+        why_not_encoded="写成规则就是允许指向 FAIL 证据，等于取消 D-020。这次换指针不改变能否启动，"
+        "只改变由哪道门报出拒绝。「哪份记账更准」是人对两种不过的比较，两份 artefact 上都没有这个字段。"
+        "机器侧的代价照付，exemption 没有覆盖它：registry 不过门，`governance apply` 的写入都会回滚。"
+        "本条按精确文件名，只归因 09-19 这一次采纳。它不随 bridge 到期：采纳是历史，"
+        "到期后还该不该指着它，由启动门与 `shipped_evidence` 管。"
+        "#163 计划在 10-13 之后把指针换到 `20260925T143836Z`（WEAK_PASS）。"
+        "那是另一次采纳，按它自己的 artefact 判，本条不覆盖。",
+        covers=("tsmom-validation-20260919T081914Z.json",),
     ),
 )
 
@@ -409,7 +428,13 @@ def _instant(value: Any) -> datetime | None:
 
 
 def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) -> Difference:
-    """Map one refusal to a named cause by inspecting the artefact, never by guessing at a category."""
+    """Map one refusal to a named cause by inspecting the artefact, never by guessing at a category.
+
+    `16a52547` matches one file name exactly and reads the artefact's own verdict.  A prefix would
+    quietly cover the next FAIL too, and a name alone would still cover this file if it ever said
+    something else.  It takes D-020 and R0 only: a construction divergence or a late pre-registration
+    on the same artefact is a finding the 2026-09-19 ruling never looked at.
+    """
     selection = report.get("oos_selection") or {}
     if reason.startswith("D-018") and str(report.get("book_verdict")) == "REJECT":
         entry = EXCEPTIONS_BY_ID["D-029"]
@@ -420,6 +445,16 @@ def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) 
             EXCEPTION,
             f"{entry.id}（{entry.date}）：探针书可引用 REJECT，"
             "但 registry 必须写明 `probe.accepted_despite: REJECT`；本条指针正是那样写的",
+        )
+    ruled = EXCEPTIONS_BY_ID["16a52547"]
+    if reason.startswith(("D-020", "R0")) and name in ruled.covers and report.get("verdict") == "FAIL":
+        return Difference(
+            name,
+            history,
+            reason,
+            EXCEPTION,
+            f"{ruled.id}（{ruled.date}）：操作者把 tsmom 指向这份诚实的 FAIL，理由是记账记准。"
+            "两个指针都过不了 armed 启动；循环靠 D-041 bridge 照跑到 2026-10-13",
         )
     if reason.startswith("R0"):
         if not selection:

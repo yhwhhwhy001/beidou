@@ -4,7 +4,9 @@ Two tests carry the acceptance and one carries the register.
 
 T-G0-1 is the register: the seven rulings Phase 0 was told to account for are declared, each with the
 rule it conflicts with and the reason it stays an exception rather than becoming a rule.  A register
-whose entries only said "this happened" would let anything in.
+whose entries only said "this happened" would let anything in.  A ruling taken after Phase 0 joins the
+register with a test of its own, naming the artefact it accounts for - `16a52547` (2026-09-19) is the
+first - and T-G0-1 stays the seven the plan named.
 
 T-G0-2 is the acceptance, and its teeth are in `Difference.attributed`: an `evidence_gap` counts as
 attributed only when it names the fix that would close it.  Without that clause "we cannot tell"
@@ -20,7 +22,9 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,10 +32,12 @@ from beidou_governance.admission import canary_health
 from beidou_governance.lifecycle import Event
 from beidou_governance.replay import (
     EVIDENCE_GAP,
+    EXCEPTION,
     EXCEPTIONS,
     EXCEPTIONS_BY_ID,
     JUDGEABLE,
     SUSPENDED,
+    UNATTRIBUTED,
     Difference,
     load_jsonl,
     render,
@@ -67,6 +73,16 @@ ADOPTIONS = {
     # a report the registry cites and history does not record IS a difference between the rules and
     # what happened.
     "reports/research/tsmom-validation-20260913T182325Z.json": "2026-09-14",
+    # 2026-09-19 (`16a52547`): the operator pointed tsmom at the 16-cell evidence, whose verdict is FAIL.
+    #
+    # Third time this list went stale, and like the first, CI could not see it.  The first was masked by a
+    # bug; this one by the design.  `replay_adoptions` asks "why was this never adopted?" only of a report
+    # that PASSED, so a FAIL the registry cites and this dict omits is read by neither loop.  Run by hand
+    # on 2026-09-27, in passing on #170, `governance replay` read 2 unattributed on the real record - D-020
+    # and R0 on this pointer - while this file was green.  Both refusals are the ruling's named exception,
+    # `EXCEPTIONS_BY_ID["16a52547"]`.  A fourth time is a test failure:
+    # `test_every_pointer_the_registry_cites_is_in_the_adoption_history`.
+    "reports/research/tsmom-validation-20260919T081914Z.json": "2026-09-19",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
@@ -96,12 +112,69 @@ def test_an_exception_entry_has_to_say_which_rule_it_breaks() -> None:
         assert any(token in entry.rule_conflict for token in ("R", "§", "D-", "DL-")), entry.id
 
 
+POINTER_0919 = "reports/research/tsmom-validation-20260919T081914Z.json"
+
+
+def test_the_0919_pointer_is_the_operators_named_exception() -> None:
+    """Both refusals of the 2026-09-19 pointer are the ruling's, and they are one fact seen twice.
+
+    The artefact's verdict is FAIL because its OOS 1.2306 is under the 1.5129 gate at N=167: D-020
+    reads the first half, R0 the second.  The operator pointed tsmom at it anyway, to keep the books
+    straight - both available pointers were refused at an armed start, on different gates.
+    """
+    entry = EXCEPTIONS_BY_ID["16a52547"]
+    assert entry.ruling and entry.rule_conflict and entry.why_not_encoded, "16a52547 is a stub"
+    assert entry.date == "2026-09-19"
+    result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
+    ruled = [d for d in result.differences if d.subject == POINTER_0919.rsplit("/", 1)[-1]]
+    assert sorted(d.rules_say.split(":")[0] for d in ruled) == ["D-020", "R0"]
+    assert all(d.kind == EXCEPTION and d.attribution.startswith("16a52547（2026-09-19）") for d in ruled)
+
+
+def test_the_0919_ruling_covers_one_artefact_and_not_a_shape() -> None:
+    """The ruling covers one artefact and two reasons: not a copy, not a doctored verdict, not a third refusal.
+
+    Written against the route, not the entry.  `_attribute` could match on a prefix, on the verdict
+    alone, or on every reason the artefact draws, and each would turn one ruling into a standing
+    permission.  The first assertion is the real artefact, so this cannot pass by attributing nothing.
+    """
+    real = _reports()[POINTER_0919]
+
+    def kinds(report: dict[str, Any], name: str = POINTER_0919, live: str = real["evidence_construction"]) -> dict:
+        result = replay_adoptions({name: report}, {name: "2026-09-19"}, live_constructions=[live])
+        return {d.rules_say.split(":")[0]: d.kind for d in result.differences}
+
+    assert kinds(real) == {"D-020": EXCEPTION, "R0": EXCEPTION}
+    copy = "reports/research/tsmom-validation-20261001T000000Z.json"
+    assert kinds(real, name=copy) == {"D-020": UNATTRIBUTED, "R0": UNATTRIBUTED}
+    assert kinds({**real, "verdict": "WEAK_PASS"}) == {"D-020": UNATTRIBUTED, "R0": UNATTRIBUTED}
+    diverged = kinds(real, live="0000000000000000")
+    assert diverged == {"D-020": EXCEPTION, "R0": EXCEPTION, "KILL-AR-07": UNATTRIBUTED}
+
+
 def test_t_g0_2_every_difference_carries_a_named_cause() -> None:
     result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
     assert result.differences, "a replay that finds no difference is not replaying anything"
     for difference in result.differences:
         assert difference.attributed, f"unattributed: {difference.subject} / {difference.rules_say}"
     assert result.passes_ac_g0
+
+
+def test_every_pointer_the_registry_cites_is_in_the_adoption_history() -> None:
+    """The fourth staleness, made a failure instead of a finding.
+
+    `ADOPTIONS` went stale three times (09-09, 09-14, 09-19), each time because moving a pointer is one
+    edit and recording the adoption is a second, in another file.  Two of the three were invisible to
+    CI: the first was masked by DL-K3's string compare, and the third pointer was a FAIL, which nothing
+    in this file reads unless it is listed.  The registry on disk is readable in a shallow clone, so
+    this needs no `git log` - the constraint the dict exists for.  It catches a missing line, not a
+    wrong date; the date is still the author's to get right.
+    """
+    registry = (ROOT / "config" / "alpha_registry.yaml").read_text(encoding="utf-8")
+    cited = re.findall(r"^[ \t]+report:[ \t]*(\S+)", registry, re.MULTILINE)
+    assert cited, "the registry cites no report, or this pattern no longer finds its `report:` lines"
+    missing = sorted(set(cited) - set(ADOPTIONS))
+    assert not missing, f"the registry cites {missing} and ADOPTIONS does not record the adoption"
 
 
 def test_an_evidence_gap_without_a_fix_is_not_attributed() -> None:
@@ -127,6 +200,9 @@ def test_only_the_reports_that_name_their_gate_are_the_ones_the_rules_admit() ->
     `embargo` field that landed with `--embargo`.  Its OOS margin is thin - 1.5919 against a 1.5493
     gate at N=242, where the report it replaces cleared by 0.2951 - which is a fact for whoever cites
     it next, not a reason the rules refuse it.
+
+    Still three after 2026-09-19, although `ADOPTIONS` grew.  That pointer names its gate and fails it,
+    and its admission is the operator's `16a52547`, not a rule the replay relaxed.
     """
     result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
     admitted = sorted(line.split("：")[0] for line in result.reproduced if "规则同意采纳（validate" in line)
