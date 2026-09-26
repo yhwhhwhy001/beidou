@@ -3924,7 +3924,17 @@ CEILING = {
     # and reads the artefact's own verdict; 6 are its docstring, saying why a prefix or the verdict alone
     # would be a standing permission.  Measured after, `governance replay` on the real record: 15
     # reproduced, 34 differences, 0 unattributed, exit 0.  The 3 lines over were not golfed.  40 above again.
-    "beidou_governance": 4_155,
+    # +32 beidou_governance (4_123 -> 4_155), 2026-09-27, operator ruling on M-011 ("按你的建议执行"): an
+    # agreement is only as recent as the newest bucket it compared.  Measured on the stores that day: the
+    # archive had one ingest, on 09-09, and stopped at 2026-09-07T23:55Z, so the fifteen symbols held since
+    # 09-07 were compared on the same 155-156 buckets of 09-07 in every daily report from 09-09 - two
+    # columns of six, the snapshot's ratios being NaN until 09-12 - and passed; LSKUSDT and NEARUSDT,
+    # entered 09-16, shared none.  `parity_satisfied` now takes `now` and refuses a status that does not
+    # say which bucket it reached and one older than `PARITY_MAX_AGE`; `assemble` hands it the clock.  The
+    # constant sits beside `canary.SOAK_CYCLES` rather than in `Policy`, so the digest the loop records does
+    # not move.  Most of the 32 are its reasoning and the docstring.  The ruling's other half is the nightly
+    # `data metrics` in `deploy/run_data.sh`; live, data and cli grew inside their headroom.  40 above again.
+    "beidou_governance": 4_195,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

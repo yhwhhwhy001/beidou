@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -261,7 +262,7 @@ def test_the_m011_row_agrees_with_the_parity_reader_that_exists() -> None:
       one that holds the rule.
     """
     row = next(s for s in SUSPENDED if s.reads == "Facts.parity_met")
-    met, why = parity_satisfied(None)
+    met, why = parity_satisfied(None, now=datetime.now(UTC))
     assert not met and why.startswith("M-011:"), "the reader the row says was delivered"
     assert "✔ DL-D4" in row.fix, f"DL-D4 landed; the row still says: {row.why_unreadable}"
     assert Event.PARITY not in JUDGEABLE, "M-011 has a route now; the row's reason is stale"

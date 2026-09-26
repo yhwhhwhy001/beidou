@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
 from beidou_alpha.mining import enumerate_candidates
@@ -195,6 +196,7 @@ def assemble(
     wanted_trials: int,
     ledger_lines: Sequence[str] = (),
     ledger_source: str = NOT_SUPPLIED,
+    now: datetime | None = None,
 ) -> Assembly:
     """Build the context out of `reports/research/` and `governance_state.json`, saying what came from where."""
     at_least = {name: RANK[candidate.state] for name, candidate in book.candidates.items()}
@@ -287,7 +289,7 @@ def assemble(
         fields.append(Field("booked_without_parity", 0, parity_source, False))
         fields.append(Field("parity_met_unqueued", 0, parity_source, False))
     else:
-        met, why = parity_satisfied(parity)
+        met, why = parity_satisfied(parity, now=now or datetime.now(UTC))
         fields.append(Field("booked_without_parity", 0 if met else len(accepted), f"{parity_source}: {why}"))
         fields.append(Field("parity_met_unqueued", len(accepted) if met else 0, f"{parity_source}: {why}"))
 

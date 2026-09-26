@@ -7,7 +7,7 @@ import json
 import time
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import click
@@ -154,9 +154,11 @@ def data_sync(
 
 @data.command("metrics")
 @click.option("--root", default=".beidou/data", show_default=True, help="parquet store root")
-@click.option("--symbols", required=True, help="comma-separated symbols to ingest")
-@click.option("--from", "start", required=True, help="first day YYYY-MM-DD")
-@click.option("--to", "end", required=True, help="last day YYYY-MM-DD, exclusive")
+@click.option(
+    "--symbols", default="", help="comma-separated symbols to ingest (default: every symbol the snapshot store holds)"
+)
+@click.option("--from", "start", default="", help="first day YYYY-MM-DD (default: 30 days before --to)")
+@click.option("--to", "end", default="", help="last day YYYY-MM-DD, exclusive (default: today UTC)")
 @click.option(
     "--workers",
     default=8,
@@ -179,8 +181,19 @@ def data_metrics(root: str, symbols: str, start: str, end: str, workers: int) ->
     ``MetricsStore.append`` rewrites the symbol's whole parquet, so the real cost grew with the days
     already held - a 2,077-day symbol wrote about 621 million rows to store 598 thousand.  It now
     gathers a symbol's days and appends once, and ``--workers`` fetches several symbols at a time.
+
+    With no arguments it is the nightly job (2026-09-27): every symbol the loop's snapshot store holds,
+    which is the set M-011 compares, up to yesterday.  A symbol already held resumes from its own
+    watermark, so ``--from`` only reaches one the archive never held, and 30 days of it overlaps
+    whatever the snapshot recorded lately.  The archive had one ingest, on 09-09, and M-011 then read
+    the buckets of 09-07 for nineteen days.
     """
+    end = end or datetime.now(UTC).strftime("%Y-%m-%d")
+    start = start or (datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
     wanted = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    wanted = wanted or MetricsStore(root, kind="metrics_snapshot").symbols()
+    if not wanted:
+        raise click.ClickException("no --symbols, and the snapshot store holds none: nothing says what M-011 compares")
     store = MetricsStore(root)
     before = {s: store.last_open_time(s) for s in wanted}
 

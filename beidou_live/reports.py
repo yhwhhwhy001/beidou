@@ -155,6 +155,7 @@ def daily_payload(
     closes: Callable[[str], pd.Series] | None = None,
     exits: ExitParams | None = None,
     fidelity: ReplayInputs | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -243,7 +244,9 @@ def daily_payload(
         # they share?  The whole same-source contract is this one number, and until now `metrics_parity`
         # existed with nothing calling it - which is the shape this repository keeps finding, a
         # measurement that is written but never taken.
-        "metrics_parity": metrics_parity_status(sorted(cycles[-1].get("universe") or []) if cycles else [], data_root),
+        "metrics_parity": metrics_parity_status(
+            sorted(cycles[-1].get("universe") or []) if cycles else [], data_root, now=now or datetime.now(UTC)
+        ),
         # The instrument the 2026-09-08 ruling owes: the denominator stays total equity, so the
         # pro-cyclical amplifier is an ACCEPTED risk - and an accepted risk with nothing measuring it is
         # a sentence.  Beside `risk_budget` rather than inside it on purpose: it is not a threshold and

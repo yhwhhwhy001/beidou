@@ -137,6 +137,7 @@ def test_parity_counts_the_buckets_that_disagree() -> None:
     assert parity["overlapping"] == 2
     assert parity["differing"] == 1
     assert parity["rate"] == pytest.approx(0.5)
+    assert parity["through"] == 3, "the newest bucket both sources hold, which is how recent the reading is"
 
 
 def test_no_overlap_is_reported_as_unknown_rather_than_perfect() -> None:
@@ -150,6 +151,7 @@ def test_no_overlap_is_reported_as_unknown_rather_than_perfect() -> None:
 
     assert parity["overlapping"] == 0
     assert parity["rate"] is None
+    assert parity["through"] is None
 
 
 def test_parity_is_not_fooled_by_float_noise() -> None:
