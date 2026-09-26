@@ -157,7 +157,10 @@ class SuspendedCondition:
     fix: str
 
 
-#: Measured against the 201 archived reports and the 153-cycle live record, not assumed.
+#: Measured, not assumed.  Phase 0 (f8a80c95, 2026-09-08) read the 153-cycle live record and wrote "the
+#: 201 archived reports" here - the entry count of `reports/research/` in that commit, of which the replay
+#: reads the 101 JSON; the rest are `.md` twins, one `.jsonl` and `scratch/`.  Rows marked delivered were
+#: re-measured when they changed.
 SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="DL-K3 预登记早于报告",
@@ -211,8 +214,13 @@ SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="L4 Canary 浸泡",
         reads="Facts.canary_healthy",
-        why_unreadable="Canary 尚不存在",
-        fix="Phase 2：DL-G5",
+        why_unreadable="**DL-G5 已交付**：`plan`/`apply` 晋级前经 `admission.canary_health` 判 L4，"
+        "shadow soak 2026-09-12 首次开跑。`governance replay` 仍判不了它：L4 只守 `queued -> probe`，"
+        "而 `JUDGEABLE` 只有 VALIDATE 与 BOOK。记录里也没有一次机器晋级：唯一的 probe（flow）"
+        "2026-09-04 按 D-019 上线，早于 canary。canary 的读数不落盘。`verdicts.jsonl` 的 admission 行里，"
+        "L4 只会作为拒绝理由出现；放行的行不记 `promoting`，分不出 L4 是过了还是没被问",
+        fix="Phase 2 ✔ DL-G5：`canary.py` + `governance canary` + `admission.canary_health`。"
+        "`governance replay` 要判它还缺两样：晋级时落盘的 canary 读数，以及 `JUDGEABLE` 里的 PROMOTE",
     ),
 )
 
