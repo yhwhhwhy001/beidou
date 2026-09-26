@@ -17019,3 +17019,62 @@ A 落地为三处：
 **补记（2026-09-26）：已快进。** #166 于 18:37:23Z 合入，merge commit `06e1d485`。主 checkout 于 18:37:49Z
 从 `593fe4dc` 快进到它，只带进 #166 的提交。快进后，主 checkout 的 venv 答 `--remaining` 为 86。PID 26020 未受影响。
 
+## 2026-09-26 · canary 的两个读者口径不一致：别名与基准窗口
+
+只记可观测事实。读取时刻 2026-09-26T18:00Z 前后，全部只读。两份 `cycles.jsonl` 先拷成快照再算，
+sha256 与源文件一致。两处是修 shadow soak（#166）时顺带发现的。#166 没动它们：它们改变晋级门的读数，
+要先报操作者定。
+
+**第 1 条：别名。**
+
+- `governance canary` 先把 digest 过 `CONSTRUCTION_ALIASES`，再数 `construction_stable`。
+  `plan`/`apply` 经 `_admission` → `admit` → `canary_health` 读同一份记录，按 raw digest 数。
+- `admit` 手里有别名表，只传给了 `clean_days`。同一次 `admit` 里，K-EX14 的时钟读 canonical，
+  canary 读 raw。
+- 来历：`canary_health` 写于 09-09 23:15（3ffe58c6）。13 分钟后 048204f7 给 `canary.evaluate`
+  加了 `aliases`，只改了 `canary_cmd`。
+- 复现：用真实别名对 `b8f215ab → 0c555e1c` 造一轮 168 个周期、中途改名的 soak。
+  `governance canary` 判 HEALTHY；`admit` 判 REFUSED，唯一理由是 `flow: L4: the canary soak did not pass`。
+- 真实记录上不改判。shadow 的两个 raw digest 本就属于两个 canonical 构造（`46b8d731`、`0c555e1c`）。
+  #166 评的最近一轮只有一个 digest。
+- 反事实：把 armed 的 digest 序列当作 shadow 的代理，419 个可能的 soak 起点里有 81 个（19.3%）会分歧。
+  它们全在 09-04..06 与 09-17..18。这个数偏高：digest 只在重启时变，armed 重启过 57 次，
+  shadow 自 09-16 只重启过 1 次。构造冻结期内是 0。
+
+**第 2 条：基准窗口。**
+
+- 三处文字写「同一窗口」：`canary.py` 的模块 docstring、`canary_cmd` 的 docstring、canary 测试的 docstring。
+  两处调用都传 armed 的整份 `cycles.jsonl`。用基准的只有 `guard_rate` 一项。
+- 读数：五份 `cycles.jsonl` 合计 1,397 行，guard 从未触发。#166 评的最近一轮上，shadow 0.000（分母 81），
+  armed 整份 0.000（分母 577），armed 同窗 0.000（分母 81）。不改判。
+- 何时改判：guard 的四个原因里有三个是共模的（`STALE_MARKET_DATA`、`KILL_SWITCH`、`DAILY_LOSS_PAUSE`）。
+  shadow 与 armed 在同一根 bar 上的 equity 中位差是 0。一轮里出现 ≥12 根共模 guard bar，整份口径就误判 FAIL；
+  armed 记录到 5,000 行时，门槛降到 9 根。反方向：armed 早期的 guard 事件抬高基准，
+  能掩护候选自己触发的 `GROSS_CAPPED`。今天这一侧是 0。
+
+**裁定。** 操作者 2026-09-26 选定：第 1 条「传下去」，第 2 条「截到被评那一轮，空窗判 FAIL」。
+代价先报过。第 1 条让 `plan`/`apply` 在别名情形下放松，与 `governance canary` 一致。
+第 2 条把分母从 577 缩到 81，并新增一种失败：armed 在这一轮的 bar 上没有已决周期。
+
+**落地。**
+
+- #167：`canary_health` 加 `aliases` 参数，不给默认值；`admit` 把手里的表传下去。
+- 第 2 条：`canary._same_bars` 取 armed 在被评那一轮 bar 区间里的已决周期当基准。区间按 `bar_open_ms`
+  取闭区间，不按 `at`：两个循环收同一根 bar 的时刻差几秒。空窗时 `guard_rate` 判 FAIL，
+  detail 写 `no decided armed cycle over bars …`。正常时 detail 印出两边分母与 bar 区间。
+  模块 docstring 原写「every check」都对照 armed，改成只有 `guard_rate` 用基准。
+- 新代码在同一份快照上的读数：只有 `soak` 一项 FAIL（82/168）。`guard_rate` 是 PASS，
+  `shadow 0.000 over 81 vs armed 0.000 over 81, bars 2026-09-23T08:00..2026-09-26T17:00`。
+
+**顺带发现，没做。**
+
+- `plan`/`apply` 路径上的 `startup_gate` 永远判 PASS：没有调用者传非零的 `gate_refusals`，
+  只能靠 `governance canary --gate-refusals N` 手填。
+- `beidou_governance/replay.py` 里 L4 的 SuspendedCondition 仍写「Canary 尚不存在」。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。
+没跑 `report daily`，没跑 `governance apply`。
+
+**生效条件。** 两处都只在下次手动跑 `governance canary`、`plan`、`apply` 时生效。运行中的进程在启动时
+已导入旧代码，不会中途换。没有定时任务跑这三个命令。
+
