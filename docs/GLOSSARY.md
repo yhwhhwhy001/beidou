@@ -87,6 +87,9 @@
 向源头问过、源头也没有、记进 `confirmed_gaps.json` 的那种写 **confirmed gap**，不写「已确认缺口」
 「真缺口」（2026-09-25，`beidou data repair`）。旧文里的「真缺口」不改。
 
+`轮`写中文，指一份 shadow soak 记录里每 168 个尝试过的周期（OK 与 ERROR 算，SKIPPED 不算），
+说「第二轮」「最近一轮」（2026-09-26）。代码里是 `beidou_governance/canary.py` 的 `rounds`。不写 round。
+
 ## 没定的怎么办
 
 写英文原形，然后在同一个提交里把它加进上面的表。不要留着两种写法等以后统一。

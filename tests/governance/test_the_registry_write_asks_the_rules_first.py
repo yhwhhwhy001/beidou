@@ -24,6 +24,7 @@ import pytest
 
 from beidou_alpha.registry import parse_registry
 from beidou_governance.admission import WINDOW_ANCHOR, admit, clean_days, exposure, registry_refusals, window_index
+from beidou_governance.canary import SOAK_CYCLES
 from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 
@@ -46,16 +47,31 @@ def _registry(sleeves: dict[str, float], *, main: str = "tsmom") -> Any:
 
 
 def _cycles(days: float, *, digest: str = "aaaa", now: datetime = NOW) -> list[dict[str, Any]]:
+    """The armed record: a cycle an hour, each written just after the bar it decided closed."""
     start = now - timedelta(days=days)
     return [
-        {"at": (start + timedelta(hours=hour)).isoformat(), "construction": digest}
+        {
+            "at": (start + timedelta(hours=hour)).isoformat(),
+            "bar_open_ms": int((start + timedelta(hours=hour - 1)).timestamp() * 1000),
+            "construction": digest,
+        }
         for hour in range(int(days * 24) + 1)
     ]
 
 
-def _healthy_shadow(cycles: int = 200) -> list[dict[str, Any]]:
+def _healthy_shadow(cycles: int = SOAK_CYCLES, *, end: datetime = NOW) -> list[dict[str, Any]]:
+    """One finished soak.  Was 200 until 2026-09-26: the canary now scores the latest round of 168, and
+    200 cycles is a finished soak plus 32 of the next one (`test_a_soak_record_is_scored_one_round_at_a_time`).
+
+    It ends at ``end``, beside the armed record, since the same day: `guard_rate` compares the two over
+    the round's own bars, and a soak dated where the armed loop decided nothing has no baseline."""
     return [
-        {"at": f"2026-10-{1 + i // 24:02d}T{i % 24:02d}:00:00+00:00", "construction": "aaaa", "phase": "OK"}
+        {
+            "at": (end - timedelta(hours=cycles - 1 - i)).isoformat(),
+            "bar_open_ms": int((end - timedelta(hours=cycles - i)).timestamp() * 1000),
+            "construction": "aaaa",
+            "phase": "OK",
+        }
         for i in range(cycles)
     ]
 
@@ -185,7 +201,7 @@ def test_the_window_rolls_on_the_calendar_rather_than_on_a_counter_nobody_increm
         book=stale,
         policy=POLICY,
         cycles=_cycles(45, now=later),
-        shadow=_healthy_shadow(),
+        shadow=_healthy_shadow(end=later),
         now=later,
     )
     assert admission.allowed, admission.reasons
@@ -233,7 +249,13 @@ def test_the_canary_command_reads_a_soak_and_says_pass_or_fail(tmp_path: Any) ->
     for directory in (shadow, live):
         directory.mkdir()
     rows = [
-        {"at": f"2026-10-01T{hour:02d}:00:00+00:00", "phase": "OK", "construction": "aaaa", "universe": ["BTCUSDT"]}
+        {
+            "at": f"2026-10-01T{hour:02d}:00:00+00:00",
+            "bar_open_ms": int(datetime(2026, 10, 1, hour, tzinfo=UTC).timestamp() * 1000),
+            "phase": "OK",
+            "construction": "aaaa",
+            "universe": ["BTCUSDT"],
+        }
         for hour in range(24)
     ]
     (live / "cycles.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
@@ -260,7 +282,7 @@ def test_a_renamed_field_does_not_fail_the_canary_for_a_deployment_that_did_not_
 
     rows = [
         {"at": f"2026-10-01T{hour:02d}:00:00+00:00", "phase": "OK", "construction": "old" if hour < 12 else "new"}
-        for hour in range(200)
+        for hour in range(SOAK_CYCLES)
     ]
     raw = {check.name: check.passed for check in evaluate_canary(rows, rows).checks}
     aliased = {check.name: check.passed for check in evaluate_canary(rows, rows, aliases={"new": "old"}).checks}

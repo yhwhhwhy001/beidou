@@ -36,6 +36,7 @@ from beidou_cli import main
 from beidou_governance.admission import WINDOW_ANCHOR, Admission, admit, rolled, window_start
 from beidou_governance.assemble import assemble, conclude
 from beidou_governance.budget import window_spend
+from beidou_governance.canary import attempted, remaining, rounds
 from beidou_governance.canary import evaluate as evaluate_canary
 from beidou_governance.family_gate import VERDICT_KIND, refusals
 from beidou_governance.family_gate import failures as gate_failures
@@ -641,7 +642,13 @@ def divergence_cmd(root: str, since_at: str, check: bool) -> None:
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The soak's state directory.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop, as the baseline.")
 @click.option("--gate-refusals", default=0, show_default=True, help="Startup-gate refusals the soak itself saw.")
-def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
+@click.option(
+    "--remaining",
+    "ask_remaining",
+    is_flag=True,
+    help="Print how many cycles the latest round still needs (0 = finished) and exit.  run_shadow.sh asks this.",
+)
+def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int, ask_remaining: bool) -> None:
     """L4 / DL-G5: score a finished shadow soak against the armed loop over the same window.
 
     The soak is `deploy/run_shadow.sh`; this is the half that reads it.  Until 2026-09-09 there was no
@@ -651,12 +658,28 @@ def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
     Deployment health only (KILL-AR-04).  A candidate that passes has been shown to deploy, not to
     have edge; a candidate that fails has hit a wiring or venue problem, and reading that as evidence
     against the sleeve is the mistake this command's own docstring exists to prevent.
+
+    Only the latest round is scored; earlier ones are listed and left alone (`canary.rounds`).  The
+    launcher's `--remaining` reads the same cut, so the two cannot disagree about where a soak ends.
     """
     shadow = _shadow_rows(shadow_dir)
+    if ask_remaining:
+        click.echo(remaining(shadow))
+        return
     baseline = _rows(Path(state_dir) / "cycles.jsonl")
     if not shadow:
         looked = store_directory(Path(shadow_dir), dry_run=True)
         raise click.ClickException(f"no shadow record at {looked}/cycles.jsonl; run deploy/run_shadow.sh first")
+    cut, first = rounds(shadow), 1
+    for index, soak in enumerate(cut, 1):
+        bars = [str(row["bar"])[:16] for row in soak if row.get("bar")] or ["?"]
+        errors = sum(row.get("phase") == "ERROR" for row in soak)
+        role = "scored below" if index == len(cut) else "not scored"
+        click.echo(
+            f"round {index}: rows {first}-{first + len(soak) - 1}, bars {bars[0]}..{bars[-1]}, "
+            f"{sum(map(attempted, soak))} cycles, {errors} ERROR, {role}"
+        )
+        first += len(soak)
     result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=CONSTRUCTION_ALIASES)
     for check in result.checks:
         click.echo(f"{'PASS' if check.passed else 'FAIL'}  {check.name:22s} {check.detail}")
