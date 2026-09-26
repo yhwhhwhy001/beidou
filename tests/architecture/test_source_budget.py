@@ -3878,7 +3878,16 @@ CEILING = {
     # docstrings: why a SKIPPED row is no cycle, and why it stays in its round - measured on the real
     # `run()`, the backoff after a failed last cycle writes one, and opening a round there reads a finished
     # soak as 168 to go.  The 1 line over the old ceiling was not golfed away.  40 above again.
-    "beidou_governance": 4_075,
+    # +31 beidou_governance (4_041 -> 4_072), 2026-09-26, operator ruling on the canary's two readers.  #167
+    # (+6, inside the old headroom) made `plan`/`apply` judge `construction_stable` on the canonical
+    # construction as `governance canary` does.  This is the other half: `guard_rate` compared the shadow
+    # with the armed loop's whole `cycles.jsonl` while three docstrings said "the same window".
+    # `canary._same_bars` keeps the armed loop's decided cycles over the scored round's own bars, and no
+    # armed cycle there fails the check instead of passing it.  Measured on the real records that day: no
+    # guard had fired in 1,397 rows across five loops, so no reading moved; the denominator went 577 -> 81.
+    # Most of the 31 are docstrings: the whole history misleads both ways - it dilutes an outage both loops
+    # sat through, and an old storm raises the bar the candidate is held to.  40 above again.
+    "beidou_governance": 4_112,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

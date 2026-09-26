@@ -6,16 +6,18 @@ be blocked by an unrelated venue hiccup - and then be recorded as evidence again
 answers one question: *would this registry, deployed, behave like a working deployment?*  Whether the
 sleeve has any edge is R3's 1/3 budget and the P&L stop's problem, not this module's.
 
-The shadow is `live run --dry-run --state-dir .beidou/live-shadow` against the candidate registry, and
-every check below is computed against the ARMED loop's own cycles over the same window rather than
-against a constant.  A constant would fail the whole canary on a day the venue was slow, which is the
-false negative that teaches an operator to ignore it.
+The shadow is `live run --dry-run --state-dir .beidou/live-shadow` against the candidate registry.  The
+one check with a baseline, `guard_rate`, compares it with the ARMED loop's own cycles over the bars the
+scored round decided, rather than with a constant.  A constant would fail the whole canary on a day the
+venue was slow, which is the false negative that teaches an operator to ignore it.  So would the armed
+loop's whole history, which is what both callers passed until 2026-09-26 (`_same_bars`).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 SOAK_CYCLES = 168
@@ -91,6 +93,31 @@ def _longest_error_streak(rows: Sequence[Mapping[str, Any]]) -> int:
     return longest
 
 
+def _same_bars(
+    baseline: Sequence[Mapping[str, Any]], scored: Sequence[Mapping[str, Any]]
+) -> tuple[list[Mapping[str, Any]], str]:
+    """The armed loop's decided cycles over the bars the scored round decided, and those bars as text.
+
+    Not the whole armed record.  Spread over it, an outage both loops sat through is diluted until the
+    candidate looks guard-prone, and a storm weeks earlier raises the bar the candidate is held to.
+    By `bar_open_ms`: the two loops close one bar seconds apart, and the bar is what they share.  A
+    round with no stamped cycle has no window; it reads "?", as the round listing does.
+    """
+    stamps = [int(row["bar_open_ms"]) for row in scored if row.get("bar_open_ms") is not None]
+    if not stamps:
+        return [], "?"
+    first, last = min(stamps), max(stamps)
+    same = [
+        row
+        for row in baseline
+        if row.get("phase") not in ("ERROR", "SKIPPED")
+        and row.get("bar_open_ms") is not None
+        and first <= int(row["bar_open_ms"]) <= last
+    ]
+    text = [datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()[:16] for ms in (first, last)]
+    return same, "..".join(text)
+
+
 def evaluate(
     shadow: Sequence[Mapping[str, Any]],
     baseline: Sequence[Mapping[str, Any]],
@@ -126,7 +153,8 @@ def evaluate(
         for row in decided
         if row.get("construction")
     }
-    base_guard_rate = _rate([r for r in baseline if r.get("phase") not in ("ERROR", "SKIPPED")], "guard_reasons")
+    armed, bars = _same_bars(baseline, decided)
+    base_guard_rate = _rate(armed, "guard_reasons")
     guard_rate = _rate(decided, "guard_reasons")
     streak = _longest_error_streak(shadow)
 
@@ -149,10 +177,13 @@ def evaluate(
         Check("construction_stable", len(digests) <= 1, f"{len(digests)} distinct construction digests"),
         # `<=` with a tolerance rather than `<`: guards firing at the same rate as the armed book is
         # the expected outcome, and a canary that demands an improvement is asking the wrong question.
+        # No armed cycle over the round's bars is a comparison that could not be made, never a pass.
         Check(
             "guard_rate",
-            guard_rate <= base_guard_rate + 0.05,
-            f"shadow {guard_rate:.3f} vs armed {base_guard_rate:.3f}",
+            bool(armed) and guard_rate <= base_guard_rate + 0.05,
+            f"shadow {guard_rate:.3f} over {len(decided)} vs armed {base_guard_rate:.3f} over {len(armed)}, bars {bars}"
+            if armed
+            else f"no decided armed cycle over bars {bars}; nothing to compare the shadow against",
         ),
         Check("no_error_streak", streak <= max_error_streak, f"longest ERROR streak {streak}"),
         # Planned orders inside the participation cap, and targets inside the universe.  Both are
