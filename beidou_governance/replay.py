@@ -208,8 +208,15 @@ SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="M-011 面板平价义务",
         reads="Facts.parity_met",
-        why_unreadable="平价义务随 DL-D4 才存在，本期没有任何一列数据受它约束",
-        fix="Phase 3：DL-D4 落地后自然可读",
+        why_unreadable="**DL-D4 已交付**：日报的 `metrics_parity` 块每天按实盘 universe 量一次平价，2026-09-08 起；"
+        "`governance next` 经 `scheduler.parity_satisfied` 读最新一份，2026-09-10 起。`governance replay` "
+        "仍判不了它：M-011 只守 `booked -> queued`，而 `JUDGEABLE` 只有 VALIDATE 与 BOOK。记录里没有一次 "
+        "`booked -> queued`，`governance_state.json` 里从没出现过 `queued`。生产代码也不执行这条边："
+        "`governance next` 只建议 QUEUE，`Event.PARITY` 只出现在 `lifecycle` 的判据里。平价读数只落在日报里："
+        "按 universe 算，不按候选；`reports/daily/` 也不进仓库",
+        fix="Phase 3 ✔ DL-D4：日报的 `metrics_parity` + `scheduler.parity_satisfied`。"
+        "`governance replay` 要判它还缺三样：执行 `booked -> queued` 的调用者，那一刻按候选落盘的平价读数，"
+        "以及 `JUDGEABLE` 里的 PARITY",
     ),
     SuspendedCondition(
         condition="L4 Canary 浸泡",

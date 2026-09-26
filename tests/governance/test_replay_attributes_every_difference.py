@@ -18,6 +18,7 @@ clone as in a full one.  The CLI derives the full set from history; this is the 
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from beidou_governance.replay import (
     replay_adoptions,
     replay_live,
 )
+from beidou_governance.scheduler import parity_satisfied
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -161,6 +163,43 @@ def test_the_l4_row_agrees_with_the_canary_that_exists() -> None:
     assert "✔ DL-G5" in row.fix, f"the canary exists; the row still says: {row.why_unreadable}"
     assert Event.PROMOTE not in JUDGEABLE, "L4 has a route now; the row's reason is stale"
     assert "`queued -> probe`" in row.why_unreadable
+
+
+def test_the_m011_row_agrees_with_the_parity_reader_that_exists() -> None:
+    """Phase 0 wrote "平价义务随 DL-D4 才存在" here at 20:25 +08:00 on 2026-09-08; DL-D4 landed at 23:31.
+
+    The row's fix said the condition would become readable "naturally" once DL-D4 landed.  It did not.
+    DL-D4 put `metrics_parity` into the daily report and `scheduler.parity_satisfied` beside it, and
+    `governance next` has read the newest daily report through that function since 2026-09-10 - while
+    the replay still routes nothing to the edge M-011 guards.  Flagged 2026-09-26 beside the L4 row.
+
+    Pinned the way the L4 row is, plus the one claim that sets this row apart from L4's:
+
+    * the reader exists, so the row says delivered;
+    * the replay still cannot judge it: M-011 guards `booked -> queued`, and `JUDGEABLE` routes no
+      PARITY.  Whoever adds that route fails here and rewrites the row with it;
+    * nothing in production applies that edge.  L4's edge has `plan`/`apply` behind it, so the record
+      can one day hold a machine promotion; `governance next` only ADVISES a queue, so nothing the
+      machine does can put a `booked -> queued` in the record.  Whoever builds the executor fails here
+      too.  Read off the source rather than trusted: the one module allowed to name the event is the
+      one that holds the rule.
+    """
+    row = next(s for s in SUSPENDED if s.reads == "Facts.parity_met")
+    met, why = parity_satisfied(None)
+    assert not met and why.startswith("M-011:"), "the reader the row says was delivered"
+    assert "✔ DL-D4" in row.fix, f"DL-D4 landed; the row still says: {row.why_unreadable}"
+    assert Event.PARITY not in JUDGEABLE, "M-011 has a route now; the row's reason is stale"
+    assert "`booked -> queued`" in row.why_unreadable
+    naming = sorted(
+        {
+            path.relative_to(ROOT).as_posix()
+            for path in ROOT.glob("beidou_*/**/*.py")
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Attribute) and node.attr == "PARITY"
+            if isinstance(node.value, ast.Name) and node.value.id == "Event"
+        }
+    )
+    assert naming == ["beidou_governance/lifecycle.py"], "something applies `booked -> queued` now"
 
 
 def test_the_live_replay_refuses_to_decide_on_an_error_cycle() -> None:
