@@ -74,3 +74,48 @@ for label, key in (("毛", "portfolio_sharpe_gross"), ("净", "portfolio_sharpe_
 tails = d["research"]["live_position_tails"]["positions"]
 worst = sum(p["equity_loss_if_worst_repeats"] for p in tails)
 print(f"\nE-016：17 个持仓各自最差 24h 同时发生的合计 k=0.60 {worst:.3f}；按 k 线性缩放到 0.175 约 {worst * K_NEXT / K_NOW:.3f}")
+
+# D3（审查 K-04 补）：实盘把 0 < |目标| < no_trade_band × band_entry_multiple × 权益 的目标当作平
+# （beidou_live/rebalancer.py 的 `snapped_flat`；config/live.demo.yaml 的 no_trade_band 0.005、
+# band_entry_multiple 2.0、flat_inside_band true；#163 不改这三项）。上表的 k=0.175 列没有扣它。
+BAND, ENTRY = 0.005, 2.0
+floor = BAND * ENTRY
+print(f"\nD3：目标低于权益的 {floor:.1%} 就不持有")
+for k_label, k in (("0.175（#163）", K_NEXT), ("0.13125（第一级回撤档）", 0.13125), ("0.0875（回滚档）", 0.0875)):
+    r_k = r_now * k / K_NOW
+    kept = [r for r in rows if min(r_k / r["sigma"], 0.15) >= floor]
+    cut = [r for r in rows if min(r_k / r["sigma"], 0.15) < floor]
+    gross_kept = sum(min(r_k / r["sigma"], 0.15) for r in kept)
+    print(
+        f"  k={k_label}：持有 {len(kept)} 个，剔掉 {len(cut)} 个（{', '.join(r['symbol'] for r in cut) or '无'}）；"
+        f"σ 门槛 {r_k / floor:.2f}；持有部分 gross {gross_kept:.3f}"
+    )
+kept = [r for r in rows if r["w_next"] >= floor]
+print("\n附录 A 更正版：k=0.175 扣 D3（「不持有」= 目标低于 1% 权益，被剔掉）")
+print(
+    "| 交易对 | σ（年化） | 真实杠杆 现在 k=0.60 | 真实杠杆 k=0.175（扣 D3） | 目标 ÷ 1% 门槛 | "
+    "交易所杠杆 5x → 分档 | 保证金/权益 k=0.175：5x → 分档 | 界面 ROE% 日波动：5x → 分档 |"
+)
+print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+for r in rows:
+    if r["w_next"] >= floor:
+        print(
+            f"| {r['symbol']} | {r['sigma']:.2f} | {r['w_now']:.3f} | {r['w_next']:.4f} | {r['w_next'] / floor:.2f} | "
+            f"5x → {r['tier']}x | {r['im_now_5x_next']:.2%} → {r['im_tier_next']:.2%} | "
+            f"{r['roe_now']:.0%} → {r['roe_tier']:.0%} |"
+        )
+    else:
+        print(
+            f"| {r['symbol']} | {r['sigma']:.2f} | {r['w_now']:.3f} | 不持有（目标 {r['w_next']:.4f}） | "
+            f"{r['w_next'] / floor:.2f} | — | — | {r['roe_now']:.0%} → — |"
+        )
+g_kept = sum(r["w_next"] for r in kept)
+print(
+    f"扣 D3 后：持有 {len(kept)} 个，gross {g_kept:.3f}；初始保证金 5x {g_kept / 5:.4f}、分档 "
+    f"{sum(r['im_tier_next'] for r in kept):.4f}；分档后每个持仓保证金 "
+    f"{min(r['im_tier_next'] for r in kept):.2%}–{max(r['im_tier_next'] for r in kept):.2%}，"
+    f"档位 {min(r['tier'] for r in kept)}x–{max(r['tier'] for r in kept)}x；"
+    f"界面 ROE% 日波动 分档 {min(r['roe_tier'] for r in kept):.0%}–{max(r['roe_tier'] for r in kept):.0%}、"
+    f"5x {min(r['roe_now'] for r in kept):.0%}–{max(r['roe_now'] for r in kept):.0%}"
+)
+print(f"被剔掉的名字占 17 个等风险单名的 {len(rows) - len(kept)}/{len(rows)}")
