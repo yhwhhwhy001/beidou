@@ -103,3 +103,21 @@ def test_the_json_dump_is_still_machine_readable(tmp_path: Path) -> None:
     payload = json.loads(output[output.index("{") : output.rindex("}") + 1])
     assert set(payload) == {"heartbeat", "state"}
     assert payload["state"]["leverage_set"] == dict.fromkeys(VOLS, 5)
+
+
+def test_each_holding_is_printed_with_its_own_leverage_under_the_line(tmp_path: Path) -> None:
+    """2026-09-26, the sixth time: the line above answers in the system's words, so the rows follow in the operator's.
+
+    What the question is about - each holding's own leverage - was on no screen, and the uniform 5x was.
+    `tests/live/test_the_leverage_answer_names_each_holdings_own_leverage.py` pins the numbers; this pins
+    that `live status` prints them, one holding per indented line, below the reading they restate.
+    """
+    targets = {symbol: 0.30 / vol for symbol, vol in VOLS.items()}
+    _store(tmp_path, targets, VOLS)
+
+    output = _status(tmp_path)
+
+    assert output.index("杠杆自适应（M-015）") < output.index("真实杠杆（白话）")
+    assert "交易所那一栏的 5x 只决定开仓占用多少保证金（名义的 1/5）" in output
+    for symbol, vol in VOLS.items():
+        assert f"\n  {symbol}：年化波动 {vol:.0%}，真实杠杆 {targets[symbol]:.3f}x，" in output
