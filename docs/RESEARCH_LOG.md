@@ -17078,3 +17078,85 @@ sha256 与源文件一致。两处是修 shadow soak（#166）时顺带发现的
 **生效条件。** 两处都只在下次手动跑 `governance canary`、`plan`、`apply` 时生效。运行中的进程在启动时
 已导入旧代码，不会中途换。没有定时任务跑这三个命令。
 
+## 2026-09-27 · startup gate 只在写入时问：canary 删掉恒 PASS 的一项，写入的 gate 补上 dataset 那一半
+
+只记可观测事实。读取时刻 2026-09-26T19:12Z 前后，全部只读。来由是上一节「顺带发现」的第一条：
+`plan`/`apply` 路径上的 `startup_gate` 永远判 PASS。
+
+**shadow 见过的 startup gate 读数。**
+
+- 读数只在 launchd 的两个日志里：`shadow.stdout.log`、`shadow.stderr.log`。`live run --dry-run` 把它打印成
+  `evidence:`、`dataset:` 行，不写 `cycles.jsonl`、`heartbeat.json`、`state.json`。
+- 对齐方法：stderr 的 `venue clock offset` 每个进程只在 `startup` 里打一次，共 7 条，没有 `could not sync`。
+  stdout 的 `shadow: soaking` 也是 7 条，按顺序对上。最后一对用 PID 26020 的启动时刻核过。
+  stderr 用本地时间（+08:00），下表换成了 Z。
+
+| 启动 | 时刻（Z） | 记录 · 轮 | `dataset:` | `evidence:` |
+|---|---|---|---|---|
+| #1 | 09-12 13:21 | 归档记录 · 唯一一轮 | 2 条 advisory | 0 |
+| #2 | 09-12 15:05 | 同上 | 2 条 advisory | 0 |
+| #3 | 09-13 20:39 | 同上 | 2 条 advisory | 1：`tsmom: portfolio vol_target is 0.6 live but 0.3 in the cited evidence` |
+| #4 | 09-14 19:11 | 同上 | 2 条 advisory | 1：同上 |
+| #5 | 09-14 20:25 | 同上 | 2 条 advisory | 1：同上 |
+| #6 | 09-16 08:21 | 当前记录 · 第 1 轮 | 2 条 advisory | 0 |
+| #7 | 09-23 08:00（PID 26020） | 当前记录 · 第 2 轮 | 2 条 advisory | 1：`tsmom: evidence verdict FAIL does not allow live use` |
+
+- 归档记录是 `.beidou/live-shadow-dry-run.20260916-drifted-candidate`，90 行，一轮未满。
+  当前记录 251 行。第 1 轮是行 1–168，3 个 ERROR，已满。第 2 轮是行 169–251，83/168，1 个 ERROR，正在被评。
+- 14 条 `dataset:` 全是 advisory：7 条 `dataset store contents changed`，7 条 `flow: no dataset manifest recorded`。
+  blocking 的措辞一条也没有。
+- 7 次启动里 4 次有 `evidence:`，不带 `--allow-unvalidated` 的 armed 启动会因此拒绝。dry-run 不拒绝，
+  所以它们只进了日志。
+- canary 对第 2 轮读 `startup_gate PASS 0 refusals`。
+
+**写入的 gate 只问一半。**
+
+- armed `live run` 拒绝启动的条件是 `if problems or dataset.blocking`。一半是 evidence，一半是 D-041 的 dataset blocking。
+- `governance_cmd._gate` 只调 `registry_evidence_problems`。`promote.py` 写着「it is the SAME function startup
+  calls」，D-041 之后不再成立。
+- 当天按磁盘上的文件重算，不是日志读数。候选与 armed 结果相同：evidence 1 条（tsmom verdict FAIL），
+  dataset.blocking 1 条（09-24 重建 membership，refreshes 2056 → 2063），advisory 2 条。写入的 gate 只说得出第一条。
+
+**为什么这次改不动任何一次写入。** 当天在真实记录上只读复算 `admit`：
+
+- `promoting ()`。候选与 armed 只差注释，canary 结论不进判定。
+- `clean_days` 9.1，K-EX14 要 30。#163 在 10-13 后把构造指纹 `b8f215ab` 改成 `4b2dc74b`，这个时钟会重置。
+- 写入的 gate 因 verdict FAIL 拒绝一切写入。
+
+所以约 11-12 之前，下面的改动不改变任何一次写入的结果。
+
+**定价与裁定。** 报了四个方案。A：dry-run 把读数写进每行 cycle，两个读者都读它。B：删掉这一项。
+C：只写文档。D：写入的 gate 补上 dataset 那一半，可配 A 或 B。A 记的是 soak 开始时的读数，到写入时至少过期 7 天。
+第 1 轮就是反例：开始时 0 条；09-19 候选的 tsmom 指针在轮中换成 FAIL 证据；A 仍会判它 PASS。
+操作者 2026-09-27 选 B + D。
+
+**落地。**
+
+- B：`canary.evaluate` 删掉 `startup_gate` 与 `gate_refusals`。`canary_health`、`admit` 删掉同名参数，
+  `governance canary` 删掉 `--gate-refusals`。canary 现为 6 项。此前全仓库没有调用者传过非零值。
+- D：`_gate` 问 evidence，再加 `registry_dataset_problems(...).blocking`，与 `live_cmd` 同一判据。
+  `plan`、`apply` 加 `--data-root`，默认 `.beidou/data`，与 `live run` 相同。`live_cmd.py` 没动。
+- 测试：`tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`。四种读数各造一次：没动、sync 追加 bar、
+  membership 重建、verdict FAIL。每种分别交给 `plan` 与 armed `live run`，两边都要等于字面值。armed 那一侧
+  在闸后第一行 `resolve_universe` 抛哨兵异常，碰不到凭据和 venue。
+- 先红后绿。只接上 `--data-root` 时，membership 重建那一格红：`plan` 放行、armed 拒绝，`apply` 真的写了进去。
+  补上 dataset 那一半后全绿。
+- `beidou_cli` 超 ceiling 8 行，同一提交抬顶，理由写在 `test_source_budget.py`。
+- RUNBOOK 加「startup gate 在写入时问」一节；GLOSSARY 加 `startup gate`；计划文档 §5 L4 行加更正注。
+
+**改后的读数。** 同一份真实记录上，canary 对第 2 轮 6 项：`soak` FAIL（83/168），其余 PASS。
+写入的 gate 对候选与 armed 各报两条：evidence FAIL，membership。
+
+**顺带发现，没做。**
+
+- `admit` 不核「被评那一轮跑的 registry」与「要写的 registry」是不是同一份。shadow 每行有 `registry` 摘要，
+  没人拿它比 `after`。只读代码所见，没造数据复现。
+- 候选 registry 头注 2026-09-16 那段写「PID 802, started 09-15T04:24Z」。stderr 里那次启动是本地 04:25，
+  即 09-14T20:25Z，把本地时间标成了 Z。同段写记录移到了 `.beidou/live-shadow-dry-run.20260916`，
+  实际目录名多一个 `-drifted-candidate`。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
+没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
+
+**生效条件。** 只在下次手动跑 `governance canary`、`plan`、`apply` 时生效，没有定时任务跑这三个命令。
+launcher 只问 `--remaining`，这次没动。`live run` 没改，运行中的进程不受影响。

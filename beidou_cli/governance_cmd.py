@@ -58,7 +58,7 @@ from beidou_governance.verdicts import read as read_verdicts
 from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
-from beidou_live.config import registry_evidence_problems, store_directory
+from beidou_live.config import registry_dataset_problems, registry_evidence_problems, store_directory
 from beidou_live.construction import CONSTRUCTION_ALIASES
 from beidou_shared.config import load_yaml
 
@@ -296,12 +296,22 @@ def transactions_cmd(root: str) -> None:
         raise SystemExit("the transaction chain is broken: something changed the registry outside a transaction")
 
 
-def _gate(profile_path: str) -> Callable[[Path], list[str]]:
+def _gate(profile_path: str, data_root: str) -> Callable[[Path], list[str]]:
+    """What an armed `live run` refuses to start on, asked of the file about to be written.
+
+    Both halves of `live_cmd`'s `if problems or dataset.blocking`: the evidence, and the blocking half
+    of D-041's dataset check.  Advisory lines are printed there and refuse nothing, so not here either.
+    Until 2026-09-27 this asked the evidence half alone, and a membership rebuild under unchanged
+    evidence passed here while `live run` refused it.  `tests/cli/test_the_write_refuses_what_an_armed_
+    start_refuses.py` puts each reading to both.
+    """
     profile = load_yaml(profile_path)
+    interval = str((profile.get("market_data") or {}).get("interval", "1h"))
 
     def gate(path: Path) -> list[str]:
         registry = parse_registry(load_yaml(str(path)))
-        return registry_evidence_problems(registry, profile)
+        dataset = registry_dataset_problems(registry, data_root, interval)
+        return [*registry_evidence_problems(registry, profile), *dataset.blocking]
 
     return gate
 
@@ -380,8 +390,16 @@ def _report_admission(admission: Admission) -> None:
 @click.option("--root", default=".", help="Checkout holding the governance state and transaction log.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop's record.")
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The canary's record.")
+@click.option("--data-root", default=".beidou/data", show_default=True, help="The data `live run` checks against.")
 def plan_cmd(
-    proposed: str, registry_path: str, profile: str, candidate: str, root: str, state_dir: str, shadow_dir: str
+    proposed: str,
+    registry_path: str,
+    profile: str,
+    candidate: str,
+    root: str,
+    state_dir: str,
+    shadow_dir: str,
+    data_root: str,
 ) -> None:
     """What `apply` would do, asked of the same gate, without touching the file."""
     admission = _admission(
@@ -397,7 +415,7 @@ def plan_cmd(
     transaction = plan_transaction(
         Path(registry_path),
         Path(proposed).read_text(encoding="utf-8"),
-        gate=_gate(profile),
+        gate=_gate(profile, data_root),
         candidate=candidate or Path(proposed).name,
     )
     click.echo(json.dumps(json.loads(transaction.to_json()), indent=2, ensure_ascii=False))
@@ -641,14 +659,13 @@ def divergence_cmd(root: str, since_at: str, check: bool) -> None:
 @governance.command("canary")
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The soak's state directory.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop, as the baseline.")
-@click.option("--gate-refusals", default=0, show_default=True, help="Startup-gate refusals the soak itself saw.")
 @click.option(
     "--remaining",
     "ask_remaining",
     is_flag=True,
     help="Print how many cycles the latest round still needs (0 = finished) and exit.  run_shadow.sh asks this.",
 )
-def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int, ask_remaining: bool) -> None:
+def canary_cmd(shadow_dir: str, state_dir: str, ask_remaining: bool) -> None:
     """L4 / DL-G5: score a finished shadow soak against the armed loop over the same window.
 
     The soak is `deploy/run_shadow.sh`; this is the half that reads it.  Until 2026-09-09 there was no
@@ -680,7 +697,7 @@ def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int, ask_remainin
             f"{sum(map(attempted, soak))} cycles, {errors} ERROR, {role}"
         )
         first += len(soak)
-    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=CONSTRUCTION_ALIASES)
+    result = evaluate_canary(shadow, baseline, aliases=CONSTRUCTION_ALIASES)
     for check in result.checks:
         click.echo(f"{'PASS' if check.passed else 'FAIL'}  {check.name:22s} {check.detail}")
     click.echo(f"{'HEALTHY' if result.healthy else 'UNHEALTHY'}  {result.soaked} cycles soaked")
@@ -716,6 +733,7 @@ def disable_cmd(root: str) -> None:
 @click.option("--root", default=".", help="Checkout holding the switch and the transaction log.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop's record.")
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The canary's record.")
+@click.option("--data-root", default=".beidou/data", show_default=True, help="The data `live run` checks against.")
 @click.option("--actor", default="machine", show_default=True, help="Who initiated this; recorded in the log.")
 def apply_cmd(
     proposed: str,
@@ -725,6 +743,7 @@ def apply_cmd(
     root: str,
     state_dir: str,
     shadow_dir: str,
+    data_root: str,
     actor: str,
 ) -> None:
     """Write the registry as a transaction, rolling back if the startup gate refuses.
@@ -752,7 +771,7 @@ def apply_cmd(
     transaction = apply_transaction(
         Path(registry_path),
         text,
-        gate=_gate(profile),
+        gate=_gate(profile, data_root),
         log_path=checkout / TRANSACTIONS,
         candidate=candidate or Path(proposed).name,
         actor=actor,

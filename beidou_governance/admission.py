@@ -152,7 +152,6 @@ def canary_health(
     baseline: Sequence[Mapping[str, Any]],
     *,
     aliases: Mapping[str, str] | None,
-    gate_refusals: int = 0,
 ) -> tuple[bool, str]:
     """L4 as a fact the promotion rule can read, or the reason it is not one.
 
@@ -166,7 +165,7 @@ def canary_health(
     """
     if not shadow:
         return False, "L4: no shadow record; run deploy/run_shadow.sh first"
-    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=aliases)
+    result = evaluate_canary(shadow, baseline, aliases=aliases)
     if result.healthy:
         return True, f"L4: {len(result.checks)} checks pass over {result.soaked} soaked cycles"
     return False, "L4: " + "; ".join(f"{check.name} ({check.detail})" for check in result.failures)
@@ -254,7 +253,6 @@ def admit(
     shadow: Sequence[Mapping[str, Any]] = (),
     aliases: Mapping[str, str] | None = None,
     anchor: str = WINDOW_ANCHOR,
-    gate_refusals: int = 0,
     now: datetime | None = None,
 ) -> Admission:
     """May this registry change be written?  Both layers, with everything measured reported back."""
@@ -264,7 +262,7 @@ def admit(
     book, window_why = rolled(book, policy, anchor=anchor, now=now)
 
     days, days_why = clean_days(cycles, aliases=aliases, now=now)
-    healthy, canary_why = canary_health(shadow, cycles, aliases=aliases, gate_refusals=gate_refusals)
+    healthy, canary_why = canary_health(shadow, cycles, aliases=aliases)
     measured = {
         "clean_days": round(days, 3),
         "clean_days_detail": days_why,

@@ -1,4 +1,4 @@
-"""DL-G5 / DRILL-G4: six deployment-health checks, and the boundary the Phase 7 review drew.
+"""DL-G5 / DRILL-G4: the deployment-health checks, and the boundary the Phase 7 review drew.
 
 The review's sharpest correction (KILL-AR-04) was that calling the canary a filter would do two kinds
 of harm: let a bad candidate through on a technicality, and let a good one be blocked by an unrelated
@@ -13,6 +13,8 @@ operator to ignore an instrument.
 from __future__ import annotations
 
 from typing import Any
+
+import pytest
 
 from beidou_governance.canary import SOAK_CYCLES, evaluate
 
@@ -61,11 +63,21 @@ def test_an_unfinished_soak_is_not_a_pass() -> None:
     assert [c.name for c in result.failures] == ["soak"]
 
 
-def test_drill_g4_a_startup_gate_refusal_fails_the_canary(tmp_path: Any) -> None:
-    """The candidate goes back to the queue; nothing here can touch the armed loop to begin with."""
-    result = evaluate(_cycles(SOAK_CYCLES), _cycles(SOAK_CYCLES), gate_refusals=1)
-    assert not result.healthy
-    assert [c.name for c in result.failures] == ["startup_gate"]
+def test_drill_g4_the_startup_gate_is_asked_by_the_write_not_the_canary() -> None:
+    """2026-09-27, operator ruling: the canary stopped carrying a `startup_gate` check.
+
+    Nothing ever supplied it.  The shadow is a dry run, a dry run never refuses, and `plan`/`apply`
+    passed no count, so the check read `0 refusals` whatever the soak saw.  Measured that day: the
+    process writing the scored round had printed `evidence: tsmom: evidence verdict FAIL does not allow
+    live use` when it started.  DRILL-G4's production run (2026-09-12) was already the other path - the
+    transaction's gate refused the write and rolled it back - and that gate now asks both halves `live
+    run` refuses on (`tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`).
+    """
+    result = evaluate(_cycles(SOAK_CYCLES), _cycles(SOAK_CYCLES))
+    assert result.healthy
+    assert "startup_gate" not in [c.name for c in result.checks]
+    with pytest.raises(TypeError, match="gate_refusals"):
+        evaluate(_cycles(SOAK_CYCLES), _cycles(SOAK_CYCLES), gate_refusals=1)  # type: ignore[call-arg]
 
 
 def test_a_construction_that_moves_mid_soak_fails() -> None:

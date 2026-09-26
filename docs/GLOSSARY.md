@@ -28,6 +28,7 @@
 | universe | 标的池、宇宙 | `universe` |
 | throttle | 节流阀 | `drawdown_throttle` |
 | family gate | 家族门 | `family_gate` |
+| startup gate | 启动门、启动闸 | `registry_evidence_problems` 与 `registry_dataset_problems` 的 blocking 那一半，armed `live run` 拒绝启动看的就是这两处；写入时由 `governance_cmd._gate` 问（2026-09-27 起，旧文不改） |
 | ceiling | 天花板 | `ceiling` |
 | alert | 呼叫（名词用法） | `alerts` |
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |

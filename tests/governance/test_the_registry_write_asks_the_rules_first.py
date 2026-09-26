@@ -268,7 +268,8 @@ def test_the_canary_command_reads_a_soak_and_says_pass_or_fail(tmp_path: Any) ->
     short = CliRunner().invoke(canary_cmd, ["--shadow-dir", str(shadow), "--state-dir", str(live)])
     assert "FAIL  soak" in short.output and "24/168" in short.output
     assert "UNHEALTHY" in short.output and short.exit_code == 1
-    assert short.output.count("PASS") == 6, short.output
+    # Five: `startup_gate` left the canary on 2026-09-27; the write's gate asks that question now.
+    assert short.output.count("PASS") == 5, short.output
 
 
 def test_a_renamed_field_does_not_fail_the_canary_for_a_deployment_that_did_not_change() -> None:
