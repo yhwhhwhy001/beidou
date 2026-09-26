@@ -3887,7 +3887,16 @@ CEILING = {
     # guard had fired in 1,397 rows across five loops, so no reading moved; the denominator went 577 -> 81.
     # Most of the 31 are docstrings: the whole history misleads both ways - it dilutes an outage both loops
     # sat through, and an old storm raises the bar the candidate is held to.  40 above again.
-    "beidou_governance": 4_112,
+    # +35 beidou_governance (4_080 -> 4_115), 2026-09-27, operator ruling: the 2026-09-19 pointer move
+    # (`16a52547`) joins the replay's exception register.  #170 (+8, inside the old headroom) came first.
+    # Measured before the change, on the real record: 2 unattributed, D-020 and R0 on the FAIL evidence tsmom
+    # has cited since 09-19, while CI was green - the test's hand-written adoption history never learned of
+    # the pointer.  18 lines are the entry: the ruling, the rule it breaks, why it stays a ruling, and
+    # how long it holds against #163.  10 are the `_attribute` route, which matches one file name exactly
+    # and reads the artefact's own verdict; 6 are its docstring, saying why a prefix or the verdict alone
+    # would be a standing permission.  Measured after, `governance replay` on the real record: 15
+    # reproduced, 34 differences, 0 unattributed, exit 0.  The 3 lines over were not golfed.  40 above again.
+    "beidou_governance": 4_155,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
