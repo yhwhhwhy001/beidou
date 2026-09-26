@@ -23,10 +23,13 @@ from pathlib import Path
 
 import pytest
 
+from beidou_governance.admission import canary_health
+from beidou_governance.lifecycle import Event
 from beidou_governance.replay import (
     EVIDENCE_GAP,
     EXCEPTIONS,
     EXCEPTIONS_BY_ID,
+    JUDGEABLE,
     SUSPENDED,
     Difference,
     load_jsonl,
@@ -136,6 +139,28 @@ def test_a_suspended_condition_says_what_would_make_it_readable() -> None:
     for condition in SUSPENDED:
         assert condition.fix.startswith("Phase "), f"{condition.condition} has no owner phase"
         assert condition.reads.startswith("Facts."), condition.condition
+
+
+def test_the_l4_row_agrees_with_the_canary_that_exists() -> None:
+    """Phase 0 wrote "Canary 尚不存在" here at 20:25 +08:00 on 2026-09-08; DL-G5 landed at 22:39.
+
+    The row then stood for eighteen days, printed into every `governance replay`, while `plan`/`apply`
+    judged L4 through `admission.canary_health` (from 2026-09-09) and the shadow soak ran (from
+    2026-09-12).  Found 2026-09-26 while the canary's two readers were being made to agree.
+
+    Each half of the row is pinned to the code it describes, so the next change to either shows up
+    here instead of in a report nobody rereads:
+
+    * the reader exists, so the row says delivered - the `✔` the DL-G9 and `book_limits` rows carry;
+    * the replay still cannot judge it, for a reason in this module: L4 guards `queued -> probe`, and
+      `JUDGEABLE` routes no PROMOTE.  Whoever adds that route fails here and rewrites the row with it.
+    """
+    row = next(s for s in SUSPENDED if s.reads == "Facts.canary_healthy")
+    healthy, why = canary_health([], [], aliases=None)
+    assert not healthy and why.startswith("L4:"), "the reader the row says was delivered"
+    assert "✔ DL-G5" in row.fix, f"the canary exists; the row still says: {row.why_unreadable}"
+    assert Event.PROMOTE not in JUDGEABLE, "L4 has a route now; the row's reason is stale"
+    assert "`queued -> probe`" in row.why_unreadable
 
 
 def test_the_live_replay_refuses_to_decide_on_an_error_cycle() -> None:
