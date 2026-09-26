@@ -234,7 +234,7 @@ def test_the_l4_row_agrees_with_the_canary_that_exists() -> None:
       `JUDGEABLE` routes no PROMOTE.  Whoever adds that route fails here and rewrites the row with it.
     """
     row = next(s for s in SUSPENDED if s.reads == "Facts.canary_healthy")
-    healthy, why = canary_health([], [], aliases=None)
+    healthy, why = canary_health([], [], aliases=None, registry=None)
     assert not healthy and why.startswith("L4:"), "the reader the row says was delivered"
     assert "✔ DL-G5" in row.fix, f"the canary exists; the row still says: {row.why_unreadable}"
     assert Event.PROMOTE not in JUDGEABLE, "L4 has a route now; the row's reason is stale"

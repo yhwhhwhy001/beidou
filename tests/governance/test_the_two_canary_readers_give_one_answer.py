@@ -14,6 +14,10 @@ the armed loop.  The real shadow record never hit it, and nothing can while the 
 
 The falsifier is agreement, asked of both readers on the same files: a declared rename passes both,
 and a real construction change fails both.
+
+Since 2026-09-27 `_admission` also asks `registry_soaked`, which the command cannot ask: it holds no
+proposal.  So the soak here is stamped the way the engine stamps a loop running the promotion
+(`_stamped`), and agreement stays the falsifier for everything both readers can ask.
 """
 
 from __future__ import annotations
@@ -35,10 +39,14 @@ from beidou_governance.canary import SOAK_CYCLES
 from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 from beidou_governance.state import write as write_state
+from beidou_live.composition import build_model
 from beidou_live.construction import CONSTRUCTION_ALIASES
+from beidou_live.engine import registry_digest
+from beidou_shared.config import load_yaml
 
 RENAMED, ORIGINAL = next(iter(CONSTRUCTION_ALIASES.items()))
 MOVED = "f" * 64  # declared nowhere: a construction that really changed
+PROFILE = Path(__file__).resolve().parents[2] / "config" / "live.demo.yaml"
 
 
 def _registry(*, sleeve: bool) -> dict[str, Any]:
@@ -55,8 +63,15 @@ def _registry(*, sleeve: bool) -> dict[str, Any]:
     return payload
 
 
-def _hourly(end: datetime, hours: int, construction: Callable[[int], str]) -> list[dict[str, Any]]:
-    """Cycles as the engine writes them: one per closed bar, stamped with the bar and the construction."""
+def _stamped() -> str:
+    """The `registry` digest a loop running the promotion writes on every cycle: the engine's recipe."""
+    return registry_digest(build_model(parse_registry(_registry(sleeve=True)), load_yaml(PROFILE)))
+
+
+def _hourly(
+    end: datetime, hours: int, construction: Callable[[int], str], registry: str = "rrrr"
+) -> list[dict[str, Any]]:
+    """Cycles as the engine writes them: one per closed bar, stamped with the bar, construction and registry."""
     rows = []
     for hour in range(hours):
         bar = end - timedelta(hours=hours - hour)
@@ -65,6 +80,7 @@ def _hourly(end: datetime, hours: int, construction: Callable[[int], str]) -> li
                 "at": (bar + timedelta(hours=1, seconds=25)).isoformat(),
                 "bar_open_ms": int(bar.timestamp() * 1000),
                 "construction": construction(hour),
+                "registry": registry,
                 "guard_reasons": [],
                 "universe": ["BTCUSDT"],
                 "targets": {"BTCUSDT": 0.1},
@@ -76,7 +92,7 @@ def _hourly(end: datetime, hours: int, construction: Callable[[int], str]) -> li
 
 def _soak(end: datetime, second: str) -> list[dict[str, Any]]:
     """One finished soak whose construction digest moves to ``second`` two thirds of the way through."""
-    return _hourly(end, SOAK_CYCLES, lambda hour: ORIGINAL if hour < 112 else second)
+    return _hourly(end, SOAK_CYCLES, lambda hour: ORIGINAL if hour < 112 else second, _stamped())
 
 
 def _write(directory: Path, rows: list[dict[str, Any]]) -> None:
@@ -103,7 +119,8 @@ def test_the_canary_command_and_the_registry_write_give_one_answer(tmp_path: Pat
     write_state(checkout / STATE, Book(candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)}))
 
     command = CliRunner().invoke(canary_cmd, ["--shadow-dir", str(shadow), "--state-dir", str(armed)])
-    admission = _admission(str(registry), yaml.safe_dump(_registry(sleeve=True)), checkout, str(armed), str(shadow))
+    proposal = yaml.safe_dump(_registry(sleeve=True))
+    admission = _admission(str(registry), proposal, checkout, str(armed), str(shadow), str(PROFILE))
 
     assert (command.exit_code == 0) is healthy, command.output
     assert admission.allowed is healthy, (admission.reasons, admission.measured["canary"])
@@ -126,8 +143,10 @@ def test_admit_reads_the_canary_on_the_construction_its_clock_reads() -> None:
     shadow = _hourly(now, SOAK_CYCLES, lambda hour: "old" if hour < 112 else "new")
     armed = _hourly(now, 45 * 24, lambda _hour: "old")
 
-    declared = admit(before, after, book=book, cycles=armed, shadow=shadow, aliases={"new": "old"}, now=now)
-    undeclared = admit(before, after, book=book, cycles=armed, shadow=shadow, now=now)
+    declared = admit(
+        before, after, book=book, cycles=armed, shadow=shadow, aliases={"new": "old"}, registry="rrrr", now=now
+    )
+    undeclared = admit(before, after, book=book, cycles=armed, shadow=shadow, registry="rrrr", now=now)
 
     assert declared.allowed, (declared.reasons, declared.measured["canary"])
     assert undeclared.reasons == ("flow: L4: the canary soak did not pass",), undeclared.reasons

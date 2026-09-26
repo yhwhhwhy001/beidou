@@ -30,7 +30,7 @@ from typing import Any
 import click
 import yaml
 
-from beidou_alpha.registry import parse_registry
+from beidou_alpha.registry import Registry, parse_registry
 from beidou_alpha.validation.ledger import resolve_ledger_path
 from beidou_cli import main
 from beidou_governance.admission import WINDOW_ANCHOR, Admission, admit, rolled, window_start
@@ -58,8 +58,10 @@ from beidou_governance.verdicts import read as read_verdicts
 from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
+from beidou_live.composition import build_model
 from beidou_live.config import registry_dataset_problems, registry_evidence_problems, store_directory
 from beidou_live.construction import CONSTRUCTION_ALIASES
+from beidou_live.engine import registry_digest
 from beidou_shared.config import load_yaml
 
 REGISTRY = "config/alpha_registry.yaml"
@@ -333,16 +335,32 @@ def _shadow_rows(shadow_dir: str) -> list[dict[str, Any]]:
     return suffixed or _rows(Path(shadow_dir) / "cycles.jsonl")
 
 
-def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, shadow_dir: str) -> Admission:
+def _soaked_as(registry: Registry, profile: dict[str, Any]) -> str | None:
+    """The `registry` digest a loop running ``registry`` stamps on every cycle, or None if none can run it.
+
+    The engine's own recipe - `registry_digest` of the model `build_model` makes - so what L4 compares
+    is what a shadow row records.  `build_model` refuses a registry with no enabled strategy, which is
+    the shape of a stop; a stop promotes nothing, L4 is never asked of it, and it must not raise here.
+    """
+    try:
+        return registry_digest(build_model(registry, profile))
+    except ValueError:
+        return None
+
+
+def _admission(
+    registry_path: str, proposed: str, root: Path, state_dir: str, shadow_dir: str, profile: str
+) -> Admission:
     """R3/R4/R5/R7 and K-EX14, asked of the change before the bytes move.
 
     Added 2026-09-09.  Until then `apply` asked the startup gate and nothing else, so every constraint
     §3 lists as a precondition of `queued -> probe` was decorative on the only path that promotes:
     a proposal moving 0.9 of the book to an unproven sleeve was accepted against a cap of 1/3.
     """
+    after = parse_registry(yaml.safe_load(proposed))
     return admit(
         parse_registry(load_yaml(registry_path)),
-        parse_registry(yaml.safe_load(proposed)),
+        after,
         book=read_state(root / STATE),
         policy=Policy(),
         cycles=_rows(Path(state_dir) / "cycles.jsonl"),
@@ -350,6 +368,7 @@ def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, sh
         # K-EX14's clock reads the canonical construction, not the raw digest: three of the raw
         # changes since 09-04 altered no behaviour and were declared equivalent here on the read side.
         aliases=CONSTRUCTION_ALIASES,
+        registry=_soaked_as(after, load_yaml(profile)),
     )
 
 
@@ -402,9 +421,8 @@ def plan_cmd(
     data_root: str,
 ) -> None:
     """What `apply` would do, asked of the same gate, without touching the file."""
-    admission = _admission(
-        registry_path, Path(proposed).read_text(encoding="utf-8"), Path(root).resolve(), state_dir, shadow_dir
-    )
+    text = Path(proposed).read_text(encoding="utf-8")
+    admission = _admission(registry_path, text, Path(root).resolve(), state_dir, shadow_dir, profile)
     click.echo(
         f"admission: {'ALLOWED' if admission.allowed else 'REFUSED'} "
         f"(promoting: {', '.join(admission.promoting) or 'nothing'})",
@@ -413,10 +431,7 @@ def plan_cmd(
     _report_admission(admission)
     # No `_log_admission` here: a dry run is not a ruling.  See that function's docstring.
     transaction = plan_transaction(
-        Path(registry_path),
-        Path(proposed).read_text(encoding="utf-8"),
-        gate=_gate(profile, data_root),
-        candidate=candidate or Path(proposed).name,
+        Path(registry_path), text, gate=_gate(profile, data_root), candidate=candidate or Path(proposed).name
     )
     click.echo(json.dumps(json.loads(transaction.to_json()), indent=2, ensure_ascii=False))
     if transaction.reasons or not admission.allowed:
@@ -759,7 +774,7 @@ def apply_cmd(
             "turns it on; `governance plan` shows what this would do without it."
         )
     text = Path(proposed).read_text(encoding="utf-8")
-    admission = _admission(registry_path, text, checkout, state_dir, shadow_dir)
+    admission = _admission(registry_path, text, checkout, state_dir, shadow_dir, profile)
     _log_admission(checkout, admission, candidate or Path(proposed).name)
     if not admission.allowed:
         _report_admission(admission)

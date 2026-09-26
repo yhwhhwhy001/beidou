@@ -30,6 +30,7 @@ from beidou_governance.policy import Policy
 
 POLICY = Policy()
 NOW = datetime(2026, 10, 20, tzinfo=UTC)
+SOAKED = "rrrr"  # the registry the healthy soak ran; L4 vouches for a promotion only when it is this one
 
 
 def _registry(sleeves: dict[str, float], *, main: str = "tsmom") -> Any:
@@ -70,6 +71,7 @@ def _healthy_shadow(cycles: int = SOAK_CYCLES, *, end: datetime = NOW) -> list[d
             "at": (end - timedelta(hours=cycles - 1 - i)).isoformat(),
             "bar_open_ms": int((end - timedelta(hours=cycles - i)).timestamp() * 1000),
             "construction": "aaaa",
+            "registry": SOAKED,
             "phase": "OK",
         }
         for i in range(cycles)
@@ -177,7 +179,9 @@ def test_a_clean_promotion_passes_every_layer() -> None:
     """The gate has to be able to say yes, or it is a stop sign rather than a rule."""
     before, after = _registry({}), _registry({"flow_short": 1 / 3})
     book = _book(candidates={"flow": Candidate("flow", State.QUEUED, fraction=1 / 3)})
-    admission = admit(before, after, book=book, policy=POLICY, cycles=_cycles(45), shadow=_healthy_shadow(), now=NOW)
+    admission = admit(
+        before, after, book=book, policy=POLICY, cycles=_cycles(45), shadow=_healthy_shadow(), registry=SOAKED, now=NOW
+    )
     assert admission.allowed, admission.reasons
     assert admission.promoting == ("flow",)
 
@@ -202,6 +206,7 @@ def test_the_window_rolls_on_the_calendar_rather_than_on_a_counter_nobody_increm
         policy=POLICY,
         cycles=_cycles(45, now=later),
         shadow=_healthy_shadow(end=later),
+        registry=SOAKED,
         now=later,
     )
     assert admission.allowed, admission.reasons
