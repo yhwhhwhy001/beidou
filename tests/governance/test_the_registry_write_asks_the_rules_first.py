@@ -24,6 +24,7 @@ import pytest
 
 from beidou_alpha.registry import parse_registry
 from beidou_governance.admission import WINDOW_ANCHOR, admit, clean_days, exposure, registry_refusals, window_index
+from beidou_governance.canary import SOAK_CYCLES
 from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 
@@ -53,7 +54,9 @@ def _cycles(days: float, *, digest: str = "aaaa", now: datetime = NOW) -> list[d
     ]
 
 
-def _healthy_shadow(cycles: int = 200) -> list[dict[str, Any]]:
+def _healthy_shadow(cycles: int = SOAK_CYCLES) -> list[dict[str, Any]]:
+    """One finished soak.  Was 200 until 2026-09-26: the canary now scores the latest round of 168, and
+    200 cycles is a finished soak plus 32 of the next one (`test_a_soak_record_is_scored_one_round_at_a_time`)."""
     return [
         {"at": f"2026-10-{1 + i // 24:02d}T{i % 24:02d}:00:00+00:00", "construction": "aaaa", "phase": "OK"}
         for i in range(cycles)
@@ -260,7 +263,7 @@ def test_a_renamed_field_does_not_fail_the_canary_for_a_deployment_that_did_not_
 
     rows = [
         {"at": f"2026-10-01T{hour:02d}:00:00+00:00", "phase": "OK", "construction": "old" if hour < 12 else "new"}
-        for hour in range(200)
+        for hour in range(SOAK_CYCLES)
     ]
     raw = {check.name: check.passed for check in evaluate_canary(rows, rows).checks}
     aliased = {check.name: check.passed for check in evaluate_canary(rows, rows, aliases={"new": "old"}).checks}

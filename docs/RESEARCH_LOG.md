@@ -16960,3 +16960,59 @@ REST 共 6 次，没有日归档文件。6 个都没有新行，全部记为已�
 
 构造没有变：k 仍是 0.60，档位、规则摘要都没动。改 k 的切换是 #163，按裁定在 2026-10-13T00:00Z 之后合入。
 
+## 2026-09-26 · shadow soak 跑满 168 不停：有失败周期就以 1 退出，launchd 静默起了第二轮
+
+只记可观测事实。读取时刻 2026-09-26T17:40Z 前后，全部只读。
+
+**现象。**
+
+- `~/Library/Application Support/beidou/shadow.stderr.log` 第 487 行：
+  `Error: 3 of 168 cycle(s) failed; see .beidou/live-shadow-dry-run/heartbeat.json`。
+- `launchctl list`：`com.beidou.shadow` 上次退出码 1，当前 PID 26020。
+  `state.json` 的 `restarted_at` 是 2026-09-23T08:00:27Z，`restarts` 是 1。
+- `.beidou/live-shadow-dry-run/cycles.jsonl` 249 行，分两段：
+  - 第一轮：第 1–168 行，bar 09-16T08:00Z 至 09-23T07:00Z，construction `ccd7bb9764b5`。
+    3 个 ERROR（09-16T12:01Z、09-21T18:01Z、09-21T21:00Z），都是代理 503。末行 `at` 是 08:00:26Z。
+  - 第二轮：第 169 行起，bar 09-23T08:00Z 起，construction `b8f215ab706c`。已有 1 个 ERROR（09-23T16:01Z）。
+- `governance canary` 读了全部 249 行：`soak 249/168` PASS，`construction_stable` FAIL
+  （2 distinct construction digests），总判 UNHEALTHY。
+
+**机制。**
+
+- `live run --cycles N` 在 `done < cycles` 时抛 ClickException，退出码 1（`beidou_cli/live_cmd.py`）。
+- plist 设了 `KeepAlive {SuccessfulExit: false}`，非零退出立即拉起。`run_shadow.sh` 用 `exec`，退出码直接交给 launchd。
+- RUNBOOK 与 plist 注释写的是「soak 在 168 周期正常结束」。这句只在 168 个周期全部成功时成立。
+- 还有第二条路：`RunAtLoad`。零失败、以 0 退出的一轮，下次登录或 `launchctl load` 时也会再起一轮。
+
+**切开之后的读数**（同一份记录，只读）：第一轮单独评是 HEALTHY：168/168，最长 ERROR 连续 1，
+construction 只有 1 个。第二轮单独评只差 `soak` 一项，读到的是 82/168。baseline 截到同一窗口不改判，
+shadow 与 armed 的 guard 率都是 0.000。
+
+**修法的定价。** 选 A。
+
+| 修法 | 赶得上 09-30T08:00Z 吗 | 代价 |
+| --- | --- | --- |
+| A. launcher 启动前问记录：满了以 0 退出，没满只跑欠的周期 | 赶得上：launchd 拉起时重新执行脚本 | 每轮结束多一次秒级的拉起；bash 分支要在 3.2 上真跑；进程崩溃后改为接着跑同一轮，此前是另起 168 |
+| B. `live run --cycles N` 有失败也以 0 退出 | 赶不上：PID 26020 跑的是旧代码 | 改 CLI 的退出码契约，手跑 `--cycles 1` 冒烟失败了也是 0 |
+| C. 「跑满但有失败」单独一个退出码 | 赶不上，同上 | `KeepAlive` 不认具体退出码。要在 bash 里翻译就得去掉 `exec`，`launchctl` 的 SIGTERM 会打到 bash 而不是循环，DL-L6 的优雅停机失效 |
+| D. 改 plist 的 `KeepAlive`，例如 `{Crashed: true}` | 要重新装载，bootout 等于停掉 PID 26020 | 操作者动作。Python 崩溃是退出码 1 而不是信号，改完连普通崩溃也不再拉起，这改变了 RUNBOOK 写明的行为。也挡不住 `RunAtLoad` |
+
+A 落地为三处：
+
+- `beidou_governance/canary.py` 的 `rounds` 把记录切成每轮 168 个尝试过的周期（OK 与 ERROR；SKIPPED 不算，`engine.run` 也不数它）。
+  `evaluate` 只评最近一轮，`governance canary` 与 `plan`/`apply` 走的 `canary_health` 因此一起改。
+- `governance canary --remaining` 用同一个切法答最近一轮还欠几个周期。`run_shadow.sh` 每次启动前问它。
+  答 0 就以 0 退出；答 N 就 `--cycles N`。soak 长度只在 `SOAK_CYCLES` 写一次，脚本里的 168 删掉了。
+- RUNBOOK「shadow soak 怎么停」一节与 plist 注释改成实际机制。plist 的键没动。
+
+一个用真实 `run()` 跑出来的读数定了切法的一处细节：最后一个周期失败后，退避会在它后面写 SKIPPED 行。
+若把这些行算作下一轮的开头，launcher 会把跑完的 soak 读成「还欠 168」。所以 SKIPPED 行留在所属的那一轮。
+
+**没做的。** 没重启、没停止 shadow、paper-l3、实盘的任何进程。没改 `~/Library/LaunchAgents` 下的 plist。
+没动 `.beidou/live-shadow-dry-run/` 的任何一行。`live run` 的退出码没改。
+
+**生效条件。** launchd 执行的是主 checkout 的 `deploy/run_shadow.sh` 与 `.venv/bin/beidou`。PID 26020
+约在 2026-09-30T08:00Z 跑满第二轮，照旧以 1 退出；launchd 拉起的是主 checkout 当时那一份。
+所以主 checkout 要在那之前快进到含这次修复的 main。之后第二轮留在记录里，canary 评它；要不要起第三轮，
+按 RUNBOOK 移走记录，由操作者定。
+

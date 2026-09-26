@@ -50,7 +50,7 @@
 
 | 任务 | 干什么 | 装载 |
 | --- | --- | --- |
-| `com.beidou.shadow` | L4 金丝雀 soak：拿 `config/alpha_registry.candidate.yaml` 在 armed 循环旁边跑 168 个 dry-run 周期，写 `.beidou/live-shadow-dry-run`，不碰账户、不重排 universe。`KeepAlive` 只在崩溃时生效——soak 在 168 周期**正常结束**，那里重启等于静默开始第二次。读数：`beidou governance canary` | `cp deploy/com.beidou.shadow.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.shadow.plist` |
+| `com.beidou.shadow` | L4 金丝雀 soak：拿 `config/alpha_registry.candidate.yaml` 在 armed 循环旁边跑 168 个 dry-run 周期，写 `.beidou/live-shadow-dry-run`，不碰账户、不重排 universe。一轮跑满就停，不论其中失败几个。停靠的是 `run_shadow.sh` 启动前问记录，不是 `KeepAlive`，见下文「shadow soak 怎么停」。读数：`beidou governance canary`，只评最近一轮 | `cp deploy/com.beidou.shadow.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.shadow.plist` |
 | `com.beidou.paper-l3` | §5 L3 的七天累积器：`--paper` 在 mainnet 价位上撮合，`--state-dir .beidou/paper-l3`，无凭据、结构上不可能变成交易进程。读数：`beidou live soak --check`（**报告而不闸**：前六天按构造必然为假，接进 `failed` 等于每小时误报一周） | `cp deploy/com.beidou.paper-l3.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.paper-l3.plist` |
 
 `com.beidou.proxy-probe` 曾是第三个，2026-09-22 撤除：它是临时测量，判读做出来了就该收。
@@ -71,6 +71,45 @@ git show 3a4bf6fa:deploy/com.beidou.proxy-probe.plist > ~/Library/LaunchAgents/c
 ```bash
 launchctl bootout gui/$(id -u)/com.beidou.shadow && mv .beidou/live-shadow-dry-run .beidou/live-shadow-dry-run.$(date -u +%Y%m%d) && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.shadow.plist
 ```
+
+一轮跑满之后，launcher 不会自己再起一轮。要再 soak（换了候选，或同一个候选再测一轮），也用上面这条命令。
+记录移走之后，launcher 从空记录起一轮 168。
+
+### shadow soak 怎么停（2026-09-26 更正）
+
+上表那一行此前写的是：`KeepAlive` 只在崩溃时生效，soak 在 168 周期正常结束，那里重启等于静默开始第二次。
+机制写错了：
+
+- `live run --cycles 168` 只要有一个周期失败，就以 1 退出（`beidou_cli/live_cmd.py` 的 `done < cycles`）。
+  代理 503 很常见，几乎每轮都有失败周期。
+- plist 的 `KeepAlive {SuccessfulExit: false}` 把非零退出当崩溃，立刻重新拉起。`run_shadow.sh` 用 `exec`，
+  退出码直接交给 launchd。
+- 2026-09-23 就是这样。第一轮有 3 个 ERROR，08:00:26Z 以 1 退出。launchd 下一秒拉起新进程。
+  第二轮追加进同一个 `cycles.jsonl`，construction 从 `ccd7bb9764b5` 换成 `b8f215ab706c`。
+- `governance canary` 把两轮当一轮读。2026-09-26T17:40Z 的读数：`soak 249/168` PASS，`construction_stable`
+  FAIL，总判 UNHEALTHY。两轮各自只有一个 construction，这个 FAIL 来自混读。
+- 一轮零失败、以 0 退出也拦不住：下次登录或 `launchctl load` 时，`RunAtLoad` 会再起一轮。
+
+现在让 soak 停在 168 的是 launcher：
+
+1. `run_shadow.sh` 启动前先问 `beidou governance canary --remaining`。它读 dry-run 实际写的目录
+   （`store_directory`），答最近一轮还差几个周期。
+2. 答 0：最近一轮已满。打印一行，以 0 退出。launchd 不再拉起，`RunAtLoad` 再跑一次也一样。
+3. 答 N > 0：只跑 N 个周期（`--cycles N`）。进程崩溃或机器重启之后，接着跑同一轮，不另起一轮。
+4. 问不出来（命令本身失败），或答的不是个数：以 70 退出，不起循环。launchd 60 秒后重试，与崩溃时一样。
+
+一轮 = 记录里连续 168 个尝试过的周期。OK 与 ERROR 都算。SKIPPED 不算，`engine.run` 也不数它。
+canary 的 `soak` 按同一口径计数，`--remaining` 与打分共用一个切法（`beidou_governance/canary.py` 的 `rounds`）。
+
+`governance canary`、`plan`、`apply` 只评最近一轮。`governance canary` 先逐轮列出行号、bar 区间与 ERROR 数，
+前面的轮只列不评。
+
+失败周期不影响停不停，交给 canary 的 `no_error_streak` 评。`live run` 的退出码没改：一轮里有失败，它照旧
+以 1 退出。launchd 照旧拉起一次，launcher 看到这一轮已满，以 0 退出。所以 `launchctl list` 上最后的退出码
+是 0。失败要读 canary，不读退出码。
+
+plist 的键没改，只改了注释，已装载的那份不用重新装载。launchd 每次拉起都重新执行 `run_shadow.sh`，新逻辑在下一次拉起时生效。
+launchd 执行的是主 checkout 里的那一份。
 
 ## 成员表落后告警（2026-09-23 起）
 
