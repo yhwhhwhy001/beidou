@@ -151,16 +151,22 @@ def canary_health(
     shadow: Sequence[Mapping[str, Any]],
     baseline: Sequence[Mapping[str, Any]],
     *,
+    aliases: Mapping[str, str] | None,
     gate_refusals: int = 0,
 ) -> tuple[bool, str]:
     """L4 as a fact the promotion rule can read, or the reason it is not one.
 
     An absent soak is False with its own sentence rather than a failed check, because "the canary
     never ran" and "the canary ran and found the deployment sick" are different operator actions.
+
+    ``aliases`` has no default, so a caller has to say which construction it means.  This function
+    predates the parameter by thirteen minutes (048204f7 added it to `canary.evaluate` for
+    `governance canary` alone), so until 2026-09-26 `plan`/`apply` judged `construction_stable` on
+    the raw digest while the command judged the same record on the canonical one.
     """
     if not shadow:
         return False, "L4: no shadow record; run deploy/run_shadow.sh first"
-    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals)
+    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=aliases)
     if result.healthy:
         return True, f"L4: {len(result.checks)} checks pass over {result.soaked} soaked cycles"
     return False, "L4: " + "; ".join(f"{check.name} ({check.detail})" for check in result.failures)
@@ -258,7 +264,7 @@ def admit(
     book, window_why = rolled(book, policy, anchor=anchor, now=now)
 
     days, days_why = clean_days(cycles, aliases=aliases, now=now)
-    healthy, canary_why = canary_health(shadow, cycles, gate_refusals=gate_refusals)
+    healthy, canary_why = canary_health(shadow, cycles, aliases=aliases, gate_refusals=gate_refusals)
     measured = {
         "clean_days": round(days, 3),
         "clean_days_detail": days_why,
