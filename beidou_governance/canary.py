@@ -69,6 +69,9 @@ class Check:
 class CanaryResult:
     checks: tuple[Check, ...] = field(default_factory=tuple)
     soaked: int = 0
+    #: The `registry` digests the scored round's decided cycles carry: what the soak ran, which is a
+    #: reading and not a check - only a caller holding a proposal can judge it (`canary_health`).
+    registries: tuple[str, ...] = ()
 
     @property
     def healthy(self) -> bool:
@@ -193,4 +196,5 @@ def evaluate(
         Check("participation", not over_cap, f"{len(over_cap)} planned orders above the cap"),
         Check("targets_in_universe", not outside, f"{len(outside)} targets outside the managed universe"),
     )
-    return CanaryResult(checks, soaked=soaked)
+    registries = tuple(sorted({str(row["registry"]) for row in decided if row.get("registry")}))
+    return CanaryResult(checks, soaked=soaked, registries=registries)

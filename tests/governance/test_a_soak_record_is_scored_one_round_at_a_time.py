@@ -33,6 +33,7 @@ from beidou_governance.canary import SOAK_CYCLES, attempted, evaluate, remaining
 from beidou_live.construction import CONSTRUCTION_ALIASES
 
 FIRST_BAR = datetime(2026, 9, 16, 8, tzinfo=UTC)  # the first bar of the soak begun 2026-09-16
+RAN = "7f8adb754962"  # the `registry` digest on every decided row of both rounds, and the candidate's
 
 
 def _bar(index: int) -> dict[str, Any]:
@@ -49,6 +50,7 @@ def _ok(index: int, construction: str) -> dict[str, Any]:
     """No `phase` key: `_finish_cycle` puts OK on the heartbeat, not on the row."""
     return _bar(index) | {
         "construction": construction,
+        "registry": RAN,
         "guard_reasons": [],
         "skipped": [],
         "targets": {"BTCUSDT": 0.1},
@@ -133,7 +135,8 @@ def test_an_empty_record_owes_the_whole_soak() -> None:
 
 def test_plan_and_apply_read_the_same_round_as_the_command() -> None:
     """`canary_health` is the path `plan` and `apply` take, and it cuts through the same `evaluate`."""
-    healthy, why = canary_health(_record_as_of_2026_09_26(), _soak(0, 250, "armed"), aliases=CONSTRUCTION_ALIASES)
+    record, armed = _record_as_of_2026_09_26(), _soak(0, 250, "armed")
+    healthy, why = canary_health(record, armed, aliases=CONSTRUCTION_ALIASES, registry=RAN)
     assert not healthy
     assert why == "L4: soak (82/168 cycles in round 2 of 2)"
 

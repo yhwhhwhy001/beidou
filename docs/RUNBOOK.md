@@ -56,6 +56,16 @@
 - canary 不再有 `startup_gate`，`--gate-refusals` 也删了。shadow 是 dry run，从不拒绝，这一项从来没有来源。
   想在 soak 开始时就知道候选过不过 startup gate，跑一次 `beidou governance plan --proposed <候选>`。
 
+### L4 只为 soak 跑过的那份 registry 作保（2026-09-27 起）
+
+- `plan` 与 `apply` 的 L4 多一项 `registry_soaked`。被评那一轮每个已决周期的 `registry` 摘要要只有一个，
+  而且等于提议那份的摘要。摘要是 `engine.registry_digest`：策略、参数、权重、books、钉住的 universe，
+  不含 evidence 指针和注释。
+- 所以换了候选就要重新 soak：用下面「另外两个 launchd 任务」一节那条命令移走记录，launcher 从空记录起新的一轮。
+  只改注释或 evidence 指针，摘要不变，不用重新 soak。
+- 不一致时，`plan` 的 `canary:` 行写出两边的摘要。`governance canary` 不核这一项：它手里没有提议。
+- 全部停用的提议建不出模型，也就没有摘要。它不晋级，L4 不会被问到，照常走到 startup gate。
+
 ## 另外两个 launchd 任务
 
 | 任务 | 干什么 | 装载 |
