@@ -123,15 +123,17 @@ def evaluate(
     baseline: Sequence[Mapping[str, Any]],
     *,
     soak_cycles: int = SOAK_CYCLES,
-    gate_refusals: int = 0,
     max_error_streak: int = 2,
     aliases: Mapping[str, str] | None = None,
 ) -> CanaryResult:
-    """The six checks of §5's L4 row, in the order a deployment fails them.
+    """§5's L4 row, in the order a deployment fails them: `soak`, then five of its six checks.
 
-    ``gate_refusals`` is supplied rather than recomputed: whether the candidate registry passed the
-    startup gate is a fact about a process that already ran, and asking a second implementation would
-    reintroduce the divergence `promote` was careful to avoid.
+    The sixth, zero startup-gate refusals, was here as `startup_gate` until 2026-09-27 and nothing ever
+    supplied it.  The shadow is a dry run and a dry run refuses nothing; `plan`/`apply` passed no count,
+    so it read `0 refusals` whatever the soak saw.  Measured that day: the process writing the scored
+    round had printed `evidence: tsmom: evidence verdict FAIL does not allow live use` as it started.
+    The question belongs to the write, where `promote` asks it of the bytes about to be written, with
+    both halves `live run` refuses on (`governance_cmd._gate`).  Operator ruling the same day.
 
     ``aliases`` is `CONSTRUCTION_ALIASES`, and `construction_stable` is wrong without it: the raw
     digest has moved six times on the armed record since 2026-09-04 while the CANONICAL construction
@@ -172,7 +174,6 @@ def evaluate(
     ]
 
     checks = (
-        Check("startup_gate", gate_refusals == 0, f"{gate_refusals} refusals"),
         Check("soak", soaked >= soak_cycles, f"{soaked}/{soak_cycles} cycles in round {len(cut)} of {len(cut)}"),
         Check("construction_stable", len(digests) <= 1, f"{len(digests)} distinct construction digests"),
         # `<=` with a tolerance rather than `<`: guards firing at the same rate as the armed book is

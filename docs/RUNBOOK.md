@@ -46,6 +46,16 @@
 | 进程持有的 registry 与磁盘上的是否分岔 | `beidou governance divergence` |
 | 重开条件 / 批次窗口 | `beidou governance reopen`；`beidou governance window` |
 
+### startup gate 在写入时问（2026-09-27 起）
+
+- `plan` 与 `apply` 写入前问 armed `live run` 的 startup gate，两半都问：evidence，以及 dataset 检查的 blocking
+  那一半。advisory 不拒绝。此前只问 evidence 那一半。
+- dataset 那一半读 `--data-root`，默认 `.beidou/data`，相对当前目录，与 `live run` 相同。所以要在主 checkout 里跑。
+  在没有数据的 worktree 里跑，它会报 `membership: present then, absent now` 并拒绝。
+- membership 重建之后，证据在新表上重出之前，`apply` 会回滚。bridge 过期后 armed 重启会在同一处被拒，这里只是提前说。
+- canary 不再有 `startup_gate`，`--gate-refusals` 也删了。shadow 是 dry run，从不拒绝，这一项从来没有来源。
+  想在 soak 开始时就知道候选过不过 startup gate，跑一次 `beidou governance plan --proposed <候选>`。
+
 ## 另外两个 launchd 任务
 
 | 任务 | 干什么 | 装载 |

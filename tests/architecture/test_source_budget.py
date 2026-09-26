@@ -3755,7 +3755,18 @@ CEILING = {
     # `_bit_for_bit` 全部相同；15 个变异全部有测试变红。
     #
     # 留 40 行（8_474 -> 8_514），理由同上，不重述。
-    "beidou_cli": 8_514,
+    #
+    # 2026-09-27（不编号，同上）。+19 beidou_cli，8_503 -> 8_522，抬到 8_562。
+    #
+    # 事务的闸补上 D-041 的 dataset 那一半，操作者当天裁定。`live run` 的 armed 启动拒绝的是 evidence 或
+    # dataset.blocking，`governance_cmd._gate` 只问前一半：membership 重建之后，写入会放行一份启动会拒的
+    # registry。当天读数：09-24 的重建（refreshes 2056 -> 2063）让 shipped registry 过不了 dataset 那一半。
+    # 花在哪：`_gate` 的 docstring 8 行，多问的一半 2 行；`plan`、`apply` 各加 `--data-root`，2 行；`plan_cmd`
+    # 的签名加一个参数后是 121 列，ruff 拆成每行一个，+7；`apply_cmd` 的签名 +1；`governance canary` 删掉
+    # `--gate-refusals`，−1。测试见 `tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`。
+    #
+    # 留 40 行（8_522 -> 8_562），理由同上，不重述。
+    "beidou_cli": 8_562,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,

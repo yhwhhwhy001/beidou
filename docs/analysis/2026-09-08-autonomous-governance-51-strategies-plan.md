@@ -114,7 +114,7 @@ Interaction：Yellow（🟢🟢🟡🟡🟢🟢）｜等级：L｜当前决策�
 | L1 代码层 | pytest（240 s 上限） | 每个 signal 自动三测（因果 / warmup / 有界，**面板随 warmup 伸缩**，KILL-AR-15）；治理属性测试（R0–R10 任意序列不可违反；事务回滚后 digest 相等）；状态机合法转移 | 全绿 + ratchet |
 | L2 回放层 | 历史 ledger 702 行 + 199 份报告 + RESEARCH_LOG 裁定 | 规则对每个人工裁定的重放，**输出 = 规则结论 + 例外清单 + 差异归因**（KILL-AR-03） | 差异清单无"未归因"项 |
 | L3 paper | `live run --paper`（进程内撮合、mainnet 标记、无凭证） | 状态机 + 调度器 + 事务在无场所下跑完整周期 | 7 天无 ERROR 相；事务日志闭合 |
-| L4 Canary | `live run --dry-run --state-dir .beidou/live-shadow`，读候选 registry | **部署健康**：0 启动闸拒绝；digest 稳定；`guard_reasons` 率 ≤ 基线；无 ERROR 连败；计划订单 ⊆ participation cap；`targets ⊆ universe`。**不拦假阳性**（KILL-AR-04） | 六项全过（**更正**：`canary.py` 实建 **7** 项 Check，多一个 `soak`；`healthy` 要求全 7） |
+| L4 Canary | `live run --dry-run --state-dir .beidou/live-shadow`，读候选 registry | **部署健康**：0 启动闸拒绝；digest 稳定；`guard_reasons` 率 ≤ 基线；无 ERROR 连败；计划订单 ⊆ participation cap；`targets ⊆ universe`。**不拦假阳性**（KILL-AR-04） | 六项全过（**更正**：`canary.py` 实建 **7** 项 Check，多一个 `soak`；`healthy` 要求全 7。**2026-09-27 再更正**：「0 启动闸拒绝」移出 canary，现为 6 项。dry run 从不拒绝，这一项没有来源；改由 `plan`/`apply` 在写入时问，两半都问，见 `governance_cmd._gate`） |
 | L5 Testnet armed | demo-fapi，`--armed`，probe 受 R3 限制 | 真实撮合下的执行保真 + 六项演练 | M-Q03 / M-Q08（≥30 笔）/ M-Q09 / M-Q10 = 100% / M-015 在界内；DRILL-G1..G6 全过 |
 | L6 real money | — | — | Out；入口见 §1 |
 
