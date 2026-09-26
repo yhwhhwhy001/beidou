@@ -70,6 +70,7 @@ from beidou_live.reports import (
     daily_payload,
     expectations_from_evidence,
     latest_risk_adaptation,
+    plain_leverage_lines,
     preregistration_problems,
     preregistration_skipped,
     risk_adaptation_headline,
@@ -510,7 +511,12 @@ def live_status(
     # Beside the dump rather than inside it: the dump is what `live status | jq` reads, and the number
     # this line explains - `state.leverage_set`, eighteen identical 5s - is in there.  Unconditional,
     # above the `--check` return, because the reader who needs it is the one running this by hand.
-    click.echo(risk_adaptation_headline(latest_risk_adaptation(store)))
+    # Then the same rows in the operator's words: the sixth time the question came back, it came back
+    # to a line that answered it in the system's (`plain_leverage_lines`, 2026-09-26).
+    adaptation = latest_risk_adaptation(store)
+    click.echo(risk_adaptation_headline(adaptation))
+    plain = plain_leverage_lines(adaptation)
+    click.echo("\n".join([plain[0], *(f"  {line}" for line in plain[1:])]))
     if not check:
         return
     interval = str((payload.get("market_data", {}) or {}).get("interval", "1h"))

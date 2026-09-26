@@ -3417,7 +3417,24 @@ CEILING = {
     # 只多 `event_risk` 一个键，md 只多这一节、删行为 0（合并方另起一份副本复核过）。20 个变异全部有测试变红。
     #
     # 留 40 行（14_653 -> 14_693），理由与上面几格逐字相同，不重述。
-    "beidou_live": 14_693,
+    #
+    # 2026-09-26（不编号，同上）。+93 beidou_live，14_653 -> 14_746，抬到 14_786。
+    #
+    # 「所有持仓都是 5 倍、没有区分」第六次被问到。上面第十次抬顶那一格买下的 M-015 那一行答得对，用的却是
+    # 系统的话（「吸收了离散度的 91%」「不承担风险」），也没印出这个问题问的那个数：每个持仓自己的杠杆。
+    # `report_risk.plain_leverage_lines` 51 行（docstring 16 行）用白话写三件事：交易所那一栏的数只管保证金；
+    # 每个持仓的真实杠杆（目标名义 ÷ 权益）、波动与风险份额；最小仓位规则（D3）拿掉了哪些名字、为什么。
+    # 10-13 之后 k=0.175 会拿掉最波动的四个，不说出来就是第七次提问。`min_position_of` 23 行从记录里的构造
+    # 读 D3 的门槛，理由同 `max_weight_of`。`risk_adaptation` 的块多两个键 11 行，函数间空行 4，`reports.py`
+    # 挂接 +4。依据：`docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` 的 O-1（NA-2、T-2、T-3）。
+    #
+    # 验收：同一份合成状态（6 个名字、D3 开），main 与本改动各出一遍：`live status` 与 `live status --check`
+    # 只在 M-015 那行之后多这一段，`--check` 的末三行（巡检告警正文）不变；日报 md 只多「真实杠杆（白话）」
+    # 一节；json 只多 `risk_adaptation.leverage_values` 与 `min_position` 两个键；其余只差状态文件的时间戳。
+    # 没有在实盘状态副本上重出（副本在操作者的 Mac 上）。构造指纹不变，两个构造测试照常通过。
+    #
+    # 留 40 行（14_746 -> 14_786），理由与上面几格逐字相同，不重述。
+    "beidou_live": 14_786,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

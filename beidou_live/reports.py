@@ -131,6 +131,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     margin_and_rejections,
     max_weight_of,
     noise_scale,
+    plain_leverage_lines,
     risk_adaptation,
     risk_adaptation_headline,
     tail_readings,
@@ -844,6 +845,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 }
                 or {"none": 0},
             ),
+            # The rows of the section below, in the operator's words (`plain_leverage_lines`, 2026-09-26).
+            ("真实杠杆（白话）", plain_leverage_lines(payload.get("risk_adaptation") or {})),
             (
                 # Where per-symbol adaptation actually lives (D-037): the weight, not the leverage
                 "Risk adaptation per symbol (M-015)",
@@ -868,6 +871,7 @@ __all__ = [
     "daily_payload",
     "expectations_from_evidence",
     "latest_risk_adaptation",
+    "plain_leverage_lines",
     "preregistration_problems",
     "preregistration_skipped",
     "risk_adaptation_headline",
