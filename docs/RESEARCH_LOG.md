@@ -17160,3 +17160,48 @@ C：只写文档。D：写入的 gate 补上 dataset 那一半，可配 A 或 B�
 
 **生效条件。** 只在下次手动跑 `governance canary`、`plan`、`apply` 时生效，没有定时任务跑这三个命令。
 launcher 只问 `--remaining`，这次没动。`live run` 没改，运行中的进程不受影响。
+
+## 2026-09-27 · L4 只为 soak 跑过的那份 registry 作保：admit 核对被评那一轮的 registry 摘要
+
+只记可观测事实。读取时刻 2026-09-26T20:15Z 前后，全部只读。来由是上一节「顺带发现」的第一条，
+操作者当天要求做掉。
+
+**缺口。**
+
+- shadow 的每个已决周期都写 `registry`，即进程持有的 `engine.registry_digest`（DL-Q0）。
+  `admit` 只问最近一轮健康不健康，从不拿这个摘要和要写的 registry 比。
+- 所以一轮 soak 了候选 A，也能为 B 作保。soak 之后改候选，或者给 `apply` 另一个文件，L4 都照读旧 soak 的健康。
+- 摘要覆盖策略、补齐默认值后的参数、权重、books、probe 止损、钉住的 universe。不含 evidence 指针和注释。
+
+**今天的读数。** 当前记录 252 行。两轮的已决周期上都只有一个摘要 `7f8adb754962`。候选与 armed 按引擎的
+算法算出来也是 `7f8adb754962`。所以对当前候选，这一项今天是 PASS，L4 仍只因 `soak`（84/168）不过。
+换一个摘要，L4 会多一条 `registry_soaked (the scored round ran 7f8adb754962; the proposal is …)`。
+
+**落地。**
+
+- `canary.evaluate` 多报一个读数 `registries`：被评那一轮已决周期上的摘要。它只是读数，不是检查：
+  `governance canary` 手里没有提议，判不了。
+- `canary_health` 加必填的 `registry`，新增一项 `registry_soaked`：这一轮只跑过一份 registry，
+  而且就是提议那份，才算过。一轮里有两个摘要也不过：候选在轮中被改，relaunch 会续跑同一轮。
+- `admit` 加 `registry`，默认 None，按关闭处理。L4 只在晋级时被问。
+- `_admission` 用引擎盖章的同一条路径算提议的摘要：`registry_digest(build_model(...))`。
+  当天实测，`build_model` 对没有启用策略的 registry 抛 `ValueError: registry has no enabled strategies`。
+  那是「停」的形状：停不晋级，L4 不会被问到，所以这里记为 None，不抛异常。
+- `plan_cmd` 只读一次提议文件，admission 与事务用同一份字节。`apply_cmd` 本来就是这样。
+- RUNBOOK 加「L4 只为 soak 跑过的那份 registry 作保」一节。
+
+**测试。** 新文件 `tests/governance/test_the_canary_vouches_only_for_the_registry_it_ran.py`，先红后绿。
+
+- 红：6 条。5 条是新参数还不存在，`plan` 那条是断言失败。「全部停用的 plan 仍放行」是护栏，改之前就绿。
+- 四个变异全部被杀死：核对恒过，5 条红；拿当前 registry 而不是提议去算，2 条红；只要求包含、不要求唯一，
+  1 条红；去掉 `ValueError` 的保护，1 条红。
+- 四个已有测试跟着补 `registry`：夹具按真实记录补 `7f8adb754962`，或者盖上引擎对提议的摘要。
+
+**已知的边界。** `registry_digest` 的算法本身变了，摘要也会变，registry 却没变。跨这种改动的 soak 会被判
+不一致。方向是拒绝，处理是重新 soak。这次没有给它做别名表。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
+没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
+
+**生效条件。** 只在下次手动跑 `plan`、`apply` 时生效，要等主 checkout 快进之后。没有定时任务跑这两个命令，
+`live run` 与 launcher 都没动。
