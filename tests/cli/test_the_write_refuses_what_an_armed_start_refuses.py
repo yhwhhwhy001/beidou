@@ -27,15 +27,14 @@ import yaml
 from click.testing import CliRunner
 
 import beidou_cli.live_cmd as live_cmd
+from beidou_alpha.registry import parse_registry
 from beidou_cli import main
 from beidou_data.manifest import build_manifest
 from beidou_data.store import KlineStore
+from beidou_live.config import registry_evidence_problems
 from tests.live.fakes import UNREACHABLE
 
 ROOT = Path(__file__).resolve().parents[2]
-#: A tsmom report whose evidence half passes against the shipped profile.  Only its `dataset` block is
-#: replaced, by the manifest of the fixture's own data root, so the dataset half starts out agreeing.
-REPORT = ROOT / "reports" / "research" / "tsmom-validation-20260913T182325Z.json"
 
 
 class _PastTheGate(Exception):
@@ -48,18 +47,24 @@ def _membership(root: Path, refreshes: int) -> None:
 
 
 def _case(tmp_path: Path, declared: str) -> tuple[Path, Path, Path]:
-    """A profile, a registry citing one report, and the data root that report was produced on."""
+    """A profile, a registry citing one report, and the data root that report was produced on.
+
+    The report is a copy of the one the SHIPPED registry cites for tsmom, so it follows the shipped pair
+    through every re-issue and construction change.  Two fields of the copy are replaced: `dataset`, by
+    the fixture root's own manifest, and `verdict`, by WEAK_PASS - this file tests which halves the gate
+    asks, not whether tsmom's evidence clears.
+    """
     root = tmp_path / "data"
     root.mkdir()
     _membership(root, 30)
     KlineStore(root).append("BTCUSDT", "1h", pd.DataFrame({"open_time": [0, 3_600_000], "close": [1.0, 2.0]}))
-    report = json.loads(REPORT.read_text(encoding="utf-8"))
-    report["dataset"] = build_manifest(root).to_dict()
+    shipped = yaml.safe_load((ROOT / "config" / "alpha_registry.yaml").read_text(encoding="utf-8"))
+    tsmom = next(entry for entry in shipped.pop("strategies") if entry["id"] == "tsmom")
+    report = json.loads((ROOT / tsmom["evidence"]["report"]).read_text(encoding="utf-8"))
+    report.update(verdict="WEAK_PASS", dataset=build_manifest(root).to_dict())
     cited = tmp_path / "report.json"
     cited.write_text(json.dumps(report), encoding="utf-8")
 
-    shipped = yaml.safe_load((ROOT / "config" / "alpha_registry.yaml").read_text(encoding="utf-8"))
-    tsmom = next(entry for entry in shipped.pop("strategies") if entry["id"] == "tsmom")
     digest = hashlib.sha256(cited.read_bytes()).hexdigest()
     tsmom["evidence"] = {"report": str(cited), "sha256": digest, "verdict": declared}
     shipped.pop("books", None)  # the flow sleeve's book; the one strategy left is on the main book
@@ -67,6 +72,11 @@ def _case(tmp_path: Path, declared: str) -> tuple[Path, Path, Path]:
     registry.write_text(yaml.safe_dump({**shipped, "strategies": [tsmom]}), encoding="utf-8")
 
     profile = yaml.safe_load((ROOT / "config" / "live.demo.yaml").read_text(encoding="utf-8"))
+    # The copy clears the evidence half only while the shipped registry and profile agree on params and
+    # construction.  That pair is `tests/alpha/test_evidence_gate.py`'s to own; say so here rather than
+    # fail below as a disagreement between the two gates this file compares.
+    problems = registry_evidence_problems(parse_registry(yaml.safe_load(registry.read_text(encoding="utf-8"))), profile)
+    assert declared == "FAIL" or not problems, f"the shipped registry and profile disagree: {problems}"
     profile["registry"] = str(registry)
     profile["market_data"]["rest_url"] = UNREACHABLE
     profile["paths"] = {"state_dir": str(tmp_path / "live"), "reports_dir": str(tmp_path / "reports")}
