@@ -3869,7 +3869,16 @@ CEILING = {
     # `version` is inside `policy_digest()`, and bumping it would make `live status --check` report every
     # hour that the loop runs stale rules when no enforced rule changed.  Left 40 lines above, as the
     # beidou_live cells do since 2026-09-17: a ratchet at zero taxes the next honest change.
-    "beidou_governance": 4_034,
+    # +41 beidou_governance (3_994 -> 4_035), 2026-09-26: the shadow soak did not stop at 168.  `live run`
+    # exits 1 when any of its cycles failed, KeepAlive relaunches every non-zero exit, and on 09-23 a second
+    # 168 began in the same record; the canary then read both as one soak and failed `construction_stable`
+    # on two digests, each stable inside its own soak.  `canary.rounds` cuts the record into soaks of 168
+    # attempted cycles, `evaluate` scores the latest, and `remaining` answers `run_shadow.sh` from the same
+    # cut, so the launcher and its reader cannot disagree about where a soak ends.  Most of the 41 are the
+    # docstrings: why a SKIPPED row is no cycle, and why it stays in its round - measured on the real
+    # `run()`, the backoff after a failed last cycle writes one, and opening a round there reads a finished
+    # soak as 168 to go.  The 1 line over the old ceiling was not golfed away.  40 above again.
+    "beidou_governance": 4_075,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
