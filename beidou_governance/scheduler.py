@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from beidou_governance.budget import LedgerBudget, mine_refusals, refusals
@@ -29,6 +30,12 @@ BOOK = "book"
 PARITY = "parity"
 QUEUE = "queue"
 WAIT = "wait"
+
+#: How old M-011's newest compared bucket may be.  The archive is T+1 and `deploy/run_data.sh` fetches
+#: it at 17:20Z, so a healthy reading is 17 to 41 hours old; three days allows one missed night.  A module
+#: constant like `canary.SOAK_CYCLES`, not a `Policy` field: the loop records the policy digest every
+#: cycle, and a number the loop never reads should not have `live status --check` asking for a restart.
+PARITY_MAX_AGE = timedelta(days=3)
 
 
 @dataclass(frozen=True)
@@ -103,13 +110,18 @@ def next_action(context: Context, policy: Policy | None = None) -> Action:
     return Action(WAIT, tuple(blocked))
 
 
-def parity_satisfied(status: Mapping[str, Any] | None) -> tuple[bool, str]:
+def parity_satisfied(status: Mapping[str, Any] | None, *, now: datetime) -> tuple[bool, str]:
     """M-011 / T-D4-2: may a candidate that reads a metrics column leave `booked`?
 
     Three answers, and the middle one is the point.  No status at all and a status that could not be
     computed are BOTH "no", because the obligation is to have shown parity - not to have failed to
     disprove it.  `metrics_parity` already refuses to call zero disagreements out of zero comparisons
     agreement; this refuses to call a missing report one.
+
+    And an agreement is only as recent as the newest bucket it compared (2026-09-27).  Nothing refreshed
+    the archive after its one ingest, so from 2026-09-09 every daily report re-compared the buckets of
+    2026-09-07 and passed.  A status that does not say which bucket its comparison reaches is not parity,
+    and neither is one older than `PARITY_MAX_AGE` at `now`.
 
     Returned with its reason rather than as a bare bool: the reason is what `governance status` prints
     when somebody asks why a candidate has been sitting in `booked` for a month.
@@ -120,10 +132,28 @@ def parity_satisfied(status: Mapping[str, Any] | None) -> tuple[bool, str]:
         return False, f"M-011: parity not measurable ({status.get('reason', 'unstated')})"
     if status.get("unmeasurable"):
         return False, f"M-011: {len(status['unmeasurable'])} symbols have no overlapping buckets"
+    through = _instant(status.get("compared_through"))
+    if through is None:
+        return False, "M-011: the report does not say how recent its comparison is"
+    if now - through > PARITY_MAX_AGE:
+        return (
+            False,
+            f"M-011: the newest compared bucket is {through:%Y-%m-%dT%H:%MZ}, over {PARITY_MAX_AGE.days} days old",
+        )
     rate = status.get("worst_differing_rate")
     if not isinstance(rate, int | float) or rate > 0.0:
         return False, f"M-011: worst symbol disagrees on {rate} of shared buckets"
-    return True, f"M-011: {status.get('symbols_compared', 0)} symbols agree on every shared bucket"
+    count = status.get("symbols_compared", 0)
+    return True, f"M-011: {count} symbols agree on every shared bucket through {through:%Y-%m-%dT%H:%MZ}"
+
+
+def _instant(value: Any) -> datetime | None:
+    """An ISO stamp as a UTC instant, or None - unreadable is not an answer, least of all a fresh one."""
+    try:
+        stamp = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return None if stamp is None else (stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)).astimezone(UTC)
 
 
 def describe(actions: Sequence[Action]) -> str:

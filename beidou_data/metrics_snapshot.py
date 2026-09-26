@@ -111,19 +111,28 @@ def metrics_parity(snapshot: pd.DataFrame, archive: pd.DataFrame, *, tolerance: 
     The rate is ``None`` rather than 1.0 when nothing overlaps.  Zero disagreements out of zero
     comparisons is not agreement - reporting it as perfect is how a dead snapshot stream would look
     healthiest exactly while it stopped recording.
+
+    ``through`` is the newest bucket the two share, because an agreement is only as recent as that.
+    A dead ARCHIVE looks the same from here: from 2026-09-09 every call compared the buckets of
+    2026-09-07, the last day anything had ingested, and answered rate 0.0.
     """
     if snapshot.empty or archive.empty:
-        return {"overlapping": 0, "differing": 0, "rate": None}
+        return {"overlapping": 0, "differing": 0, "rate": None, "through": None}
     columns = [c for c in snapshot.columns if c in archive.columns and c not in ("open_time", "symbol")]
     merged = snapshot.merge(archive, on="open_time", suffixes=("_snap", "_arch"))
     if merged.empty or not columns:
-        return {"overlapping": 0, "differing": 0, "rate": None}
+        return {"overlapping": 0, "differing": 0, "rate": None, "through": None}
     differing = pd.Series(False, index=merged.index)
     for column in columns:
         left, right = merged[f"{column}_snap"], merged[f"{column}_arch"]
         differing |= ~((left - right).abs() <= tolerance) & left.notna() & right.notna()
     count = int(differing.sum())
-    return {"overlapping": len(merged), "differing": count, "rate": count / len(merged)}
+    return {
+        "overlapping": len(merged),
+        "differing": count,
+        "rate": count / len(merged),
+        "through": int(merged["open_time"].max()),
+    }
 
 
 def live_coverage_bars(store: MetricsStore, symbols: Sequence[str], *, interval_ms: int, period: str = "5m") -> int:
