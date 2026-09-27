@@ -5,8 +5,9 @@ Two tests carry the acceptance and one carries the register.
 T-G0-1 is the register: the seven rulings Phase 0 was told to account for are declared, each with the
 rule it conflicts with and the reason it stays an exception rather than becoming a rule.  A register
 whose entries only said "this happened" would let anything in.  A ruling taken after Phase 0 joins the
-register with a test of its own, naming the artefact it accounts for - `16a52547` (2026-09-19) is the
-first - and T-G0-1 stays the seven the plan named.
+register with a test of its own, naming what it accounts for: one artefact for `16a52547` (2026-09-19),
+one shape for `D-043` (carried over to pointer moves on 2026-09-27).  T-G0-1 stays the seven the plan
+named.
 
 T-G0-2 is the acceptance, and its teeth are in `Difference.attributed`: an `evidence_gap` counts as
 attributed only when it names the fix that would close it.  Without that clause "we cannot tell"
@@ -154,6 +155,46 @@ def test_the_0919_ruling_covers_one_artefact_and_not_a_shape() -> None:
     assert kinds({**real, "verdict": "WEAK_PASS"}) == {"D-020": UNATTRIBUTED, "R0": UNATTRIBUTED}
     diverged = kinds(real, live="0000000000000000")
     assert diverged == {"D-020": EXCEPTION, "R0": EXCEPTION, "KILL-AR-07": UNATTRIBUTED}
+
+
+POINTER_0925 = "reports/research/tsmom-validation-20260925T143836Z.json"
+POINTER_0913 = "reports/research/tsmom-validation-20260913T182325Z.json"
+
+
+def test_d043_covers_a_running_book_repointed_at_capped_evidence() -> None:
+    """A running book moved onto capped evidence is D-043's; nothing else that shares its verdict is.
+
+    The operator's ruling (2026-09-27) carries D-043's own reason over to a pointer move: the cap exists
+    so that a book holding positions is not stopped, so that book may change its evidence to capped
+    evidence.  Unlike `16a52547` it names a shape, not a file - the next capped tsmom pointer needs no
+    ruling of its own - so every condition gets a control that breaks it alone and must stay
+    unattributed.  The first assertion is the real artefact #163 points tsmom at, so this cannot pass
+    by attributing nothing.
+    """
+    reports = _reports()
+    real, earlier = reports[POINTER_0925], reports[POINTER_0913]
+    pbo = "pbo 0.55 > 0.3 was exempted at 2 grid trials (< 4): the gate did not run rather than passed"
+
+    def kinds(report: dict[str, Any], *, earlier_on: str | None = "2026-09-14", live: str = "") -> dict:
+        book = {POINTER_0925: report} | ({POINTER_0913: earlier} if earlier_on else {})
+        dates = {POINTER_0925: "2026-10-13"} | ({POINTER_0913: earlier_on} if earlier_on else {})
+        seen = [live or real["evidence_construction"], earlier["evidence_construction"]]
+        result = replay_adoptions(book, dates, live_constructions=seen)
+        mine = [d for d in result.differences if d.subject == POINTER_0925.rsplit("/", 1)[-1]]
+        return {d.rules_say.split(":")[0]: (d.kind, d.attribution.split("（")[0]) for d in mine}
+
+    assert kinds(real) == {"D-020": (EXCEPTION, "D-043")}
+    assert kinds(real, earlier_on=None) == {"D-020": (UNATTRIBUTED, "")}  # a first adoption
+    assert kinds(real, earlier_on="2026-10-20") == {"D-020": (UNATTRIBUTED, "")}  # the other pointer came later
+    assert kinds({**real, "reasons": [pbo]}) == {"D-020": (UNATTRIBUTED, "")}  # D-043's other cap
+    assert kinds({**real, "reasons": [*real["reasons"], pbo]}) == {"D-020": (UNATTRIBUTED, "")}  # every reason
+    assert kinds({**real, "reasons": []}) == {"D-020": (UNATTRIBUTED, "")}  # a WEAK_PASS on the Sharpe bar
+    assert kinds({**real, "verdict": "FAIL"}) == {"D-020": (UNATTRIBUTED, "")}
+    diverged = kinds(real, live="0000000000000000")
+    assert diverged == {"D-020": (EXCEPTION, "D-043"), "KILL-AR-07": (UNATTRIBUTED, "")}
+    # #163's switch on the real record: the whole adoption history plus this pointer stays clean.
+    switched = {**ADOPTIONS, POINTER_0925: "2026-10-13"}
+    assert replay_adoptions(reports, switched, acknowledged_rejects=ACKNOWLEDGED).passes_ac_g0
 
 
 def test_t_g0_2_every_difference_carries_a_named_cause() -> None:

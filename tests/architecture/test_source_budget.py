@@ -3934,7 +3934,18 @@ CEILING = {
     # constant sits beside `canary.SOAK_CYCLES` rather than in `Policy`, so the digest the loop records does
     # not move.  Most of the 32 are its reasoning and the docstring.  The ruling's other half is the nightly
     # `data metrics` in `deploy/run_data.sh`; live, data and cli grew inside their headroom.  40 above again.
-    # +54 beidou_governance (4_177 -> 4_231), 2026-09-27, operator's choice of option B: the replay's
+    # +39 beidou_governance (4_177 -> 4_216), 2026-09-27, operator ruling ("均按推荐处理") on the refusal
+    # #163 will meet: D-043 joins the replay's exception register as a class, not a file.  #163 moves tsmom
+    # to the 2026-09-25 evidence, a WEAK_PASS for one reason only - D-043's cap (2 cells, all five folds
+    # chose `crowding_window` 72) - and §3 admits PASS alone; it was written on 2026-09-08, before the cap
+    # existed.  The operator carried D-043's own reason over to a pointer move: the cap does not stop a book
+    # holding positions, so that book may move onto capped evidence.  Measured on main plus #163 plus its
+    # `ADOPTIONS` row, on the real record: 2 unattributed before, D-020 and KILL-AR-07; 1 after, KILL-AR-07,
+    # which clears with the first decided cycle under `221d001c3c07a626`.  14 lines are the entry; 12 the
+    # route, reading the verdict, every reason being the cap and an earlier adoption of the strategy; 7 its
+    # docstring and signature; 6 the adoption-order bookkeeping.  Eight mutations each turned one control
+    # red.  The 21 lines over were not golfed.  40 above again.
+    # +54 beidou_governance (4_216 -> 4_270), 2026-09-27, operator's choice of option B: the replay's
     # construction rows read what DL-G9 put in the record.  Phase 0 wrote "Phase 1：构造变化时落全量构造"
     # into every one of them at 20:25 +08:00 on 2026-09-08; DL-G9 (a9f4f255) shipped `construction_full`
     # 38 minutes later, and the live loop has written it on each process's first cycle since that day's
@@ -3947,9 +3958,9 @@ CEILING = {
     # mutation of the new test showed exactly that.  31 of the 54 are code (`_flat`, `_moved`, the two
     # texts a row can say), 17 the docstrings and comments on why the diff reads raw digests as JSON text
     # with `payload_version` kept, 6 blank.  `governance replay` on the real record, before and after: 15
-    # reproduced, 34 differences, 0 unattributed; only the six construction rows moved.  The 36 over were
-    # not golfed.  40 above again.
-    "beidou_governance": 4_271,
+    # reproduced, 34 differences, 0 unattributed; only the six construction rows moved, also on top of #177.
+    # The 14 over were not golfed.  40 above again.
+    "beidou_governance": 4_310,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
