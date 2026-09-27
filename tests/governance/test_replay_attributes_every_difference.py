@@ -88,6 +88,10 @@ ADOPTIONS = {
     # `EXCEPTIONS_BY_ID["16a52547"]`.  A fourth time is a test failure:
     # `test_every_pointer_the_registry_cites_is_in_the_adoption_history`.
     "reports/research/tsmom-validation-20260919T081914Z.json": "2026-09-19",
+    # 2026-09-27 (#163, the k switch; the operator ended the construction freeze early that day): tsmom
+    # moves to the k = 0.175 re-issue, WEAK_PASS under D-043's cap (`oos_is_full_sample_tail` only).  Its
+    # one D-020 difference is `EXCEPTIONS_BY_ID["D-043"]`'s (#177).
+    "reports/research/tsmom-validation-20260925T143836Z.json": "2026-09-27",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
@@ -177,7 +181,7 @@ def test_d043_covers_a_running_book_repointed_at_capped_evidence() -> None:
 
     def kinds(report: dict[str, Any], *, earlier_on: str | None = "2026-09-14", live: str = "") -> dict:
         book = {POINTER_0925: report} | ({POINTER_0913: earlier} if earlier_on else {})
-        dates = {POINTER_0925: "2026-10-13"} | ({POINTER_0913: earlier_on} if earlier_on else {})
+        dates = {POINTER_0925: "2026-09-27"} | ({POINTER_0913: earlier_on} if earlier_on else {})
         seen = [live or real["evidence_construction"], earlier["evidence_construction"]]
         result = replay_adoptions(book, dates, live_constructions=seen)
         mine = [d for d in result.differences if d.subject == POINTER_0925.rsplit("/", 1)[-1]]
@@ -193,7 +197,7 @@ def test_d043_covers_a_running_book_repointed_at_capped_evidence() -> None:
     diverged = kinds(real, live="0000000000000000")
     assert diverged == {"D-020": (EXCEPTION, "D-043"), "KILL-AR-07": (UNATTRIBUTED, "")}
     # #163's switch on the real record: the whole adoption history plus this pointer stays clean.
-    switched = {**ADOPTIONS, POINTER_0925: "2026-10-13"}
+    switched = {**ADOPTIONS, POINTER_0925: "2026-09-27"}
     assert replay_adoptions(reports, switched, acknowledged_rejects=ACKNOWLEDGED).passes_ac_g0
 
 
