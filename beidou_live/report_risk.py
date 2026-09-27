@@ -91,7 +91,9 @@ def leg_split(store: StateStore, *, since_ms: int | None, equity: float | None) 
         if isinstance(bar, int | float):
             targets_at[int(bar)] = {str(k): float(v) for k, v in (row.get("targets") or {}).items()}
     legs: dict[str, float] = {"long": 0.0, "short": 0.0, "flat": 0.0}
-    counts: dict[str, int] = {"long": 0, "short": 0, "flat": 0}
+    # Distinct (bar, symbol) pairs, not rows: since 2026-09-27 a bar whose book paid funding carries a
+    # second, `late_funding` row, and a symbol that also traded that bar would otherwise count twice.
+    seen: dict[str, set[tuple[int, str]]] = {"long": set(), "short": set(), "flat": set()}
     for row in store.read_jsonl(store.attribution_path):
         bar = row.get("bar_open_ms")
         if not isinstance(bar, int | float) or (since_ms is not None and int(bar) < since_ms):
@@ -105,8 +107,8 @@ def leg_split(store: StateStore, *, since_ms: int | None, equity: float | None) 
             weight = targets.get(str(symbol), 0.0)
             side = "long" if weight > 0 else ("short" if weight < 0 else "flat")
             legs[side] += total
-            counts[side] += 1
-    out: dict[str, Any] = {"pnl": legs, "symbol_bars": counts}
+            seen[side].add((int(bar), str(symbol)))
+    out: dict[str, Any] = {"pnl": legs, "symbol_bars": {side: len(pairs) for side, pairs in seen.items()}}
     if equity and equity > 0:
         out["pnl_pct"] = {side: value / equity for side, value in legs.items()}
     return out

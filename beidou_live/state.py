@@ -41,6 +41,15 @@ class LiveState:
     day: str | None = None
     day_start_equity: float | None = None
     last_income_ms: int | None = None
+    # FUNDING_FEE rows are read from a second window that trails `last_income_ms` by
+    # `engine.FUNDING_SETTLE_LAG_MS`, because the venue publishes them after the settlement they are
+    # stamped with (2026-09-27: 6 of 507 recorded).  Absent from every state.json written before that,
+    # and then started at `last_income_ms` - never earlier, or rows the old window read are read twice.
+    last_funding_ms: int | None = None
+    # The book the last ingestion charged its window to, and that window's bar.  A funding row stamped
+    # before the current `since` was paid by it, not by `last_contributions`: a cycle has traded since.
+    income_prev_contributions: dict[str, dict[str, float]] = field(default_factory=dict)
+    income_prev_bar_ms: int | None = None
     leverage_set: dict[str, int] = field(default_factory=dict)
     # `by_vol`: which symbols' `leverage_set` entry is a vol tier this loop sent, and how many
     # consecutive cycles each has asked for a different one (S2).  Persisted so a restart neither hands

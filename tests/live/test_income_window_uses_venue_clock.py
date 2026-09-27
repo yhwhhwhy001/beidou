@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from beidou_alpha.panel import Panel
-from beidou_live.engine import LiveEngine
+from beidou_live.engine import FUNDING_SETTLE_LAG_MS, LiveEngine
 from beidou_live.state import StateStore
 from tests.fakes.fake_venue import FakeVenue
 from tests.live.fakes import FakeClock, FakeMarketData
@@ -79,7 +79,9 @@ async def test_a_fill_that_just_happened_at_the_venue_is_inside_the_window(panel
 
     flows = await engine._ingest_income(HOST_NOW, 10_000.0)
 
-    start, end = venue.windows[-1]
+    # Since 2026-09-27 a second call reads FUNDING_FEE alone, a lag behind; it trails the same clock.
+    (start, end), funding = venue.windows
+    assert funding[1] == venue.venue_time_ms() - FUNDING_SETTLE_LAG_MS
     assert end == venue.venue_time_ms(), "the window must end on the venue's clock, not the host's"
     assert start <= just_filled <= end
     assert venue.income_log == [], "both rows were ingested"
@@ -103,7 +105,7 @@ async def test_the_first_window_after_the_change_recovers_the_hour_the_host_basi
 
     await engine._ingest_income(HOST_NOW, 10_000.0)
 
-    start, end = venue.windows[-1]
+    start, end = venue.windows[0]  # the main window; the lagged FUNDING_FEE one follows it
     assert start == HOST_NOW - 300_000 and end == HOST_NOW + HOUR_MS
     assert venue.income_log == [], "the stranded row is recovered by the one wider window"
 
