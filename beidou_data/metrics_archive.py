@@ -142,8 +142,13 @@ def sync_metrics(
     end: str,
     workers: int = 1,
     progress: Callable[[str, int, int], None] | None = None,
+    failed: dict[str, str] | None = None,
 ) -> dict[str, int]:
     """Fetch every published day in ``[start, end)`` that the store does not already hold.
+
+    ``failed`` is filled with each symbol that raised and why, as `sync_funding` fills the report it is
+    handed.  The caller's summary is the only place a nightly log can tell a skipped symbol from one
+    with nothing new: until 2026-09-27 `data metrics` printed "unchanged" for both.
 
     The watermark is the store's own ``last_open_time``, not a cursor file: a cursor can disagree with
     the data it claims to describe, and then a resume silently skips a gap.  Days already covered are
@@ -159,7 +164,7 @@ def sync_metrics(
     """
     days = days_between(start, end)
     stored: dict[str, int] = {}
-    failures: dict[str, str] = {}
+    failures: dict[str, str] = {} if failed is None else failed
     done = 0
     total = len(symbols)
 
@@ -172,7 +177,7 @@ def sync_metrics(
             progress(symbol, done, total)
 
     def isolate(symbol: str, produce: Callable[[], tuple[str, pd.DataFrame | None]]) -> None:
-        """One symbol's failure is reported and skipped, never raised.
+        """One symbol's failure is reported - to ``progress`` now, in ``failed`` after - and skipped, never raised.
 
         The store is the watermark, so a re-run picks this symbol up exactly where it stopped; ending
         the whole run instead throws away every OTHER symbol's work, which is the expensive half of a
