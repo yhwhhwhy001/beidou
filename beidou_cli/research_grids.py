@@ -30,6 +30,7 @@ DEFAULT_GRIDS: dict[str, dict[str, list[Any]]] = {
     # Prior-driven small grids: every extra trial costs DSR power; do not widen these to "find" a pass.
     "xsmom": {"skip_bars": [24, 48], "z_scale": [1.0, 1.5], "entry_threshold": [0.20, 0.30]},
     "carry": {"window_bars": [72, 168], "entry_threshold": [0.20, 0.30]},
+    "carry_hedged": {"lookback_days": [7, 30], "threshold_per_day": [0.0, 0.0003]},
     "meanrev": {"window": [24, 48, 96], "z_entry": [1.5, 2.0, 2.5], "trend_gate_z": [1.5, 2.0, 3.0]},
     "breakout": {"window": [24, 48, 96], "distance_scale": [1.0, 2.0, 3.0]},
     "flow": {"window": [24, 72, 168, 336], "scale": [0.03, 0.05, 0.10], "entry_threshold": [0.20, 0.30]},

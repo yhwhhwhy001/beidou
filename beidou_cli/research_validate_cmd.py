@@ -17,8 +17,10 @@ import numpy as np
 import pandas as pd
 
 from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
+from beidou_alpha.hedged import spread_panel
 from beidou_alpha.registry import StrategyEntry, evidence_construction_digest
 from beidou_alpha.report import render_markdown
+from beidou_alpha.signals import get_signal
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.ledger import (
     TrialRecord,
@@ -83,11 +85,12 @@ from beidou_cli.research_options import (
 # without keeping the addresses would have made a move-only commit break the evidence base, so the
 # addresses stay until the sink step gives those names a home outside `beidou_cli` entirely.
 from beidou_cli.research_panel import (
+    _book_weights,
+    _construction,
     _entry,
     _funding_facts,
     _load,
     _membership,
-    _model,
     _require_funding,
     _resolve_symbols,
     _wants_metrics,
@@ -274,6 +277,13 @@ def research_validate(
     # that trades (2026-09-08 audit).  `--no-guards --no-exits` reproduces every report written before.
     book_guards = _book_guards(profile_payload, guards)
     exit_params = _exit_params(profile_payload, exits, interval)
+    # #14 / #39: a hedged signal is scored on this panel (it reads spot and the funding as paid) and
+    # priced on its long-spot / short-perpetual spread, so everything below prices `priced_on`.  The
+    # regime labels still read `panel`: a hedged book is split by the same market states as any other.
+    hedged = get_signal(strategy).hedged
+    if hedged and exit_params is not None:
+        raise click.ClickException("a hedged book has two legs and the exit overlay would close one; pass --no-exits")
+    priced_on = spread_panel(panel) if hedged else panel
     nets: dict[str, pd.Series] = {}
     params_by_key: dict[str, dict[str, Any]] = {}
     results: dict[str, BacktestResult] = {}
@@ -281,10 +291,10 @@ def research_validate(
     click.echo(f"evaluating {len(combos)} parameter sets on {len(panel.symbols)} symbols x {len(panel.index)} bars")
     for combo in combos:
         key = param_key(combo)
-        model = _model(StrategyEntry(id=strategy, params=combo), profile_payload, interval, min_history)
-        weights, _c, _p = model.evaluate(panel, membership)
+        cell = StrategyEntry(id=strategy, params=combo)
+        weights = _book_weights(cell, profile_payload, interval, min_history, panel, membership)
         result, decisions[key] = score_book(
-            panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
+            priced_on, weights, cost, execution=execution, guards=book_guards, exits=exit_params, impact=impact
         )
         results[key] = result
         nets[key] = result.portfolio_net
@@ -311,9 +321,7 @@ def research_validate(
     matrix = np.column_stack([nets[key].to_numpy(dtype=float) for key in nets])
     # D-024: the construction the numbers were produced by, named once and used by both the report and
     # the ledger signature, so the two can never describe different books.
-    _run_portfolio = _model(
-        StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history
-    ).portfolio.__dict__
+    _run_portfolio = _construction(StrategyEntry(id=strategy, params=combos[0]), profile_payload, interval, min_history)
     ledger_path = resolve_ledger_path(out=out)
     # Charged BEFORE the denominator below is read, which is the whole difference between this and the
     # way `mine` charges.  A shortlist is not a verdict, so `mine` can write its rows at the end; this
@@ -389,9 +397,11 @@ def research_validate(
         # 这里不传 `impact`，`score_book` 的默认也是 `None`。所以这不是修一个读数错，是拆掉一条会漂
         # 的缝：`score_book` 一旦改套层顺序或再加一层，邻域探针不会自己跟上，于是同一份报告里
         # 「最优那一格」与「它周围的格子」会按两种口径算，而没有任何东西会说出来。
-        model = _model(StrategyEntry(id=strategy, params=dict(candidate)), profile_payload, interval, min_history)
-        weights, _c, _p = model.evaluate(panel, membership)
-        priced, _overlay = score_book(panel, weights, cost, execution=execution, guards=book_guards, exits=exit_params)
+        cell = StrategyEntry(id=strategy, params=dict(candidate))
+        weights = _book_weights(cell, profile_payload, interval, min_history, panel, membership)
+        priced, _overlay = score_book(
+            priced_on, weights, cost, execution=execution, guards=book_guards, exits=exit_params
+        )
         return sharpe(priced.portfolio_net, bpy)
 
     neighbourhood = parameter_neighborhood(
@@ -409,7 +419,7 @@ def research_validate(
     # The multiplier scales the fee rates (`turnover_bps`; `carry_bps_per_bar`, 0 from costs.yaml), never impact.
     def _priced(multiplier: float) -> pd.Series:
         return run_backtest(
-            panel,
+            priced_on,
             best_weights,
             CostModel(cost.turnover_bps * multiplier, cost.carry_bps_per_bar * multiplier, cost.use_funding),
             execution=execution,  # type: ignore[arg-type]
@@ -461,7 +471,7 @@ def research_validate(
     )
     slippage_nets = {
         level: run_backtest(
-            panel,
+            priced_on,
             best_weights,
             CostModel(total, cost.carry_bps_per_bar, cost.use_funding),
             execution=execution,  # type: ignore[arg-type]
@@ -495,7 +505,7 @@ def research_validate(
     # not of the holding return.  Priced here as a comparator rather than adopted (adopting it would
     # break comparability with every report back to the August 2026 baseline).
     other_execution = "close_to_close" if execution == "open_to_close" else "open_to_close"
-    comparison = run_backtest(panel, best_weights, cost, execution=other_execution, guards=book_guards).summary()  # type: ignore[arg-type]
+    comparison = run_backtest(priced_on, best_weights, cost, execution=other_execution, guards=book_guards).summary()  # type: ignore[arg-type]
     # GAP-SF02 (docs/analysis/2026-09-17-strategy-factor-belief-deep-analysis.md).  Until this block every
     # split a report made of its returns was by calendar - folds, `time_split_sharpes`, the window q10 -
     # and on 2026-09-17 "no report shows it earning in any state" was read as "it earns in no state"
@@ -532,7 +542,7 @@ def research_validate(
         # Kept BESIDE the two above rather than replacing them: `registry.construction_problems` reads
         # `book_guards` and `exits` by name out of archived reports, and moving them would make every
         # report written from here on unreadable to the startup gate.
-        "layers": layers_applied(band="model", guards=book_guards, exits=exit_params),
+        "layers": layers_applied(band="none" if hedged else "model", guards=book_guards, exits=exit_params),
         # The data this verdict was computed from.  Everything else here already names itself - the report
         # has a digest, the registry a fingerprint, the construction another - but the dataset did not, and
         # on 2026-09-04 the membership table was rebuilt monthly -> daily while the profile still described

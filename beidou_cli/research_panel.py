@@ -33,6 +33,7 @@ from typing import Any
 import click
 import pandas as pd
 
+from beidou_alpha.hedged import HEDGED_NOTIONAL, hedged_construction, hedged_weights
 from beidou_alpha.mining.search import enumerate_candidates, to_signal
 from beidou_alpha.model import AlphaModel
 from beidou_alpha.panel import Panel
@@ -131,14 +132,62 @@ def _entry(strategy: str, registry_path: str, params: str, grids: str = "") -> S
     return StrategyEntry(id=strategy, params=base)
 
 
+def _min_history(profile: dict[str, Any], min_history: int | None) -> int:
+    return (
+        int((profile.get("portfolio", {}) or {}).get("min_history_bars", 720)) if min_history is None else min_history
+    )
+
+
 def _model(entry: StrategyEntry, profile: dict[str, Any], interval: str, min_history: int | None = None) -> AlphaModel:
-    if min_history is None:
-        min_history = int((profile.get("portfolio", {}) or {}).get("min_history_bars", 720))
     # `with_feature_store` is the identity unless BEIDOU_FEATURE_STORE is set (research only, #9.6).
     return with_feature_store(
         AlphaModel(
-            entries=(entry,), portfolio=portfolio_params(profile), interval=interval, min_history_bars=min_history
+            entries=(entry,),
+            portfolio=portfolio_params(profile),
+            interval=interval,
+            min_history_bars=_min_history(profile, min_history),
         )
+    )
+
+
+def _book_weights(
+    entry: StrategyEntry,
+    profile: dict[str, Any],
+    interval: str,
+    min_history: int | None,
+    panel: Panel,
+    membership: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """The decision weights `validate` prices for one grid cell: the model's, or a hedged signal's spread.
+
+    A hedged signal (#14 / #39) is scored on the raw panel, because it reads the spot price and the funding
+    as paid; its weights are the spread's and the caller prices them on `beidou_alpha.hedged.spread_panel`.
+    """
+    spec = get_signal(entry.id)
+    if not spec.hedged:
+        weights, _c, _p = _model(entry, profile, interval, min_history).evaluate(panel, membership)
+        return weights
+    params = spec.canonical_params(entry.params)
+    return hedged_weights(
+        spec.compute(panel, params),
+        panel.close,
+        membership,
+        min_history_bars=_min_history(profile, min_history),
+        decision_hour_utc=int(params["decision_hour_utc"]),
+    )
+
+
+def _construction(
+    entry: StrategyEntry, profile: dict[str, Any], interval: str, min_history: int | None
+) -> dict[str, Any]:
+    """The construction a report records as `portfolio` and the ledger folds into its digest (D-024)."""
+    spec = get_signal(entry.id)
+    if not spec.hedged:
+        return _model(entry, profile, interval, min_history).portfolio.__dict__
+    return hedged_construction(
+        notional=HEDGED_NOTIONAL,
+        min_history_bars=_min_history(profile, min_history),
+        decision_hour_utc=int(spec.canonical_params(entry.params)["decision_hour_utc"]),
     )
 
 

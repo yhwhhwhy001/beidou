@@ -79,6 +79,10 @@ class SignalSpec:
     # denominator - which is the whole point of a shared bucket rather than a per-strategy one.
     selection: SelectionCensus | None = None
     selection_bucket: str = ""
+    # #14 / #39 (2026-09-27).  A hedged signal's score means "hold long spot + short perpetual here", not a
+    # direction, and a model holding one weight per perpetual would trade the short leg alone.  Only
+    # `research validate` prices one (`beidou_alpha.hedged`); `AlphaModel` refuses it.
+    hedged: bool = False
 
     def warmup_for(self, params: Mapping[str, Any]) -> int:
         """Bars of history the signal needs under *these* params, not under the defaults.
