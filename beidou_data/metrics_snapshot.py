@@ -26,7 +26,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from beidou_data.metrics import REST_SOURCES, parse_rest_rows, period_ms
+from beidou_data.metrics import REST_SOURCES, parse_rest_rows, period_ms, rest_stamp_offset_ms
 from beidou_data.store import MetricsStore
 
 #: Kept so anything naming the open-interest page by hand still resolves; the poll uses `REST_SOURCES`.
@@ -73,7 +73,7 @@ async def snapshot_metrics(
                 # `metrics_parity` cannot see (it skips NaN pairs and calls that agreement).
                 absent.append(path.rsplit("/", 1)[-1])
                 continue
-            page = parse_rest_rows(rows, step, mapping, symbol=symbol)
+            page = parse_rest_rows(rows, step, mapping, symbol=symbol, stamp_offset_ms=rest_stamp_offset_ms(path, step))
             frame = page if frame is None else _merge(frame, page, mapping.values())
         return symbol, frame, absent
 

@@ -3869,7 +3869,17 @@ CEILING = {
     # 大半是那段实测。三个变异各被一条测试抓到。
     #
     # 留 40 行（3_605 -> 3_645），理由同上，不重述。
-    "beidou_data": 3_645,
+    #
+    # 2026-09-27（不编号，同上）。+32 beidou_data，3_605 -> 3_637，抬到 3_677。
+    #
+    # 同一天第二件裁定的后半：taker 页按开盘标桶。`verify_stamp_offset` 对着交易所核过：BTCUSDT 09-25 的
+    # 日归档对 REST 窗口，持仓量两列与三个比率列在 `METRICS`（+5 分钟）下 PASS，taker 页在任何容差下 FAIL
+    # （0–3/146），在偏移 0 下 PASS 145/145、相邻偏移 1/144 与 1/146。花在哪：`alignment.METRICS_TAKER`
+    # 连同它的实测注释 +17，`metrics` 的 `REST_STAMPED_AT_OPEN` 与 `rest_stamp_offset_ms` 加解析参数 +15，
+    # `snapshot_metrics` 按页传偏移只改一行。两个变异各被两条测试抓到。
+    #
+    # 留 40 行（3_637 -> 3_677），理由同上，不重述。
+    "beidou_data": 3_677,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are
