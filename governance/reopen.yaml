@@ -166,7 +166,11 @@ entries:
     ruled: 2026-09-10
     verdict: 不可执行（执行栈无现货下单路径）
     condition: 一次「本系统要不要拥有现货执行面」的具名裁定。那是块 0 级别的范围变更。
-    check: operator
+    check: resolved
+    note: >-
+      操作者 2026-09-27 07:53Z 在卡片「给北斗加现货腿,去做资金费套利和期现套利吗?」上选了「直接立项」
+      （核查后直接做两腿回测与现货下单通道），即本条要的具名裁定。重开的是对冲形状 `carry_hedged`，
+      预登记见 RESEARCH_LOG 2026-09-27「预登记：资金费对冲书 carry_hedged」；判负时本条改记 REFUTED。
     log: 2026-09-10 #14 / #39
 
   - id: ls-leaf
