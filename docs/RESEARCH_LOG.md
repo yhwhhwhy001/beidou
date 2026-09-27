@@ -17332,3 +17332,34 @@ taker 没有值。BTC 快照里 taker 的非空行比 `count_long_short_ratio` �
 **没改的与生效条件。** 已写下的快照行不改：09-12 12:55Z 起的 taker 值仍早 5 分钟，并且每小时缺一行。
 只有 armed 实盘循环写共享快照（`record_metrics`；paper-l3 与 shadow 不写），新解析要它重启后才生效，
 重启另记。M-011 从上一节起只比叶子读的列，taker 不在其中，所以这两件都不影响 M-011。
+
+## 2026-09-27 · 重启 #58：操作者要求；新进程载入 taker 页按开盘标桶的修正（#185），构造不变
+
+只记可观测事实。
+
+- **谁、为什么**：操作者在会话里选定「今天在安全窗口重启」，为让 #185 的 taker 时间偏移修正生效，由该会话执行。
+- **命令与窗口**：2026-09-27T06:14:41Z 发出 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，06:15:11Z 返回。
+  这个时刻在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
+- **重启前**：主 checkout 06:14:29Z 快进到 `efa68bb7`（#185，见 reflog）。两个构造测试 06:14:34Z 跑，15 passed。
+- **进程**：PID 75336（2026-09-25T17:09:21Z 启动）→ 71893（2026-09-27T06:15:11Z 启动）。`state.restarts` 57 → 58，
+  `restarted_at` 2026-09-27T06:15:12Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_data/metrics.py`、`metrics_snapshot.py`、`alignment.py` 06:14:29Z；
+  `beidou_live/engine.py`、`cycle_record.py` 05:53:53Z；`deploy/run_live.sh` 09-25T05:33:06Z；`config/live.demo.yaml`
+  09-23T04:55:35Z；`config/alpha_registry.yaml` 09-23T13:31:17Z。全部早于 06:15:11Z，新进程跑的是 `efa68bb7` 的代码。
+- **这次一并载入的**：上次重启时主 checkout 在 `5fbe4163`。此后合入、碰到循环所用代码的合并有五个。
+  在周期路径上的是 #183（`construction_full` 的标志等那一行落盘再置位）与 #185。#175、#176、#182 改的是日报与平价，
+  循环不调用。policy、`run_live.sh` 与两个配置没变。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13`；
+  - 交易所时钟偏差 +2.1s；
+  - `restart was 919.5s after the bar close (window 87.3s); reconciled but did not rebalance`，为 05:00Z 那根 bar
+    写了一行 SKIPPED。那根 bar 旧进程已在 06:00:30Z 跑完（0 单，无错误），没有漏掉退出检查。
+- **`live status --check`（06:15:38Z）**：registry `7f8adb754962`、治理规则 `d62ac59fa95c` 与在跑的循环一致；
+  最近 24 小时 24 个周期，完成 95.8%，1 次失败在 bar 2026-09-26T20:00Z，早于这次重启。
+- **修正前的基线**，即旧进程 06:00:30Z 那次轮询写下的：BTCUSDT 05:00Z 以来 11 行，taker 有值 10 行；
+  现取的 12 个 REST taker 值里，9 个存在「时间戳减 5 分钟」的桶上，0 个存在自己的时间戳上。
+- **第一个真周期**：写这一节时（06:19Z）还没到。它应在 07:00:30Z 左右处理 06:00Z 的 bar，新解析从这一次轮询起写快照。
+  核对办法与上一条基线同一把尺：BTCUSDT 最近一小时的 taker 是否每行有值，现取的 REST taker 值是否存在自己的时间戳上。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。它们不写共享快照（`record_metrics`）。
+
+构造没有变：k 仍是 0.60，两个构造测试通过，registry 与治理规则摘要都没变。
