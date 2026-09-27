@@ -112,6 +112,10 @@ class VenueProbes(Protocol):
         """Per-symbol venue leverage caps, for D-016's derivation."""
         ...
 
+    async def leverage_bracket_table(self) -> Mapping[str, Sequence[tuple[float, int]]]:
+        """Every bracket per symbol as ``(notional_cap, initial_leverage)``, for `by_vol`'s cap by size (E-029)."""
+        ...
+
     def mark(self, closes: Mapping[str, float]) -> None:
         """Paper venue only: move marks onto the newest closed bar."""
         ...

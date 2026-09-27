@@ -126,7 +126,9 @@ EXPECTED_FIELDS = {
         "stop_loss_price_cap",
     },
     "throttle": {"enabled", "start", "stop", "floor"},
-    "leverage": {"mode", "margin_cap", "max_leverage", "margin_buffer"},
+    # v11, `by_vol` (2026-09-27): its three knobs.  Arrived with the mode switched on, so like v9 there
+    # is no alias - `test_r1_moved_only_the_leverage_block` below shows what did and did not move.
+    "leverage": {"mode", "margin_cap", "max_leverage", "margin_buffer", "sigma_ref", "tiers", "hysteresis"},
 }
 
 
@@ -179,6 +181,12 @@ AFTER_PRICE_CAP = "b8f215ab706ca7c472028d109f96f9fbb911097a9a16bb4b6fb9dee9ec5b5
 #: `CONSTRUCTION_ALIASES`, and M-010, M-G06 and `realised_vol` restart with the restart that loads it.
 SHIPPED_K0175 = "4b2dc74b8f3ce73a3f7b14b513f3999aa9a7372024b317648c0d65381f9bf8c6"
 
+#: v11: `leverage` `auto` -> `by_vol` plus its three knobs, on top of `SHIPPED_K0175`.  The book's weights
+#: and orders do not move (the leverage is read after they are decided), but the leverage block is hashed so
+#: that a change to it is visible, and the operator accepted the one window reset on 2026-09-26's card.  So
+#: like `SHIPPED_D3` and `SHIPPED_K0175`, it is NOT in `CONSTRUCTION_ALIASES`.
+SHIPPED_BY_VOL = "e6d89cf8f8c462aa6d3a624e2b6ce5c41471ca296fea5989528cddd85bfb6b26"
+
 
 def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:
     """The freeze test compares the CANONICAL digest, so a field set that grows must not trip it.
@@ -204,16 +212,43 @@ def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
     2026-09-17: D1+D2+D3 ended the run in which every digest this tree could compute was the frozen book
     seen through a longer field set, and this test was inverted to say so.  2026-10-13: k 0.60 -> 0.175 is
     the next real change, so the shipped digest is `SHIPPED_K0175` and resolves to itself - not to
-    `SHIPPED_D3`, not to `FROZEN`.  Asserting the inequality rather than deleting the test is what keeps a
+    `SHIPPED_D3`, not to `FROZEN`.  `by_vol` is the one after that: `SHIPPED_BY_VOL`, resolving to itself and to
+    none of the three before it.  Asserting the inequality rather than deleting the test is what keeps a
     future alias - which would quietly re-declare two books to be one - from passing unnoticed.
     """
     from beidou_live.engine import construction_fingerprint
     from tests.live.helpers_construction import live_config_for_profile
 
     digest = construction_fingerprint(live_config_for_profile())["digest"]
-    assert digest == SHIPPED_K0175, digest
-    assert canonical_construction(digest) == digest, "k 0.60 -> 0.175 是真的构造变更，不能声明成旧账的别名"
-    assert canonical_construction(digest) not in (SHIPPED_D3, FROZEN)
+    assert digest == SHIPPED_BY_VOL, digest
+    assert canonical_construction(digest) == digest, "交易所分档是一次构造变更，不能声明成旧账的别名"
+    assert canonical_construction(digest) not in (SHIPPED_K0175, SHIPPED_D3, FROZEN)
+    assert canonical_construction(SHIPPED_K0175) == SHIPPED_K0175, (
+        "k 0.60 -> 0.175 是真的构造变更，不能声明成旧账的别名"
+    )
+
+
+def test_by_vol_moved_only_the_leverage_block() -> None:
+    """`by_vol` (v11): take the three new keys out and put `auto` back, and the hash is `SHIPPED_K0175` exactly.
+
+    So nothing but the leverage block moved - no weight, band, cap or exit parameter rode along with it,
+    which is §8.2's firewall stated as a hash instead of a promise.
+    """
+    import hashlib
+    import json
+
+    from beidou_live.engine import construction_fingerprint
+    from tests.live.helpers_construction import live_config_for_profile
+
+    out = construction_fingerprint(live_config_for_profile())
+    payload = {key: value for key, value in out.items() if key not in ("digest", "payload_version")}
+    leverage = {
+        key: value for key, value in payload["leverage"].items() if key not in ("sigma_ref", "tiers", "hysteresis")
+    }
+    payload["leverage"] = {**leverage, "mode": "auto"}
+    rebuilt = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    assert out["payload_version"] == 11 and out["leverage"]["mode"] == "by_vol"
+    assert rebuilt == SHIPPED_K0175, "`by_vol` 只该动杠杆那一块；拿掉三个新键、改回 auto 应当逐字节复现 #163 的构造"
 
 
 # --- the readers.  A canonicaliser nothing calls leaves M-010 reset exactly as before ----------------

@@ -74,3 +74,29 @@ entries:
       `b76de7a0` 重出，WEAK_PASS。冲击模型下重推 k 仍然欠着，触发点仍是 `live.demo.yaml` 写的
       10 万 USDT；到那时新开一条，不复用这一条。`applied` 这个字段是这份文件唯一的「不再是待办」，
       所以写在那里，文字说明它是关掉。
+
+  - id: leverage-by-vol
+    subject: "交易所杠杆按各交易对的波动率分档（分交易对杠杆报告的 R1，`portfolio.leverage: by_vol`）"
+    queued: 2026-09-26
+    earliest_window: 2026-10-14
+    change: >-
+      `portfolio.leverage` 从 `auto`（每个币 5x）改为 `by_vol`：档位 = 离 5 × 0.90 ÷ σ 对数距离最近的一档，
+      档位表 1x–15x（k=0.175 下持有的 13 个落在 3x–15x），换档须连续 24 个周期都要换，按当前名义读完整
+      档位表压上限，整本书的初始保证金不超过 `auto` 要的（超了抬档，不缩单）。构造指纹的 `leverage` 块加
+      `sigma_ref`、`tiers`、`hysteresis` 三个字段，`CONSTRUCTION_PAYLOAD_VERSION` 10 → 11，不加别名。
+    measured: >-
+      `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md`（#165）：真实杠杆（名义 ÷ 权益）早已
+      按 1/σ 分开（最大/最小 12.9 倍，对数斜率 −0.99），统一的 5x 只决定初始保证金，14 天里保证金预检没有
+      缩过一单。k=0.175 下分档后目标书的初始保证金约为权益的 4.1%，5x 时约 6.1%（附录 A）。
+    why_it_waits: >-
+      `leverage` 块在 `construction_fingerprint` 里，改它是一次构造变更。2026-10-13 之前构造冻结；10-13 那次
+      重启已经带着 k 0.175 与可动用口径（#163），报告的 D-007 要求它不进那一次。前置（NA-3）：#163 已合并、
+      Mac 已快进、10-13 的重启跑稳。
+    cost: >-
+      清零 M-010 的 30 天窗口、重启 M-G06——任何一次构造变更都要付的同一笔钱，操作者在卡片上接受了。订单
+      不受影响：权重与订单在读杠杆之前就定了（T-6 的回放核对逐单一致、预检不缩单）。
+    applied: "交易所分档（`by_vol`）的 PR（分支 claude/adaptive-leverage-analysis-zvraep），合并后按 CLAUDE.md 的纪律重启一次"
+    note: >-
+      操作者 2026-09-26 在卡片上选了「交易所也分档」，没选推荐的「只改说明」（O-1，#175 已合并）。它不改经济：
+      回报与风险由真实杠杆决定，要动回报得动保证金构成（同日卡片 2「只放 USDT」：真实账户上线前按全 USDT
+      重推 k），不是交易所那一栏。回滚是一行 `leverage: auto` 加一次重启。

@@ -40,7 +40,7 @@ from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
 from beidou_live.guards import GuardDecision, GuardParams, describe_guard_reason, evaluate_guards
 from beidou_live.inputs import latest_closes, model_inputs, required_history
-from beidou_live.leverage import derive_leverage, scale_orders_to_margin
+from beidou_live.leverage import VOL_TIERS, by_vol_problems, derive_leverage, plan_leverage, scale_orders_to_margin
 from beidou_live.liquidation import min_liquidation_distance
 from beidou_live.ports import Clock, MarketData, SignalModel, UniverseProvider, UniverseUpdate, Venue
 from beidou_live.probe import ProbeParams, probe_status
@@ -159,10 +159,16 @@ class LiveConfig:
     dry_run: bool = False
     exits: ExitParams = field(default_factory=ExitParams)
     throttle: DrawdownThrottleParams = field(default_factory=DrawdownThrottleParams)
-    leverage_mode: str = "fixed"  # fixed | auto (D-016)
+    leverage_mode: str = "fixed"  # fixed | auto (D-016) | by_vol (2026-09-27)
     margin_cap: float = 0.40
     max_leverage: int = 5
     margin_buffer: float = 0.10
+    # `by_vol`'s three knobs, read by that mode only (`plan_leverage`) and hashed in every mode, like the rest of
+    # the leverage block: the vol at which a symbol keeps `auto`'s leverage, the ladder, and how many
+    # consecutive cycles a new tier must hold before it is sent.
+    leverage_sigma_ref: float = 0.90
+    leverage_tiers: tuple[int, ...] = VOL_TIERS
+    leverage_hysteresis: int = 24
     # D-031's shape, one source over: how many consecutive cycles a symbol may return no closed bars
     # before the loop stops holding it and flattens it as delisted.  1 reproduces the behaviour this
     # field was added to make visible - a single empty REST answer zeroed the target, `plan_rebalance`
@@ -251,6 +257,9 @@ class LiveEngine:
         self._construction_recorded = False
         # The cycle currently in flight, for the ERROR path to read.  None between cycles.
         self._cycle_record: dict[str, Any] | None = None
+        # `by_vol`'s bracket table (E-029), read once a UTC day by `_bracket_tables`.
+        self._brackets: dict[str, list[tuple[float, int]]] = {}
+        self._brackets_day: str | None = None
         # `state` is the way in for a caller that must run WITHOUT a readable state file.
         # `store.load()` refuses a corrupt one on purpose (it is the only copy of the income
         # watermark, the equity high-water mark and the exit anchors), and `beidou live run`
@@ -392,15 +401,22 @@ class LiveEngine:
                 "an enabled signal reads funding history but the market data port cannot supply it; "
                 "refusing to trade an unvalidated configuration (KILL-027)"
             )
-        # D-016's invariant, checked instead of assumed - and only in `auto`, which is the mode that
-        # claims it.  `derive_leverage` picks the smallest leverage keeping initial margin at the gross
+        # D-016's invariant, checked instead of assumed - and only in the modes that claim it: `auto`,
+        # and `by_vol`, whose margin is held at or under `auto`'s (`hold_margin_to_auto`).
+        # `derive_leverage` picks the smallest leverage keeping initial margin at the gross
         # cap under `margin_cap`, then clamps to `max_leverage`, and that clamp silently wins: at
         # max_gross 3.0 / margin_cap 0.40 / max_leverage 5 the loop settles on 5x and runs at 60%
         # initial margin against a 40% policy without raising a word.  Today it is unreachable only
         # because 2.0 = 5 x 0.40 happens to be exact; move any one of the three and the policy becomes
         # decoration.  `fixed` is deliberately exempt: there the operator set the number and margin_cap
         # is not consulted at all (the profile's own note - "was 100% at a fixed 2x" - is that state).
-        if self.config.leverage_mode == "auto":
+        if self.config.leverage_mode == "by_vol":
+            problems = by_vol_problems(
+                self.config.leverage_tiers, self.config.leverage_sigma_ref, self.config.leverage_hysteresis
+            )
+            if problems:
+                raise RuntimeError("; ".join(problems) + " (`leverage: by_vol`)")
+        if self.config.leverage_mode in ("auto", "by_vol"):
             implied_margin = self.config.guards.max_gross / max(1, self.config.max_leverage)
             if implied_margin > self.config.margin_cap + 1e-9:
                 raise RuntimeError(
@@ -476,7 +492,12 @@ class LiveEngine:
             raise RuntimeError("venue reports canTrade=false for this account")
         self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
         if not self.config.dry_run:
+            if self.config.leverage_mode != "by_vol":
+                # The tier memory belongs to `by_vol`.  Any other mode sends its own values below, so a later
+                # switch back re-tiers from scratch instead of trusting settings it no longer made.
+                self.state.leverage_tiered, self.state.leverage_streaks = [], {}
             await self._ensure_leverage(self.managed_symbols(), reassert=True)
+            self.state.leverage_reasserted_day = _utc_day(self.clock.now_ms())
         self._roll_day(self.clock.now_ms(), snapshot.equity)
         # A3, and it has to be asked HERE: the line below is what makes the watermark non-None again,
         # so by the time `_ingest_income` reads it the evidence of the loss is already gone.
@@ -939,6 +960,10 @@ class LiveEngine:
             # lifts the relative band off reductions - the rung is a risk action, not a rebalance.
             deescalating=bool(ladder.get("acting")),
         )
+        if config.leverage_mode == "by_vol":
+            # `by_vol`: after the orders are planned - leverage decides none of them - and before the pre-check,
+            # so the pre-check reads the settings this cycle's orders will actually meet at the venue.
+            record["leverage_tiers"] = await self._retier_leverage(targets, decision.targets, snapshot)
         if orders:
             orders, margin = scale_orders_to_margin(
                 orders,
@@ -1264,7 +1289,7 @@ class LiveEngine:
         return {**update.to_dict(), "entered": entered, "left": left, "day": day}
 
     async def _leverage_targets(self, symbols: Sequence[str]) -> dict[str, int]:
-        if self.config.leverage_mode != "auto":
+        if self.config.leverage_mode not in ("auto", "by_vol"):
             return dict.fromkeys(symbols, self.config.leverage)
         brackets: Mapping[str, int] = {}
         probe = getattr(self.venue, "leverage_brackets", None)
@@ -1273,10 +1298,20 @@ class LiveEngine:
                 brackets = await probe()
             except Exception as exc:
                 logger.warning("leverage brackets unavailable (%s); using policy caps only", exc)
-        return {
+        auto = {
             symbol: derive_leverage(
                 self.config.guards.max_gross, self.config.margin_cap, self.config.max_leverage, brackets.get(symbol)
             )
+            for symbol in symbols
+        }
+        if self.config.leverage_mode == "auto":
+            return auto
+        # `by_vol` at startup or on entry, before any sigma of this process: the tier this loop last sent
+        # a symbol it has tiered (what the venue should already hold), `auto`'s value for one it has not.
+        # The first cycle then tiers the latter at once (`plan_leverage`, rule 1).
+        tiered = set(self.state.leverage_tiered)
+        return {
+            symbol: self.state.leverage_set.get(symbol, auto[symbol]) if symbol in tiered else auto[symbol]
             for symbol in symbols
         }
 
@@ -1294,20 +1329,102 @@ class LiveEngine:
         posts unconditionally; startup does, because the POST is idempotent, costs one weight unit per
         symbol, and is the only channel that can make the venue agree with the record.
         """
-        wanted = await self._leverage_targets(symbols)
-        for symbol in symbols:
-            if not reassert and self.state.leverage_set.get(symbol) == wanted[symbol]:
+        await self._push_leverage(await self._leverage_targets(symbols), reassert=reassert)
+
+    async def _push_leverage(
+        self, wanted: Mapping[str, int], *, reassert: bool = False
+    ) -> tuple[dict[str, int], dict[str, str]]:
+        """Send each setting that differs from the record (all of them on ``reassert``); what went and what failed.
+
+        A refusal keeps the venue's setting and the record's, and never stops the loop: nothing that
+        follows depends on a send succeeding, because the margin pre-check reads ``leverage_set``, which
+        only a send that came back moves (T-10).  It also alerts, in every mode: `by_vol` sends every day
+        rather than at startup only, so a refusal is no longer something an operator is there to see.
+        """
+        sent: dict[str, int] = {}
+        refused: dict[str, str] = {}
+        for symbol, leverage in wanted.items():
+            if not reassert and self.state.leverage_set.get(symbol) == leverage:
                 continue
             try:
-                applied = await self.venue.set_leverage(symbol, wanted[symbol])
+                applied = await self.venue.set_leverage(symbol, leverage)
             except (
                 Exception
             ) as exc:  # e.g. -4028 invalid leverage for this symbol: margin math falls back to config.leverage
-                logger.warning(
-                    "leverage %sx refused for %s (%s); keeping the venue setting", wanted[symbol], symbol, exc
-                )
+                logger.warning("leverage %sx refused for %s (%s); keeping the venue setting", leverage, symbol, exc)
+                refused[symbol] = str(exc)[:200]
                 continue
-            self.state.leverage_set[symbol] = int(applied)
+            self.state.leverage_set[symbol] = sent[symbol] = int(applied)
+        if refused:
+            listed = "、".join(f"{symbol} {wanted[symbol]}x" for symbol in sorted(refused))
+            await self.alerts.send(f"北斗 交易所杠杆下发被拒：{listed}；保留原设置，循环照常", key="leverage-refused")
+        return sent, refused
+
+    async def _bracket_tables(self, day: str) -> dict[str, list[tuple[float, int]]]:
+        """Every bracket per symbol (E-029), read once a UTC day; a failed read keeps the last table and retries."""
+        probe = getattr(self.venue, "leverage_bracket_table", None)
+        if self._brackets_day != day and callable(probe):
+            try:
+                self._brackets = {symbol: sorted(rows) for symbol, rows in (await probe()).items()}
+                self._brackets_day = day
+            except Exception as exc:
+                logger.warning("leverage bracket table unavailable (%s); keeping the last one read", exc)
+        return self._brackets
+
+    async def _retier_leverage(self, targets: Any, weights: Mapping[str, float], snapshot: Snapshot) -> dict[str, Any]:
+        """`by_vol`, once a cycle and before the margin pre-check: move each exchange leverage toward its vol tier.
+
+        `plan_leverage` decides; this sends it and keeps the state that makes the next cycle's decision
+        (which symbols are tiered, the hysteresis streaks).  The first cycle of a UTC day re-sends every
+        setting (S4): the venue cannot report the setting back on demo-fapi, and an account reset puts
+        it back to the default without a word (2026-09-04), so a daily send is the only repair channel.
+        The day is the clock's, as at startup, so a restart does not re-send twice.  A dry run decides
+        and records and sends nothing.
+
+        A symbol with a sigma this cycle counts as tiered from here on even if its send was refused.
+        The venue kept the old setting, `leverage_set` still says so, and hysteresis asks again once the
+        new tier has held for `leverage_hysteresis` cycles: a setting the venue will not take is retried
+        and alerted about once a day, not every hour (KILL-R7's 36 identical lines).
+        """
+        config, managed, day = self.config, self.managed_symbols(), _utc_day(self.clock.now_ms())
+        tables = await self._bracket_tables(day)
+        cap = config.guards.max_gross, config.margin_cap, config.max_leverage
+        first = {symbol: rows[0][1] for symbol, rows in tables.items() if rows}  # bracket 1, what `auto` reads
+        plan = plan_leverage(
+            managed=managed,
+            sigma=dict(getattr(targets, "asset_vol", {}) or {}),
+            standing=self.state.leverage_set,
+            tiered=set(self.state.leverage_tiered),
+            streaks=self.state.leverage_streaks,
+            target_notional={symbol: float(weights.get(symbol, 0.0)) * snapshot.equity for symbol in managed},
+            position_notional={symbol: position.notional for symbol, position in snapshot.positions.items()},
+            auto={symbol: derive_leverage(*cap, first.get(symbol)) for symbol in managed},
+            tables=tables,
+            base=derive_leverage(*cap),
+            sigma_ref=config.leverage_sigma_ref,
+            tiers=config.leverage_tiers,
+            cycles=config.leverage_hysteresis,
+        )
+        equity = snapshot.equity
+        row: dict[str, Any] = {
+            "ideal": plan.ideal,
+            "clamped": plan.clamped,
+            "raised": plan.raised,
+            "pending": plan.streaks,
+            # Initial margin of the target book as a share of equity, tiered and under `auto`: the first may
+            # not exceed the second (M7).  Both are the pre-check's arithmetic, not the venue's.
+            "margin": {key: value / equity for key, value in plan.margin.items()} if equity > 0 else None,
+        }
+        if config.dry_run:
+            return {**row, "wanted": plan.wanted}
+        reassert = self.state.leverage_reasserted_day != day
+        sent, refused = await self._push_leverage(plan.wanted, reassert=reassert)
+        if reassert:
+            self.state.leverage_reasserted_day = day
+        self.state.leverage_streaks = plan.streaks
+        self.state.leverage_tiered = sorted(set(managed) & (set(plan.ideal) | set(self.state.leverage_tiered)))
+        standing = {symbol: self.state.leverage_set[symbol] for symbol in managed if symbol in self.state.leverage_set}
+        return {**row, "sent": sent, "refused": refused, "reasserted": reassert, "set": standing}
 
     def _liquidity(self, bars: Mapping[str, pd.DataFrame]) -> dict[str, float]:
         """Average quote volume per bar over the trailing window (falls back to volume x close)."""
@@ -1785,6 +1902,10 @@ class LiveEngine:
             self.state.day_start_equity = equity
 
 
+def _utc_day(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m-%d")
+
+
 def _needs_metrics(spec: Any, params: Mapping[str, Any]) -> bool:
     predicate = getattr(spec, "needs_metrics", None)
     return bool(predicate(params)) if callable(predicate) else False
@@ -2194,6 +2315,12 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "margin_cap": config.margin_cap,
             "max_leverage": config.max_leverage,
             "margin_buffer": config.margin_buffer,
+            # v11 (`by_vol`, 2026-09-27).  What `by_vol` sets depends on these three, and what it sets decides
+            # how much of the pre-check's room a book uses; the mode already was in here for the same
+            # reason.  Arrived with the mode switched on, so the digest moves and there is no alias.
+            "sigma_ref": config.leverage_sigma_ref,
+            "tiers": list(config.leverage_tiers),
+            "hysteresis": config.leverage_hysteresis,
         },
         "strategy_weights": dict(sorted(config.strategy_weights.items())),
     }

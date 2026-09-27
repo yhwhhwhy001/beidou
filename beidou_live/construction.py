@@ -48,7 +48,16 @@ from __future__ import annotations
 #      against each other with the cap both off and on - so the book is byte-identical and the alias
 #      below says so.  Turning the cap ON later is a separate decision, gated by K-EX14 until the
 #      current window matures; it would be a real construction change with no alias, exactly like v9.
-CONSTRUCTION_PAYLOAD_VERSION = 10
+#  11: + `leverage.sigma_ref`, `leverage.tiers`, `leverage.hysteresis` (`by_vol`, 2026-09-27).  **v9's shape, not
+#      v10's: no alias.**  The same commit switches `leverage` from `auto` to `by_vol`, so a value moved
+#      with the field set and the digest is supposed to move.  What did NOT move is the book: weights and
+#      orders are decided before leverage is read (`plan_leverage` runs after `plan_rebalance`), and
+#      `hold_margin_to_auto` keeps the pre-check's room at or above today's, so the margin arithmetic
+#      that could shrink an order cannot bind where it did not.  That is an argument for the book, not a
+#      reason for an alias: the leverage block is hashed precisely so that a change to it is visible, and
+#      M-010's window restarting once is the price the operator accepted on 2026-09-26's card
+#      ("交易所也分档"; `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` D-007).
+CONSTRUCTION_PAYLOAD_VERSION = 11
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.

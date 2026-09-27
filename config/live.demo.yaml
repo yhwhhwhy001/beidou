@@ -24,9 +24,19 @@ universe: config/universe.yaml
 registry: config/alpha_registry.yaml
 costs: config/costs.yaml
 portfolio:
-  leverage: auto              # per-symbol exchange leverage = min(max_leverage, bracket max, ceil(max_gross / margin_cap)) (D-016)
+  # `by_vol`, option R1 of docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md; operator's card
+  # 2026-09-26「交易所也分档」: the exchange leverage follows each symbol's vol, 1x-15x (3x-15x
+  # for what the book holds at k=0.175), so the venue's screen shows the same per-symbol difference the book
+  # already has.  It sets initial margin only; weights, orders and exits are decided before it is read, and
+  # the book's margin stays at or under what `auto` needs (`hold_margin_to_auto`).  Rollback is one line:
+  # `leverage: auto` and a restart, which re-sends auto's value (D-016 below) to every symbol.
+  #   auto: per-symbol exchange leverage = min(max_leverage, bracket max, ceil(max_gross / margin_cap)) (D-016)
+  leverage: by_vol
+  leverage_sigma_ref: 0.90    # the vol at which a symbol keeps auto's 5x; tier = nearest(5 x 0.90 / sigma)
+  leverage_tiers: [1, 2, 3, 4, 5, 6, 8, 10, 12, 15]
+  leverage_hysteresis: 24     # consecutive cycles a new tier must hold before it is sent (one day)
   margin_cap: 0.40            # initial margin at the gross cap stays below 40% of equity (was 100% at a fixed 2x)
-  max_leverage: 5
+  max_leverage: 5             # auto's cap, and by_vol's leverage at sigma_ref
   margin_buffer: 0.10         # keep 10% of the available balance free when scaling risk-adding orders (T-S02)
   max_participation: 0.02     # any order but a full close <= 2% of the symbol's average hourly quote volume (T-S03)
   # 2026-09-04 (operator decision): 0.15 -> 0.30.  Read this as a risk-budget decision, not a research

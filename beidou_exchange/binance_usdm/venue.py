@@ -179,6 +179,19 @@ class BinanceUsdmVenue:
                 out[str(row.get("symbol", ""))] = int(_float(brackets[0].get("initialLeverage"), 1.0))
         return out
 
+    async def leverage_bracket_table(self) -> dict[str, list[tuple[float, int]]]:
+        """The same endpoint read past bracket 1: ``(notionalCap, initialLeverage)`` per bracket, by cap (E-029)."""
+        payload = await self._client.get("/fapi/v1/leverageBracket", signed=True)
+        out: dict[str, list[tuple[float, int]]] = {}
+        for row in payload if isinstance(payload, list) else [payload]:
+            rows = [
+                (_float(bracket.get("notionalCap")), int(_float(bracket.get("initialLeverage"), 1.0)))
+                for bracket in row.get("brackets") or []
+            ]
+            if rows:
+                out[str(row.get("symbol", ""))] = sorted(rows)
+        return out
+
     async def place_order(self, request: OrderRequest) -> OrderAck:
         params: dict[str, Any] = {
             "symbol": request.symbol,
