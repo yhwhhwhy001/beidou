@@ -105,7 +105,25 @@ def _merge(frame: pd.DataFrame, page: pd.DataFrame, columns: Any) -> pd.DataFram
     return out.reset_index()
 
 
-def metrics_parity(snapshot: pd.DataFrame, archive: pd.DataFrame, *, tolerance: float = 1e-6) -> dict[str, Any]:
+#: Columns compared RELATIVELY, because REST publishes them to fewer digits than the archive keeps: four
+#: decimals (1.3031) against six (1.302937).  Measured 2026-09-27 on 174k same-bucket pairs across the 17
+#: symbols of the universe: median 1.1e-4 for the two account ratios and 1.2e-5 for the position ratio,
+#: at most 3.9e-4.  1e-3 is the operator's ruling that day.  Open interest stays absolute at `tolerance`,
+#: where 0 of 80,504 pairs differed.  The taker ratio is left out: aligned, 5.8% of its pairs exceed 1e-3.
+RELATIVE_TOLERANCE: dict[str, float] = {
+    "count_toptrader_long_short_ratio": 1e-3,
+    "sum_toptrader_long_short_ratio": 1e-3,
+    "count_long_short_ratio": 1e-3,
+}
+
+
+def metrics_parity(
+    snapshot: pd.DataFrame,
+    archive: pd.DataFrame,
+    *,
+    tolerance: float = 1e-6,
+    columns: Sequence[str] | None = None,
+) -> dict[str, Any]:
     """M-011: do the two sources agree on the buckets they share?
 
     The rate is ``None`` rather than 1.0 when nothing overlaps.  Zero disagreements out of zero
@@ -115,17 +133,21 @@ def metrics_parity(snapshot: pd.DataFrame, archive: pd.DataFrame, *, tolerance: 
     ``through`` is the newest bucket the two share, because an agreement is only as recent as that.
     A dead ARCHIVE looks the same from here: from 2026-09-09 every call compared the buckets of
     2026-09-07, the last day anything had ingested, and answered rate 0.0.
+
+    ``columns`` narrows the comparison to the ones a caller vouches for; unset, every shared column.
     """
     if snapshot.empty or archive.empty:
         return {"overlapping": 0, "differing": 0, "rate": None, "through": None}
-    columns = [c for c in snapshot.columns if c in archive.columns and c not in ("open_time", "symbol")]
+    shared = [c for c in snapshot.columns if c in archive.columns and c not in ("open_time", "symbol")]
+    compared = [c for c in shared if columns is None or c in columns]
     merged = snapshot.merge(archive, on="open_time", suffixes=("_snap", "_arch"))
-    if merged.empty or not columns:
+    if merged.empty or not compared:
         return {"overlapping": 0, "differing": 0, "rate": None, "through": None}
     differing = pd.Series(False, index=merged.index)
-    for column in columns:
+    for column in compared:
         left, right = merged[f"{column}_snap"], merged[f"{column}_arch"]
-        differing |= ~((left - right).abs() <= tolerance) & left.notna() & right.notna()
+        allowed = RELATIVE_TOLERANCE[column] * right.abs() if column in RELATIVE_TOLERANCE else tolerance
+        differing |= ~((left - right).abs() <= allowed) & left.notna() & right.notna()
     count = int(differing.sum())
     return {
         "overlapping": len(merged),
