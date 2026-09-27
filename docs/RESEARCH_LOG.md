@@ -18057,6 +18057,71 @@ wrote /tmp/new_family_look.json
 exit 0
 ```
 
+## 2026-09-27 · 重启 #60：载入交易所杠杆按波动率分档（#186，`leverage: by_vol`，迟滞 168）
+
+只记可观测事实。
+
+- **谁、为什么**：操作者 16:30:39Z 在分交易对杠杆的项目话题里打「现在」，随后在 Mac 本机的 Claude 会话里打「现在重启」。
+  #186 写明合入后的那次重启要操作者在对话里打字同意，这就是那句同意。快进、构造测试与 kickstart 都由这个 Mac 会话执行。
+  - #186 原定在切换重启跑满 24 小时（09-28 13:21Z）之后合入。它实际于 16:32:24Z 合入 main（`40cbe17c`），
+    离切换重启约 3 小时 11 分。
+  - 话题 16:34Z 另给过操作者一条作用相同的链式命令，重启后已通知作废。reflog 里只有一条快进，`state.restarts` 只加 1。
+- **命令与窗口**：
+  - 16:34:31Z 快进主 checkout（reflog：`merge 40cbe17c6f0921c895e38cb9120505f395459f8b: Fast-forward`）。
+    `40cbe17c` 的树与 #186 的 PR 头 `be302311` 相同（`e3472428`），PR 头的 CI `verify` 15:49:56Z 通过。
+  - 16:34:41Z 跑两个构造测试，见下。
+  - 16:35:16Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，16:35:46Z 返回 0，新进程同一秒启动。
+  - 这几个时刻都在整点后 5 分到整点前 10 分的窗口里。
+- **重启前**：
+  - 主 checkout 在 `e42ed90c`。它 15:27:25Z 从 `97f81b5a` 快进过来，不是这个会话做的，这里不归因。
+  - 工作树里只有 ` M governance/verdicts.jsonl`，快进碰不到它，没动。
+  - 切换后的三个周期（13:00Z、14:00Z、15:00Z 的 bar）都是 OK，构造 `4b2dc74b`，没有 ERROR。
+  - 上线前回放 T-6 / T-11 在 Mac 上只读跑过（15:08Z–15:34Z）。迟滞 24 时 T-11 没过：14 天里一天最多换档 9 次，上限 5。
+    改成 168（`8db1d61e`）之后，14 天里 T-6 与 T-11 都过，一天最多 3 次。取舍写在 `config/live.demo.yaml` 那一行上方。
+- **构造测试**：快进之后、kickstart 之前，在主 checkout 跑
+  `tests/live/test_the_construction_is_frozen_until_the_holdout_matures.py` 与 `tests/live/test_construction_identity.py`，
+  17 passed，退出码 0。
+- **进程**：PID 88034（13:21:35Z 启动）→ 96836（16:35:46Z 启动）。`state.restarts` 59 → 60，
+  `restarted_at` 2026-09-27T16:35:47Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_live/leverage.py`、`engine.py`、`construction.py`、`config.py`、
+  `beidou_exchange/binance_usdm/venue.py`、`config/live.demo.yaml` 16:34:31Z；`config/alpha_registry.yaml` 11:27:30Z；
+  `deploy/run_live.sh` 09-25T05:33:06Z。全部早于 16:35:46Z，新进程跑的是 `40cbe17c` 的代码。
+- **这次一并载入的**：#59 的进程跑 `97f81b5a`，此后合入了五个。碰到循环所用代码的是两个：
+  - #186：`leverage: by_vol`，`leverage_sigma_ref` 0.90，档位 `[1, 2, 3, 4, 5, 6, 8, 10, 12, 15]`，
+    `leverage_hysteresis` 168；`CONSTRUCTION_PAYLOAD_VERSION` 10 → 11；
+  - #191：`beidou_alpha/model.py` 加了一道检查，registry 里有两条腿的对冲书就拒绝建模。实盘 registry 没有这类条目。
+  #194 给 `data metrics` 用的 `sync_metrics` 加了一个可选参数，循环不调用它。#192、#193 改的是文档与研究脚本。
+  `run_live.sh` 没变。
+- **摘要**（heartbeat）：construction `4b2dc74b8f3c` → `2ee491c13971`；governance `9cc96461276f` 不变；
+  registry `7f8adb754962` 不变。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13 - armed on evidence that does not clear its gate`，这是 bridge
+    生效时的固定文案；
+  - 交易所时钟偏差 +2.2s；
+  - `restart was 2154.0s after the bar close (window 86.8s); reconciled but did not rebalance`，为 15:00Z 那根 bar
+    写了一行 SKIPPED。那根 bar 旧进程已在 16:00Z 跑完；
+  - 标准输出的启动行写 `leverage=by_vol`，上一次启动（#59）那一行是 `leverage=auto`。
+- **第一个真周期**：17:00:31Z 写出，处理 16:00Z 的 bar。
+  - 0 单。17 个币都在 `skipped` 里：14 个 `NO_TRADE_BAND`，3 个 `BAND_BLOCKS_ENTRY`（NEARUSDT、LSKUSDT、AKEUSDT）。
+    没有护栏、隔离、退出事件、拒单或报错。
+  - `leverage_tiers.set`：BTCUSDT、BNBUSDT、ETHUSDT 15x；HYPEUSDT、SOLUSDT 8x；ADAUSDT、DOGEUSDT、XRPUSDT 6x；
+    TRUMPUSDT 5x；1000PEPEUSDT、ZECUSDT 4x；ENAUSDT、NEARUSDT、SUIUSDT、UNIUSDT 3x；LSKUSDT 2x；AKEUSDT 1x。
+    持有的 14 个币落在 3x–15x。
+  - `sent` 是档位不等于 5 的 16 个币，没发的只有 TRUMPUSDT。`refused`、`raised`、`clamped` 都是空的，`pending` 0 个，
+    `reasserted` false。`set` 与 `ideal` 相同。
+  - 目标书的初始保证金占权益：分档 6.46%，`auto` 7.96%。同一行的 `margin_usage` 是 7.55%。
+  - R8：`ruler` 是 `attributed_pnl_as_read+unrealized`，读数 −0.92%，`enforced` true，`acting` false，scalar 1.0。
+  - `live.stderr.log` 在 16:35:54Z 那条 WARNING 之后没有新行。
+  - 17:01:39Z 的 `live status --check` 退出码 0，registry 与治理规则都与在跑的循环一致。M-015 那一行写
+    「交易所杠杆 8 个取值」。「真实杠杆（白话）」那一行写「交易所那一栏的 1x–15x 只决定开仓占用多少保证金」；
+    14 个持仓，真实杠杆合计 0.38x，各币风险份额都是 7.1%。
+- **还没做的**：
+  - T-12：操作者在交易所界面上逐个币核对杠杆，与上面的 `set` 一致（命令在 RUNBOOK）。接口读不回，只能人看。
+  - 30 天后读 M-002。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。
+
+构造变了（v11）。按 #186 写明的代价（D-007），M-010 的 30 天窗口、`realised_vol` 的单构造条件、L3 的 7 天条件，
+从这次重启起再算一次。
 
 ## 2026-09-27 · D-018 的回撤门按 EXP-AE2 在 k=0.175 上行使：1pp → 2.5pp（草案，待操作者签字）
 
