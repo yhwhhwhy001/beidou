@@ -29,7 +29,7 @@ from beidou_alpha.portfolio import (
     vol_targeted,
 )
 from beidou_alpha.registry import MAIN_BOOK, Registry, StrategyEntry
-from beidou_alpha.signals import get_signal, scores_to_targets
+from beidou_alpha.signals import SIGNALS, get_signal, scores_to_targets
 
 # strategy -> symbol -> the unscaled target recorded at the end of the previous live cycle (the D-005 hold seed, E-042)
 PreviousTargets = Mapping[str, Mapping[str, float]]
@@ -89,6 +89,12 @@ class AlphaModel:
         repeated = sorted({name for name in ids if ids.count(name) > 1})
         if repeated:
             raise ValueError(f"duplicate strategy id {repeated}: per-strategy results are keyed by id")
+        hedged = sorted(entry.id for entry in self.entries if getattr(SIGNALS.get(entry.id), "hedged", False))
+        if hedged:
+            raise ValueError(
+                f"{hedged}: a two-leg book (long spot, short perpetual) cannot be held one weight per perpetual; "
+                "only `research validate` prices it"
+            )
 
     @classmethod
     def from_registry(

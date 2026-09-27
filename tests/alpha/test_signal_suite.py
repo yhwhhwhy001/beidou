@@ -17,7 +17,12 @@ from tests.alpha.test_causality import _bit_for_bit
 
 
 def _synthetic_panel(
-    seed: int = 0, n_symbols: int = 6, n_bars: int = 800, with_funding: bool = True, correlated: bool = False
+    seed: int = 0,
+    n_symbols: int = 6,
+    n_bars: int = 800,
+    with_funding: bool = True,
+    correlated: bool = False,
+    with_spot: bool = False,
 ) -> Panel:
     """``correlated`` gives two symbols a common factor, and it defaults OFF on purpose.
 
@@ -28,6 +33,11 @@ def _synthetic_panel(
     fixture, and a common factor makes the covariance more ill-conditioned and the EWMA scalar slower
     to settle - measured 1.08e-7 - so turning it on for everybody would have loosened somebody else's
     pinned number to accommodate a change of mine.  That is the wrong direction, so it is a flag.
+
+    ``with_spot`` is a flag for the same reason: a spot leg quoted a few bps off the perpetual, drawn
+    after every other draw so a panel without it is bit for bit the one it always was.  `carry_hedged`
+    refuses to enter without a spot price, so without it that signal is NaN everywhere and the
+    emptiness assertion below reads it as broken.
     """
     rng = np.random.default_rng(seed)
     index = pd.date_range("2024-01-01", periods=n_bars, freq="h", tz="UTC")
@@ -61,7 +71,13 @@ def _synthetic_panel(
     if with_funding:
         funding = pd.DataFrame(0.0, index=index, columns=symbols)
         funding.iloc[::8] = rng.normal(0.0001, 0.0002, size=(len(funding.iloc[::8]), n_symbols))
-    return Panel.from_frames(frames, "1h", funding=funding)
+    spot = None
+    if with_spot:
+        spot_close = pd.DataFrame(
+            close * (1.0 + rng.normal(0.0, 0.0005, size=close.shape)), index=index, columns=symbols
+        )
+        spot = {"open": spot_close.shift(1).fillna(spot_close), "close": spot_close}
+    return Panel.from_frames(frames, "1h", funding=funding, spot=spot)
 
 
 def _live_params() -> list[tuple[str, dict]]:
@@ -105,7 +121,8 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
     spec = SIGNALS[signal_id]
     params = {**spec.default_params, **overrides}
     warmup = spec.warmup_for(params)
-    panel = _synthetic_panel(n_bars=warmup + 600, correlated=True)
+    with_spot = bool(spec.needs_spot and spec.needs_spot(params))
+    panel = _synthetic_panel(n_bars=warmup + 600, correlated=True, with_spot=with_spot)
     scores = spec.compute(panel, params)
     assert scores.shape == panel.close.shape
     assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
@@ -116,7 +133,7 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
         "causality comparison below would be NaN against NaN - the exact way this test was vacuous "
         "before KILL-AR-15"
     )
-    shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index), correlated=True)
+    shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index), correlated=True, with_spot=with_spot)
     mixed_frames = {}
     for symbol in panel.symbols:
         mixed_frames[symbol] = pd.DataFrame(
@@ -144,7 +161,13 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
     funding = None
     if panel.funding is not None and shuffled.funding is not None:
         funding = pd.concat([panel.funding.iloc[:cutoff], shuffled.funding.iloc[cutoff:]])
-    mixed = Panel.from_frames(mixed_frames, "1h", funding=funding)
+    spot = None
+    if panel.spot is not None and shuffled.spot is not None:
+        spot = {
+            name: pd.concat([frame.iloc[:cutoff], shuffled.spot[name].iloc[cutoff:]])
+            for name, frame in panel.spot.items()
+        }
+    mixed = Panel.from_frames(mixed_frames, "1h", funding=funding, spot=spot)
     later = spec.compute(mixed, params)
     _bit_for_bit(scores.iloc[:cutoff], later.iloc[:cutoff])
 

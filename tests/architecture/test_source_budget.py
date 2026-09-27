@@ -3804,7 +3804,19 @@ CEILING = {
     # `--gate-refusals`，−1。测试见 `tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`。
     #
     # 留 40 行（8_522 -> 8_562），理由同上，不重述。
-    "beidou_cli": 8_562,
+    #
+    # 2026-09-27（不编号，同上）。+60 beidou_cli，8_556 -> 8_616，抬到 8_656。
+    #
+    # `carry_hedged` 的另一半（beidou_alpha 那格 +222）：`research validate` 能给两腿书定价。花在哪：
+    # `research_panel.py` +49——`_book_weights`（非对冲信号照旧走模型，对冲信号走 `hedged_weights`）与
+    # `_construction`（报告的 `portfolio` 和 ledger 的 construction digest 记两腿书自己的构造，D-024），
+    # 连空行 41 行；`_min_history` 让两条路共用同一个默认值，+6，`_model` 改用它、调用被 ruff 拆开，净 +1；
+    # import +1。`research_validate_cmd.py` +10：对冲时拒绝退出层（它会平掉一条腿）、定价面板换成
+    # `spread_panel`、`layers.band` 记 none，其余是把 `_model(...).evaluate` 换成 `_book_weights`。
+    # `research_grids.py` +1，预登记的 4 格。
+    #
+    # 留 40 行（8_616 -> 8_656），理由同上，不重述。
+    "beidou_cli": 8_656,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -4284,7 +4296,25 @@ CEILING = {
     #
     # 留 43 行（10_677 -> 10_720），理由与 2026-09-17 那格逐字相同，不重述。上一格留的 41 行，此后
     # 别的改动用掉 18 行，这次用完了剩下的 23 行。
-    "beidou_alpha": 10_720,
+    # 2026-09-27（不编号）。+222 beidou_alpha，10_698 -> 10_920，抬到 10_960。#14 / #39 的资金费对冲书
+    # `carry_hedged`：操作者 09-27 在卡片上选了「直接立项」，那就是 `governance/reopen.yaml` 的
+    # `funding-arb-14-and-basis-39` 等的具名裁定。与 beidou_cli 那格 +60 是同一次改动的两半。
+    #
+    # +108 `hedged.py`（新）：两腿书按一列「价差」定价——现货收益减永续收益，资金费取永续的相反数——
+    #     于是 walk-forward、CPCV、成本与滑点压力、护栏回放都不用第二条路径。模块 docstring 19 行记这个
+    #     推导，以及现货缺一根 bar 时为什么按裸永续腿算而不是记零：记零是乐观的读法。`spread_panel` 32 行，
+    #     其中 8 行拒绝会把合成价格推到零以下的收益；`hedged_weights` 25 行，`hedged_construction` 10 行。
+    # +91 `signals/carry_hedged.py`（新）：docstring 24 行记它为什么不是 `carry`（那条只做永续，赚的是
+    #     方向），以及为什么每天在 00:00 那根 bar 上决策：D-034 把结算记在含它的 bar 上，在结算 bar 上进出
+    #     会被记一笔没拿到的、或漏一笔拿到的。`FUNDING_TOLERANCE` 带 3 行注释：很多币连续几周正好停在
+    #     0.0001/8h，求和之后与 0.0003/天那条线逐位相等，裸 `>` 会让浮点舍入决定持不持有。
+    # +13 `signals/__init__.py` 登记；+4 `SignalSpec.hedged`；+6 `AlphaModel` 拒绝对冲信号——实盘只有
+    #     永续腿，一张每币一个权重的表只会交易空头那条腿。
+    #
+    # 这一格算进 alpha 投入，方向是对的：它买的是 G-B 要的一本低相关的书，不是管道。
+    #
+    # 留 40 行（10_920 -> 10_960），理由与 2026-09-17 那格逐字相同，不重述。
+    "beidou_alpha": 10_960,
 }
 
 
