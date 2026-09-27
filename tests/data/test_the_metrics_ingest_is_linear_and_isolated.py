@@ -89,16 +89,30 @@ def test_a_symbols_days_are_appended_once_not_once_per_day(tmp_path: Path, monke
     assert len(store.load("AAAUSDT")) == 30
 
 
-def test_one_symbols_failure_does_not_end_the_run(tmp_path: Path) -> None:
-    """The expensive half of a six-hour job is every OTHER symbol still in flight."""
+@pytest.mark.parametrize("workers", [1, 3])
+def test_one_symbols_failure_does_not_end_the_run(tmp_path: Path, workers: int) -> None:
+    """The expensive half of a six-hour job is every OTHER symbol still in flight.
+
+    Skipped is not silent: the failure comes back in `failed`, because the caller's summary is the
+    only place a nightly log can say it (2026-09-27 - it used to print "unchanged").
+    """
     store = MetricsStore(tmp_path)
     transport = _Recorder(fail="BADUSDT", status=500)
+    failed: dict[str, str] = {}
     with _client(transport) as client:
         stored = sync_metrics(
-            client, store, ["AAAUSDT", "BADUSDT", "CCCUSDT"], start="2024-01-01", end="2024-01-02", workers=3
+            client,
+            store,
+            ["AAAUSDT", "BADUSDT", "CCCUSDT"],
+            start="2024-01-01",
+            end="2024-01-02",
+            workers=workers,
+            failed=failed,
         )
     assert set(stored) == {"AAAUSDT", "CCCUSDT"}
     assert store.load("BADUSDT").empty
+    assert list(failed) == ["BADUSDT"]
+    assert failed["BADUSDT"].startswith("HTTPStatusError: Server error '500"), failed
 
 
 def test_a_5xx_is_retried_and_a_404_is_not(tmp_path: Path) -> None:

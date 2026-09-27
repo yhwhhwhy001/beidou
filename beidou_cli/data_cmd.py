@@ -200,9 +200,16 @@ def data_metrics(root: str, symbols: str, start: str, end: str, workers: int) ->
     def progress(symbol: str, done: int, total: int) -> None:
         click.echo(f"[{done}/{total}] {symbol}", err=True)
 
+    failed: dict[str, str] = {}
     with MetricsArchiveClient() as client:
-        totals = sync_metrics(client, store, wanted, start=start, end=end, workers=workers, progress=progress)
+        totals = sync_metrics(
+            client, store, wanted, start=start, end=end, workers=workers, progress=progress, failed=failed
+        )
     for symbol in wanted:
+        if symbol in failed:
+            # First, because the archive never answered: "published no day" and "unchanged" both say it did.
+            click.echo(f"{symbol}: FAILED ({failed[symbol]}), nothing appended; the next run resumes from the store")
+            continue
         after = store.last_open_time(symbol)
         rows = totals.get(symbol)
         if after is None:

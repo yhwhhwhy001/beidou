@@ -17,11 +17,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pandas as pd
 import pytest
 from click.testing import CliRunner
 
 from beidou_cli import data_cmd, main
+from beidou_data.metrics_archive import MetricsArchiveClient
 from beidou_data.store import MetricsStore
 
 SCRIPT = Path(__file__).resolve().parents[2] / "deploy" / "run_data.sh"
@@ -106,3 +108,43 @@ def test_the_research_ingest_still_takes_its_own_symbols_and_window(tmp_path: Pa
 
     assert result.exit_code == 0, result.output
     assert (asked["symbols"], asked["start"], asked["end"]) == (["NEARUSDT"], "2021-12-01", "2021-12-03")
+
+
+class _ProxyDown(httpx.BaseTransport):
+    """The archive through the local proxy on a bad minute: LSKUSDT and ETHUSDT die at the proxy.
+
+    `httpx.ProxyError: 503 Service Unavailable` is what ended `data sync` on 2026-09-19.  The proxy's
+    503 is an EXCEPTION from the transport, not a response, so the 5xx retry in `_get` never sees it
+    and the symbol is skipped for the night.  BTCUSDT gets a 404 for every day: an archive that really
+    published nothing.
+    """
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if "/LSKUSDT/" in request.url.path or "/ETHUSDT/" in request.url.path:
+            raise httpx.ProxyError("503 Service Unavailable", request=request)
+        return httpx.Response(404, request=request)
+
+
+def test_a_symbol_whose_fetch_failed_says_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed fetch is not the archive's answer, and the job's log used to print it as one.
+
+    LSKUSDT has no archive at all, so its failure printed "the archive published no day" - a claim about
+    the archive nobody had checked, and one M-011's `unmeasurable` would then seem to confirm.  ETHUSDT
+    is already held, so its failure printed "unchanged", which reads as "nothing new yet".
+    """
+    frame = pd.DataFrame({"open_time": [0], "sum_open_interest": 1.0})
+    for symbol in ("LSKUSDT", "BTCUSDT", "ETHUSDT"):
+        MetricsStore(tmp_path, kind="metrics_snapshot").append(symbol, frame.assign(symbol=symbol))
+    MetricsStore(tmp_path).append("ETHUSDT", frame.assign(symbol="ETHUSDT"))
+    monkeypatch.setattr(
+        data_cmd, "MetricsArchiveClient", lambda: MetricsArchiveClient(transport=_ProxyDown(), backoff=0.0)
+    )
+
+    result = CliRunner().invoke(main, ["data", "metrics", "--root", str(tmp_path)])
+
+    lines = {line.split(":")[0]: line for line in result.stdout.splitlines()}
+    for symbol in ("LSKUSDT", "ETHUSDT"):
+        assert lines[symbol].startswith(f"{symbol}: FAILED (ProxyError: 503 Service Unavailable)"), result.stdout
+        assert "published no day" not in lines[symbol] and "unchanged" not in lines[symbol]
+    assert "published no day" in lines["BTCUSDT"], "a 404 on every day is still the archive's answer"
+    assert result.exit_code == 0, "like `data sync`: one symbol's error is printed, the job goes on"
