@@ -17072,6 +17072,15 @@ sha256 与源文件一致。两处是修 shadow soak（#166）时顺带发现的
   只能靠 `governance canary --gate-refusals N` 手填。
 - `beidou_governance/replay.py` 里 L4 的 SuspendedCondition 仍写「Canary 尚不存在」。
 
+**已修（补记）。** 两条都已修，原文保持不变：
+
+- `startup_gate` 恒 PASS：`8af1ca34`（#171，2026-09-26T19:43Z）。
+  操作者裁定 B + D：canary 删掉这项检查；写入的 gate 补上 dataset 那一半，
+  与 armed 启动时拒绝的口径一致。
+  详见下一节「startup gate 只在写入时问」。
+- replay 的 L4 挂起行：`58e1ce38`（#170，2026-09-26T19:28Z）。
+  改成「DL-G5 已交付」，并写明回放为什么仍判不了它。
+
 **没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。
 没跑 `report daily`，没跑 `governance apply`。
 
@@ -17154,6 +17163,14 @@ C：只写文档。D：写入的 gate 补上 dataset 那一半，可配 A 或 B�
 - 候选 registry 头注 2026-09-16 那段写「PID 802, started 09-15T04:24Z」。stderr 里那次启动是本地 04:25，
   即 09-14T20:25Z，把本地时间标成了 Z。同段写记录移到了 `.beidou/live-shadow-dry-run.20260916`，
   实际目录名多一个 `-drifted-candidate`。
+
+**已修，同日 `b7167c4a`（补记）。** 上面第一条，操作者当天要求做掉，经 #174 合入。`plan`/`apply` 的 L4
+多一项 `registry_soaked`。被评那一轮只跑过一份 registry、而且就是提议那份，才算过。提议的摘要由
+`_admission` 按引擎盖章的路径算，即 `registry_digest(build_model(...))`。全部停用的提议建不出模型，
+摘要记为 None，不挡「停」。`governance canary` 没加这一项，它手里没有提议。摘要也没做别名表。
+当天读数不变：两轮的已决周期都是 `7f8adb754962`，与候选、armed 相同。测试在
+`tests/governance/test_the_canary_vouches_only_for_the_registry_it_ran.py`，经过见下文
+「L4 只为 soak 跑过的那份 registry 作保」一节。第二条没动。
 
 **没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
 没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
