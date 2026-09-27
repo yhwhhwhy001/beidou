@@ -25,6 +25,7 @@ from typing import Any
 from click.testing import CliRunner
 
 from beidou_cli.governance_cmd import governance
+from beidou_governance.admission import window_start
 from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 from beidou_governance.state import dump
@@ -34,13 +35,18 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _row(param_key: str, *, strategy: str = "tsmom", run_id: str = "r") -> str:
+    """One ledger row, stamped at the opening of the window `governance next` counts on.
+
+    It was the literal 2026-09-05 until 2026-09-27: inside the first window only, so from
+    2026-10-03T00:00Z the spent fixture below spent the previous window and the scheduler said VALIDATE.
+    """
     return json.dumps(
         {
             "strategy": strategy,
             "param_key": param_key,
             "sharpe_annual": 1.0,
             "bars_per_year": 8760.0,
-            "recorded_at": "2026-09-05T00:00:00+00:00",
+            "recorded_at": window_start(Policy(), anchor=ANCHOR).isoformat(),
             "range_start": "a",
             "range_end": "b",
             "symbols": 15,

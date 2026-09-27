@@ -247,7 +247,12 @@ class LiveEngine:
         # them: `cycles.jsonl` and `heartbeat.json` carry a digest and nothing else, a digest does not
         # invert, and the startup heartbeat that does hold the payload is overwritten by the next start.
         # A construction can only change at startup (the engine builds its model once - KILL-Q15), so
-        # writing it on this process's first cycle records every change exactly once.
+        # writing it on this process's first completed cycle row records every change exactly once.
+        # `_finish_cycle` sets this right after `append_cycle`.  Set when `run_cycle` built the row, a
+        # cycle that then failed (orders out, `_quarantine` raising) left an ERROR row without the
+        # payload and a flag saying it was written; set after the heartbeat, a heartbeat that failed
+        # would let the next row write it twice.  Not onto the ERROR row: `report_common._cycles` drops
+        # rows with no equity, and `_liquidity_to_close` would read the previous process's knobs.
         self._construction_recorded = False
         # The cycle currently in flight, for the ERROR path to read.  None between cycles.
         self._cycle_record: dict[str, Any] | None = None
@@ -909,7 +914,6 @@ class LiveEngine:
         # The same object the rest of this method mutates.  `guarded_cycle` reads it when a cycle
         # raises, so an ERROR row can carry the decisions already taken instead of asserting none.
         self._cycle_record = record
-        self._construction_recorded = True
         await self._announce_guards(decision, bar_open_ms)
         # M-Q06.  Before the skip check on purpose: a book approaching liquidation while a guard has
         # stopped it trading is exactly the state an operator needs told about, and it is the state in
@@ -1756,6 +1760,9 @@ class LiveEngine:
         if self.rebalance_window is not None:
             record["window_seconds"] = self.rebalance_window
         self.store.append_cycle(record)
+        # DL-G9: on disk now, and not a line earlier - see `_construction_recorded` for both directions.
+        if "construction_full" in record:
+            self._construction_recorded = True
         self.store.heartbeat(
             {
                 "phase": "SKIPPED" if record["skip"] else "OK",
