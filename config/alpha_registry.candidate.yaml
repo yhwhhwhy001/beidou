@@ -30,11 +30,12 @@
 #                     So this candidate was soaking a population the armed loop had abandoned.
 #   evidence.report   `tsmom-validation-20260908T182204Z` here, `...20260913T182325Z` in armed.
 #
-# The soak running when this was found (PID 802, started 09-15T04:24Z, 90/168 cycles) was therefore not
+# The soak running when this was found (PID 802, started 09-14T20:24Z, 90/168 cycles) was therefore not
 # the positive control this file's own first paragraph describes: "a registry that should pass" had
 # silently become "a registry nobody would deploy".  It was regenerated from the armed registry as of
-# `71863e9e` and the soak restarted; the 90-cycle record was moved to `.beidou/live-shadow-dry-run.20260916`
-# rather than appended to, because one `cycles.jsonl` may only describe one candidate.
+# `71863e9e` and the soak restarted; the 90-cycle record was moved to
+# `.beidou/live-shadow-dry-run.20260916-drifted-candidate` rather than appended to, because one
+# `cycles.jsonl` may only describe one candidate.
 #
 # The GENERAL lesson, which is why this is recorded here rather than fixed silently: a file whose
 # correctness is "identical to that other file" has no instrument watching it.  Every other identity in
