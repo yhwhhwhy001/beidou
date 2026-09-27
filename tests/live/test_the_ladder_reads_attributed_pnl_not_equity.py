@@ -36,7 +36,7 @@ class _Alerts:
         self.sent.append(message)
 
 
-# 0.175 is the k the rungs are derived for since 2026-10-13 (0.60 from 2026-09-14); at a different k the
+# 0.175 is the k the rungs are derived for since 2026-09-27 (0.60 from 2026-09-14); at a different k the
 # scalars below mean something else, which is the dependence `engine._risk_ladder` now clamps rather than hides.
 def _engine(tmp_path: Path, *, vol_target: float = 0.175) -> LiveEngine:
     engine = LiveEngine.__new__(LiveEngine)
@@ -156,7 +156,7 @@ async def test_a_restart_does_not_hand_the_book_a_fresh_grace(tmp_path: Path) ->
     engine = _engine(tmp_path)
     store = engine.store
     bar = _cycle(store, 0, 10_000.0)
-    _attribute(store, bar, -3_000.0)  # -30%, on the first rung since 2026-10-13
+    _attribute(store, bar, -3_000.0)  # -30%, on the first rung since 2026-09-27
     for index in (1, 2, 3):
         bar = _cycle(store, index, 10_000.0)
         await LiveEngine._risk_ladder(engine, bar)

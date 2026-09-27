@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass, field
 from beidou_alpha.overlays.ladder import rung_target
 
 POLICY_VERSION = "0.3.6"
-"""0.3.6（2026-10-13 的切换，与 k 0.60 -> 0.175 同一个 PR）：R8 的两档按可动用口径重推。
+"""0.3.6（2026-09-27 的切换，与 k 0.60 -> 0.175 同一个 PR）：R8 的两档按可动用口径重推。
 
 `drawdown_ladder` 从 ((-0.49, 0.45), (-0.70, 0.30)) 改为 ((-0.2803, 0.13125), (-0.4005, 0.0875))。规则没变，
 仍是 0.3.3 转写的那条：`deescalate_at` = 预算的 70%，`rollback_at` = 预算，`deescalate_to` = 0.75k，
@@ -253,7 +253,7 @@ class Policy:
     # the first time, i.e. silently adopted the 20.5pp arm the operator did not choose; re-scaling the
     # rungs alone would have re-tuned a ladder that never fires.
     #
-    # 2026-10-13（0.3.6）：同一条规则，两个输入变了。k 0.60 -> 0.175；-70% 预算改按可动用 USDT 计，
+    # 2026-09-27（0.3.6）：同一条规则，两个输入变了。k 0.60 -> 0.175；-70% 预算改按可动用 USDT 计，
     # 折成这把尺子的总权益单位是 0.70 / 1.7479 = 0.4005。(a) 里的数是 k=0.60 那一版，是历史。
     # 为什么写 4 位小数，见 POLICY_VERSION。
     drawdown_ladder: tuple[tuple[float, float], ...] = ((-0.2803, 0.13125), (-0.4005, 0.0875))

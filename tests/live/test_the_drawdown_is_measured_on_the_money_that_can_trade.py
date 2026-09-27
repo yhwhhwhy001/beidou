@@ -126,10 +126,10 @@ def test_a_zero_usdt_balance_is_not_a_reading() -> None:
 def test_the_shipped_rungs_convert_by_the_factor_and_past_a_total_loss_stay_reported_not_clamped() -> None:
     """The conversion is the rungs times the factor, and a rung that lands past 100% is not clamped.
 
-    Until 2026-10-13 the SHIPPED rungs were that case: `rollback_at` 0.70 was calibrated on total equity
+    Until 2026-09-27 the SHIPPED rungs were that case: `rollback_at` 0.70 was calibrated on total equity
     and at 1.86x landed at 130% of the tradable money - past zero, no reachable crossing, the number the
     2026-09-20 ruling needed.  Clamping it to 100% would have hidden exactly the fact that made it a
-    decision.  The 10-13 switch re-derived the rungs on the tradable caliber (policy 0.3.6), so at the
+    decision.  The 09-27 switch re-derived the rungs on the tradable caliber (policy 0.3.6), so at the
     factor they were derived at they are the declared -49% / -70%, and the no-clamp half needs a factor
     that has drifted much further (5x here) to be exercised.
     """

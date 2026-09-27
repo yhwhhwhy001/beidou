@@ -31,9 +31,9 @@ def _real_gate(profile: dict) -> object:
     """The shipped `registry_evidence_problems`, as the startup gate calls it.
 
     The REAL gate, which is this file's design: `_corrupt` below breaks a digest and the gate has to
-    refuse that, and it does.  From 2026-09-19 to 2026-10-13 this dropped one exact string, tsmom's
+    refuse that, and it does.  From 2026-09-19 to 2026-09-27 this dropped one exact string, tsmom's
     `evidence verdict FAIL`, through `tests/shipped_evidence.py`, and `governance apply` was blocked in
-    production for as long as it stood.  The 2026-10-13 switch pointed tsmom at the WEAK_PASS re-issue
+    production for as long as it stood.  The 2026-09-27 switch pointed tsmom at the WEAK_PASS re-issue
     at k = 0.175, the shipped pair clears again, and the exemption went with its reason.
     """
 
@@ -72,8 +72,8 @@ def _shipped(tmp_path: Path) -> tuple[Path, Path, dict]:
     # the config, the field, or the armed loop that would refuse to start.  The pair is owned by
     # `tests/alpha/test_evidence_gate.py::test_the_shipped_registry_runs_what_its_evidence_validated`;
     # this line only keeps the drill from answering for it.
-    # 2026-09-19 to 2026-10-13 it read one exemption, the same one `test_evidence_gate.py` read, for
-    # tsmom's FAIL pointer.  Both went with the 2026-10-13 switch; see `_real_gate`.
+    # 2026-09-19 to 2026-09-27 it read one exemption, the same one `test_evidence_gate.py` read, for
+    # tsmom's FAIL pointer.  Both went with the 2026-09-27 switch; see `_real_gate`.
     problems = registry_evidence_problems(parse_registry(yaml.safe_load(registry.read_text(encoding="utf-8"))), profile)
     assert problems == [], f"the shipped registry and profile disagree before the drill even starts: {problems}"
 

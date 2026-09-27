@@ -173,7 +173,7 @@ SHIPPED_D3 = "0c555e1c837e342a8af1edca0089b12461a9bdbe3b9a0f122142c63d6ba54bd7"
 #: alias of the line above - declared before the loop ever writes it, same as v3-v8.
 AFTER_PRICE_CAP = "b8f215ab706ca7c472028d109f96f9fbb911097a9a16bb4b6fb9dee9ec5b528a"
 
-#: v10, the 2026-10-13 switch: `vol_target` 0.60 -> 0.175.  The field set did not move (payload version
+#: v10, the 2026-09-27 switch: `vol_target` 0.60 -> 0.175.  The field set did not move (payload version
 #: still 10) and `portfolio.vol_target` is the only value that did: the same profile with 0.60 put back
 #: reproduces `AFTER_PRICE_CAP` exactly.  A real construction change, so like `SHIPPED_D3` it is NOT in
 #: `CONSTRUCTION_ALIASES`, and M-010, M-G06 and `realised_vol` restart with the restart that loads it.
@@ -191,9 +191,9 @@ def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() 
 
 
 def test_the_price_cap_digest_is_still_the_d3_book() -> None:
-    """v10 added an inert field, so the digest the loop wrote from 09-17 to 10-13 resolves to D3's book.
+    """v10 added an inert field, so the digest the loop wrote from 09-17 until the k switch resolves to D3's book.
 
-    Asserted on the constant since 2026-10-13, when the shipped digest moved on: history is not rewritten.
+    Asserted on the constant since 2026-09-27, when the shipped digest moved on: history is not rewritten.
     """
     assert canonical_construction(AFTER_PRICE_CAP) == SHIPPED_D3, "v10 是惰性字段，必须解析回 D3 那本账"
 
@@ -202,7 +202,7 @@ def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
     """A construction CHANGE must not resolve to the book it replaced.
 
     2026-09-17: D1+D2+D3 ended the run in which every digest this tree could compute was the frozen book
-    seen through a longer field set, and this test was inverted to say so.  2026-10-13: k 0.60 -> 0.175 is
+    seen through a longer field set, and this test was inverted to say so.  2026-09-27: k 0.60 -> 0.175 is
     the next real change, so the shipped digest is `SHIPPED_K0175` and resolves to itself - not to
     `SHIPPED_D3`, not to `FROZEN`.  Asserting the inequality rather than deleting the test is what keeps a
     future alias - which would quietly re-declare two books to be one - from passing unnoticed.

@@ -158,7 +158,7 @@ portfolio:
   # The two agree, which is the property this paragraph originally existed to protect.  The -35%/-50%
   # numbers survive nowhere in the code and must not be quoted from here as current behaviour; three
   # readers of this file (2026-09-15) each had to go to `policy.py` to find that out.
-  # 2026-10-13：上面两行也成了历史。现行档位是 ((-0.2803, 0.13125), (-0.4005, 0.0875))，见 policy 0.3.6。
+  # 2026-09-27：上面两行也成了历史。现行档位是 ((-0.2803, 0.13125), (-0.4005, 0.0875))，见 policy 0.3.6。
   #
   # KNOWN, UNFIXED, AND NOT CREATED BY THIS CHANGE: R8's first rung is ALREADY dead at vol_target 0.30
   # (0.225/0.30 = 0.75, swallowed by the same band), so the shipped ladder has been running one rung
@@ -212,7 +212,7 @@ portfolio:
   # 也就是说：这一条从此不必靠重放脚本去量，改 k 或改 `max_weight` 之后下一份日报就会说话。
   # Reverting is this one line (and `vol_band` below).
   #
-  # 2026-10-13（切换 PR，分支 `live/k0175-switch-after-1013`）：0.60 -> 0.175。与上面两次一样，这是风险预算
+  # 2026-09-27（切换 PR，分支 `live/k0175-switch-after-1013`）：0.60 -> 0.175。与上面两次一样，这是风险预算
   # 的决定，不是研究发现。取值规则是 D-035 那条（09-04 先写后跑）：两个 universe 的自助 q95 回撤都在声明
   # 预算以内的最大 k。这次在量之前就由操作者 09-25 的裁定点了名，09-14 那次不是（见上面 PROVENANCE 一段）。
   # 与 09-14 不同的还有三处：
@@ -442,7 +442,7 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   # `Policy.drawdown_ladder` 是动手的那份，下面四个数是它的报告副本，两边不许不一致
   # （`test_the_profile_and_the_policy_cannot_disagree_about_the_rungs` 管着这一条）。
   #
-  # 2026-10-13（policy 0.3.6）：按同一条规则重推。规则是 0.3.3 转写的那条：`deescalate_at` = 预算的 70%，
+  # 2026-09-27（policy 0.3.6）：按同一条规则重推。规则是 0.3.3 转写的那条：`deescalate_at` = 预算的 70%，
   # `rollback_at` = 预算，`deescalate_to` = 0.75k，`rollback_to` = 0.50k。变的是两个输入：
   #   * k 取 0.175，是 D-035 在诚实漂移、现有抵押品下的答案（见上面 `vol_target` 那段）。
   #   * -70% 的预算按可动用 USDT 计。回撤以总权益为分母，按「书的亏损全落在 USDT 上」换算，
@@ -452,17 +452,17 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   # 因子是读数不是常数：09-20 1.861，09-22 1.769，09-25 1.748。它变大，同一档折成可动用口径就更深。
   # 越过 1.865 时，static 的 q95 按比例越过 -70%（预登记第 9 项第 1 条）。日报的
   # `rungs_in_this_denominator` 按当天的因子现算，读它，别读这里的「约 -49% / -70%」。
-  # 以前的数是历史。09-14 到 10-13 是 0.49 / 0.70 / 0.45 / 0.30（k=0.60，总权益口径）；再往前是 k=0.30、
+  # 以前的数是历史。09-14 到 09-27 是 0.49 / 0.70 / 0.45 / 0.30（k=0.60，总权益口径）；再往前是 k=0.30、
   # 预算 50% 下的 0.35 / 0.50 / 0.225 / 0.15。09-14 那段写的「重标只花 0.4pp、q95 -66.5%」与「旧档位要花
   # 20.5pp」都是 k=0.60、总权益口径的读数，不描述现在这一版。
   deescalate_at: 0.2803       # drawdown from the high-water mark (total equity) -> vol_target 0.13125
   rollback_at: 0.4005         # -> vol_target 0.0875; the declared -70% of tradable USDT at factor 1.7479
   deescalate_to: 0.13125
   rollback_to: 0.0875
-  # 2026-10-13：随 `vol_target` 0.60 -> 0.175 等比缩放。仍是转写，不是新选择：带宽保持 k=0.30 那一对
+  # 2026-09-27：随 `vol_target` 0.60 -> 0.175 等比缩放。仍是转写，不是新选择：带宽保持 k=0.30 那一对
   # (0.26, 0.38) 的相对宽度，即 target 的 0.8667 倍与 1.2667 倍。写 10 位小数，是因为
   # `test_the_band_moves_with_the_vol_target_it_was_derived_against` 按 1e-9 钉这个比例。
-  # 它必须跟着 target 走，否则 M-002 按构造每个周期都报 outside；它只量，不交易。09-14 到 10-13 是 [0.52, 0.76]。
+  # 它必须跟着 target 走，否则 M-002 按构造每个周期都报 outside；它只量，不交易。09-14 到 09-27 是 [0.52, 0.76]。
   vol_band: [0.1516666667, 0.2216666667]  # 30-day realised annualised vol; 0.175 target, same relative width
   vol_window_days: 30
   min_vol_bars: 240           # ten days of hourly cycles before this estimate is allowed to say anything
