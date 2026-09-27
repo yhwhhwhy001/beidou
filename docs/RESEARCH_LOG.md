@@ -18232,3 +18232,35 @@ k 决策的输入定下，式子没定死的三处都取了紧的一边。它的
 **没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的历史行。`data metrics` 只在
 scratch 根上预跑过 4 个离池币；真实数据根上那次是 launchd 跑的。没跑 `report daily`，没跑
 `governance apply`。
+
+## 2026-09-27 · 操作者裁定：M-011 只对读 metrics 列的候选生效
+
+承接 #172 描述里「顺带发现」第 1 条。那一条量到：`assemble` 把 `parity_satisfied` 套在每一份 ACCEPT
+book 报告上，不看候选读不读 metrics。而 T-D4-2、`parity_satisfied` 的 docstring、DL-D4 一节写的都是
+「读 metrics 列的候选」。操作者当晚在本话题选定「收窄到读 metrics 的候选」。
+
+**落地。**
+
+- `owes_parity` 按 book 报告的 `sleeve.strategy` 取信号，在 `sleeve.params` 下问它自己的
+  `needs_metrics`。实盘启动门读的也是这个声明。
+- 手写信号都没有声明 `needs_metrics`，所以都不欠。挖掘候选按 hash 重新枚举取回：默认空间与上一轮
+  shortlist 的 knobs 各枚举一次。默认空间 676 个候选，枚举约 0.02 秒，其中 90 个读 metrics。
+- 解析不出的名字照样欠。找不到信号，不等于它不读 metrics。
+- 缺平价报告时，免检候选照样得到 QUEUE。它们不管报告怎么说都能排队；欠的候选只会让数目变大，
+  改不了答案。
+- scheduler 的 QUEUE 理由改成 `booked candidates have met M-011 or do not owe it`。
+
+**在真实记录上。** 改前改后，`governance next` 的输出逐字相同。仅有的两份 ACCEPT book 报告
+（`book-tsmom-flow`，09-03 与 09-04）点名的 flow、tsmom，在 state 里已是 probe 与 main。这道闸今天不承重。
+
+**测试。** 两条新测试都走 `governance next` 命令：
+
+- 平价读数冻结在 09-07 时，`residual` 和默认空间里一个不读 metrics 的挖掘候选得到 QUEUE；一个读
+  `lsr` 的挖掘候选和一个不存在的名字得到 PARITY。
+- 没有日报时，`residual` 单独得到 QUEUE；与一个读 metrics 的候选并列时也是 QUEUE。
+
+四个变异各让至少一条测试变红：未知名字当作不读、解析不出的 hash 当作不读、免检下限标成 unknown、
+退回每个 ACCEPT 都欠。
+
+**没做的。** 没动 `lifecycle`：`Event.PARITY` 仍没有生产调用者，`booked -> queued` 仍没有执行者，
+`governance next` 只给建议。日报的平价块仍按 universe 算，不按候选。

@@ -24,6 +24,7 @@ from typing import Any
 
 from click.testing import CliRunner
 
+from beidou_alpha.mining import enumerate_candidates
 from beidou_cli.governance_cmd import governance
 from beidou_governance.admission import window_start
 from beidou_governance.lifecycle import Book, Candidate, State
@@ -286,6 +287,78 @@ def test_an_accepted_book_waits_for_the_parity_status_rather_than_assuming_it(
         answer = _invoke(held)
         assert "scheduler PARITY" in answer.output, (name, answer.output)
         assert "booked_without_parity    1" in answer.output, (name, answer.output)
+
+
+FROZEN = {
+    "enforced": True,
+    "symbols_compared": 15,
+    "worst_differing_rate": 0.0,
+    "compared_through": "2026-09-07T23:55:00+00:00",
+}
+
+
+def _accepted(strategy: str) -> dict[str, dict[str, Any]]:
+    return {
+        f"book-tsmom-{strategy}-1.json": {
+            "kind": "book",
+            "book_verdict": "ACCEPT",
+            "sleeve": {"strategy": strategy, "params": {}},
+            "generated_at": "2026-09-08",
+        }
+    }
+
+
+def _in_the_space(*, reads_metrics: bool) -> str:
+    """A real `mined_<hash>` from the default space: the name `research book` resolved to write the report."""
+    return "mined_" + next(
+        c.hash for c in enumerate_candidates().candidates if bool(c.expr.reads_metrics()) is reads_metrics
+    )
+
+
+def test_m011_is_owed_only_by_a_candidate_that_reads_a_metrics_column(
+    tmp_path: Path, isolated_trials_ledger: Path
+) -> None:
+    """T-D4-2's own words, which the gate did not follow until the operator's ruling of 2026-09-27.
+
+    From DL-D4 on, every ACCEPT book waited on M-011 - `residual`, which reads no metrics column, as
+    much as a mined `lsr` candidate - and the daily report said "not met" every day from 09-16 to 09-27.
+    Whether a candidate reads metrics is its signal's `needs_metrics` under the booked params.  A name
+    this process cannot resolve still owes it: not finding the signal is not finding that it reads nothing.
+    `mined_aa` in the test above is that case, which is why it still waits.
+    """
+    for strategy, action, owed in (
+        ("residual", "QUEUE", "0"),
+        (_in_the_space(reads_metrics=False), "QUEUE", "0"),
+        (_in_the_space(reads_metrics=True), "PARITY", "1"),
+        ("no_such_signal", "PARITY", "1"),
+    ):
+        root = _checkout(
+            tmp_path / strategy, isolated_trials_ledger, reports=_accepted(strategy), daily={"metrics_parity": FROZEN}
+        )
+        result = _invoke(root)
+        assert f"scheduler {action}" in result.output, (strategy, result.output)
+        assert f"booked_without_parity    {owed}" in result.output, (strategy, result.output)
+
+
+def test_a_missing_parity_report_does_not_hold_a_candidate_that_owes_none(
+    tmp_path: Path, isolated_trials_ledger: Path
+) -> None:
+    """A research machine has no daily report.  That is load-bearing for the owed, and only for them.
+
+    Beside a metrics reader it stays unknown, but it cannot move the answer: `residual` is queueable
+    whatever the report would have said, and the reader could only add a second name to the queue.
+    """
+    alone = _invoke(_checkout(tmp_path / "alone", isolated_trials_ledger, reports=_accepted("residual")))
+    assert "scheduler QUEUE" in alone.output, alone.output
+    assert "next      WAIT" not in alone.output
+
+    reader = _in_the_space(reads_metrics=True)
+    both = _invoke(
+        _checkout(tmp_path / "both", isolated_trials_ledger, reports={**_accepted("residual"), **_accepted(reader)})
+    )
+    assert "scheduler QUEUE" in both.output, both.output
+    assert "next      WAIT" not in both.output
+    assert "parity_met_unqueued      1" in both.output, both.output
 
 
 def test_a_candidate_the_state_already_carries_is_not_scheduled_again(
