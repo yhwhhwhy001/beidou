@@ -3434,7 +3434,28 @@ CEILING = {
     # 没有在实盘状态副本上重出（副本在操作者的 Mac 上）。构造指纹不变，两个构造测试照常通过。
     #
     # 留 40 行（14_746 -> 14_786），理由与上面几格逐字相同，不重述。
-    "beidou_live": 14_786,
+    #
+    # 2026-09-27（不编号，同上）。+123 beidou_live，14_776 -> 14_899，抬到 14_939。
+    #
+    # 资金费流水漏记（`docs/RESEARCH_LOG.md` 同日一节）。FUNDING_FEE 行的时间戳是结算时刻，行却要过几秒到
+    # 几分钟才查得到；周期在整点后约 27 秒查 `[since, now]`，随后把 `since` 挪到 `now`，这批行就再也不会被
+    # 问到。09-15 到 09-27 的 36 次常规结算应记 507 行，记下 6 行，约 -16.51 / -17.40 U 没进归因。修法：
+    # 资金费改从晚 `FUNDING_SETTLE_LAG_MS`（10 分钟）的第二个窗口读，记给结算时持仓的那本书；早于 `since`
+    # 的另写一行（`late_funding`，标上一根 bar）。于是一根 bar 可以有两行，读者里有四处要改：
+    # `_series_by_strategy` 从赋值改成累加，O3、`_booked_fees` 不读这种行，`leg_split` 数不重复的 symbol-bar。
+    #
+    # 花在哪（加 133 行、删 10 行）：代码 60 行——`engine._settled_funding`（半开区间取窗、按 `since` 分两组）、
+    # `engine._late_funding_record`、`_ingest_income` 的接线、`LiveState` 三个字段、四个读者各 1–5 行；
+    # docstring 42 行、注释 21 行、空行 10 行。注释记的是证据（507 对 6、175 与 259 秒）、迁移那一周期为什么
+    # 从 `since` 起算而不是 `since - lag`、单一「上一本书」在两次入账相隔不到滞后时的已知局限。每一条读起来
+    # 都像能「简化」掉的东西，简化掉的正好是这个 bug。
+    #
+    # 验收：复现测试在 origin/main（4f3420e）上红（-1.0 对 -1.4：20 秒可见的那行记下了，90 秒可见的那行丢了），
+    # 改后绿；四个读者各一条测试，在同一个 main 上也红。17 个变异（逐条把修复改回去）都有测试变红。没有在实盘
+    # 状态副本上重出（副本在操作者的 Mac 上）。构造指纹不变，两个构造测试照常通过。
+    #
+    # 留 40 行（14_899 -> 14_939），理由与上面几格逐字相同，不重述。
+    "beidou_live": 14_939,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

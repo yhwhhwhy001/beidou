@@ -562,11 +562,16 @@ def _booked_fees(
     the venue's (D-030) and would need the offset D-025 accepts.  A commission that reached the venue's
     income feed only after the next row was written would land one row later, and nothing recorded can
     tell that apart.
+
+    A ``late_funding`` row (2026-09-27) holds FUNDING_FEE and nothing else, so it cannot be the row a
+    commission went into.  It is written in the same second as that cycle's own row, under an OLDER bar,
+    and `written` sorts on (stamp, bar) - so left in, it would take the flatten's key from the row that
+    really carries the commission.
     """
     fees: dict[tuple[int, str], list[float]] = {}
     written: list[tuple[datetime, int]] = []
     for row in attribution:
-        if not isinstance(bar := row.get("bar_open_ms"), int):
+        if not isinstance(bar := row.get("bar_open_ms"), int) or row.get("late_funding"):
             continue
         for symbol, bucket in (row.get("by_symbol") or {}).items():
             if paid := float(bucket.get("COMMISSION") or 0.0):
