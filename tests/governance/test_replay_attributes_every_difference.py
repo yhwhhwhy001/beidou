@@ -88,6 +88,9 @@ ADOPTIONS = {
     # `EXCEPTIONS_BY_ID["16a52547"]`.  A fourth time is a test failure:
     # `test_every_pointer_the_registry_cites_is_in_the_adoption_history`.
     "reports/research/tsmom-validation-20260919T081914Z.json": "2026-09-19",
+    # 2026-10-13 (#163, the cutover): tsmom moves to the k = 0.175 re-issue, WEAK_PASS under D-043's cap
+    # (`oos_is_full_sample_tail` only).  Its one D-020 difference is `EXCEPTIONS_BY_ID["D-043"]`'s (#177).
+    "reports/research/tsmom-validation-20260925T143836Z.json": "2026-10-13",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
