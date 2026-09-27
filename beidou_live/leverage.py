@@ -145,8 +145,8 @@ def hysteresis_step(ideal: int, standing: int | None, streak: int, cycles: int) 
     Returns the leverage to send (None keeps what stands) and the streak to carry.  The streak counts
     cycles in which the tier differed from what stands, whichever tier it was, and resets the moment the
     two agree: sigma dithering across a rung boundary sends nothing (T-8), and a move that persists is
-    sent on the ``cycles``-th cycle, to that cycle's tier.  24 hourly cycles is one day, and EC-2's sigma
-    jump costs a day of the old margin and nothing else, because leverage here sets margin, not exposure.
+    sent on the ``cycles``-th cycle, to that cycle's tier.  As shipped that is 168 hourly cycles, a week, and EC-2's
+    sigma jump costs a week of the old margin and nothing else, because leverage here sets margin, not exposure.
     """
     if standing is None:
         return ideal, 0
