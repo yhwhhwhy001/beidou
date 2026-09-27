@@ -17072,6 +17072,15 @@ sha256 与源文件一致。两处是修 shadow soak（#166）时顺带发现的
   只能靠 `governance canary --gate-refusals N` 手填。
 - `beidou_governance/replay.py` 里 L4 的 SuspendedCondition 仍写「Canary 尚不存在」。
 
+**已修（补记）。** 两条都已修，原文保持不变：
+
+- `startup_gate` 恒 PASS：`8af1ca34`（#171，2026-09-26T19:43Z）。
+  操作者裁定 B + D：canary 删掉这项检查；写入的 gate 补上 dataset 那一半，
+  与 armed 启动时拒绝的口径一致。
+  详见下一节「startup gate 只在写入时问」。
+- replay 的 L4 挂起行：`58e1ce38`（#170，2026-09-26T19:28Z）。
+  改成「DL-G5 已交付」，并写明回放为什么仍判不了它。
+
 **没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。
 没跑 `report daily`，没跑 `governance apply`。
 
