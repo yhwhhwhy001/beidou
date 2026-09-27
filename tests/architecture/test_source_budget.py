@@ -3860,7 +3860,16 @@ CEILING = {
     # 15 个变异全部有测试变红。4 份 fixture 在主 checkout 的归档上逐位核对过（`_bit_for_bit`）。
     #
     # 留 40 行（3_570 -> 3_610）。这一格此前是零余量，理由与 `beidou_live` 那几格逐字相同，不重述。
-    "beidou_data": 3_610,
+    #
+    # 2026-09-27（不编号，同上）。+22 beidou_data，3_583 -> 3_605，抬到 3_645。#176 的 +9（`through`）在旧余量内。
+    #
+    # 操作者当天对 M-011 的两条裁定落在 `metrics_parity`：三个账户比、持仓比按相对 1e-3 比
+    # （`RELATIVE_TOLERANCE`），调用方用 `columns` 只比它担保的列。实测写在常量旁边：17 个币 17.4 万对同桶，
+    # 比率列相对差最大 3.9e-4，持仓量 80,504 对 0 处不同，taker 对齐后仍有 5.8% 超过 1e-3，所以不在表里。
+    # 大半是那段实测。三个变异各被一条测试抓到。
+    #
+    # 留 40 行（3_605 -> 3_645），理由同上，不重述。
+    "beidou_data": 3_645,
     # +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
     # rows sharing that page's final millisecond were dropped - and one funding settlement writes one row
     # per held symbol on an identical `fundingTime`, so the rows most likely to share a millisecond are

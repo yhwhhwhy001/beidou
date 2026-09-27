@@ -17279,3 +17279,25 @@ launcher 只问 `--remaining`，这次没动。`live run` 没改，运行中的�
 **生效条件。** 本会话在 2026-09-27T05:07Z 把主 checkout 快进到 60468a63（#176）。05:10Z 那次每小时检查
 写出的平价块已是新格式：`compared_through` 2026-09-07T23:50Z，`why` 为 2 symbols have no overlapping buckets。
 第一次夜间 `data metrics` 在 2026-09-27T17:20Z。
+
+## 2026-09-27 · 操作者裁定：M-011 的比率列按相对 1e-3 比，只比叶子读的列；taker 的偏移另修
+
+承接上一节「M-011 读了十九天的 09-07」末尾两件待裁的事。操作者当天选定：
+
+1. 比率列改用相对容差 1e-3。
+2. taker 列两件都做：M-011 只比叶子读的列；taker 的时间偏移另开 PR 修，含一次实盘循环重启。
+
+**落地。**
+
+- `beidou_alpha.mining.expr` 列出 `METRICS_LEAVES`（`OpenInterest`、`LongShortRatio`），由它得出
+  `METRICS_COLUMNS`：`sum_open_interest`、`count_long_short_ratio`。一条测试守着「定义 `reads_metrics`
+  的节点都在表里」，新增 metrics 叶子漏登记会变红。
+- `metrics_parity` 对三个账户比、持仓比按相对 1e-3 比，持仓量仍按绝对 1e-6。taker 不给相对容差：
+  对齐后仍有 5.8% 的对超过 1e-3，将来真有叶子读它，要先量再定。
+- 日报的平价块只比 `METRICS_COLUMNS`，并写出 `columns`。
+- 三个变异各被一条新测试抓到：叶子漏登记、去掉相对容差、改回比全部列。
+
+**读数。** 在上一节那份补齐的 scratch 数据上重算：17 个币全部一致，比到 2026-09-25T23:50Z，`met: true`。
+真实 store 在今晚第一次夜间 `data metrics` 之前读数不变：LSK、NEAR 不可量。
+
+**没做的。** taker 的偏移这里不改。没重启、没停止任何进程，没动 `.beidou/` 的任何一行。
