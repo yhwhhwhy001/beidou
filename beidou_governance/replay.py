@@ -155,6 +155,20 @@ EXCEPTIONS: tuple[ExceptionEntry, ...] = (
         "那是另一次采纳，按它自己的 artefact 判，本条不覆盖。",
         covers=("tsmom-validation-20260919T081914Z.json",),
     ),
+    ExceptionEntry(
+        id="D-043",
+        date="2026-09-17",
+        ruling="D-043 把没做过选择的证据封顶在 WEAK_PASS，不判 FAIL。理由是 WEAK_PASS 仍可上线，"
+        "封顶不必停掉正在持仓的循环。本条把同一个理由用到换指针上：在跑的书可以换到一份封顶的证据。"
+        "第一次是 tsmom 的 `20260925T143836Z`，预登记 b76de7a0 第 6 节写明 WEAK_PASS 也换，2026-10-13 之后合入。",
+        rule_conflict="§3 candidate->validated 要求 D-020 的 verdict PASS。封顶之后，单配置证据拿不到 PASS。",
+        why_not_encoded="§3 管机器自主晋级。把封顶证据写进 §3，机器就能自己放行单配置证据，挖掘候选全在这一类。"
+        "D-043 的意思是读数成立，「这是一次选择的样本外」不成立。"
+        "给在跑的书换证据，和让机器晋级新候选，不是同一件事。"
+        "本条读 artefact：verdict WEAK_PASS，理由只有 `oos_is_full_sample_tail`，同一策略此前有被采纳的指针。"
+        "只归因 D-020；R0、DL-K3、KILL-AR-07 照判。PBO 豁免那种封顶不在内，新策略头一次上线也不在内。",
+        covers=("oos_is_full_sample_tail",),
+    ),
 )
 
 EXCEPTIONS_BY_ID: dict[str, ExceptionEntry] = {entry.id: entry for entry in EXCEPTIONS}
@@ -427,13 +441,20 @@ def _instant(value: Any) -> datetime | None:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
-def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) -> Difference:
+def _attribute(
+    reason: str, name: str, report: Mapping[str, Any], history: str, *, incumbent: bool = False
+) -> Difference:
     """Map one refusal to a named cause by inspecting the artefact, never by guessing at a category.
 
     `16a52547` matches one file name exactly and reads the artefact's own verdict.  A prefix would
     quietly cover the next FAIL too, and a name alone would still cover this file if it ever said
     something else.  It takes D-020 and R0 only: a construction divergence or a late pre-registration
     on the same artefact is a finding the 2026-09-19 ruling never looked at.
+
+    `D-043` names a shape, so its conditions carry the weight a file name carries above: the verdict,
+    EVERY reason being the `oos_is_full_sample_tail` cap (D-043's other cap is a PBO gate that did not
+    run, which the 2026-09-27 ruling never looked at), and an earlier adoption of the same strategy -
+    the ruling is about a running book changing its evidence, and a first adoption stays a finding.
     """
     selection = report.get("oos_selection") or {}
     if reason.startswith("D-018") and str(report.get("book_verdict")) == "REJECT":
@@ -455,6 +476,18 @@ def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) 
             EXCEPTION,
             f"{ruled.id}（{ruled.date}）：操作者把 tsmom 指向这份诚实的 FAIL，理由是记账记准。"
             "两个指针都过不了 armed 启动；循环靠 D-041 bridge 照跑到 2026-10-13",
+        )
+    capped = EXCEPTIONS_BY_ID["D-043"]
+    reasons = [str(r) for r in report.get("reasons") or []]
+    only_the_cap = bool(reasons) and all(r.startswith(capped.covers) for r in reasons)
+    if reason.startswith("D-020") and incumbent and report.get("verdict") == "WEAK_PASS" and only_the_cap:
+        return Difference(
+            name,
+            history,
+            reason,
+            EXCEPTION,
+            f"{capped.id}（{capped.date}）：在跑的书换到一份封顶的证据。"
+            "WEAK_PASS 只来自 `oos_is_full_sample_tail`，D-043 写明它仍可上线",
         )
     if reason.startswith("R0"):
         if not selection:
@@ -503,6 +536,7 @@ def replay_adoptions(
     judged: dict[str, int] = {}
 
     adopted_names = {path.rsplit("/", 1)[-1] for path in adoptions}
+    running: set[str] = set()  # strategies an earlier adoption already put in the registry (D-043)
     for path, adopted_on in sorted(adoptions.items(), key=lambda kv: kv[1]):
         name = path.rsplit("/", 1)[-1]
         report = reports.get(path)
@@ -519,6 +553,9 @@ def replay_adoptions(
                 )
             )
             continue
+        strategy = str(report.get("strategy") or "")
+        incumbent = bool(strategy) and strategy in running
+        running.add(strategy)
         event, facts, suspended = _facts_for(report, acknowledged=name in acknowledged, live_constructions=live)
         for condition in suspended:
             suspensions[condition] = suspensions.get(condition, 0) + 1
@@ -531,7 +568,9 @@ def replay_adoptions(
             basis = "；凭 registry 的 D-029 书面承认" if name in acknowledged else ""
             reproduced.append(f"{name}：规则同意采纳（{event.value}{basis}）")
             continue
-        differences.extend(_attribute(reason, name, report, history) for reason in decision.reasons)
+        differences.extend(
+            _attribute(reason, name, report, history, incumbent=incumbent) for reason in decision.reasons
+        )
 
     for condition, count in sorted(judged.items()):
         reproduced.append(
