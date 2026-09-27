@@ -17779,3 +17779,90 @@ Sharpe 本身；压力窗口与相关预期能过，也过了。
 - 代码留在仓库里（`hedged.py`、`signals/carry_hedged.py`、判定脚本与测试），与报告、判定读数和 4 笔 ledger 一起
   入库。`AlphaModel` 拒绝对冲信号，实盘够不到它。
 - 卡片上的「直接立项」是在这本书有望的前提下选的，判负改变了前提，带着读数回去问操作者。
+
+## 2026-09-27 · 重启 #59：载入 k 0.175 的切换（#163）、资金费的滞后窗口（#190）与 R8 的新尺子（#149）
+
+只记可观测事实。
+
+- **谁、为什么**：操作者 11:27:35Z 在项目话题「执行 10-13 切换」里打字「今天」，定下当天重启，一次载入 #163、#190 与
+  #149（裁定与代价见上面「操作者裁定：构造冻结提前到当天结束」一节）。那个话题先派 Mac 上的 Claude 会话去做：约 12:07Z
+  快进被本机 Claude Code 的 auto mode 判为 `[Production Deploy]` 拦下，快进与重启都没执行。13:20Z 话题请操作者在终端
+  粘贴一条链式命令：快进到固定的 `97f81b5a`，跑两个构造测试，两步都成功才 kickstart。写这一节时，操作者还没有确认是否由他执行；
+  下面 reflog 里的快进条目与那条命令的形式相同。
+- **命令与窗口**：13:21:04Z 快进（reflog：`merge 97f81b5a40816cae3ca4561b35fe4fae0ef56e1a: Fast-forward`），
+  13:21:35Z 新进程启动。这个时刻在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
+- **重启前**：
+  - 主 checkout 在 `0925e0ef`。它 11:27:30Z 从 `efa68bb7` 前移过来（源文件 mtime），不是本话题做的，这里不归因。
+    之后那次只读核对里，`live status --check` 因此以 1 退出：磁盘上的治理规则不是循环正在跑的那份。
+  - 工作树里只有 09-25 就在的 ` M governance/verdicts.jsonl`，快进碰不到它，没动。
+  - 重启前的只读预检（11:30Z 起）：
+    - 最新日报的 `vs_total_equity` 1.736，预登记的证伪线是 1.865；
+    - flow 探针与 R8 离各自的线都还远（R8 −0.86%，两档 −28.03% / −40.05%）；
+    - 按新 registry 算，证据门与 dataset 门都没有拦截项。
+  - 12:06Z 再核一次：PID 仍是 71893，HEAD 仍是 `0925e0ef`，本地 `origin/main` 是 `97f81b5a`，能快进，差的正好是
+    #149 的 7 个文件。
+- **构造测试**：在链式命令里，快进之后、kickstart 之前跑，没过就不会 kickstart。输出没有留存；kickstart 执行了，
+  所以推断两个都过了。
+- **进程**：PID 71893（2026-09-27T06:15:11Z 启动）→ 88034（13:21:35Z 启动）。`state.restarts` 58 → 59，
+  `restarted_at` 2026-09-27T13:21:36Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_live/risk_budget.py` 13:21:04Z；`beidou_live/engine.py`、`state.py`、
+  `beidou_governance/policy.py`、`config/live.demo.yaml`、`config/alpha_registry.yaml` 11:27:30Z；`deploy/run_live.sh`
+  09-25T05:33:06Z。全部早于 13:21:35Z，新进程跑的是 `97f81b5a` 的代码。
+- **这次一并载入的**：上次重启时主 checkout 在 `efa68bb7`，此后合入了六个。碰到循环所用代码的是三个：
+  - #163：k 0.60 → 0.175，档位按可动用口径，policy 0.3.6，tsmom 指向 WEAK_PASS 证据，删 exemption；
+  - #190：资金费改从滞后 10 分钟的第二个窗口读；
+  - #149：R8 的尺子不再把平仓的已实现盈亏算两次。
+  #187、#188、#189 改的是文档与候选 registry，循环不读；`run_live.sh` 没变。
+- **摘要**（heartbeat）：construction `b8f215ab706c` → `4b2dc74b8f3c`，即 #163 钉住的 `SHIPPED_K0175`；
+  governance `d62ac59fa95c` → `9cc96461276f`；registry `7f8adb754962` 不变。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13 - armed on evidence that does not clear its gate`。这是 bridge
+    生效时的固定文案，按新 registry 算证据门并没有问题项；
+  - 交易所时钟偏差 +2.2s；
+  - `restart was 1307.1s after the bar close (window 90.7s); reconciled but did not rebalance`，为 12:00Z 那根 bar
+    写了一行 SKIPPED（`this bar was already rebalanced`，`missed_rebalances` 0，没有单）。那根 bar 旧进程已在
+    13:00:55Z 跑完（0 单，没有护栏），没有漏掉退出检查。
+- **`live status --check`（13:23:31Z）**：registry `7f8adb754962`、治理规则 `9cc96461276f` 与在跑的循环一致，
+  退出码 0；最近 24 小时 25 个周期，完成 96.0%，1 次失败在 bar 2026-09-26T20:00Z，早于这次重启。M-015 与
+  「真实杠杆」两行读不出；那时最新一行是 SKIPPED，没有波动与持仓读数（推断）。
+- **第一个真周期**：14:00:41Z 写出，处理 13:00Z 的 bar。
+  - 17 单全部成交，全是 reduce-only：卖 16 单，买 1 单（TRUMPUSDT 的空头减仓）。成交名义约为权益的 0.74 倍。
+  - 按订单目标算的 gross 从权益的 1.12 倍降到 0.38 倍。持有 14 个币；NEARUSDT、LSKUSDT、AKEUSDT 平到 0，因为目标
+    不到权益的 1%，最小仓位规则（D3）不开仓。行里的 `targets` 仍列着 17 个非零权重。
+  - 没有护栏、隔离、退出事件、拒单或报错；`live.stderr.log` 在 13:21:47Z 之后没有新行。
+  - R8：`ruler` 是 `attributed_pnl_as_read+unrealized`，即 #149 的新尺子；读数 −0.56%，`enforced` true，`acting` false，
+    scalar 1.0。
+  - `external_flows.funding_window`（#190 的滞后窗口）从 13:00:49Z 到 13:50:28Z，0 行；推断是窗口里没有结算时刻。
+  - 14:04:14Z 的 `live status --check` 退出码 0。M-015 与「真实杠杆」两行都读得出：14 个持仓，真实杠杆合计 0.38x，
+    各币的风险份额都是 7.1%。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。
+
+构造变了，所以按裁定，M-010 的 30 天窗口、`realised_vol` 的单构造条件、L3 的 7 天条件，从这次重启起算。
+
+## 2026-09-27 · 补记：09-14「新尺子对『是否已实现』不变」只在那个 fixture 上成立（#149，`97f81b5`）
+
+只补记。「2026-09-14 · 平仓污染 R8 这条的定价」原文不改。
+
+- **那一节怎么验的**：`scratchpad/r8_is_realisation_invariant.py` 造两个世界，同一条权益路径、同一个 base，
+  只差最后一根是否把浮亏 U 记账。两边都读 −4%，于是写下「新尺子对『是否已实现』不变」。
+- **fixture 与引擎差一根**：fixture 把平掉的亏损记在最后一根，那一行的 `unrealized` 已经是 0，仓位不在快照里了。
+  引擎不这样记。`_ingest_income` 下一个周期才把收入读进来，记在下单平仓的那一根 bar 上。那一行的
+  `unrealized` 是下单前的快照，仓位还在，所以引擎比 fixture 早一根。
+- **按引擎的记法**，旧尺子在读到平仓的那一行把同一笔亏损算两次：快照里一次浮亏，收入里一次已实现。
+  #149 的 `test_the_cycle_that_reads_a_losing_close_sees_it_once_as_if_it_were_still_held` 用的就是这个记法。
+  这条测试的 fixture 在修复前后两个提交上各跑一次（2026-09-27）：
+
+| R8 读数 | 持有不平 | 平掉 |
+| --- | ---: | ---: |
+| 修复前（`0925e0e`） | −4.02% | **−8.05%** |
+| 修复后（`97f81b5`，#149） | −4.02% | −4.02% |
+
+- **所以**：09-14 的结论对那个 fixture 成立，对引擎的记法不成立。#149 合入后，按引擎的记法也成立。
+  实盘记录上修复前后差多少，出自 #149 的重放（`scratchpad/r8_ruler_no_double_count.py`，这里没有重跑）：
+  364 个读数里 331 个不同，修复前平均深 0.27pp，最多深 1.58pp，最多浅 0.51pp。
+- **同样要知道的**：「2026-09-14 · R8 的分母漂移」一节那张表（287 个周期的 `equity / peak`）是旧尺子量的。
+  高水位不再含重复计的盈利平仓，所以现在重跑 `scratchpad/r8_denominator_drift.py`，数会变。这里没有重跑，
+  那一节原文不改。
+- **生效**：实盘循环从重启 #59（13:21:35Z，见上一节）起用新尺子，14:00:41Z 那一行的 `ruler` 已是
+  `attributed_pnl_as_read+unrealized`（此前是 `attributed_pnl+unrealized`）。日报从主 checkout 快进（13:21:04Z）之后
+  的下一份起用新尺子。已写下的行不改。
