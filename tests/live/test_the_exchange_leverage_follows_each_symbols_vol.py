@@ -572,7 +572,7 @@ def test_the_shipped_profile_runs_by_vol_on_the_reports_ladder() -> None:
     config = live_config_for_profile()
 
     assert config.leverage_mode == "by_vol"
-    assert (config.leverage_sigma_ref, config.leverage_tiers, config.leverage_hysteresis) == (0.90, VOL_TIERS, 24)
+    assert (config.leverage_sigma_ref, config.leverage_tiers, config.leverage_hysteresis) == (0.90, VOL_TIERS, 168)
     assert (config.max_leverage, config.margin_cap) == (5, 0.40), "5x 仍是 σ_ref 上的档位，也是回滚成 auto 的值"
 
 

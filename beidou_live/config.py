@@ -131,7 +131,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         max_leverage=int(portfolio.get("max_leverage", 5)),
         leverage_sigma_ref=float(portfolio.get("leverage_sigma_ref", 0.90)),
         leverage_tiers=tuple(int(tier) for tier in portfolio.get("leverage_tiers", VOL_TIERS)),
-        leverage_hysteresis=int(portfolio.get("leverage_hysteresis", 24)),
+        leverage_hysteresis=int(portfolio.get("leverage_hysteresis", 168)),
         dropped_after=int(pool.get("dropped_after", 1)),
         margin_buffer=float(portfolio.get("margin_buffer", 0.10)),
         universe_refresh=str(pool.get("refresh", "never")).lower() != "never",

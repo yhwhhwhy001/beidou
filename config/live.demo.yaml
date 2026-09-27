@@ -34,7 +34,14 @@ portfolio:
   leverage: by_vol
   leverage_sigma_ref: 0.90    # the vol at which a symbol keeps auto's 5x; tier = nearest(5 x 0.90 / sigma)
   leverage_tiers: [1, 2, 3, 4, 5, 6, 8, 10, 12, 15]
-  leverage_hysteresis: 24     # consecutive cycles a new tier must hold before it is sent (one day)
+  # A new tier must hold this many consecutive cycles (one week) before it is sent.  24 (one day) failed T-11 on
+  # the Mac's cycles.jsonl, 2026-09-27: up to 9 tier changes a day over 14 days against the report's limit of 5.
+  # 168 had at most 3 over those 14 days and 4 over the whole 24-day record (09-04 set aside: `asset_vol` first
+  # appears there and every symbol takes its first tier at once); 48-96 passed the 14 days and failed the record,
+  # 120 sat on the limit (`scratchpad/per_symbol_leverage_by_vol_hysteresis_whatif.py`).  Lagging costs margin only:
+  # on cross margin the setting moves neither P&L nor the liquidation price, and a bracket cap or the margin
+  # invariant still acts in the same cycle.
+  leverage_hysteresis: 168
   margin_cap: 0.40            # initial margin at the gross cap stays below 40% of equity (was 100% at a fixed 2x)
   max_leverage: 5             # auto's cap, and by_vol's leverage at sigma_ref
   margin_buffer: 0.10         # keep 10% of the available balance free when scaling risk-adding orders (T-S02)

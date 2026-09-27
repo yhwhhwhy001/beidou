@@ -264,7 +264,7 @@ M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录
 
 ## Profile 关键字段（`config/live.demo.yaml`）
 
-- `portfolio.leverage: by_vol` —— 每个币的交易所杠杆按它自己的年化波动率分档（分交易对杠杆报告的方案 R1，操作者 2026-09-26 卡片「交易所也分档」；推导见 `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` §5.2）。档位 = 离 `max_leverage × leverage_sigma_ref ÷ σ` 对数距离最近的那一档（`leverage_tiers`，1x–15x；k=0.175 下持有的落在 3x–15x）；要换档须连续 `leverage_hysteresis` 个周期（24，一天）都要换；交易所档位表在当前名义上不收的档位当周期就降；整本书的初始保证金不超过 `auto` 要的，超了就把最低的档往上抬，**从不缩单**。它只决定开仓占用多少保证金——权重、订单、退出都在读它之前就定了。
+- `portfolio.leverage: by_vol` —— 每个币的交易所杠杆按它自己的年化波动率分档（分交易对杠杆报告的方案 R1，操作者 2026-09-26 卡片「交易所也分档」；推导见 `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` §5.2）。档位 = 离 `max_leverage × leverage_sigma_ref ÷ σ` 对数距离最近的那一档（`leverage_tiers`，1x–15x；k=0.175 下持有的落在 3x–15x）；要换档须连续 `leverage_hysteresis` 个周期（168，一周；24 在 T-11 回放里一天最多换 9 次，超了报告的上限 5）都要换；交易所档位表在当前名义上不收的档位当周期就降；整本书的初始保证金不超过 `auto` 要的，超了就把最低的档往上抬，**从不缩单**。它只决定开仓占用多少保证金——权重、订单、退出都在读它之前就定了。
   - 每天第一个周期全量重发一次：demo 的接口读不回杠杆，账户重置会一声不响地改回默认。下发被拒或网络出错：保留原设置、告警（`leverage-refused`），循环照常，迟滞满了再试一次。
   - 读数在 `cycles.jsonl` 每行的 `leverage_tiers`：`ideal`（波动率档位）、`clamped`（被档位表压住的）、`raised`（被保证金不变量抬起的）、`pending`（正在攒周期的）、`sent` / `refused`（这周期发了什么）、`set`（发完之后的设置）、`margin`（分档与 `auto` 下目标书的初始保证金占权益的比例，前者不得超过后者）。
   - **上线首日要人看一次（T-12）**：重启后第一个整点周期跑完，在交易所界面上逐个币核对杠杆，与 `tail -1 .beidou/live/cycles.jsonl | python3 -c "import json,sys; print(json.load(sys.stdin)['leverage_tiers']['set'])"` 一致。接口读不回，这一步只能人看。

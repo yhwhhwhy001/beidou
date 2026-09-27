@@ -184,8 +184,9 @@ SHIPPED_K0175 = "4b2dc74b8f3ce73a3f7b14b513f3999aa9a7372024b317648c0d65381f9bf8c
 #: v11: `leverage` `auto` -> `by_vol` plus its three knobs, on top of `SHIPPED_K0175`.  The book's weights
 #: and orders do not move (the leverage is read after they are decided), but the leverage block is hashed so
 #: that a change to it is visible, and the operator accepted the one window reset on 2026-09-26's card.  So
-#: like `SHIPPED_D3` and `SHIPPED_K0175`, it is NOT in `CONSTRUCTION_ALIASES`.
-SHIPPED_BY_VOL = "e6d89cf8f8c462aa6d3a624e2b6ce5c41471ca296fea5989528cddd85bfb6b26"
+#: like `SHIPPED_D3` and `SHIPPED_K0175`, it is NOT in `CONSTRUCTION_ALIASES`.  Hysteresis 168: the draft's
+#: 24 (digest e6d89cf8) failed T-11 on the Mac's cycles and never ran.
+SHIPPED_BY_VOL = "2ee491c139714bf1dd8e79d2824b93330c65053a6fbc628bddc8918c9a67b16d"
 
 
 def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:

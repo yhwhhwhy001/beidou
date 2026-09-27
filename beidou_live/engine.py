@@ -177,7 +177,7 @@ class LiveConfig:
     # consecutive cycles a new tier must hold before it is sent.
     leverage_sigma_ref: float = 0.90
     leverage_tiers: tuple[int, ...] = VOL_TIERS
-    leverage_hysteresis: int = 24
+    leverage_hysteresis: int = 168
     # D-031's shape, one source over: how many consecutive cycles a symbol may return no closed bars
     # before the loop stops holding it and flattens it as delisted.  1 reproduces the behaviour this
     # field was added to make visible - a single empty REST answer zeroed the target, `plan_rebalance`
@@ -1397,7 +1397,7 @@ class LiveEngine:
         A symbol with a sigma this cycle counts as tiered from here on even if its send was refused.
         The venue kept the old setting, `leverage_set` still says so, and hysteresis asks again once the
         new tier has held for `leverage_hysteresis` cycles: a setting the venue will not take is retried
-        and alerted about once a day, not every hour (KILL-R7's 36 identical lines).
+        and alerted once per hysteresis (a week as shipped), not every hour (KILL-R7's 36 identical lines).
         """
         config, managed, day = self.config, self.managed_symbols(), _utc_day(self.clock.now_ms())
         tables = await self._bracket_tables(day)

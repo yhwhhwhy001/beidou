@@ -81,9 +81,10 @@ entries:
     earliest_window: 2026-09-27
     change: >-
       `portfolio.leverage` 从 `auto`（每个币 5x）改为 `by_vol`：档位 = 离 5 × 0.90 ÷ σ 对数距离最近的一档，
-      档位表 1x–15x（k=0.175 下持有的 13 个落在 3x–15x），换档须连续 24 个周期都要换，按当前名义读完整
-      档位表压上限，整本书的初始保证金不超过 `auto` 要的（超了抬档，不缩单）。构造指纹的 `leverage` 块加
-      `sigma_ref`、`tiers`、`hysteresis` 三个字段，`CONSTRUCTION_PAYLOAD_VERSION` 10 → 11，不加别名。
+      档位表 1x–15x（k=0.175 下持有的 13 个落在 3x–15x），换档须连续 168 个周期（一周）都要换（24 在 Mac 的
+      T-11 回放里一天最多换 9 次，超了上限 5），按当前名义读完整档位表压上限，整本书的初始保证金不超过 `auto`
+      要的（超了抬档，不缩单）。构造指纹的 `leverage` 块加 `sigma_ref`、`tiers`、`hysteresis` 三个字段，
+      `CONSTRUCTION_PAYLOAD_VERSION` 10 → 11，不加别名。
     measured: >-
       `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md`（#165）：真实杠杆（名义 ÷ 权益）早已
       按 1/σ 分开（最大/最小 12.9 倍，对数斜率 −0.99），统一的 5x 只决定初始保证金，14 天里保证金预检没有
