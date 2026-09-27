@@ -145,7 +145,18 @@ def test_drill_g6_an_hour_of_proxy_503s_produces_no_governance_decision(tmp_path
     ]
     record = [json.loads(line) for line in _write(tmp_path, rows).read_text(encoding="utf-8").splitlines()]
 
-    derived = tenure(record, book="flow_short", started_at=ANCHOR, window_anchor=ANCHOR, policy=POLICY)
+    # Judged the moment the record ends, not on the wall clock.  Unpinned, `tenure` read `datetime.now()`,
+    # and from 2026-10-03T00:00Z the first 30-day window (09-03 -> 10-03) had closed under it: the six OK
+    # cycles then credit a survived window, which is the rule working, and this drill went red on the
+    # calendar rather than on an outage.
+    derived = tenure(
+        record,
+        book="flow_short",
+        started_at=ANCHOR,
+        window_anchor=ANCHOR,
+        policy=POLICY,
+        now=START + timedelta(hours=len(rows)),
+    )
     assert derived.stopped_at is None
     assert derived.windows_survived == 0, "an hour of outage does not close a 30-day window"
     assert not [e for e in derived.events if e.event is Event.PNL_STOP]
