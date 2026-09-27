@@ -1,0 +1,25 @@
+# 资金费对冲书 `carry_hedged` 的成本模型（#14 / #39，2026-09-27 预登记）。
+#
+# 这本书按「价差」一列定价（`beidou_alpha/hedged.py`）：每单位 |Δw| 同时在两条腿上成交，所以每单位换手
+# 付两条腿的手续费和滑点。`beidou_live.composition.cost_model` 把 taker_fee_bps 与 slippage_bps 相加，
+# 这里两项各自是两条腿之和：
+#
+#   taker_fee_bps  15.0 = 永续 VIP0 taker 5.0（与 costs.yaml 同）+ 现货 VIP0 taker 10.0（币安现货 0.10%，
+#                         不计 BNB 抵扣）
+#   slippage_bps    4.0 = 每条腿 2.0，沿用 costs.yaml 的假设
+#
+# 所以每单位换手 19 bps，永续单腿是 7 bps。现货腿不借币，没有借贷成本；闲置保证金与现货现金的利息不计。
+taker_fee_bps: 15.0
+maker_fee_bps: 4.0        # 每条腿 2.0；本书只用 taker，留着是为了与 costs.yaml 同形
+slippage_bps: 4.0
+use_actual_funding: true  # 永续腿收付实际结算的资金费；价差面板取它的相反数，空头收正费率
+
+# 滑点压力档：costs.yaml 每条腿的档位（2.0 / 4.43 / 5.5 / 9.2）在两条腿上各付一次，所以乘 2。
+# 手续费按合约常数固定在 15.0，与 costs.yaml 那段「费率是合约常数」的理由相同。
+slippage_stress_bps: [4.0, 8.86, 11.0, 18.4]
+
+# 冲击模型与 costs.yaml 相同，默认关（`--capital 0`）。
+impact:
+  coefficient: 1.0
+  adv_window_bars: 720
+  vol_window_bars: 720

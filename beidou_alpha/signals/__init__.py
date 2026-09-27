@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from beidou_alpha.signals import breakout, carry, chanlun, flow, meanrev, pairs, residual, tsmom, xsmom
+from beidou_alpha.signals import breakout, carry, carry_hedged, chanlun, flow, meanrev, pairs, residual, tsmom, xsmom
 from beidou_alpha.signals.base import SignalSpec, scores_to_targets
 from beidou_alpha.validation.ledger import PAIR_SEARCH_STRATEGY
 
@@ -64,6 +64,19 @@ SIGNALS: dict[str, SignalSpec] = {
         warmup=lambda params: carry.CarryParams.from_mapping(params).warmup_bars,
         canonical=lambda params: asdict(carry.CarryParams.from_mapping(params)),
         uses_funding=lambda params: True,
+    ),
+    # #14 / #39, reopened by the operator's named ruling of 2026-09-27 and pre-registered the same day.
+    "carry_hedged": SignalSpec(
+        "carry_hedged",
+        carry_hedged.compute,
+        asdict(carry_hedged.CarryHedgedParams()),
+        "funding carry held as a hedge: long spot, short perpetual, equal notional, decided daily",
+        carry_hedged.CarryHedgedParams().warmup_bars,
+        warmup=lambda params: carry_hedged.CarryHedgedParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(carry_hedged.CarryHedgedParams.from_mapping(params)),
+        uses_funding=lambda params: True,
+        needs_spot=lambda params: True,
+        hedged=True,
     ),
     "meanrev": SignalSpec(
         "meanrev",
