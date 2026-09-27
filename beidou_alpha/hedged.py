@@ -12,10 +12,18 @@ guards' replay - then prices the hedge without a second code path.  The syntheti
 built so `asset_returns` recovers exactly those returns under BOTH conventions, which
 `tests/alpha/test_the_hedged_book_prices_two_legs_as_one.py` holds.
 
-A spot bar can be missing while the hedge is on (a halted listing, an archive hole).  The spot leg is
-then marked at its last traded price, so for those bars the book carries the naked perpetual leg, and
-the move the spot missed lands on the bar it trades again.  Scoring such a bar as zero would be the
-optimistic reading; the signal still refuses to ENTER without a spot price on the decision bar.
+A leg can stop trading while the hedge is on: a spot bar goes missing (a halted listing, an archive
+hole), a perpetual bar goes missing or trades nothing.  A delisted perpetual does the second for months,
+because the archive keeps printing its last price at zero volume (FTTUSDT at 1.59 from 2022-11-14 04:00).
+The leg that did not trade is marked at its last traded price, so for those bars the book carries the
+other leg naked, and the move the leg missed lands on the bar it trades again.  Scoring such a bar as
+zero would be the optimistic reading: LUNAUSDT's perpetual last traded at 2022-05-12 15:00, and its spot
+fell from 0.00887 to 0.00005 over the next nine hours.
+
+The mark lasts one day.  The signal decides daily and refuses a symbol whose legs did not both trade on
+the decision bar, so a day is the longest the book can hold a leg that has stopped; past it the spread is
+not priced, and a leg that comes back later moves neither the book nor the synthetic price.  It may come
+back as something else: LUNAUSDT's spot resumes on 2022-05-31 at 8.5558, and that is LUNA 2.0.
 """
 
 from __future__ import annotations
@@ -25,7 +33,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.panel import Panel
+from beidou_alpha.panel import Panel, interval_seconds
 
 #: Per-leg notional as a fraction of equity.  The spot leg needs its whole notional in cash, and the
 #: short perpetual at 2x needs half its notional as margin: 2/3 + 1/3 fills the account, and the
@@ -42,9 +50,13 @@ def spread_panel(panel: Panel) -> Panel:
         raise ValueError("a hedged book needs the spot leg's open and close in `panel.spot`")
     spot_open = spot_open.reindex(index=panel.index, columns=panel.close.columns)
     spot_close = spot_close.reindex(index=panel.index, columns=panel.close.columns)
-    marked = spot_close.ffill()
-    spread_cc = marked / marked.shift(1) - 1.0 - (panel.close / panel.close.shift(1) - 1.0)
-    spread_oc = (spot_close / spot_open - 1.0).fillna(0.0).where(marked.notna()) - (panel.close / panel.open - 1.0)
+    day = max(1, round(86_400 / interval_seconds(panel.interval)))
+    traded = panel.close.notna() & (panel.volume > 0)
+    perp, spot = panel.close.where(traded).ffill(limit=day), spot_close.ffill(limit=day)
+    spread_cc = spot / spot.shift(1) - 1.0 - (perp / perp.shift(1) - 1.0)
+    spread_oc = (spot_close / spot_open - 1.0).fillna(0.0).where(spot.notna()) - (
+        (panel.close / panel.open - 1.0).where(traded).fillna(0.0).where(perp.notna())
+    )
     for name, frame in (("close-to-close", spread_cc), ("open-to-close", spread_oc)):
         broken = np.argwhere(frame.to_numpy(dtype=float) <= -1.0)
         if len(broken):
@@ -53,8 +65,7 @@ def spread_panel(panel: Panel) -> Panel:
                 f"{frame.columns[column]} at {frame.index[row]}: {name} spread return "
                 f"{frame.iat[row, column]:.4f} would price the synthetic leg at or below zero"
             )
-    tradable = panel.close.notna() & spot_close.notna().cummax()
-    close = (1.0 + spread_cc.fillna(0.0)).cumprod().where(tradable)
+    close = (1.0 + spread_cc.fillna(0.0)).cumprod().where(perp.notna() & spot.notna())
     opened = close / (1.0 + spread_oc)
     return Panel(
         interval=panel.interval,

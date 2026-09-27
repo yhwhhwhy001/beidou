@@ -5,10 +5,12 @@
 
 1. **价差收益 = 现货收益 − 永续收益**，两种收益口径都成立；空头腿收资金费。`run_backtest` 在价差面板
    上算出来的，就是两条腿分开算再相加的结果。
-2. **现货缺 bar 时永续腿是裸的**：现货按最后成交价计价，缺掉的那段涨跌落在它重新成交的那根 bar 上。
-   记 0 是偏乐观的读法，这里不做。
+2. **一条腿没成交时另一条腿是裸的**：现货缺 bar，或永续缺 bar、零成交量，都按最后成交价计价，缺掉的
+   那段涨跌落在它重新成交的那根 bar 上。记 0 是偏乐观的读法，这里不做。最多记一天：再往后价差不定价，
+   隔一天以上才回来的腿（LUNAUSDT 的现货回来时已是 LUNA 2.0）碰不到书，也碰不到合成价格。
 3. **每天只在 00:00 UTC 开盘那根 bar 上决策**，进出场的 bar 里没有结算（D-034 的归属规则）。严格大于
-   门槛；决策 bar 上没有现货价就不进；预热期是 NaN，回测从第一个决策开始。
+   门槛；决策 bar 上没有现货价、或永续没有成交（下架后归档里的零量平 bar）就不进；预热期是 NaN，回测从
+   第一个决策开始。
 4. **入选标的等名义，名义固定为每条腿权益的 2/3**；成员表与上市时长只在决策 bar 上读。
 5. **因果**：改动决策时刻之后的数据，不改之前的任何分数与权重。
 6. **只有 validate 能给它定价**：`AlphaModel` 拒绝它，validate 要求 `--no-exits`。
@@ -119,6 +121,70 @@ def test_a_missing_spot_bar_leaves_the_perpetual_leg_naked_until_spot_trades_aga
     assert got[BARS[103]] == pytest.approx(jump - perp[BARS[103]], abs=1e-12)
 
 
+def test_a_spot_leg_that_comes_back_after_more_than_a_day_moves_nothing() -> None:
+    """XMRUSDT's and FTTUSDT's shape: the spot goes dark for longer than a day, then prints again, here at
+    a thousand times the price, which is what a different asset under the same name looks like."""
+    base = _panel()
+    spot_close = base.spot_field("close")
+    assert spot_close is not None
+    dark = spot_close.copy()
+    dark.loc[BARS[100:130], "AAAUSDT"] = np.nan
+    dark.loc[BARS[130:], "AAAUSDT"] *= 1_000.0
+    panel = _panel(spot_close=dark)
+    assert panel.spot is not None
+    panel.spot["open"].loc[BARS[130:], "AAAUSDT"] *= 1_000.0
+    spread = spread_panel(panel)
+    naked = asset_returns(spread, "close_to_close")["AAAUSDT"]
+    perp = panel.close["AAAUSDT"].pct_change()
+    np.testing.assert_allclose(naked[BARS[100:124]], -perp[BARS[100:124]], rtol=0, atol=1e-12)
+    assert spread.close.loc[BARS[124:130], "AAAUSDT"].isna().all(), "a day after its last trade it is not priced"
+    assert spread.close.loc[BARS[130], "AAAUSDT"] == spread.close.loc[BARS[123], "AAAUSDT"], "and comes back flat"
+    assert np.isnan(naked[BARS[130]]), "close to close there is no price to come back from"
+    own_bar = dark["AAAUSDT"][BARS[130]] / panel.spot["open"]["AAAUSDT"][BARS[130]] - (
+        panel.close["AAAUSDT"][BARS[130]] / panel.open["AAAUSDT"][BARS[130]]
+    )
+    assert asset_returns(spread, "open_to_close")["AAAUSDT"][BARS[130]] == pytest.approx(own_bar, abs=1e-12)
+
+
+@pytest.mark.parametrize("stopped", ["rows_missing", "zero_volume"])
+def test_a_perpetual_that_stops_trading_leaves_the_spot_leg_naked_until_the_next_decision(stopped: str) -> None:
+    """LUNAUSDT's shape.  Its perpetual last traded at 2022-05-12 15:00 and has no rows after it; its spot
+    fell from 0.00887 to 0.00005 over the next nine hours, went dark for 438, and came back as LUNA 2.0.
+    FTTUSDT's perpetual stopped the other way the archive records it, flat at 1.59 with zero volume.
+
+    Either way the book carries the naked spot leg until the next decision bar exits it, and pays for the
+    fall: marking the stopped leg is what keeps those nine hours out of zero.
+    """
+    funding = _funding(dict.fromkeys(SYMBOLS, 0.0002))
+    last, decision = 4 * 24 + 15, 5 * 24  # the perpetual's last trade, 15:00 on day 4; the next decision
+    crash = BARS[last + 1 : decision + 1]
+    spot_close = _panel().spot_field("close")
+    assert spot_close is not None
+    spot_close = spot_close.copy()
+    spot_close.loc[crash, "AAAUSDT"] = spot_close["AAAUSDT"].iloc[last] * 0.5 ** np.arange(1, len(crash) + 1)
+    spot_close.loc[BARS[decision + 1 : 9 * 24], "AAAUSDT"] = np.nan
+    spot_close.loc[BARS[9 * 24 :], "AAAUSDT"] *= 1_000.0
+    panel = _panel(funding=funding, spot_close=spot_close)
+    after = BARS[last + 1 :]
+    if stopped == "rows_missing":
+        for frame in (panel.open, panel.high, panel.low, panel.close, panel.volume):
+            frame.loc[after, "AAAUSDT"] = np.nan
+    else:
+        for frame in (panel.open, panel.high, panel.low, panel.close):
+            frame.loc[after, "AAAUSDT"] = panel.close["AAAUSDT"].iloc[last]
+        panel.volume.loc[after, "AAAUSDT"] = 0.0
+
+    scores = carry_hedged_scores(panel, CarryHedgedParams(lookback_days=2))
+    weights = hedged_weights(scores, panel.close, None, min_history_bars=0, decision_hour_utc=0)
+    held = weights["AAAUSDT"].iloc[4 * 24]
+    assert held == pytest.approx(HEDGED_NOTIONAL / 3) and weights["AAAUSDT"].iloc[decision] == 0.0
+    result = run_backtest(spread_panel(panel), weights, CostModel(turnover_bps=0.0), execution="close_to_close")
+    fall = spot_close["AAAUSDT"].pct_change().loc[crash]
+    np.testing.assert_allclose(result.gross.loc[crash, "AAAUSDT"], held * fall, rtol=0, atol=1e-12)
+    assert result.gross.loc[BARS[decision + 1 :], "AAAUSDT"].eq(0.0).all()
+    assert spread_panel(panel).close.loc[BARS[last + 25 :], "AAAUSDT"].isna().all(), "a day on, it is not priced"
+
+
 # --- 3. the signal ---------------------------------------------------------------------------------
 
 
@@ -162,6 +228,27 @@ def test_no_price_on_either_leg_on_the_decision_bar_means_no_entry() -> None:
     assert weights.loc[day].to_dict() == pytest.approx(
         {"AAAUSDT": HEDGED_NOTIONAL / 2, "BBBUSDT": HEDGED_NOTIONAL / 2, "CCCUSDT": 0.0}
     )
+
+
+def test_a_perpetual_printing_its_last_price_at_zero_volume_is_not_held() -> None:
+    """FTTUSDT's shape: last trade 2022-11-14 04:00, then 1.59 at zero volume for as long as the archive runs.
+
+    Its spot still trades and its L-day funding is still above the line, so only the volume says the
+    short leg is gone.
+    """
+    funding = _funding(dict.fromkeys(SYMBOLS, 0.0002))
+    panel = _panel(funding=funding)
+    last, decision = 4 * 24 + 4, 5 * 24  # the last trade, 04:00 on day 4; the next decision
+    after = BARS[last + 1 :]
+    for frame in (panel.open, panel.high, panel.low, panel.close):
+        frame.loc[after, "CCCUSDT"] = panel.close["CCCUSDT"].iloc[last]
+    panel.volume.loc[after, "CCCUSDT"] = 0.0
+    params = CarryHedgedParams(lookback_days=2)
+    scores = carry_hedged_scores(panel, params)
+    assert scores["CCCUSDT"].iloc[4 * 24] == 1.0 and scores["CCCUSDT"].iloc[decision:].eq(0.0).all()
+    assert scores[["AAAUSDT", "BBBUSDT"]].iloc[decision:].eq(1.0).all().all()
+    panel.volume.loc[after, "CCCUSDT"] = 1_000.0
+    assert carry_hedged_scores(panel, params)["CCCUSDT"].iloc[decision] == 1.0, "the volume, not the flat price"
 
 
 # --- 4. the weights --------------------------------------------------------------------------------

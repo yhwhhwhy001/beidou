@@ -14,8 +14,8 @@ settlement on the bar that contains it; a book entering ON a settlement bar woul
 payment it never held, and one leaving on it would miss one it did.
 
 A symbol qualifies when its spot leg has a price on the decision bar (same open time, never
-forward-filled - DL-D5 note 7), its perpetual has traded for a whole look-back window, and its
-trailing funding - summed over ``lookback_days`` worth of bars and divided by ``lookback_days`` - is
+forward-filled - DL-D5 note 7), its perpetual has traded for a whole look-back window and trades on the
+decision bar itself, and its trailing funding - summed over ``lookback_days`` worth of bars and divided by ``lookback_days`` - is
 strictly above ``threshold_per_day`` (by more than ``FUNDING_TOLERANCE``).  Summing bars rather than
 averaging settlements puts a symbol that settles every 8h, 4h or 1h on the same per-day scale.
 
@@ -79,8 +79,13 @@ def carry_hedged_scores(panel: Panel, params: CarryHedgedParams | None = None) -
     # paid.  A whole window of perpetual bars is required before its mean is read - and a price on the
     # decision bar itself, or a delisted perpetual would still hold L days of the funding it used to pay.
     listed = panel.close.notna() & (panel.close.notna().cumsum() >= window)
+    # A price is not a trade.  The archive keeps printing a delisted perpetual's last price at zero volume
+    # (FTTUSDT at 1.59 from 2022-11-14 04:00, and a pit member for 25 days more), so without this the book
+    # would hold naked spot, against a short leg that no longer exists, for as long as the funding it paid
+    # before it stopped keeps the L-day mean above the line.
+    traded = panel.volume.reindex(index=index, columns=columns) > 0
     priced = spot_close.reindex(index=index, columns=columns).notna()
-    held = ((per_day > p.threshold_per_day + FUNDING_TOLERANCE) & listed & priced).astype(float)
+    held = ((per_day > p.threshold_per_day + FUNDING_TOLERANCE) & listed & traded & priced).astype(float)
     stamps = pd.DatetimeIndex(index)
     decided = (stamps.hour == p.decision_hour_utc) & (stamps.minute == 0) & (np.arange(len(index)) >= window - 1)
     held.loc[~decided, :] = np.nan

@@ -151,6 +151,18 @@ def main() -> int:
         "trading_costs": float(-(priced.costs.sum(axis=1) - funding_cost).mean() * bpy),
         "net": float(priced.portfolio_net.mean() * bpy),
     }
+    # 只报告：持有时有一条腿那根 bar 没成交（现货缺 bar；永续缺 bar 或零成交量）。`hedged.py` 按最后成交价
+    # 记它、最多一天，所以这些 bar 上书带着另一条腿的裸敞口；这里给出有多少、落在哪些币、毛收益合计多少。
+    spot_close = panel.spot_field("close")
+    assert spot_close is not None
+    idx, cols = priced.weights.index, priced.weights.columns
+    stopped = ~(panel.close.notna() & (panel.volume > 0))[cols].reindex(idx) | spot_close[cols].reindex(idx).isna()
+    naked = (priced.weights.fillna(0.0) != 0.0) & stopped
+    naked_leg = {
+        "bars": int(naked.to_numpy().sum()),
+        "symbols": sorted(str(symbol) for symbol in cols[naked.any(axis=0).to_numpy()]),
+        "gross_return_sum": float(priced.gross.where(naked, 0.0).sum().sum()),
+    }
 
     verdict_reads = {
         "verdict": report.get("verdict"),
@@ -174,6 +186,7 @@ def main() -> int:
                 "share_of_days_holding_nothing": float((held_daily == 0).mean()),
             },
             "annualized_components": components,
+            "naked_leg_bars": naked_leg,
         },
         "generated_at": datetime.now(UTC).isoformat(),
     }
