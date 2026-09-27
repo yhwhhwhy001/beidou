@@ -56,6 +56,7 @@ from beidou_alpha.validation.stability import (
 )
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import Fold, param_key, walk_forward_evaluate, walk_forward_folds
+from beidou_cli.research_feature_store import with_feature_store
 from beidou_cli.research_ledger_io import _trial_signature
 
 # The panel layer now lives in `beidou_cli/research_panel.py` (M6 step 1) and is re-exported here.
@@ -246,13 +247,15 @@ def _running_book_nets(
             notes.append(f"{name}: skipped - the candidate `{exclude_strategy}` is a member of this book")
             continue
         try:
-            model = AlphaModel(
-                entries=entries,
-                portfolio=portfolio,
-                interval=interval,
-                ensemble_method=registry.ensemble_method,
-                min_history_bars=min_history,
-                books={name: registry.fraction(name)} if name in registry.books else {},
+            model = with_feature_store(
+                AlphaModel(
+                    entries=entries,
+                    portfolio=portfolio,
+                    interval=interval,
+                    ensemble_method=registry.ensemble_method,
+                    min_history_bars=min_history,
+                    books={name: registry.fraction(name)} if name in registry.books else {},
+                )
             )
             weights, _c, _p = model.evaluate(panel, membership)
         except (FundingUnavailable, KeyError, ValueError) as exc:
@@ -400,8 +403,12 @@ def _evaluate_book(
     """
     bpy = panel.bars_per_year
     bare = replace(portfolio, no_trade_band=0.0, no_trade_rel_band=0.0)
-    main_model = AlphaModel(entries=(main_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
-    sleeve_model = AlphaModel(entries=(sleeve_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
+    main_model = with_feature_store(
+        AlphaModel(entries=(main_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
+    )
+    sleeve_model = with_feature_store(
+        AlphaModel(entries=(sleeve_entry,), portfolio=bare, interval=interval, min_history_bars=min_history)
+    )
     w_main, _mc, _mp = main_model.evaluate(panel, membership)
     w_sleeve, _sc, _sp = sleeve_model.evaluate(panel, membership)
 

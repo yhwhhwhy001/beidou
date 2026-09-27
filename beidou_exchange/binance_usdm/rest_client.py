@@ -1,9 +1,10 @@
 """Async Binance USDⓈ-M REST client: HMAC signing, clock resync, retry/backoff, ambiguity semantics.
 
 Ambiguity rule: a *read* that fails is retried; a *write* whose request was
-sent but whose response is unknown (timeout after send, 5xx) raises
-:class:`OrderOutcomeUnknown` so the caller queries by client id instead of
-re-submitting.  Deterministic venue rejections raise :class:`VenueError`.
+sent but whose response is unknown (timeout after send, 5xx, the venue's own
+backend timeout) raises :class:`OrderOutcomeUnknown` so the caller queries by
+client id instead of re-submitting.  Deterministic venue rejections raise
+:class:`VenueError`.
 """
 
 from __future__ import annotations
@@ -26,8 +27,16 @@ from beidou_shared.types import OrderOutcomeUnknown, VenueError
 logger = logging.getLogger(__name__)
 
 RETRYABLE_HTTP = frozenset({418, 429, 500, 502, 503, 504})
-RETRYABLE_CODES = frozenset({-1003, -1015, -1021, -1001, -1007, -1008})
+RETRYABLE_CODES = frozenset({-1003, -1015, -1021, -1001, -1008})
 CLOCK_SKEW_CODE = -1021
+# -1007 was in RETRYABLE_CODES until 2026-09-25, so a write that got it was signed again and re-sent.
+# Binance's error-code page calls it a timeout waiting for the backend with the execution status
+# UNKNOWN, and HTTP 408 is the status its general-info page gives that same timeout.  Re-sending does
+# not bounce off the first order either: `newClientOrderId` only has to be unique among OPEN orders, and
+# a MARKET order that filled is no longer open - so the retry was a second fill.  A read may still ask
+# again; a write is `_ambiguous`.
+BACKEND_TIMEOUT_HTTP = 408
+BACKEND_TIMEOUT_CODE = -1007
 # USDⓈ-M allows 2,400 request weight per minute per IP.  These two thresholds buy VISIBILITY only:
 # nothing here sleeps on them.  A token bucket would change what the live loop does mid-run, and this
 # client has only ever been reactive (429/418 + Retry-After); see docs/ARCHITECTURE.md.
@@ -113,18 +122,18 @@ class BinanceRestClient:
                     response = await self._client.delete(path, params=payload)
                 else:
                     response = await self._client.request(method, path, data=payload)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                # nothing was sent: safe to retry for reads and writes alike
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError, httpx.PoolTimeout) as exc:
+                # nothing was sent: safe to retry for reads and writes alike.  `ProxyError` is the local
+                # proxy refusing the CONNECT (its 503), so the tunnel to the venue never opened, and
+                # `PoolTimeout` never got a connection.  Neither subclasses the two before them, so until
+                # 2026-09-25 a proxy 503 on an order read as "maybe sent" while the same 503 on a read
+                # was retried.
                 last_error = exc
                 self._note_transport_failure(exc)
             except httpx.TransportError as exc:
                 self._note_transport_failure(exc)
                 if mutating:
-                    raise OrderOutcomeUnknown(
-                        f"{type(exc).__name__} after sending {method} {path}",
-                        client_order_id=str(params.get("newClientOrderId") or params.get("origClientOrderId") or ""),
-                        symbol=str(params.get("symbol", "")),
-                    ) from exc
+                    raise _ambiguous(f"{type(exc).__name__} after sending {method} {path}", params) from exc
                 last_error = exc
             else:
                 self.consecutive_transport_failures = 0
@@ -175,14 +184,16 @@ class BinanceRestClient:
         if status in RETRYABLE_HTTP:
             retry_after = float(response.headers.get("Retry-After", "0") or 0) or 2.0
             if status >= 500 and mutating:
-                raise OrderOutcomeUnknown(
-                    f"HTTP {status} for {method} {path}",
-                    client_order_id=str(params.get("newClientOrderId") or params.get("origClientOrderId") or ""),
-                    symbol=str(params.get("symbol", "")),
-                )
+                raise _ambiguous(f"HTTP {status} for {method} {path}", params)
             return self._Outcome(
                 error=VenueError(f"HTTP {status}: {message}", code=code or status, retryable=True),
                 retry_after=retry_after,
+            )
+        if status == BACKEND_TIMEOUT_HTTP or code == BACKEND_TIMEOUT_CODE:
+            if mutating:
+                raise _ambiguous(f"backend timeout (HTTP {status}, code {code}) for {method} {path}", params)
+            return self._Outcome(
+                error=VenueError(message or f"HTTP {status}", code=code or status, retryable=True), retry_after=2.0
             )
         if status >= 400 or code < 0:
             if code == CLOCK_SKEW_CODE:
@@ -239,3 +250,12 @@ class BinanceRestClient:
                         USED_WEIGHT_WARN,
                     )
                 self._weight_warned = over
+
+
+def _ambiguous(reason: str, params: Mapping[str, Any]) -> OrderOutcomeUnknown:
+    """A write that may have executed, named by the client id the caller will query it by."""
+    return OrderOutcomeUnknown(
+        reason,
+        client_order_id=str(params.get("newClientOrderId") or params.get("origClientOrderId") or ""),
+        symbol=str(params.get("symbol", "")),
+    )

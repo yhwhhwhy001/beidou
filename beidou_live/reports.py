@@ -10,6 +10,7 @@ answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
     report_exits       #1.5 / #3.2 the exit overlay
     report_execution   #10 execution, with #10.9 / #10.10 per-order TCA (M-Q08 itself is execution_fidelity.py)
     report_data        #9 data (bar sanity is bar_sanity.py)
+    report_events      #8.10 event risk: the stablecoin peg, venue incidents and extreme moves, reported only
     report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
     report_governance  the weekly's effort share and pre-registration order
     report_common      what all of them read the state files with
@@ -86,6 +87,7 @@ from beidou_live.report_decay import (  # noqa: F401  (re-exported at its histor
     probe_correlation,
     probe_rows,
 )
+from beidou_live.report_events import _event_risk_lines, event_risk
 from beidou_live.report_execution import (
     _restart_cost_lines,
     clock_health,
@@ -129,6 +131,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     margin_and_rejections,
     max_weight_of,
     noise_scale,
+    plain_leverage_lines,
     risk_adaptation,
     risk_adaptation_headline,
     tail_readings,
@@ -152,6 +155,7 @@ def daily_payload(
     closes: Callable[[str], pd.Series] | None = None,
     exits: ExitParams | None = None,
     fidelity: ReplayInputs | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -240,7 +244,9 @@ def daily_payload(
         # they share?  The whole same-source contract is this one number, and until now `metrics_parity`
         # existed with nothing calling it - which is the shape this repository keeps finding, a
         # measurement that is written but never taken.
-        "metrics_parity": metrics_parity_status(sorted(cycles[-1].get("universe") or []) if cycles else [], data_root),
+        "metrics_parity": metrics_parity_status(
+            sorted(cycles[-1].get("universe") or []) if cycles else [], data_root, now=now or datetime.now(UTC)
+        ),
         # The instrument the 2026-09-08 ruling owes: the denominator stays total equity, so the
         # pro-cyclical amplifier is an ACCEPTED risk - and an accepted risk with nothing measuring it is
         # a sentence.  Beside `risk_budget` rather than inside it on purpose: it is not a threshold and
@@ -279,6 +285,9 @@ def daily_payload(
         "exit_reachability": exit_reachability(store, exits),
         "noise_scale": noise_scale(store, day, vol_target=vol_target),
         "tail": tail_readings(store, day, vol_target=vol_target),  # G4: the backtest tail beside the sigma ruler
+        # #8.10, reported only: the stablecoin peg, what the loop recorded going wrong on its way to the venue,
+        # and the market's newest moves in units of its own vol.  Beside the book's tail, which it is not.
+        "event_risk": event_risk(store, day, closes=closes, root=data_root),
         "exit_counterfactual": exit_counterfactuals(store, closes=closes, root=data_root),
         "plan_gaps": plan_gaps(store, day),
         "clock": clock_health(store, day),
@@ -791,6 +800,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ),
             ("Noise scale (DL-EX0)", _noise_scale_lines(payload.get("noise_scale") or {})),
             ("Tail beside the sigma ruler (G4)", _tail_readings_lines(payload.get("tail") or {})),
+            ("Event risk (#8.10, reported only)", _event_risk_lines(payload.get("event_risk") or {})),
             (
                 "Exit counterfactuals (M-005, monitoring only)",
                 {
@@ -838,6 +848,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 }
                 or {"none": 0},
             ),
+            # The rows of the section below, in the operator's words (`plain_leverage_lines`, 2026-09-26).
+            ("真实杠杆（白话）", plain_leverage_lines(payload.get("risk_adaptation") or {})),
             (
                 # Where per-symbol adaptation actually lives (D-037): the weight, not the leverage
                 "Risk adaptation per symbol (M-015)",
@@ -862,6 +874,7 @@ __all__ = [
     "daily_payload",
     "expectations_from_evidence",
     "latest_risk_adaptation",
+    "plain_leverage_lines",
     "preregistration_problems",
     "preregistration_skipped",
     "risk_adaptation_headline",

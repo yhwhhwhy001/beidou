@@ -47,16 +47,22 @@ stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 # 与 run_check.sh 同一个 notify：一份「这家 provider 读哪种 shape」和「消息到底发出去没有」的实现。
 # 那里记着代价——手搓的第三份曾经对 Lark 发 Slack 的扁平 {"text": ...}，HTTP 200、消息被丢、
 # `curl -f` 还成功，于是告警路径整条静默。
+# 两个通道都发，URL 走环境变量不走 argv——理由与 2026-09-25 的改动都记在 run_check.sh 的 notify 上方。
 notify() {
   echo "[$(stamp)] FAIL governance-gate: $1"
-  if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}" ]; then
-    "$REPO/.venv/bin/python" -c '
-import asyncio, sys
+  if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}${BEIDOU_ALERTS_WEBHOOK_URL_2:-}" ]; then
+    BEIDOU_ALERTS_WEBHOOK_URL="${BEIDOU_ALERTS_WEBHOOK_URL:-}" BEIDOU_ALERTS_WEBHOOK_URL_2="${BEIDOU_ALERTS_WEBHOOK_URL_2:-}" \
+      "$REPO/.venv/bin/python" -c '
+import asyncio, os, sys
 from pathlib import Path
 from beidou_live.alerts import WebhookAlerts
-alerts = WebhookAlerts(sys.argv[1], state_path=Path(sys.argv[4]))
-sys.exit(0 if asyncio.run(alerts.send(sys.argv[2], key=sys.argv[3])) else 1)
-' "$BEIDOU_ALERTS_WEBHOOK_URL" "北斗 family gate 失败：$1" "governance-gate" "$SUPPORT/alert-dedup.json" \
+alerts = WebhookAlerts(
+    os.environ["BEIDOU_ALERTS_WEBHOOK_URL"],
+    secondary_url=os.environ["BEIDOU_ALERTS_WEBHOOK_URL_2"],
+    state_path=Path(sys.argv[3]),
+)
+sys.exit(0 if asyncio.run(alerts.send(sys.argv[1], key=sys.argv[2])) else 1)
+' "北斗 family gate 失败：$1" "governance-gate" "$SUPPORT/alert-dedup.json" \
       || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }

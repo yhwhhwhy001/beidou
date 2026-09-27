@@ -11034,6 +11034,12 @@ AKEUSDT 在 16:00Z 收到 4.90σ（距 6σ 差 10.0%）之后，它第一次有�
 （原 90 周期记录移到 `.beidou/live-shadow-dry-run.20260916-drifted-candidate`，不追加：一份
 `cycles.jsonl` 只能描述一个候选）。重启后 universe 17 个币、`pool_refresh=False`，与 armed 同源。
 
+**补记（2026-09-27）：更正起跑时刻。** 上段「`com.beidou.shadow` 从 09-15T04:24Z 起跑的 90 个周期」
+有两处不对。一是把本地时间（+08:00）标成了 Z：本地 09-15 04:24 是 09-14T20:24Z。二是那 90 个周期不是
+一次起跑：归档记录的第一行在 09-12T14:00Z，由 5 个进程接力写成。09-14T20:24Z 起跑的是最后一个进程
+PID 802，它写了第 55–90 行。逐次启动的读数见 2026-09-27「startup gate 只在写入时问」一节的启动表。
+候选 registry 头注里同样的时刻已改于 `9891d8e1`。上段原文保持不变。
+
 守卫做成**条件式**：头注还在声称「NOTHING ELSE」时，非注释正文必须与 armed 逐行相同；那句话被
 删掉（文件终于成为真正的晋级候选）时断言自动放开。不变量是「这份文件不谎报自己」，不是「两份
 文件相同」——后者会在它第一次干正事的那天挡住它。负控制已跑（旧文件上失败、新文件上通过）。
@@ -16177,6 +16183,9 @@ universe、两条漂移上，打印精度逐字相同。它量的 0.15 在诚实
 static −58.8%，CAGR 中位 18.8% / 20.9%。插值的守住线是 pit 0.2004、static 0.1935。0.15 那一格的
 prior-trials 申报归它。
 
+**后续（同日）**：操作者点头入库，见本文件「p32i：诚实漂移下补测 0.15」一节。0.15 的申报已由
+「预登记：tsmom 在 k = 0.45 上重出证据」一节计入（9 个 k × 2 个 universe）。
+
 ### 状态：等操作者选
 
 上一节说「它的读数与选出的 k，写进下一节预登记」。主读数是诚实漂移那张。在现有抵押品下，规则在那张表上
@@ -16186,3 +16195,1276 @@ prior-trials 申报归它。
 
 p32h 与 D3 那次的全精度输出，只在另外两个会话的 worktree 里（路径见全文第 6 节）。那两个 worktree 一旦
 清掉，12/12 的对照就重做不了。要不要归档，也交操作者定。
+
+**后续（同日）**：操作者裁定归档，见下一节「操作者三条裁定」。
+
+## 2026-09-25 · 操作者三条裁定：k 取 0.45 并换抵押品，做 8.10、9.4、9.6，归档 k 扫描的全精度输出
+
+执行记录「查漏补缺」一节末尾列了三件要操作者定的事
+（`docs/analysis/2026-09-25-external-checklist-round-two.md`）。操作者同日答复：
+
+| 事项 | 裁定 |
+| --- | --- |
+| k | 按建议：换抵押品，k = 0.45 |
+| 8.10、9.4、9.6 | 做 |
+| p32h 与 D3 那次的全精度输出 | 归档 |
+
+本节记落地安排，只写可观测事实与计划。
+
+### 一、k = 0.45 并换抵押品
+
+依据是上一节「k 的重测」：换抵押品之后，诚实漂移下 D-035 给 0.45，headroom pit +2.09pp、static +3.40pp。
+落地分四步，顺序不能反。
+
+1. **换抵押品。** 操作者在交易所把 USDⓈ-M 账户里的 BTC 抵押品换成 USDT。这是交易所上的操作，agent
+   不做。09-25T10:10Z 的日报读数：抵押品 5,748.6 U，占权益 43.50%。
+   - 循环侧不用改代码。`COIN_SWAP_DEPOSIT`、`COIN_SWAP_WITHDRAW`、`AUTO_EXCHANGE`、
+     `CROSS_COLLATERAL_TRANSFER`、`TRANSFER` 都在 `attribution.EXTERNAL_FLOW_TYPES` 里。循环读到它们，
+     就把日初权益与高水位重置到当前权益（`engine.py` 外部资金流那一支）。R8 的尺子只读归因收入与
+     未实现盈亏，不读这类流水。
+   - 要在两个整点之间一次做完。若分成转出、兑换、转入三步，中间又跨过一个周期，那个周期看到的权益会
+     少掉抵押品那一块，可能触发 `DAILY_LOSS_PAUSE`（`guards.py`，−5%）。
+   - 做完的判据：日报「Collateral in equity (L1-10)」的 share 约为 0；
+     `risk_budget.usdt_drawdown.vs_total_equity` 约为 1.0。
+2. **先把数据修好。** 9.4 的缺口修复与成员表重建，都放在重出之前。成员表是 dataset manifest 的阻断
+   字段（`beidou_data/manifest.py`），重出之后再重建，新证据就失效；K 线不是阻断字段。两件都要下载，
+   先报操作者。成员表重建照 RUNBOOK「membership」一节的四条做。
+3. **重出。** 按下一节的预登记，在 worktree 里把 `config/live.demo.yaml` 的 `portfolio.vol_target` 改成
+   0.45，跑 `research validate`。
+4. **10-13 之后切换。** 过门时，下面几件放进同一个 PR：改 k；改档位（走 R10）；换指针；删 exemption。
+   这个 PR 在 10-13T00:00Z 之后合入，与 #149（R8 尺子）同批。然后快进主 checkout，在安全窗口重启一次。
+   不过门时，10-12 前在准备文档第 2.2 节的 C、E、F 里选一个，交操作者定。
+
+档位按 K-4 的规则取 ((−0.49, 0.3375), (−0.70, 0.225))。改 `Policy.drawdown_ladder` 要升
+`POLICY_VERSION`，`risk_budget:` 报告副本同步改。
+
+**价钱比报给操作者的略高。** 执行记录写的是「2 格加约 16 笔申报，N = 337，门 1.5855」，出自 10-13
+准备文档。那个门的方差借自 09-18 的报告。`research power` 的规则是借同族最近一份，也就是 09-19 的报告；
+按它算，N = 339 时门是 1.5959。多申报的 2 笔（p32i 的 0.15）只让门高 0.0006，差额主要在方差借自哪份
+报告。门最终以跑出来的报告为准，下一节把两种算法都列出。
+
+### 二、8.10、9.4、9.6
+
+三项分给三个 worker，各用一个 worktree。都是零 ledger，不改交易行为：
+
+- **9.4 缺口修复。** 先只读扫描真实归档，再做一个修复命令：从源头重取；源头也没有的记为已确认缺口；
+  绝不插值。它默认只干跑，真正写数据前先报操作者，因为要下载。
+- **9.6 feature store。** 做一个内容寻址的落盘缓存，与直接计算逐位相同，实盘默认不开。收益太小就照实报。
+- **8.10 事件风险。** 第一期是日报读数，覆盖稳定币锚定、交易所事故信号、极端行情，只报告不告警。
+  第二期是「按事件调仓」规则的预登记草稿。它要花 trial，所以排在 k = 0.45 重出之后、10-13 之后，
+  否则会先抬高重出那道门。
+
+### 三、归档
+
+p32h 与 D3 那次的全精度输出，归档到 `reports/research/k-scan-20260923/`，共 8 个文件：
+
+| 文件 | 字节 | sha256 前 16 位 | 写出它的脚本 |
+| --- | --- | --- | --- |
+| `p32h-pit.json` | 16,644 | `713a20f48275c896` | `scratchpad/p32h_k_sweep_at_the_base_in_force.py`（#112） |
+| `p32h-static.json` | 16,949 | `ab0a896ea864ddb6` | 同上 |
+| `kgrid-pit-2000.json` | 6,856 | `cce354534b77adcb` | `scratchpad/d3_multibook_kgrid_bootstrap.py`（#115） |
+| `kgrid-static-2000.json` | 6,855 | `5dc84eb6a3c41155` | 同上 |
+| `impact-pit.json` | 5,755 | `89be63fff8126102` | `scratchpad/d3_multibook_band_impact.py`（#115） |
+| `impact-static.json` | 5,724 | `09556db03ae291de` | 同上 |
+| `series-pit.npz` | 4,332,489 | `44200678d3c8a1a7` | 同上：4 个 k × D2/D3 × mark/realised，每条 49,456 根 |
+| `series-static.npz` | 3,983,155 | `c24316c674b6bea1` | 同上，每条 49,457 根 |
+
+- 放子目录而不放 `reports/research/` 顶层，是因为 `governance replay` 读顶层的字典形状 JSON
+  （`governance_cmd._payloads`），而 p32h 那两份是字典。递归扫描的测试只认带 `verdict` 的字典，或文件名
+  含 `validation` 的报告，这 8 个都不是。
+- 二进制入库有先例：`reports/research/mine-measurement-20260914T143632Z-corr_matrix.npy`。
+- 现在可以在仓库里直接复现 12/12 的对照：
+  `scratchpad/k_remeasure_honest_drift_20260925.py --reference-dir reports/research/k-scan-20260923`。
+  对照只读这些存下来的序列，不依赖今天的数据。
+
+## 2026-09-25 · 预登记：tsmom 在 k = 0.45 上重出证据
+
+**写在跑之前。** 起因是上一节的裁定：k 取 0.45，并换抵押品。`vol_target` 在 `CONSTRUCTION_KEYS` 里。
+改了它，tsmom 引用的证据（`tsmom-validation-20260919T081914Z.json`，k = 0.60）就对不上，启动门拒绝
+（`beidou_alpha/registry.py` 的 `construction_problems`）。所以改 k 要同时换证据。flow 引用的是一份
+book 报告，没有 `portfolio` 块，构造比对跳过它，不用重出。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务：G-C（更高吞吐）为主，G-B（同收益下更小回撤）为次。它不产出新 alpha。它买回的是 10-13 之后的
+可重启性，并让 k 回到 D-035 的回撤预算以内。
+
+### 1. 假设
+
+tsmom 的已采纳配置在 k = 0.45 下，在修好的数据与重建后的成员表上，仍然通过 D-020/D-028：样本外 Sharpe
+高于它的 family gate。若不成立，报告的 `oos_selection` 会读出样本外 Sharpe 低于门，verdict 是 FAIL。
+
+### 2. 这是「新信息」还是「新网格」
+
+两种读法都说得通：
+
+- 新网格：k 是构造参数，换一个 k 再验证，等于在 k 这条轴上多看一格。
+- 新信息：k 不是按 Sharpe 挑的。它由 D-035 事先写下的回撤规则决定，读的是 bootstrap 的 q95 回撤。
+
+偏向第二种，但按第一种计费。选择污染已经发生，先声明：
+
+1. k = 0.45 是看过 K-4 的 bootstrap 表之后选的（本文件「k 的重测」一节）。规则是 2026-09-04 写下的，
+   表是照规则读的。
+2. p32g、p32h 与同日的 k 重测，看过 8 个 k（0.60 到 0.20）在两个 universe 上的回撤与 CAGR。另一个会话的
+   p32i 看过 0.15。共 9 个 k × 2 个 universe = 18 个配置，全部申报。
+3. 同一策略在别的 k 上的样本外 Sharpe 已经看过：
+   - k = 0.30，09-13 的数据，2 格：1.8087（registry 的注释；P31 的先例）；
+   - k = 0.60，09-18，2 格：1.5628，FAIL；
+   - k = 0.60，09-19，16 格：1.2306，FAIL。
+
+### 3. 协议（照抄 09-18 那一份，只改 k）
+
+```bash
+# 在 worktree 里：config/live.demo.yaml 只改 portfolio.vol_target 0.60 -> 0.45，别的一个字不动
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 170 --charge 2 --prereg <本节的 commit>
+```
+
+- `--folds 5`、`--min-train 4000`、`--purge 50`、`--embargo`（跟随 purge）、`--cpcv-groups 6`、`--guards`、
+  `--exits`、`--capital 0.0` 全部用默认值，与 09-18 那一份相同。
+- `--to` 不钉：证据要描述跑的那天的数据。
+- `--prior-trials 170` 是 09-18 起申报的 152，加上面第 2 项的 18。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+
+**开跑前三件事，顺序不能反：**
+
+1. 9.4 的缺口修复在共享归档上执行完。它要下载，先报操作者。
+2. 成员表按 RUNBOOK「membership」一节重建，出日表（`--refresh D`）。它也要下载，同样先报操作者。
+3. 确认没有别的会话在写 `.beidou/data`（RISK-LD05）。开跑时间放在整点后 5 分到下一个整点前 10 分之间，
+   并避开 17:20Z 的数据任务。
+
+**跑完之后到 10-13，成员表不再重建。** 重建会让新证据的 dataset manifest 失效（`membership` 是阻断字段）。
+成员表落后满 14 天起，告警每天推送一次；这段时间照收，不动它。
+
+### 4. 计费与桶
+
+2 笔，进 `tsmom` 桶（`grid_size: 2`）。今天 ledger 去重后 167 行，`reports/research/trials.jsonl` 的
+sha256 前 16 位是 `09245c344b922ddc`。
+
+- 今天的 N：167 + 152 + 18 = 337。
+- 跑完的 N：339。
+
+k 变了，construction digest 也跟着变。ledger 里 k = 0.60 的行不算这次网格的重放，全部照计。
+
+### 5. 功效读数
+
+方差借自同族最近一份报告（09-19），这是 `research power` 的规则：
+
+```
+evidence: reports/research/tsmom-validation-20260919T081914Z.json sha256=3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
+  interval=1h bars_per_year=8760 n_obs=44640 variance=2.22706e-05 (这份报告自己量的样本外方差)
+  N 由 --trials 指定为 337，证据报告自己的是 167
+
+## N=337
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5952  [selection binds]
+      D-028 selection threshold: 1.5952 at N=337, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.9%
+    P(clear | true annual Sharpe = 1.2): 20.5%
+    P(clear | true annual Sharpe = 1.5): 41.5%
+    P(clear | true annual Sharpe = 1.6): 47.1%
+    P(clear | true annual Sharpe = 1.8): 68.6%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+## N=339（这次跑完的 N）
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5959  [selection binds]
+      D-028 selection threshold: 1.5959 at N=339, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.9%
+    P(clear | true annual Sharpe = 1.2): 20.4%
+    P(clear | true annual Sharpe = 1.5): 41.4%
+    P(clear | true annual Sharpe = 1.6): 47.0%
+    P(clear | true annual Sharpe = 1.8): 68.5%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+把上面这张表抄进预登记，紧挨着网格与桶（M-SY01）。方差是借来的——它是样本外序列长度与矩的函数，换一个候选会变，所以这是一个**估计**，不是这次运行的读数。
+零 ledger：本命令不写 trials.jsonl，不写报告，不碰面板。
+```
+
+方差改借 09-18 那一份（与本次同一个 2 格协议）时，两张表的门与功效：
+
+```
+evidence: reports/research/tsmom-validation-20260918T154025Z.json sha256=2729128fdbaac483d70a19820effb7a84f883f69e62b6634431ca1c201425deb
+  interval=1h bars_per_year=8760 n_obs=45351 variance=2.20003e-05 (这份报告自己量的样本外方差)
+## N=337
+    gate (max of the two halves): 1.5855  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.3%
+    P(clear | true annual Sharpe = 1.6): 47.9%
+    P(clear | true annual Sharpe = 1.8): 69.4%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+## N=339（这次跑完的 N）
+    gate (max of the two halves): 1.5861  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.2%
+    P(clear | true annual Sharpe = 1.6): 47.9%
+    P(clear | true annual Sharpe = 1.8): 69.4%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+```
+
+两次都零 ledger，`trials.jsonl` 的 sha256 前后都是 `09245c344b922ddc`。两张表都是上界：不含 CPCV 负路径、
+PBO、fold 一致性、成本 ×2。门最终以报告的 `oos_selection` 为准。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS`（`registry.py` 的上线口径） | — |
+| 样本外 Sharpe 对 family gate | 报告 `oos_selection` 的 `oos_sharpe_annual` 高于它的门 | 直接读报告，不手算；相差不到 1e-9 读作未过 |
+| 构造 | 报告 `portfolio` 的 `vol_target` 是 0.45，其余 `CONSTRUCTION_KEYS` 与 profile 相同 | 由 `construction_problems` 判（相对 1e-9） |
+| dataset manifest | 报告记下的 `membership` 与切换当天磁盘上的一致 | 由 `registry_dataset_problems` 判，不目测 |
+
+**判负之后做什么，先写死：**
+
+- **FAIL**：不重跑、不换网格、不换 k、不申诉门。10-13 之前 k 维持 0.60。10-12 前由操作者在准备文档
+  第 2.2 节的 C（延长 bridge）、E（停 tsmom，只留 flow）、F（有计划地平仓）里选一个。换抵押品照做，
+  它不依赖这次结果。
+- **WEAK_PASS**：按上线口径仍可换指针，报告里写明降级。2 格协议两折同选时，样本外就是全样本尾巴，
+  D-043 把它封顶在 WEAK_PASS。
+- **PASS 或 WEAK_PASS 之后**：下面几件放进同一个 PR，10-13T00:00Z 之后合入，与 #149 同批：
+  - 改 k；
+  - 改档位（R10，升 `POLICY_VERSION`），`risk_budget:` 报告副本同步；
+  - 换指针；
+  - 删 exemption 与它的三处调用。
+
+  然后快进主 checkout，按 CLAUDE.md「重启实盘循环」一节在安全窗口重启一次。
+
+### 7. 预期
+
+最可能挂在「样本外 Sharpe 对 family gate」这一条，而且接近刀刃：
+
+- k = 0.60、同一个 2 格协议，09-18 读 1.5628，门 1.5746，差 0.012 没过。
+- 降 k 应当抬高样本外。09-13 的数据上，k 从 0.30 升到 0.60，2 格的样本外从 1.8087 降到 1.5919，
+  封顶的 bar 从 390 增到 4,070（`config/alpha_registry.yaml` 的注释）。0.45 在两者之间。按 09-18 在重建
+  成员表上读到的比例折算，约 1.67–1.70。
+- 门比 09-18 高：1.5861 或 1.5959，对 1.5746。
+
+预期过门，但 WEAK_PASS 的可能大于 PASS：2 格协议两折常常同选。按功效表，真 Sharpe 在 1.7 上下时，
+过门约五成到六成。
+
+两种结果各值多少：
+
+- 过门：10-13 之后能按 k = 0.45 armed 启动。回撤预算在诚实漂移下守得住（K-4，headroom pit +2.09pp、
+  static +3.40pp）。
+- 不过门：知道 tsmom 在 0.45 下也过不了门，D-041 走 C、E、F。这本身是比「重启不了」更大的发现，按 D-020 走。
+
+### 9. 实盘失效方式（How this fails）
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若抵押品没换或没换完，则可动用 USDT 的回撤仍被放大，0.45 的档位与 K-4 的 q95 对不上，预算被高估 | 日报「Collateral in equity (L1-10)」的 share；`risk_budget.usdt_drawdown.vs_total_equity` | share > 0.05，或 vs_total_equity > 1.05，即证伪「K-4 成立」 | 10-13 重启前读这两个数；不满足就不按 K-4 的档位上线，交操作者 |
+| 2 | 若真实 Sharpe 接近诚实读数 1.23（2 格过门是乐观的），则 0.45 的实盘回撤按诚实漂移那张表走，深于 2 格证据描述的 | 日报「Risk budget (P13)」的归因回撤；「Drift vs expectation (attributed income, M-002/M-010)」 | 归因回撤触第一档 −49% 即证伪「0.45 在预算内」；M-010 z < −2，构造变更后 60 天才读得出 | 60 天内没有 M-010，靠 R8 阶梯兜底：−49% 降到 0.3375，−70% 降到 0.225。亏了才看得见 |
+| 3 | 若 10-13 的切换没做全（k、档位、指针、exemption 分开合入），则 armed 启动被挡，持仓没有退出检查 | `live.stderr.log` 的「portfolio vol_target is X live but Y in the cited evidence」；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 几件事放进同一个 PR；合入前跑 `test_the_shipped_registry_runs_what_its_evidence_validated`；起不来时由操作者执行 `live flatten --yes`（RUNBOOK「D-041 bridge 到期（2026-10-13）」） |
+
+**后续（同日）**：前提不成立，操作者回报抵押品无法置换。本预登记作废，没有运行，零 ledger。见下文「抵押品换不了」一节。
+
+## 2026-09-25 · p32i：诚实漂移下补测 0.15，守住线约 0.19–0.20；从 store 重建发表时的面板要截回三个名字
+
+本节是「k 的重测」一节「与另一个会话的 p32i」一段说的那个会话的记录。操作者同日点头入库。
+
+零 ledger：`reports/research/trials.jsonl` 的 sha256 跑前跑后都是 `09245c34…`。没跑 `research validate`，
+没动构造。
+
+- 脚本：`scratchpad/p32i_k_sweep_at_honest_drift.py`。合并各次运行并插值：`scratchpad/p32i_merge_runs.py`。
+- 全精度输出：`reports/research/p32i-20260925/`，12 个文件。放子目录的理由同「操作者三条裁定」一节第三条。
+
+### 做法
+
+- 以 p32h 为底。`p32h.panel`、`p32h.run_arm`、`p32h.crossing` 直接导入，不另写梯。
+- SEED 20260904，2000 draws，BLOCK 168，static 钉在 `STATIC_P32G`。每个 k 一组 block 起点，各臂共用。
+- 诚实漂移：每个面板（universe × k）每根 bar 的净收益减同一个常数，使 `sharpe_per_period × √8760` 等于
+  1.2306419157745636。脚本逐个核：打折后的差小于 1e-9，std 与一阶自相关的相对变化小于 1e-12。
+- 两套代码。555be470 在 #115 之前，带只有 D2，用来复现「k 扫描的更正」。main 的带是 D2 + D3。
+- 换算因子默认取 p32h 钉住的 09-22 值 1.7693。另跑一组 09-25 日报的 1.7479。
+- 补测了 0.15。它是新格子，「预登记：tsmom 在 k = 0.45 上重出证据」一节已把它计入 prior-trials。
+
+### 复现：store 在发表之后被写过
+
+面板末端钉在 2026-09-22 16:00Z 那根，根数 pit 49,456、static 49,457，与发表相同。只钉末端不够。
+
+- 发表之后，store 在这根之前被写过三处。CYSUSDT、TUTUSDT 在 09-23T16:32Z 回填（本文件「重启 #56」一节）。
+  LSKUSDT 在 09-23T17:20Z 的日任务补齐（「data sync 漏掉了池子里的名字」一节）。
+- 只钉末端时，pit k=0.30 与 09-23 的存档序列差最后 461 根，每根最多差 0.006。
+- `--store 0923` 把这三个名字截回：
+
+  | 名字 | 1h 保留到 | 资金费保留到 | 资金费行数 |
+  | --- | --- | --- | ---: |
+  | CYSUSDT | 09-04 06:00 | 09-04 06:00 | 1,594 |
+  | TUTUSDT | 09-03 11:00 | 09-03 12:00 那次结算 | 3,192 |
+  | LSKUSDT | 09-18 16:00 | 09-18 17:00 | 6,835 |
+
+- CYS、TUT 的资金费行数与「重启 #56」一节记的回填前行数相同。TUT 的第 3,192 行是 12:00 那次结算，
+  时间戳是 12:00:00.002。LSK 的回填前行数没人记过，这个截点是逐位比对接受的，另一个截点没测。
+- 截回之后，重建的 mark 与 realised 与 `reports/research/k-scan-20260923/series-*.npz` 逐位相同。
+  555be470 上对 d2，main 上对 d3，k=0.60/0.30/0.25，两个 universe 都是。
+- 原臂对已发表的数：D2 pit、static 各 42/42 格（「k 扫描的更正」§3，含 no ladder、ladder@0.60、触发率与
+  running）。D3 pit 9/9、static 6/6 格（D3 那节 §三）。对 kgrid 的全精度比对，4 次运行各 9/9 行。
+  插值点 0.2707、0.2548、0.2730、0.2557 原样复现。
+
+**同日 11:36Z 起又不够了。** 9.4 的 `data repair` 在 11:36:14Z 至 11:38:12Z 补了 21 个 1h 文件的缺口。
+其中 4 个在 pit 并集里：BNX、OCEAN、OGN、RSR；`STATIC_P32G` 里一个都没有。`confirmed_gaps.json` 只记源头
+也没有的缺口，不记补进去的 bar，所以没法再截回。之后在 0c565d5a 上复核：static 仍逐位对上，pit 在锚点处
+拒跑。它该拒跑。本节的数以归档的输出为准，不以重跑为准。
+
+### 读数
+
+口径：555be470（D2），09-23 的 store 状态，因子 09-22 的 1.7693。每格是 q95(USDT) / P(USDT>70%) / CAGR 中位。
+
+| k | pit 原臂 | pit 打折臂 | static 原臂 | static 打折臂 |
+| --- | --- | --- | --- | --- |
+| K-0：0.60 现行档位 | −118.9% / 93.4% / 123.2% | −131.6% / 98.9% / 67.0% | −115.8% / 91.2% / 121.5% | −129.5% / 98.3% / 67.5% |
+| 0.60 | −102.7% / 89.5% / 111.8% | −114.0% / 97.5% / 57.4% | −100.1% / 87.3% / 110.4% | −112.6% / 97.2% / 56.6% |
+| 0.30 | −74.3% / 8.8% / 76.6% | −87.3% / 37.4% / 38.7% | −76.2% / 13.9% / 67.7% | −87.1% / 37.4% / 39.3% |
+| 0.25 | −67.0% / 3.0% / 62.3% | −80.6% / 19.4% / 33.4% | −69.3% / 4.3% / 55.6% | −79.6% / 20.2% / 34.0% |
+| 0.20 | −57.7% / 0.4% / 48.8% | −72.1% / 6.8% / 27.3% | −59.5% / 0.7% / 46.3% | −71.8% / 6.5% / 28.1% |
+| 0.15* | −45.4% / 0.0% / 35.3% | −58.4% / 0.8% / 20.5% | −48.1% / 0.1% / 34.4% | −60.1% / 1.0% / 21.4% |
+
+原臂各格即「k 扫描的更正」§3 的数。K-0 行的 P 与 0.15 行是新测的，原文没印。带 `*` 的是测量，不是提议。
+
+守住 −70% 的 k，`p32h.crossing` 沿 k 线性插值：
+
+| | pit | static |
+| --- | --- | --- |
+| 原臂，D2 | 0.2707 | 0.2548 |
+| 原臂，D3 | 0.2730 | 0.2557 |
+| 打折臂，D2 | 0.1923（CAGR 26.2%） | 0.1923（27.1%） |
+| 打折臂，D3 | 0.1974（25.8%） | 0.1914（26.6%） |
+| 打折臂，D3，今天的 store，因子 1.7479 | 0.2004（26.2%） | 0.1935（26.9%） |
+| 比例打折，D3（敏感性，见下） | 0.2216（35.8%） | 0.2043（31.9%） |
+
+- 打折臂上，网格里的 0.60、0.30、0.25、0.20 都守不住。0.15 两边都守得住。
+- 因子 1.7479 那组，pit 在 0.20 读 −69.9%，只余 0.1pp，读作「在线上」。
+- 打折让 K-0 的 CAGR 中位从 123% 变成 67%。守住线处约 26%。
+- D3 的打折臂：0.25 读 pit −80.1% / 18.6% / 32.8%，static −79.8% / 20.5% / 33.8%；0.20 读 pit −70.8% /
+  5.6% / 26.2%，static −72.1% / 6.6% / 27.8%。
+
+### 比例打折：一个敏感性
+
+面板的全样本 Sharpe 随 k 变。pit 在 0.60 是 1.70，在 0.15–0.30 是 1.91–1.96；static 是 1.70–1.84。
+每个 k 都打到 1.2306，k 越小扣掉的漂移比例越大：pit 在 0.60 扣 28%，在 0.20 扣 37%。所以打折臂的
+小 k 格偏保守。
+
+另一端是比例口径：每个面板保留证据自己的样本外与全样本之比，1.2306 / 1.6670 = 0.738。它不是审查给的
+口径。它在 D3 上交在 pit 0.2216、static 0.2043。0.25 仍守不住（−76.2% / −78.4%），0.20 守得住
+（−65.3% / −69.2%）。
+
+### 与「k 的重测」对照
+
+- 同口径的 8 格逐位相同，最大差 0。口径是 D3、今天的 store、因子 1.7479，k=0.25/0.20，两条漂移，两个
+  universe。两边是独立实现。
+- 那一节没有截回三处回填，它的原臂在今天的 store 上不等于发表的数。本节同口径那组也不等：pit 0.25 读
+  −65.4%，发表是 −66.2%。
+- 它的 D2 是在 main 上把 `band_entry_multiple` 改成 1.0 模拟的，本节直接跑 555be470。两种 D2 没逐行比过。
+- K-4（换抵押品）只在那一节。
+
+### 拿不准的地方
+
+- 诚实漂移的锚本身很宽，见「k 的重测」的同名一段。
+- 打折口径是 tsmom 单书的样本外 Sharpe，套在整本 registry 书上。这是审查给的做法，不是这本书自己的
+  样本外读数。
+- 周块 bootstrap 抹掉多月 regime、亏损全算在 USDT 上：这两条误差照旧指向更深的尾部，本节没测。
+
+## 2026-09-25 · 接缝检查：7 个同名重新计价的名字，接缝后 720 根时点成员全 False
+
+同日独立体检（#146）第一遍第三条给了判据：对 BNX、LIT、AERGO、MAVIA、CVX、KORU、CRWD，查各自接缝
+之后 720 根的时点成员表。全为 False 即移入「已排除」；有 True 就升高危，并从证据里剔除那几段重算。
+
+读数全为 False，这一条按它自己的判据移入「已排除」。只读，零 ledger。
+
+脚本是 `scratchpad/seam_membership_after_redenomination.py`。输出在 `reports/research/seam-check-20260925/`，
+两份：09-25 约 06:00Z 一份，`data repair` 之后约 13:50Z 一份。
+
+### 做法
+
+- 接缝取 `bar_sanity` 的 jump 检查（ln 2）里 `continuous` 为 false 的那一根。每个文件必须恰好一根，
+  否则停。
+- 成员表按研究路径读：`_membership_table` → `tenure_mask(…, 0)` → `membership_at_bars`。窗口是接缝那根
+  起的 720 根。
+- 09-19 证据只读三样：`range`（2021-03-02 01:00Z 至 2026-09-18 16:00Z）、`symbols`（212 个）、
+  `dataset.membership` 摘要。成员表与摘要逐项一致：437,832 字节、2,056 行、881 列、并集 212、首末日期。
+- PUMP 作对照行，它有本文件「PUMPUSDT：同一个名字下的两段序列」一段的手查结果。
+
+### 读数（09-25 约 06:00Z）
+
+| 名字 | 接缝（新序列第一根，UTC） | 缺口根数 | 接缝前零成交平盘根数 | 价位倍数 | 之后 720 根里 True | 720 根在证据区间内 | 在证据的 symbols 里 |
+| --- | --- | ---: | ---: | --- | ---: | --- | --- |
+| BNX | 2023-02-22 14:00 | 518 | 0 | ×0.01813 | 0 | 是 | 是；只在 2025-03-06 至 03-12 入选 |
+| LIT | 2025-12-23 17:00 | 17 | 7,815 | ×6.314 | 0 | 是 | 否，从未入选 |
+| AERGO | 2025-04-16 11:00 | 11 | 470 | ×5.837 | 0 | 是 | 否，从未入选 |
+| MAVIA | 2025-03-26 17:00 | 17 | 1,272 | ×0.2925 | 0 | 是 | 否，从未入选 |
+| CVX | 2025-07-23 11:00 | 11 | 1,248 | ×2.009 | 0 | 是 | 否，从未入选 |
+| KORU | 2026-07-15 09:00 | 0 | 8 | ×0.04862 | 0 | 是 | 否，从未入选 |
+| CRWD | 2026-07-02 13:00 | 0 | 12 | ×0.2584 | 0 | 是 | 否，从未入选 |
+| PUMP（对照） | 2025-07-10 07:00 | 7 | 639 | ×0.110 | 7 | 是 | 是 |
+
+- 7 个名字的 True 都是 0，所以没有哪根 bar 进过证据的可交易集。它们的 720 根窗口本身全在证据区间内。
+- PUMP 的 7 根 True 在接缝后第 713–719 根。它们的 720h 回看全落在 7 根缺口里，没有一根跨接缝，
+  与手查一致。
+- KORU、CRWD 没有缺根，是零成交几小时后开在新价位。整整 720 根的 720h 回看都跨接缝，但它们从未入选。
+- 日线在接缝处重起的是 BNX、LIT、MAVIA、CVX。AERGO、KORU、CRWD 的日线连续，年龄过滤挡不住它们，
+  挡住它们的是从未入选。
+
+### data repair 之后（约 13:50Z）
+
+9.4 的 `data repair` 在 11:36Z 用日归档给 BNX 补进 504 根。剩下 14 根记成已确认缺口：2023-02-21 23:00
+之后、02-22 14:00 之前。重跑后 BNX 读：缺口 14 根，接缝前零成交平盘 260 根，倍数 ×0.01294。倍数变了，
+是因为接缝前一根从 01-31 23:00 变成了 02-21 23:00 的归档 bar。其余 6 个名字与 PUMP 逐项不变，True 仍全是 0。
+
+### 没做的
+
+实盘侧 `bar_sanity` 只告警。下一次同名重新计价落在持仓名字上，模型会照假动量交易约一个月。审查那条
+写过这一半，本节没测，也没改。
+
+## 2026-09-25 · 抵押品换不了：k = 0.45 作废，细化到 0.175；修缺口已执行
+
+### 一、k = 0.45 的前提不成立
+
+操作者回报「抵押品无法置换」。k = 0.45 依据的是 K-4：换完抵押品之后可动用等于总权益，换算因子是 1.0。
+换不了，就还是 09-25 的因子 1.7479：书的亏损全落在约 57% 的 USDT 上。「预登记：tsmom 在 k = 0.45 上重出证据」那一节因此作废，
+没有运行，零 ledger。
+
+按 D-035 在诚实漂移、现有抵押品下重定 k。「k 的重测」一节里，0.20 在 pit 压线（+0.07pp）、
+static 超线（−1.68pp）；另一个会话的 p32i 量过 0.15，两边都守得住，但当时它不在仓库里（同日那个会话开了
+#159 入库）。操作者给了四个带价的
+选项，选的是「细化」：补量 0.175；0.175 两个 universe 都守得住就取 0.175，否则取 0.15。
+
+### 二、补量：k = 0.175
+
+脚本 `scratchpad/k_bisect_0175_20260925.py`，输出 `reports/research/k-bisect-0175-20260925.json`。
+臂的计算直接调用 `k_remeasure_honest_drift_20260925.run_arm`，一行不改；面板与「k 的重测」同一条路径：
+数据末端 09-22T16:00Z，D2 + D3，因子 1.7479，block 起点照抄 p32h，2000 draws。零 ledger：`trials.jsonl`
+的 sha256 前后都是 `09245c34…`。
+
+诚实漂移下，可动用 USDT 的 q95 与 headroom：
+
+| k | pit | static | 两边都守得住 |
+| --- | --- | --- | --- |
+| 0.20 | −69.93%（+0.07pp），CAGR 中位 26.1% | −71.68%（−1.68pp），CAGR 中位 27.8% | 否 |
+| **0.175** | **−63.30%（+6.70pp），CAGR 中位 22.5%** | **−65.60%（+4.40pp），CAGR 中位 24.3%** | **是** |
+| 0.15 | −55.37%（+14.63pp），CAGR 中位 18.8% | −58.82%（+11.18pp），CAGR 中位 20.9% | 是 |
+
+**按规则取 k = 0.175。** 原漂移下它的 CAGR 中位是 40.5%（pit）/ 40.1%（static），k = 0.60 是 112.1% / 111.2%。
+
+两处核对：
+
+- **0.20 是对照。** 四行（两个 universe × 两条漂移）与已入库的 `k-remeasure-honest-drift-20260925.json`
+  逐位相同，比的是中位回撤、q95、CAGR 中位、block 起点、漂移常数、全样本 Sharpe。
+- **0.15 与 p32i 对得上。** p32i 印的是 pit −55.4%、static −58.8%，CAGR 中位 18.8% / 20.9%。
+
+pit 的面板摘要变了（`73684a977602a4c4` → `999da4c1da37d7e1`），static 的没变。原因是下面第三条的修缺口：
+pit 候选里 BNX 等标的补上了 2022 年的 K 线，求和的次序跟着变。逐位比对 k = 0.20 的新旧序列：mark 有 137 根、
+realised 有 32 根差在末位，落在序列第 14,896 到 15,521 根之间，绝对差不超过 3.5e-18，相对差不超过 6e-14。
+bootstrap 的读数没有一个变。
+
+档位按 D-035 的同一条规则，可动用口径：((−0.2803, 0.13125), (−0.4005, 0.0875))，即 `rescaled(0.175,
+budget=0.70 / 1.7479)`。`risk_budget:` 报告副本是 0.2803 / 0.4005 / 0.13125 / 0.0875。
+
+### 三、修缺口已执行（9.4，操作者批准下载）
+
+`beidou data repair --apply`，在 `0c565d5a` 的 worktree 里对共享数据目录跑，2026-09-25T11:35:39Z 到 11:38:52Z。
+开跑前在两个整点之间，没有别的 `beidou` 进程在写数据。开跑前再干跑一次，下载量与批准时的一致：183 个日归档
+文件（另 183 个 CHECKSUM），REST 至多 207 次，约 1.35 MB。
+
+| 数据集 | 缺口 | 从源头补上 | 补进的行 | 记为已确认缺口 |
+| --- | --- | --- | --- | --- |
+| K 线 1h | 51 | 42 | 3,984 | 12 段 |
+| 资金费 | 154 | 0 | 0 | 154 |
+
+- K 线补上的是 21 个标的：18 个标的在 2022-02-26～28 与 04-01～02 的批量缺口（各 120 根），以及 BNX 624 根、
+  ICP 504 根、TLM 696 根。后三段扫描时归为「上市前后的边界」，源头其实有数据，而且与已存的行一处不差。
+- 资金费的 154 个缺口，REST 一条都没有，全部记为已确认，其中 142 个是 2026-06-24 04:00 那一次。
+- 没有一个缺口报错。跑完再干跑：未确认的缺口是 0。已确认的记在 `.beidou/data/confirmed_gaps.json`。
+- manifest 的 `klines` 字段随之变化，它只提示、不挡启动。
+
+## 2026-09-25 · 预登记：tsmom 在 k = 0.175 上重出证据
+
+**写在跑之前。** 起因是「抵押品换不了」一节：k 按 D-035 细化到 0.175。改 `vol_target` 就要换 tsmom 的证据
+（`construction_problems`）；flow 引用的 book 报告没有 `portfolio` 块，不用重出。本节取代作废的 k = 0.45 那一份，
+协议只改 k 与申报笔数。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务：G-C（更高吞吐）为主，G-B（同收益下更小回撤）为次。它不产出新 alpha。它买回的是 10-13 之后的
+可重启性，并让 k 回到 D-035 的回撤预算以内。
+
+### 1. 假设
+
+tsmom 的已采纳配置在 k = 0.175 下，在修好的数据与重建后的成员表上，仍然通过 D-020/D-028：样本外 Sharpe
+高于它的 family gate。若不成立，报告的 `oos_selection` 会读出样本外 Sharpe 低于门，verdict 是 FAIL。
+
+### 2. 这是「新信息」还是「新网格」
+
+两种读法与 0.45 那一份相同：k 是构造参数，按「新网格」计费；它由 D-035 的回撤规则选出，不是按 Sharpe 挑的。
+选择污染先声明：
+
+1. k = 0.175 是看过上一节的补量表之后按规则取的；取值规则（「0.175 守得住就取它，否则 0.15」）在跑之前由
+   操作者定下。
+2. 看过回撤与 CAGR 的 k 共 10 个：p32g、p32h 与「k 的重测」的 8 个（0.60 到 0.20），p32i 与上一节的 0.15，
+   上一节的 0.175。10 个 k × 2 个 universe = 20 个配置，全部申报。
+3. 同一策略在别的 k 上的样本外 Sharpe 已经看过：k = 0.30、09-13、2 格 1.8087；k = 0.60、09-18、2 格 1.5628
+   （FAIL）；k = 0.60、09-19、16 格 1.2306（FAIL）。
+
+### 3. 协议（照抄 09-18 那一份，只改 k）
+
+```bash
+# 在 worktree 里：config/live.demo.yaml 只改 portfolio.vol_target 0.60 -> 0.175，别的一个字不动
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 172 --charge 2 --prereg <本节的 commit>
+```
+
+- 其余参数全部用默认值，与 09-18 那一份相同：`--folds 5`、`--min-train 4000`、`--purge 50`、`--embargo`
+  （跟随 purge）、`--cpcv-groups 6`、`--guards`、`--exits`、`--capital 0.0`。`--to` 不钉。
+- `--prior-trials 172` 是 09-18 起申报的 152，加上面第 2 项的 20。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+- 开跑前：修缺口已执行（上一节）；成员表按 RUNBOOK「membership」一节重建（本节末尾记读数）；确认没有别的
+  会话在写 `.beidou/data`；避开 17:20Z 的数据任务。
+- 跑完之后到 10-13，成员表不再重建。
+
+### 4. 计费与桶
+
+2 笔，进 `tsmom` 桶。今天 ledger 去重后 167 行，`trials.jsonl` 的 sha256 前 16 位是 `09245c344b922ddc`。
+
+- 今天的 N：167 + 152 + 20 = 339。
+- 跑完的 N：341。
+
+### 5. 功效读数
+
+方差借自同族最近一份报告（09-19）：
+
+```
+evidence: reports/research/tsmom-validation-20260919T081914Z.json sha256=3239fd02e70b66d52145153dbb253986f4f41d8d2d2839b035656cf28e35a1fb
+  interval=1h bars_per_year=8760 n_obs=44640 variance=2.22706e-05 (这份报告自己量的样本外方差)
+  N 由 --trials 指定为 339，证据报告自己的是 167
+
+## N=339
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5959  [selection binds]
+      D-028 selection threshold: 1.5959 at N=339, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.9%
+    P(clear | true annual Sharpe = 1.2): 20.4%
+    P(clear | true annual Sharpe = 1.5): 41.4%
+    P(clear | true annual Sharpe = 1.6): 47.0%
+    P(clear | true annual Sharpe = 1.8): 68.5%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+## N=341（这次跑完的 N）
+    standard error of the OOS Sharpe (annual): 0.4417
+    gate (max of the two halves): 1.5965  [selection binds]
+      D-028 selection threshold: 1.5965 at N=341, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 8.8%
+    P(clear | true annual Sharpe = 1.2): 20.4%
+    P(clear | true annual Sharpe = 1.5): 41.3%
+    P(clear | true annual Sharpe = 1.6): 47.0%
+    P(clear | true annual Sharpe = 1.8): 68.5%
+    P(clear | true annual Sharpe = 2.0): 82.0%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+把上面这张表抄进预登记，紧挨着网格与桶（M-SY01）。方差是借来的——它是样本外序列长度与矩的函数，换一个候选会变，所以这是一个**估计**，不是这次运行的读数。
+零 ledger：本命令不写 trials.jsonl，不写报告，不碰面板。
+```
+
+方差改借 09-18 那一份（同一个 2 格协议）：
+
+```
+evidence: reports/research/tsmom-validation-20260918T154025Z.json sha256=2729128fdbaac483d70a19820effb7a84f883f69e62b6634431ca1c201425deb
+  interval=1h bars_per_year=8760 n_obs=45351 variance=2.20003e-05 (这份报告自己量的样本外方差)
+## N=339
+    gate (max of the two halves): 1.5861  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.2%
+    P(clear | true annual Sharpe = 1.6): 47.9%
+    P(clear | true annual Sharpe = 1.8): 69.4%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+## N=341（这次跑完的 N）
+    gate (max of the two halves): 1.5868  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.1%
+    P(clear | true annual Sharpe = 1.2): 20.9%
+    P(clear | true annual Sharpe = 1.5): 42.2%
+    P(clear | true annual Sharpe = 1.6): 47.8%
+    P(clear | true annual Sharpe = 1.8): 69.3%
+    P(clear | true annual Sharpe = 2.0): 82.7%
+```
+
+两次都零 ledger。两张表都是上界，门最终以报告的 `oos_selection` 为准。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS`（`registry.py` 的上线口径） | — |
+| 样本外 Sharpe 对 family gate | 报告 `oos_selection` 的 `oos_sharpe_annual` 高于它的门 | 直接读报告，不手算；相差不到 1e-9 读作未过 |
+| 构造 | 报告 `portfolio` 的 `vol_target` 是 0.175，其余 `CONSTRUCTION_KEYS` 与 profile 相同 | 由 `construction_problems` 判（相对 1e-9） |
+| dataset manifest | 报告记下的 `membership` 与切换当天磁盘上的一致 | 由 `registry_dataset_problems` 判，不目测 |
+
+**判负之后做什么，先写死：**
+
+- **FAIL**：不重跑、不换网格、不换 k、不申诉门。10-13 之前 k 维持 0.60。10-12 前由操作者在准备文档
+  第 2.2 节的 C（延长 bridge）、E（停 tsmom，只留 flow）、F（有计划地平仓）里选一个。
+- **WEAK_PASS**：按上线口径仍可换指针，报告里写明降级（D-043：2 格两折同选时样本外是全样本尾巴）。
+- **PASS 或 WEAK_PASS 之后**：下面几件放进同一个 PR，10-13T00:00Z 之后合入，与 #149 同批：
+  - 改 k 到 0.175；
+  - 改档位到 ((−0.2803, 0.13125), (−0.4005, 0.0875))（R10，升 `POLICY_VERSION`），`risk_budget:` 报告副本同步；
+  - 换指针；
+  - 删 exemption 与它的三处调用。
+
+  然后快进主 checkout，按 CLAUDE.md「重启实盘循环」一节在安全窗口重启一次。
+
+### 7. 预期
+
+最可能挂在「样本外 Sharpe 对 family gate」这一条，但预期过门：
+
+- 降 k 抬高了回测序列的全样本 Sharpe：pit 从 0.60 的 1.7016 到 0.175 的 1.9662（上一节的补量与「k 的重测」）。
+  按这个比例折算 09-18 在 0.60 上的 2 格读数 1.5628，0.175 约 1.81。门是 1.5868 或 1.5965。
+- 反方向的风险：绝对带（`no_trade_band` 0.005）不随 k 缩放。k 降到 0.175，目标权重约为 0.60 时的 29%，
+  更多小目标落进带内，D2 会把它们整笔平掉，持有的名字可能明显变少。上面的全样本 Sharpe 已经含这条规则，
+  所以它是方向上的提醒，不是另一个数。
+- 按功效表，真 Sharpe 在 1.8 上下时，过门约七成。2 格两折常常同选，WEAK_PASS 的可能大于 PASS。
+
+两种结果各值多少：
+
+- 过门：10-13 之后能按 k = 0.175 armed 启动。回撤预算在诚实漂移下守得住（headroom pit +6.70pp、
+  static +4.40pp）。代价是收益：诚实漂移下 CAGR 中位约 22–24%，原漂移下约 40%。
+- 不过门：知道 tsmom 在 0.175 下也过不了门，D-041 走 C、E、F。这比「重启不了」是更大的发现，按 D-020 走。
+
+### 9. 实盘失效方式（How this fails）
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若 BTC 抵押品相对 USDT 变多（BTC 涨、或 demo 重置改了余额），则换算因子变大，可动用口径的回撤被放大，0.175 的档位与预算对不上 | 日报「Collateral in equity (L1-10)」的 share；`risk_budget.usdt_drawdown.vs_total_equity` | vs_total_equity > 1.865 即证伪「0.175 在预算内」：static 的 q95 按比例越过 −70%（65.60% × 1.865 / 1.7479） | 每天读这个因子；越线交操作者，按 D-035 重算 k |
+| 2 | 若真实 Sharpe 低于诚实读数 1.23，则回撤深于诚实漂移那张表 | 日报「Risk budget (P13)」的归因回撤；「Drift vs expectation (attributed income, M-002/M-010)」 | 归因回撤触第一档 −28.03% 即证伪「0.175 在预算内」；M-010 z < −2，构造变更后 60 天才读得出 | 60 天内没有 M-010，靠 R8 阶梯兜底：−28.03% 降到 0.13125，−40.05% 降到 0.0875。亏了才看得见 |
+| 3 | 若 10-13 的切换没做全（k、档位、指针、exemption 分开合入），则 armed 启动被挡，持仓没有退出检查 | `live.stderr.log` 的「portfolio vol_target is X live but Y in the cited evidence」；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 几件事放进同一个 PR；合入前跑 `test_the_shipped_registry_runs_what_its_evidence_validated`；起不来时由操作者执行 `live flatten --yes`（RUNBOOK「D-041 bridge 到期（2026-10-13）」） |
+
+### 开跑前的数据：成员表重建与第二次修缺口（操作者批准下载）
+
+**成员表重建。** `beidou data pool history --refresh D --sync-members`，在 `0c565d5a` 的 worktree 里对共享数据
+目录跑，2026-09-25T14:05:17Z 到 14:23:07Z，退出码 0。开跑前没有别的 `beidou data` 进程。
+
+| 项 | 重建前 | 重建后 |
+| --- | --- | --- |
+| 刷新次数 | 2,056 | 2,063 |
+| 末行 | 2026-09-17 | 2026-09-24 |
+| 并集 | 212 | 212 |
+| `membership.parquet` sha256 前 16 位 | `aced36309191ee85` | `778986a79437ad28` |
+| `membership.json` sha256 前 16 位 | `dd1c52e58354eb28` | `dbad1f26d6633a3b` |
+
+- 日线同步 893 个候选，1 个报错：GAIBUSDT 返回 400，它从未当过成员。
+- 212 个曾经的成员补了小时线与资金费，211 个 OK。SXPUSDT 的资金费报了 1 个错，它的 K 线停在 2026-05-31，
+  是下架又上架的那个接缝。
+- 修缺口扫描时发现的两件事，这一步补上了：ALLO、BLESS、ENSO、RE、SKYAI 原来没有资金费文件，现在各有
+  593–3,000 次结算；ACEUSDT 原来停在 09-03，现在到 09-25T13:00Z，新表里它的成员期到 09-13。
+
+**第二次修缺口。** 重建新下载的资金费里出现 6 个缺口，14:24:33Z 到 14:24:47Z 用 `data repair --apply` 问了一遍，
+REST 共 6 次，没有日归档文件。6 个都没有新行，全部记为已确认：5 个是 ALLO、BLESS、ENSO、RE、SKYAI 在
+2026-06-24 04:00 的那一次（与第一次修缺口里 142 个标的缺的是同一次），1 个是 LSKUSDT 今天 08:00 到 12:00 之间。
+跑完再干跑，未确认的缺口是 0。
+
+**从现在到 10-13，成员表不再重建。** 新表的末行是 09-24，落后满 14 天是 10-08；从那天起告警每天推送一次，
+照收，不动它。
+
+## 2026-09-25 · tsmom 在 k = 0.175 上重出：WEAK_PASS，样本外 1.83，门 1.57
+
+按「预登记：tsmom 在 k = 0.175 上重出证据」一节的协议，一字不改地跑。
+
+- 预登记提交 `b76de7a0`，提交时刻 2026-09-25T14:25:19Z；报告写于 14:38:36Z。
+- worktree 里只把 `config/live.demo.yaml` 的 `vol_target` 从 0.60 改成 0.175。跑完撤回，这次只提交报告与 ledger 行。
+- 用时 75 秒：14:37:21Z 到 14:38:36Z。开跑前没有别的 `beidou data` 或 `research` 进程，`BEIDOU_TRIALS_LEDGER` 没设。
+- 报告：`reports/research/tsmom-validation-20260925T143836Z.json`，sha256 `d06162dd803e42c897ff85311cb7b413dbde2c098a797827894179978405f0a5`。
+
+### 读数
+
+| 项 | 值 |
+| --- | --- |
+| verdict | **WEAK_PASS**，理由是 `oos_is_full_sample_tail`：两折都选了同一格，样本外是全样本的尾巴（D-043 的封顶） |
+| 样本外 Sharpe（`oos_selection.oos_sharpe_annual`） | 1.8329 |
+| family gate（`threshold_annual`） | 1.5733，N = 341，α 0.05，选择门 binding |
+| 余量 | +0.2596 |
+| N 的构成 | ledger 167 + 申报 172 + 本次 2 = 341，与预登记第 4 项一致 |
+| CPCV | 均值 1.92，q05 1.58，负路径 0.00 |
+| DSR p / PBO | 0.24 / 0.01 |
+| 成本加倍 | 1.92（×1）、1.81（×1.5）、1.70（×2） |
+
+门比预登记里两张功效表的估计低：1.5733，对 1.5868 与 1.5965。门用的是本次运行自己量的样本外方差
+（2.1627e-05），不是借来的那一份。
+
+### 判据逐条
+
+| 判据 | 要求 | 结果 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS` | WEAK_PASS，过 |
+| 样本外 Sharpe 对 family gate | 高于门，差不到 1e-9 读作未过 | 1.8329 > 1.5733，过 |
+| 构造 | 报告 `portfolio.vol_target` 是 0.175，其余 `CONSTRUCTION_KEYS` 与 profile 相同 | 过：`registry_evidence_problems` 返回空列表（见下） |
+| dataset manifest | 报告的 `membership` 与切换当天磁盘上的一致 | 今天一致：`registry_dataset_problems` 的 blocking 为空。10-13 那天要再读一次 |
+
+**按预登记，判为过门，降级为 WEAK_PASS。** 预期写的是「过门，但 WEAK_PASS 的可能大于 PASS」，样本外约 1.81；
+实测 1.83。
+
+### 启动门的预演（零 ledger，不改任何在用文件）
+
+做法：把 `config/alpha_registry.yaml` 复制一份，只把 tsmom 的 `evidence` 指到新报告；profile 用 0.175 那一份。
+用这两份跑 `live run` 启动时的两道检查：
+
+- `registry_evidence_problems`：空列表。
+- `registry_dataset_problems`：blocking 为空；advisory 只有 flow 没有 manifest 那一条，原来就有。
+
+新报告是 pit 验证，`universe` 字段对它豁免（`_universe_drift_blocks`），循环每天重排池子挡不住它。
+挡得住它的只有成员表，所以到 10-13 不重建成员表。
+
+### 下一步：10-13 的切换，与 #149 同批
+
+下面几件放进同一个 PR，先开成草稿，10-13T00:00Z 之后合入：
+
+- `config/live.demo.yaml`：`vol_target` 0.60 → 0.175；`risk_budget:` 报告副本改为 0.2803 / 0.4005 / 0.13125 / 0.0875。
+- `Policy.drawdown_ladder` 改为 ((−0.2803, 0.13125), (−0.4005, 0.0875))，升 `POLICY_VERSION`（R10）。
+- registry 的 tsmom `evidence` 指到本报告，写明 WEAK_PASS 的降级理由。
+- 删 exemption 与它的三处调用。
+
+合入后快进主 checkout，跑两个构造测试，在安全窗口重启一次，并按 CLAUDE.md 记重启。构造清零 M-010、M-G06
+与 `realised_vol`，这是改 k 的已知代价。
+
+## 2026-09-25 · 重启 #57：操作者要求重启；新进程载入 #155 的下单路径修复，构造不变
+
+只记可观测事实。
+
+- **谁、为什么**：操作者在会话里说「重启北斗量化交易系统」，由该会话执行。
+- **命令与窗口**：2026-09-25T17:08:51Z 发出 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，17:09:21Z 返回。
+  这个时刻在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
+- **重启前**：主 checkout 在 `5fbe4163`（15:47:38Z 快进，见 reflog）。两个构造测试 17:08:34Z 跑，15 passed。
+- **进程**：PID 51356（2026-09-23T16:41:38Z 启动）→ 75336（2026-09-25T17:09:21Z 启动）。`state.restarts` 56 → 57，
+  `restarted_at` 2026-09-25T17:09:21Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_live/engine.py`、`beidou_data/live_feed.py`、
+  `beidou_exchange/binance_usdm/rest_client.py` 都是 15:32:53Z；`beidou_governance/policy.py` 07:29:40Z；
+  `deploy/run_live.sh` 05:33:06Z；`config/live.demo.yaml` 09-23T04:55:35Z；`config/alpha_registry.yaml` 09-23T13:31:17Z。
+  全部早于 17:09:21Z，所以新进程跑的是 `5fbe4163` 的代码。旧进程启动时这些文件大多还没改，#155 的四条下单路径
+  修复（−1007 不再重发、代理 503 重试、平仓单先发、单个币 400 不拖垮周期）从这次重启起生效。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13`；
+  - 交易所时钟偏差 +1.9s；
+  - `restart was 569.1s after the bar close (window 87.2s); reconciled but did not rebalance`，为 16:00Z 那根 bar
+    写了一行 SKIPPED。那根 bar 旧进程已在 17:00:29Z 跑完，没有漏掉退出检查。
+- **启动时的证据门**：都由 bridge 的 `--allow-unvalidated` 放行，与 09-23 那次启动相同。
+  - tsmom 的证据是 FAIL；
+  - tsmom 引用的成员表变了（同日 14:05–14:23Z 重建）；
+  - flow 没有 manifest。
+- **`live status --check`（17:09:53Z）**：registry `7f8adb754962`、治理规则 `d62ac59fa95c` 与在跑的循环一致；
+  最近 24 小时 24 个周期，完成 100%。
+- **第一个真周期**：18:00:29Z 处理 17:00Z 的 bar，没有错误，没有护栏，0 单；心跳 OK，universe 17 个。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。
+
+构造没有变：k 仍是 0.60，档位、规则摘要都没动。改 k 的切换是 #163，按裁定在 2026-10-13T00:00Z 之后合入。
+
+## 2026-09-26 · shadow soak 跑满 168 不停：有失败周期就以 1 退出，launchd 静默起了第二轮
+
+只记可观测事实。读取时刻 2026-09-26T17:40Z 前后，全部只读。
+
+**现象。**
+
+- `~/Library/Application Support/beidou/shadow.stderr.log` 第 487 行：
+  `Error: 3 of 168 cycle(s) failed; see .beidou/live-shadow-dry-run/heartbeat.json`。
+- `launchctl list`：`com.beidou.shadow` 上次退出码 1，当前 PID 26020。
+  `state.json` 的 `restarted_at` 是 2026-09-23T08:00:27Z，`restarts` 是 1。
+- `.beidou/live-shadow-dry-run/cycles.jsonl` 249 行，分两段：
+  - 第一轮：第 1–168 行，bar 09-16T08:00Z 至 09-23T07:00Z，construction `ccd7bb9764b5`。
+    3 个 ERROR（09-16T12:01Z、09-21T18:01Z、09-21T21:00Z），都是代理 503。末行 `at` 是 08:00:26Z。
+  - 第二轮：第 169 行起，bar 09-23T08:00Z 起，construction `b8f215ab706c`。已有 1 个 ERROR（09-23T16:01Z）。
+- `governance canary` 读了全部 249 行：`soak 249/168` PASS，`construction_stable` FAIL
+  （2 distinct construction digests），总判 UNHEALTHY。
+
+**机制。**
+
+- `live run --cycles N` 在 `done < cycles` 时抛 ClickException，退出码 1（`beidou_cli/live_cmd.py`）。
+- plist 设了 `KeepAlive {SuccessfulExit: false}`，非零退出立即拉起。`run_shadow.sh` 用 `exec`，退出码直接交给 launchd。
+- RUNBOOK 与 plist 注释写的是「soak 在 168 周期正常结束」。这句只在 168 个周期全部成功时成立。
+- 还有第二条路：`RunAtLoad`。零失败、以 0 退出的一轮，下次登录或 `launchctl load` 时也会再起一轮。
+
+**切开之后的读数**（同一份记录，只读）：第一轮单独评是 HEALTHY：168/168，最长 ERROR 连续 1，
+construction 只有 1 个。第二轮单独评只差 `soak` 一项，读到的是 82/168。baseline 截到同一窗口不改判，
+shadow 与 armed 的 guard 率都是 0.000。
+
+**修法的定价。** 选 A。
+
+| 修法 | 赶得上 09-30T08:00Z 吗 | 代价 |
+| --- | --- | --- |
+| A. launcher 启动前问记录：满了以 0 退出，没满只跑欠的周期 | 赶得上：launchd 拉起时重新执行脚本 | 每轮结束多一次秒级的拉起；bash 分支要在 3.2 上真跑；进程崩溃后改为接着跑同一轮，此前是另起 168 |
+| B. `live run --cycles N` 有失败也以 0 退出 | 赶不上：PID 26020 跑的是旧代码 | 改 CLI 的退出码契约，手跑 `--cycles 1` 冒烟失败了也是 0 |
+| C. 「跑满但有失败」单独一个退出码 | 赶不上，同上 | `KeepAlive` 不认具体退出码。要在 bash 里翻译就得去掉 `exec`，`launchctl` 的 SIGTERM 会打到 bash 而不是循环，DL-L6 的优雅停机失效 |
+| D. 改 plist 的 `KeepAlive`，例如 `{Crashed: true}` | 要重新装载，bootout 等于停掉 PID 26020 | 操作者动作。Python 崩溃是退出码 1 而不是信号，改完连普通崩溃也不再拉起，这改变了 RUNBOOK 写明的行为。也挡不住 `RunAtLoad` |
+
+A 落地为三处：
+
+- `beidou_governance/canary.py` 的 `rounds` 把记录切成每轮 168 个尝试过的周期（OK 与 ERROR；SKIPPED 不算，`engine.run` 也不数它）。
+  `evaluate` 只评最近一轮，`governance canary` 与 `plan`/`apply` 走的 `canary_health` 因此一起改。
+- `governance canary --remaining` 用同一个切法答最近一轮还欠几个周期。`run_shadow.sh` 每次启动前问它。
+  答 0 就以 0 退出；答 N 就 `--cycles N`。soak 长度只在 `SOAK_CYCLES` 写一次，脚本里的 168 删掉了。
+- RUNBOOK「shadow soak 怎么停」一节与 plist 注释改成实际机制。plist 的键没动。
+
+一个用真实 `run()` 跑出来的读数定了切法的一处细节：最后一个周期失败后，退避会在它后面写 SKIPPED 行。
+若把这些行算作下一轮的开头，launcher 会把跑完的 soak 读成「还欠 168」。所以 SKIPPED 行留在所属的那一轮。
+
+**没做的。** 没重启、没停止 shadow、paper-l3、实盘的任何进程。没改 `~/Library/LaunchAgents` 下的 plist。
+没动 `.beidou/live-shadow-dry-run/` 的任何一行。`live run` 的退出码没改。
+
+**生效条件。** launchd 执行的是主 checkout 的 `deploy/run_shadow.sh` 与 `.venv/bin/beidou`。PID 26020
+约在 2026-09-30T08:00Z 跑满第二轮，照旧以 1 退出；launchd 拉起的是主 checkout 当时那一份。
+所以主 checkout 要在那之前快进到含这次修复的 main。之后第二轮留在记录里，canary 评它；要不要起第三轮，
+按 RUNBOOK 移走记录，由操作者定。
+
+**补记（2026-09-26）：已快进。** #166 于 18:37:23Z 合入，merge commit `06e1d485`。主 checkout 于 18:37:49Z
+从 `593fe4dc` 快进到它，只带进 #166 的提交。快进后，主 checkout 的 venv 答 `--remaining` 为 86。PID 26020 未受影响。
+
+## 2026-09-26 · canary 的两个读者口径不一致：别名与基准窗口
+
+只记可观测事实。读取时刻 2026-09-26T18:00Z 前后，全部只读。两份 `cycles.jsonl` 先拷成快照再算，
+sha256 与源文件一致。两处是修 shadow soak（#166）时顺带发现的。#166 没动它们：它们改变晋级门的读数，
+要先报操作者定。
+
+**第 1 条：别名。**
+
+- `governance canary` 先把 digest 过 `CONSTRUCTION_ALIASES`，再数 `construction_stable`。
+  `plan`/`apply` 经 `_admission` → `admit` → `canary_health` 读同一份记录，按 raw digest 数。
+- `admit` 手里有别名表，只传给了 `clean_days`。同一次 `admit` 里，K-EX14 的时钟读 canonical，
+  canary 读 raw。
+- 来历：`canary_health` 写于 09-09 23:15（3ffe58c6）。13 分钟后 048204f7 给 `canary.evaluate`
+  加了 `aliases`，只改了 `canary_cmd`。
+- 复现：用真实别名对 `b8f215ab → 0c555e1c` 造一轮 168 个周期、中途改名的 soak。
+  `governance canary` 判 HEALTHY；`admit` 判 REFUSED，唯一理由是 `flow: L4: the canary soak did not pass`。
+- 真实记录上不改判。shadow 的两个 raw digest 本就属于两个 canonical 构造（`46b8d731`、`0c555e1c`）。
+  #166 评的最近一轮只有一个 digest。
+- 反事实：把 armed 的 digest 序列当作 shadow 的代理，419 个可能的 soak 起点里有 81 个（19.3%）会分歧。
+  它们全在 09-04..06 与 09-17..18。这个数偏高：digest 只在重启时变，armed 重启过 57 次，
+  shadow 自 09-16 只重启过 1 次。构造冻结期内是 0。
+
+**第 2 条：基准窗口。**
+
+- 三处文字写「同一窗口」：`canary.py` 的模块 docstring、`canary_cmd` 的 docstring、canary 测试的 docstring。
+  两处调用都传 armed 的整份 `cycles.jsonl`。用基准的只有 `guard_rate` 一项。
+- 读数：五份 `cycles.jsonl` 合计 1,397 行，guard 从未触发。#166 评的最近一轮上，shadow 0.000（分母 81），
+  armed 整份 0.000（分母 577），armed 同窗 0.000（分母 81）。不改判。
+- 何时改判：guard 的四个原因里有三个是共模的（`STALE_MARKET_DATA`、`KILL_SWITCH`、`DAILY_LOSS_PAUSE`）。
+  shadow 与 armed 在同一根 bar 上的 equity 中位差是 0。一轮里出现 ≥12 根共模 guard bar，整份口径就误判 FAIL；
+  armed 记录到 5,000 行时，门槛降到 9 根。反方向：armed 早期的 guard 事件抬高基准，
+  能掩护候选自己触发的 `GROSS_CAPPED`。今天这一侧是 0。
+
+**裁定。** 操作者 2026-09-26 选定：第 1 条「传下去」，第 2 条「截到被评那一轮，空窗判 FAIL」。
+代价先报过。第 1 条让 `plan`/`apply` 在别名情形下放松，与 `governance canary` 一致。
+第 2 条把分母从 577 缩到 81，并新增一种失败：armed 在这一轮的 bar 上没有已决周期。
+
+**落地。**
+
+- #167：`canary_health` 加 `aliases` 参数，不给默认值；`admit` 把手里的表传下去。
+- 第 2 条：`canary._same_bars` 取 armed 在被评那一轮 bar 区间里的已决周期当基准。区间按 `bar_open_ms`
+  取闭区间，不按 `at`：两个循环收同一根 bar 的时刻差几秒。空窗时 `guard_rate` 判 FAIL，
+  detail 写 `no decided armed cycle over bars …`。正常时 detail 印出两边分母与 bar 区间。
+  模块 docstring 原写「every check」都对照 armed，改成只有 `guard_rate` 用基准。
+- 新代码在同一份快照上的读数：只有 `soak` 一项 FAIL（82/168）。`guard_rate` 是 PASS，
+  `shadow 0.000 over 81 vs armed 0.000 over 81, bars 2026-09-23T08:00..2026-09-26T17:00`。
+
+**顺带发现，没做。**
+
+- `plan`/`apply` 路径上的 `startup_gate` 永远判 PASS：没有调用者传非零的 `gate_refusals`，
+  只能靠 `governance canary --gate-refusals N` 手填。
+- `beidou_governance/replay.py` 里 L4 的 SuspendedCondition 仍写「Canary 尚不存在」。
+
+**已修（补记）。** 两条都已修，原文保持不变：
+
+- `startup_gate` 恒 PASS：`8af1ca34`（#171，2026-09-26T19:43Z）。
+  操作者裁定 B + D：canary 删掉这项检查；写入的 gate 补上 dataset 那一半，
+  与 armed 启动时拒绝的口径一致。
+  详见下一节「startup gate 只在写入时问」。
+- replay 的 L4 挂起行：`58e1ce38`（#170，2026-09-26T19:28Z）。
+  改成「DL-G5 已交付」，并写明回放为什么仍判不了它。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。
+没跑 `report daily`，没跑 `governance apply`。
+
+**生效条件。** 两处都只在下次手动跑 `governance canary`、`plan`、`apply` 时生效。运行中的进程在启动时
+已导入旧代码，不会中途换。没有定时任务跑这三个命令。
+
+## 2026-09-27 · startup gate 只在写入时问：canary 删掉恒 PASS 的一项，写入的 gate 补上 dataset 那一半
+
+只记可观测事实。读取时刻 2026-09-26T19:12Z 前后，全部只读。来由是上一节「顺带发现」的第一条：
+`plan`/`apply` 路径上的 `startup_gate` 永远判 PASS。
+
+**shadow 见过的 startup gate 读数。**
+
+- 读数只在 launchd 的两个日志里：`shadow.stdout.log`、`shadow.stderr.log`。`live run --dry-run` 把它打印成
+  `evidence:`、`dataset:` 行，不写 `cycles.jsonl`、`heartbeat.json`、`state.json`。
+- 对齐方法：stderr 的 `venue clock offset` 每个进程只在 `startup` 里打一次，共 7 条，没有 `could not sync`。
+  stdout 的 `shadow: soaking` 也是 7 条，按顺序对上。最后一对用 PID 26020 的启动时刻核过。
+  stderr 用本地时间（+08:00），下表换成了 Z。
+
+| 启动 | 时刻（Z） | 记录 · 轮 | `dataset:` | `evidence:` |
+|---|---|---|---|---|
+| #1 | 09-12 13:21 | 归档记录 · 唯一一轮 | 2 条 advisory | 0 |
+| #2 | 09-12 15:05 | 同上 | 2 条 advisory | 0 |
+| #3 | 09-13 20:39 | 同上 | 2 条 advisory | 1：`tsmom: portfolio vol_target is 0.6 live but 0.3 in the cited evidence` |
+| #4 | 09-14 19:11 | 同上 | 2 条 advisory | 1：同上 |
+| #5 | 09-14 20:25 | 同上 | 2 条 advisory | 1：同上 |
+| #6 | 09-16 08:21 | 当前记录 · 第 1 轮 | 2 条 advisory | 0 |
+| #7 | 09-23 08:00（PID 26020） | 当前记录 · 第 2 轮 | 2 条 advisory | 1：`tsmom: evidence verdict FAIL does not allow live use` |
+
+- 归档记录是 `.beidou/live-shadow-dry-run.20260916-drifted-candidate`，90 行，一轮未满。
+  当前记录 251 行。第 1 轮是行 1–168，3 个 ERROR，已满。第 2 轮是行 169–251，83/168，1 个 ERROR，正在被评。
+- 14 条 `dataset:` 全是 advisory：7 条 `dataset store contents changed`，7 条 `flow: no dataset manifest recorded`。
+  blocking 的措辞一条也没有。
+- 7 次启动里 4 次有 `evidence:`，不带 `--allow-unvalidated` 的 armed 启动会因此拒绝。dry-run 不拒绝，
+  所以它们只进了日志。
+- canary 对第 2 轮读 `startup_gate PASS 0 refusals`。
+
+**写入的 gate 只问一半。**
+
+- armed `live run` 拒绝启动的条件是 `if problems or dataset.blocking`。一半是 evidence，一半是 D-041 的 dataset blocking。
+- `governance_cmd._gate` 只调 `registry_evidence_problems`。`promote.py` 写着「it is the SAME function startup
+  calls」，D-041 之后不再成立。
+- 当天按磁盘上的文件重算，不是日志读数。候选与 armed 结果相同：evidence 1 条（tsmom verdict FAIL），
+  dataset.blocking 1 条（09-24 重建 membership，refreshes 2056 → 2063），advisory 2 条。写入的 gate 只说得出第一条。
+
+**为什么这次改不动任何一次写入。** 当天在真实记录上只读复算 `admit`：
+
+- `promoting ()`。候选与 armed 只差注释，canary 结论不进判定。
+- `clean_days` 9.1，K-EX14 要 30。#163 在 10-13 后把构造指纹 `b8f215ab` 改成 `4b2dc74b`，这个时钟会重置。
+- 写入的 gate 因 verdict FAIL 拒绝一切写入。
+
+所以约 11-12 之前，下面的改动不改变任何一次写入的结果。
+
+**定价与裁定。** 报了四个方案。A：dry-run 把读数写进每行 cycle，两个读者都读它。B：删掉这一项。
+C：只写文档。D：写入的 gate 补上 dataset 那一半，可配 A 或 B。A 记的是 soak 开始时的读数，到写入时至少过期 7 天。
+第 1 轮就是反例：开始时 0 条；09-19 候选的 tsmom 指针在轮中换成 FAIL 证据；A 仍会判它 PASS。
+操作者 2026-09-27 选 B + D。
+
+**落地。**
+
+- B：`canary.evaluate` 删掉 `startup_gate` 与 `gate_refusals`。`canary_health`、`admit` 删掉同名参数，
+  `governance canary` 删掉 `--gate-refusals`。canary 现为 6 项。此前全仓库没有调用者传过非零值。
+- D：`_gate` 问 evidence，再加 `registry_dataset_problems(...).blocking`，与 `live_cmd` 同一判据。
+  `plan`、`apply` 加 `--data-root`，默认 `.beidou/data`，与 `live run` 相同。`live_cmd.py` 没动。
+- 测试：`tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`。四种读数各造一次：没动、sync 追加 bar、
+  membership 重建、verdict FAIL。每种分别交给 `plan` 与 armed `live run`，两边都要等于字面值。armed 那一侧
+  在闸后第一行 `resolve_universe` 抛哨兵异常，碰不到凭据和 venue。
+- 先红后绿。只接上 `--data-root` 时，membership 重建那一格红：`plan` 放行、armed 拒绝，`apply` 真的写了进去。
+  补上 dataset 那一半后全绿。
+- `beidou_cli` 超 ceiling 8 行，同一提交抬顶，理由写在 `test_source_budget.py`。
+- RUNBOOK 加「startup gate 在写入时问」一节；GLOSSARY 加 `startup gate`；计划文档 §5 L4 行加更正注。
+
+**改后的读数。** 同一份真实记录上，canary 对第 2 轮 6 项：`soak` FAIL（83/168），其余 PASS。
+写入的 gate 对候选与 armed 各报两条：evidence FAIL，membership。
+
+**顺带发现，没做。**
+
+- `admit` 不核「被评那一轮跑的 registry」与「要写的 registry」是不是同一份。shadow 每行有 `registry` 摘要，
+  没人拿它比 `after`。只读代码所见，没造数据复现。
+- 候选 registry 头注 2026-09-16 那段写「PID 802, started 09-15T04:24Z」。stderr 里那次启动是本地 04:25，
+  即 09-14T20:25Z，把本地时间标成了 Z。同段写记录移到了 `.beidou/live-shadow-dry-run.20260916`，
+  实际目录名多一个 `-drifted-candidate`。
+
+**已修，同日 `b7167c4a`（补记）。** 上面第一条，操作者当天要求做掉，经 #174 合入。`plan`/`apply` 的 L4
+多一项 `registry_soaked`。被评那一轮只跑过一份 registry、而且就是提议那份，才算过。提议的摘要由
+`_admission` 按引擎盖章的路径算，即 `registry_digest(build_model(...))`。全部停用的提议建不出模型，
+摘要记为 None，不挡「停」。`governance canary` 没加这一项，它手里没有提议。摘要也没做别名表。
+当天读数不变：两轮的已决周期都是 `7f8adb754962`，与候选、armed 相同。测试在
+`tests/governance/test_the_canary_vouches_only_for_the_registry_it_ran.py`，经过见下文
+「L4 只为 soak 跑过的那份 registry 作保」一节。第二条没动。
+
+**已修，同日 `9891d8e1`（补记）。** 上面第二条，操作者当天要求修。头注改成「started 09-14T20:24Z」，
+目录名补上 `-drifted-candidate`。只改注释：解析后的 YAML 逐项相同，`registry_digest` 仍是 `7f8adb754962`。
+同样的时刻也写在 09-16 那一节里，那里另加了一段补记。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
+没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
+
+**生效条件。** 只在下次手动跑 `governance canary`、`plan`、`apply` 时生效，没有定时任务跑这三个命令。
+launcher 只问 `--remaining`，这次没动。`live run` 没改，运行中的进程不受影响。
+
+## 2026-09-27 · L4 只为 soak 跑过的那份 registry 作保：admit 核对被评那一轮的 registry 摘要
+
+只记可观测事实。读取时刻 2026-09-26T20:15Z 前后，全部只读。来由是上一节「顺带发现」的第一条，
+操作者当天要求做掉。
+
+**缺口。**
+
+- shadow 的每个已决周期都写 `registry`，即进程持有的 `engine.registry_digest`（DL-Q0）。
+  `admit` 只问最近一轮健康不健康，从不拿这个摘要和要写的 registry 比。
+- 所以一轮 soak 了候选 A，也能为 B 作保。soak 之后改候选，或者给 `apply` 另一个文件，L4 都照读旧 soak 的健康。
+- 摘要覆盖策略、补齐默认值后的参数、权重、books、probe 止损、钉住的 universe。不含 evidence 指针和注释。
+
+**今天的读数。** 当前记录 252 行。两轮的已决周期上都只有一个摘要 `7f8adb754962`。候选与 armed 按引擎的
+算法算出来也是 `7f8adb754962`。所以对当前候选，这一项今天是 PASS，L4 仍只因 `soak`（84/168）不过。
+换一个摘要，L4 会多一条 `registry_soaked (the scored round ran 7f8adb754962; the proposal is …)`。
+
+**落地。**
+
+- `canary.evaluate` 多报一个读数 `registries`：被评那一轮已决周期上的摘要。它只是读数，不是检查：
+  `governance canary` 手里没有提议，判不了。
+- `canary_health` 加必填的 `registry`，新增一项 `registry_soaked`：这一轮只跑过一份 registry，
+  而且就是提议那份，才算过。一轮里有两个摘要也不过：候选在轮中被改，relaunch 会续跑同一轮。
+- `admit` 加 `registry`，默认 None，按关闭处理。L4 只在晋级时被问。
+- `_admission` 用引擎盖章的同一条路径算提议的摘要：`registry_digest(build_model(...))`。
+  当天实测，`build_model` 对没有启用策略的 registry 抛 `ValueError: registry has no enabled strategies`。
+  那是「停」的形状：停不晋级，L4 不会被问到，所以这里记为 None，不抛异常。
+- `plan_cmd` 只读一次提议文件，admission 与事务用同一份字节。`apply_cmd` 本来就是这样。
+- RUNBOOK 加「L4 只为 soak 跑过的那份 registry 作保」一节。
+
+**测试。** 新文件 `tests/governance/test_the_canary_vouches_only_for_the_registry_it_ran.py`，先红后绿。
+
+- 红：6 条。5 条是新参数还不存在，`plan` 那条是断言失败。「全部停用的 plan 仍放行」是护栏，改之前就绿。
+- 四个变异全部被杀死：核对恒过，5 条红；拿当前 registry 而不是提议去算，2 条红；只要求包含、不要求唯一，
+  1 条红；去掉 `ValueError` 的保护，1 条红。
+- 四个已有测试跟着补 `registry`：夹具按真实记录补 `7f8adb754962`，或者盖上引擎对提议的摘要。
+
+**已知的边界。** `registry_digest` 的算法本身变了，摘要也会变，registry 却没变。跨这种改动的 soak 会被判
+不一致。方向是拒绝，处理是重新 soak。这次没有给它做别名表。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
+没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
+
+**生效条件。** 只在下次手动跑 `plan`、`apply` 时生效，要等主 checkout 快进之后。没有定时任务跑这两个命令，
+`live run` 与 launcher 都没动。
+
+## 2026-09-27 · M-011 读了十九天的 09-07：归档没人刷新，补齐后比率列第一次被比到
+
+只记可观测事实。读取时刻 2026-09-26T20:00Z 至 09-27T05:10Z，全部只读。唯一一次灌入跑在 scratch 副本上，
+没碰 `.beidou/`。来由是 #172 描述里的顺带发现：日报的平价自 09-16 起每天判未满足。
+
+**缺口。**
+
+- 归档 store `.beidou/data/metrics/` 只在 09-09 手动灌过一次，名单是当时 pit universe 的 205 个币。
+  每个币都停在 2026-09-07T23:55Z。
+- `deploy/run_data.sh` 不排 `data metrics`。那段注释（3fdba392 起）只算了研究面板一个读者，
+  漏了每小时读它的 `report daily`。
+- 快照每个周期只取最近 12 个桶，不回补。LSKUSDT、NEARUSDT 在 09-16T01:00Z 的周期进 universe，
+  快照从 09-15T23:55Z 起，和归档一个桶也碰不上。LSK 09-16 才第一次入池，连归档文件都没有。
+- 其余 15 个币每天比的都是 09-07 10:55–23:55Z 的 155–156 个桶。六列里只比了两列持仓量：
+  快照的四个比率列 09-12 12:55Z 才有值。09-09 至 09-15 七份日报的「满足」，说的都是 09-07。
+
+**落地（#176，c89ef6d4）。**
+
+- 平价块写出 `compared_through`（按最旧的币折叠）、`stalest_symbol`、`why`。
+  `met` 取 `parity_satisfied` 在报告时刻的答案，报告里不再自带一份规则。
+- `parity_satisfied` 要 `now`。没写 `compared_through`，或比 `now` 早超过 `PARITY_MAX_AGE`（3 天），都不算满足。
+- `data metrics` 不带参数时取快照 store 的全部币，截到昨天。`run_data.sh` 每晚跑它。
+- 真实 store 上新旧代码对比，去掉 LSK、NEAR，即 09-09 至 09-15 的形状：旧代码 `met: true`；
+  新代码 `met: false`，理由是最新比对桶 2026-09-07T23:50Z 超过 3 天。
+
+**补齐之后，比率列第一次被比到。** 新步骤在 scratch 副本上跑了一遍：`/bin/bash` 3.2.57，
+09-26T20:28Z 开跑，32 秒，21 个币补到 09-25T23:55Z，LSK 从零 30 天共 8,640 行。在这份数据上算平价：
+
+| 列 | 对齐 | 同桶比对对数 | 相对差 |
+| --- | --- | ---: | --- |
+| `sum_open_interest`、`sum_open_interest_value` | 同桶 | 80,504 | 0 处不同 |
+| `count_toptrader_long_short_ratio` | 同桶 | 58,196 | 中位 1.1e-4，最大 3.9e-4 |
+| `count_long_short_ratio` | 同桶 | 58,172 | 中位 1.1e-4，最大 3.8e-4 |
+| `sum_toptrader_long_short_ratio` | 同桶 | 58,188 | 中位 1.2e-5，最大 8.6e-5 |
+| `sum_taker_long_short_vol_ratio` | **错开 5 分钟** | 53,813 | 同桶中位 45%；快照挪后 5 分钟再比（53,798 对），中位 2.0e-4，最大 8.6e-3，5.8% 超过 1e-3 |
+
+- 三个比率列时间对得上，差在 1e-4 量级，超出 `metrics_parity` 的 1e-6 容差。快照值四位小数（例 1.3031），
+  归档六位（1.302937），差比四舍五入大，机制没查。
+- taker 列：`bucket_open_from_rest` 对五个端点一律减一个周期。这个约定是在持仓量端点上核出来的（166/166）。
+  09-12 加四个比率端点时核的是值域，每个值落在自己那一列的归档区间内，没有逐个端点核时间偏移。
+
+今天没有交易后果：`oi()` 读持仓量，`lsr()` 读 `count_long_short_ratio`，没有叶子读 taker 列，也没有 booked
+候选。但第一次夜间 `data metrics` 之后，M-011 会从「2 个币不可量」变成「最差的币 99.9% 的桶不一致」。
+
+**待操作者裁。**
+
+1. 比率列的容差。维持 1e-6，读比率列的候选永远过不了 M-011；改成相对容差 1e-3，实测全部落在内。
+2. taker 列：修偏移，还是 M-011 只比叶子读的列。修偏移要按偏移契约核过，循环重启后才生效，
+   已写下的快照行仍然错位。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。没跑 `report daily`，
+没在真实数据根上跑 `data metrics`，没跑 `governance apply`。
+
+**生效条件。** 本会话在 2026-09-27T05:07Z 把主 checkout 快进到 60468a63（#176）。05:10Z 那次每小时检查
+写出的平价块已是新格式：`compared_through` 2026-09-07T23:50Z，`why` 为 2 symbols have no overlapping buckets。
+第一次夜间 `data metrics` 在 2026-09-27T17:20Z。
+
+## 2026-09-27 · 操作者裁定：M-011 的比率列按相对 1e-3 比，只比叶子读的列；taker 的偏移另修
+
+承接上一节「M-011 读了十九天的 09-07」末尾两件待裁的事。操作者当天选定：
+
+1. 比率列改用相对容差 1e-3。
+2. taker 列两件都做：M-011 只比叶子读的列；taker 的时间偏移另开 PR 修，含一次实盘循环重启。
+
+**落地。**
+
+- `beidou_alpha.mining.expr` 列出 `METRICS_LEAVES`（`OpenInterest`、`LongShortRatio`），由它得出
+  `METRICS_COLUMNS`：`sum_open_interest`、`count_long_short_ratio`。一条测试守着「定义 `reads_metrics`
+  的节点都在表里」，新增 metrics 叶子漏登记会变红。
+- `metrics_parity` 对三个账户比、持仓比按相对 1e-3 比，持仓量仍按绝对 1e-6。taker 不给相对容差：
+  对齐后仍有 5.8% 的对超过 1e-3，将来真有叶子读它，要先量再定。
+- 日报的平价块只比 `METRICS_COLUMNS`，并写出 `columns`。
+- 三个变异各被一条新测试抓到：叶子漏登记、去掉相对容差、改回比全部列。
+
+**读数。** 在上一节那份补齐的 scratch 数据上重算：17 个币全部一致，比到 2026-09-25T23:50Z，`met: true`。
+真实 store 在今晚第一次夜间 `data metrics` 之前读数不变：LSK、NEAR 不可量。
+
+**没做的。** taker 的偏移这里不改。没重启、没停止任何进程，没动 `.beidou/` 的任何一行。
+
+## 2026-09-27 · taker 页按开盘标桶：快照里的 taker 值从 09-12 起一直早记 5 分钟
+
+只记可观测事实。承接上一节裁定的第二件的后半：修 taker 的时间偏移。
+
+**核验（`verify_stamp_offset`，对着交易所）。** BTCUSDT，2026-09-25 的日归档对 REST 最近 500 个桶，重叠约 145 个：
+
+| 端点 | 按收盘（`METRICS`，+5 分钟） | 按开盘（偏移 0） |
+| --- | --- | --- |
+| openInterestHist 两列 | 容差 1e-12 PASS 145/145，相邻偏移 0/144、0/146 | FAIL |
+| 三个账户比、持仓比 | 容差 1e-3 PASS，相邻偏移被否掉 | FAIL |
+| takerlongshortRatio | 任何容差都 FAIL（0–3/146） | 容差 1e-3 PASS 145/145，相邻偏移 1/144、1/146 |
+
+持仓量的约定是 09-07 核出来的（166/166）。09-12 加四个比率端点时只核了值域，其中三个恰好同一约定，taker 不同。
+
+**落地。**
+
+- `alignment.METRICS_TAKER`：taker 列单独一份契约，REST 戳是开盘、偏移 0。`CONTRACTS` 里只有这一列改归它。
+- `metrics.REST_STAMPED_AT_OPEN` 与 `rest_stamp_offset_ms`：解析按端点取偏移，`snapshot_metrics` 按页传入。
+  一条测试逐页核对解析的偏移与该页各列契约的偏移。
+- 真实样本 24 个桶（BTCUSDT 09-25 21:00–22:55Z）写进测试：新契约 PASS 24/24、相邻 1/24；旧约定 FAIL 1/24。
+- 快照测试的假客户端原先给五页同一个戳，等于把旧约定写进了测试，改成各页按自己的约定。
+- 两个变异（解析退回按收盘、契约退回 `METRICS`）各被两条测试抓到。
+
+**顺带核到的。** 旧解析下 taker 页的范围比持仓量页早一个桶。`_merge` 对齐到持仓量页时，每次轮询最新那一行的
+taker 没有值。BTC 快照里 taker 的非空行比 `count_long_short_ratio` 少 295 行（09-12 12:55Z 起），
+大致是每小时一次轮询留下一个缺口。修正后两页范围一致，缺口随之消失。
+
+**没改的与生效条件。** 已写下的快照行不改：09-12 12:55Z 起的 taker 值仍早 5 分钟，并且每小时缺一行。
+只有 armed 实盘循环写共享快照（`record_metrics`；paper-l3 与 shadow 不写），新解析要它重启后才生效，
+重启另记。M-011 从上一节起只比叶子读的列，taker 不在其中，所以这两件都不影响 M-011。
+
+## 2026-09-27 · 重启 #58：操作者要求；新进程载入 taker 页按开盘标桶的修正（#185），构造不变
+
+只记可观测事实。
+
+- **谁、为什么**：操作者在会话里选定「今天在安全窗口重启」，为让 #185 的 taker 时间偏移修正生效，由该会话执行。
+- **命令与窗口**：2026-09-27T06:14:41Z 发出 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，06:15:11Z 返回。
+  这个时刻在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
+- **重启前**：主 checkout 06:14:29Z 快进到 `efa68bb7`（#185，见 reflog）。两个构造测试 06:14:34Z 跑，15 passed。
+- **进程**：PID 75336（2026-09-25T17:09:21Z 启动）→ 71893（2026-09-27T06:15:11Z 启动）。`state.restarts` 57 → 58，
+  `restarted_at` 2026-09-27T06:15:12Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_data/metrics.py`、`metrics_snapshot.py`、`alignment.py` 06:14:29Z；
+  `beidou_live/engine.py`、`cycle_record.py` 05:53:53Z；`deploy/run_live.sh` 09-25T05:33:06Z；`config/live.demo.yaml`
+  09-23T04:55:35Z；`config/alpha_registry.yaml` 09-23T13:31:17Z。全部早于 06:15:11Z，新进程跑的是 `efa68bb7` 的代码。
+- **这次一并载入的**：上次重启时主 checkout 在 `5fbe4163`。此后合入、碰到循环所用代码的合并有五个。
+  在周期路径上的是 #183（`construction_full` 的标志等那一行落盘再置位）与 #185。#175、#176、#182 改的是日报与平价，
+  循环不调用。policy、`run_live.sh` 与两个配置没变。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13`；
+  - 交易所时钟偏差 +2.1s；
+  - `restart was 919.5s after the bar close (window 87.3s); reconciled but did not rebalance`，为 05:00Z 那根 bar
+    写了一行 SKIPPED。那根 bar 旧进程已在 06:00:30Z 跑完（0 单，无错误），没有漏掉退出检查。
+- **`live status --check`（06:15:38Z）**：registry `7f8adb754962`、治理规则 `d62ac59fa95c` 与在跑的循环一致；
+  最近 24 小时 24 个周期，完成 95.8%，1 次失败在 bar 2026-09-26T20:00Z，早于这次重启。
+- **修正前的基线**，即旧进程 06:00:30Z 那次轮询写下的：BTCUSDT 05:00Z 以来 11 行，taker 有值 10 行；
+  现取的 12 个 REST taker 值里，9 个存在「时间戳减 5 分钟」的桶上，0 个存在自己的时间戳上。
+- **第一个真周期**：写这一节时（06:19Z）还没到。它应在 07:00:30Z 左右处理 06:00Z 的 bar，新解析从这一次轮询起写快照。
+  核对办法与上一条基线同一把尺：BTCUSDT 最近一小时的 taker 是否每行有值，现取的 REST taker 值是否存在自己的时间戳上。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。它们不写共享快照（`record_metrics`）。
+
+构造没有变：k 仍是 0.60，两个构造测试通过，registry 与治理规则摘要都没变。
+
+## 2026-09-27 · 补记：重启 #58 之后的第一个真周期，taker 值落在自己的时间戳上
+
+只记可观测事实。承接「重启 #58」一节里「第一个真周期：写这一节时还没到」那一条，那一节原文不改。
+
+- **周期**：2026-09-27T07:00:29Z 处理 06:00Z 的 bar，没有错误，0 单；快照写入 17 个币（`metrics_snapshot.stored`）。
+- **同一把尺**，在这次轮询之后读，与那一节记下的基线对照：
+
+| | 修正前（旧进程 06:00:30Z 的轮询） | 修正后（新进程 07:00:29Z 的轮询） |
+| --- | ---: | ---: |
+| BTCUSDT 该小时的行里 taker 有值 | 10/11 | 11/11 |
+| 现取 12 个 REST taker 值，存在自己时间戳上的 | 0 | 12 |
+| 存在「时间戳减 5 分钟」桶上的 | 9 | 0 |
+
+#185 的新解析已经在跑，每小时交界缺一行的缺口也随之消失。09-12 12:55Z 至 06:00Z 写下的快照行不改。
+
+## 2026-09-27 · 操作者裁定：构造冻结提前到当天结束，k 0.175 的切换（#163）随即合入
+
+**裁定。** 冻结原定 2026-10-13T00:00Z 到期（见本文件「2026-09-23 · 操作者两条裁定」一节）。#163（k 0.60 →
+0.175、档位按可动用口径、tsmom 指向 WEAK_PASS 证据、删 exemption）的 CI 因此一直红在冻结测试上，这是按设计的。
+操作者 06:55:20Z 在项目话题「10-13 切换」的决定卡片上选「现在结束」，07:54:41Z 打字确认「提前结束构造冻结，
+合入 #163」。
+
+**改了什么（都在 #163 里）。**
+
+- `FREEZE_ENDS` 由 `2026-10-13T00:00:00+00:00` 改为 `2026-09-27T07:54:00+00:00`，取打字确认的那一分钟。
+- `FROZEN_CONSTRUCTION` 不动（`0c555e1c`）。它是被冻过的那套，历史不重写，同文件第三条测试还要在实盘记录里找到它。
+- `deploy/run_live.sh` 的 `BRIDGE_UNTIL` 不动（10-13）。bridge 管的是证据门，#163 把 tsmom 指向 WEAK_PASS 之后
+  它不再起作用，到期自己失效。
+- #163 自己写下的切换日期由 10-13 改为 09-27；`ADOPTIONS` 里那份证据的采纳日同改。
+
+**代价（卡片上写明并被接受）。** M-010 的 30 天窗口、`realised_vol` 的单构造条件、L3 的 7 天条件，从载入 #163
+的那次重启起一起清零，比按 10-13 早约 16 天。现行构造 `0c555e1c` 的 M-010 要到 10-17T16:07 才满 30 天：按 10-13
+本来就拿不到完整读数，提前结束让它少得更多。
+
+**没变的。** 合入不改在跑的进程：循环启动时读一次构造，k 仍是 0.60，直到下一次重启。那次重启的时刻由操作者
+另行打字确认，按 CLAUDE.md「重启实盘循环」一节做，事后在本文件记可观测事实。主 checkout 快进之后、重启之前，
+`live status --check` 会报 policy 摘要不一致，所以快进与重启要挨着做。
+
+## 2026-09-27 · 资金费流水漏记：结算后 27 秒查收入，行还没出现
+
+只记可观测事实。机制一条标为推断：要等带 key 的 `/fapi/v1/income?incomeType=FUNDING_FEE` 对账确认。
+
+**读数。** 只读，在操作者的 Mac 上：`attribution.jsonl` 对账户自己的持仓与 demo 资金费率，2026-09-15T00Z 至 09-27T00Z。
+
+| 这次结算的收入查询在结算后多久跑 | 结算次数 | 应记 FUNDING_FEE 行 | 实记 |
+| --- | ---: | ---: | ---: |
+| 24–40 秒（常规周期） | 36 | 507 | 6（全是 BTCUSDT，查询在结算后 24–28 秒） |
+| 约一小时（09-23T16:00，前一个周期死于 ProxyError） | 1 | 13 | 13 |
+| 175 秒（09-03T08）、259 秒（09-04T08），早期周期 | 2 | 12、10 | 12、10 |
+
+应付约 -17.40 U，漏掉约 -16.51 U。
+
+**机制（推断）。** 交易所把 FUNDING_FEE 行的时间戳记在结算时刻（整点后几毫秒），行要过几秒到几分钟才在接口上查得到。
+周期在整点后 20–40 秒（中位约 27 秒）查 `[since, now]`，窗口已经盖住结算时刻，行多半还没出来；下一个周期从上一次的
+`now` 起查，这些行就再也不会被问到。上表三档延迟的记录与这个解释相符，但没有直接证实。代码路径本身是确定的：时间戳早于
+`last_income_ms`、在查询之后才发布的行，不论晚多久，都永久漏记。
+
+**修了什么**：
+
+- 主窗口照旧读资金费以外的全部收入，写出的行与原来相同；它自己查到的 FUNDING_FEE 行不再计入，交给第二个窗口。
+- 第二个窗口是 `(last_funding_ms, now - 10 分钟]`（`engine.FUNDING_SETTLE_LAG_MS`），只取 FUNDING_FEE。半开区间，
+  相邻窗口首尾相接，不需要去重集合。10 分钟是上表较慢那档 259 秒的两倍多。
+- 归属：时间戳早于本周期 `since` 的行，是中间那个周期交易之前的那本书付的。记给上一次入账用的那本书
+  （`state.income_prev_contributions`），bar 标上一次入账那一行的 bar（`income_prev_bar_ms`），另写一行，带
+  `"late_funding": true`，窗口 `[last_funding_ms, since]`。不早于 `since` 的并进本周期的正常那一行。结算在整点、查询在
+  27 秒后、滞后 10 分钟，所以稳态下几乎所有资金费都走前一种。
+- 迁移：旧的 state.json 没有 `last_funding_ms`，第一个周期从 `since` 起算，不从 `since - 10 分钟` 起算。那之前旧代码查得到
+  的行已经记过，再读会重复计入；代价是重启前最后一次结算里没记下的那些补不回来。
+- 读 `attribution.jsonl` 的地方：`_series_by_strategy`（M-010、衰减规则、M-G06、M-014 共用）从按 bar 赋值改成累加；
+  O3 的覆盖率不读 `late_funding` 行（它重读的是主窗口已经查过的一段，会被读成重复入账）；`_booked_fees` 不读这种行；
+  `leg_split` 的 symbol-bar 按不重复计。探针止损、R8 的归因回撤、抵押品漂移、日报合计、governance replay 本来就是求和，没改。
+- 复现测试在 origin/main（`4f3420e`）上红（-1.0 对 -1.4：结算后 20 秒可见的那行记下了，90 秒可见的那行丢了），改后绿。
+  四个读者各有一条测试，在同一个 main 上也都红：例如 `_series_by_strategy` 让晚到那一行顶掉了那根 bar 的 -1.0，只剩 -0.25。
+
+**生效条件。** 要循环重启后才生效。重启要操作者打字确认，按 CLAUDE.md 的三条走，另记一节；这一节没有重启。本分支建在
+已合入 #163 的 main（`4f3420e`）上。上一节写明 #163 也要等一次由操作者另行确认的重启才载入：本修复在那次重启之前合入、
+主 checkout 快进，就由同一次重启一起载入；在那之后合入，就要再重启一次。
+
+**已写下的行不改。** 修正前写进 `attribution.jsonl` 的行保持原样，其中资金费只记下约 1%（6/507）。M-010 的 30 天窗口从载入
+#163 的那次重启起清零（上一节）。本修复由同一次重启载入，新窗口里的资金费从头就按新办法记，不分段；晚于那一次，新窗口就是
+两段拼成的：本修复载入之前那段资金费几乎全漏，之后那段全记，两段的已实现归因不是同一个量。读 M-010、衰减规则、M-G06 时
+要知道分界落在哪一次重启。
+
+**生效后会动的读数。** 资金费一直在付（上表 12 天 -17.40 U，都在 k 0.60 下），以前几乎不进归因，以后全进。探针止损（D-019）
+与 R8 的归因回撤读到的累计盈亏会因此更负；#163 载入之后，R8 的两档是 0.3.6 的 -0.2803 / -0.4005（上一节）。构造不变
+（两个构造测试在 `4f3420e` 之上照常通过），但这两个控制看到的数会变。一行资金费也比原来晚一个周期写下，即结算后约一小时；
+在这之间生成的日报与 `live status` 还看不到它。
+
+**核对办法**（重启后）：结算后第二个周期（约 01:00:27Z、09:00:27Z、17:00:27Z）写下的 `late_funding` 行里，FUNDING_FEE
+的币数应当等于结算时持仓的币数；每个周期行的 `external_flows.funding_window.rows` 记着那个周期读到几行。对同一段时间做一次
+带 key 的 `incomeType=FUNDING_FEE` 查询，就能把上面的「推断」改成「确认」。
+
+**已知局限。** 发布一旦晚过 10 分钟，那几行照样漏，只是更少见，对账能量出来。两次入账相隔不到 10 分钟时（重启的
+`--immediate` 周期重跑刚跑过的 bar），那一段里较早的部分会记给较新的那本书：仍只计一次，bar 晚一根。

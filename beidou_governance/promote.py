@@ -9,10 +9,12 @@ confirmation point; what stands in for the person is this module's ability to un
 **One deliberate departure from the plan's ordering, and the reason.**  §2 describes: write the YAML,
 request a restart, let the startup gate refuse, then roll back.  This checks the gate IN PROCESS,
 before any restart is requested, so a bad write never reaches a running loop at all.  That is only
-safe because it is the SAME function startup calls - the gate is injected by the caller and the caller
-passes `beidou_live.config.registry_evidence_problems`.  A second, similar check written here would be
-the divergence this whole project keeps finding, so there isn't one; DRILL-G1 exists to prove the
-injected gate is the real one by feeding it a report whose sha256 does not match.
+safe because it asks what startup asks - the gate is injected by the caller, and `governance_cmd._gate`
+passes the two functions `live run` refuses on: `registry_evidence_problems` and the blocking half of
+`registry_dataset_problems`.  It passed the first alone until 2026-09-27; D-041 had added the second
+to startup and not here.  A second, similar check written here would be the divergence this whole
+project keeps finding, so there isn't one; DRILL-G1 exists to prove the injected gate is the real one
+by feeding it a report whose sha256 does not match.
 
 Nothing here restarts anything.  A transaction reports `restart_required`, and who acts on that is a
 question about deployment, not about the registry.

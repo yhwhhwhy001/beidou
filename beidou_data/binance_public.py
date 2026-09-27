@@ -55,6 +55,11 @@ def drop_unclosed(frame: pd.DataFrame, now_ms: int) -> pd.DataFrame:
     return frame[frame["close_time"] < now_ms].reset_index(drop=True)
 
 
+def is_invalid_symbol(exc: httpx.HTTPStatusError) -> bool:
+    """400 ``-1121``: the venue does not list this symbol.  An absence, not a failure (`beidou_data.spot` note 9)."""
+    return exc.response.status_code == 400 and '"code":-1121' in exc.response.text.replace(" ", "")
+
+
 def funding_to_frame(rows: list[Mapping[str, Any]]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["funding_time", "funding_rate", "mark_price"])

@@ -30,12 +30,13 @@ from typing import Any
 import click
 import yaml
 
-from beidou_alpha.registry import parse_registry
+from beidou_alpha.registry import Registry, parse_registry
 from beidou_alpha.validation.ledger import resolve_ledger_path
 from beidou_cli import main
 from beidou_governance.admission import WINDOW_ANCHOR, Admission, admit, rolled, window_start
 from beidou_governance.assemble import assemble, conclude
 from beidou_governance.budget import window_spend
+from beidou_governance.canary import attempted, remaining, rounds
 from beidou_governance.canary import evaluate as evaluate_canary
 from beidou_governance.family_gate import VERDICT_KIND, refusals
 from beidou_governance.family_gate import failures as gate_failures
@@ -57,8 +58,10 @@ from beidou_governance.verdicts import read as read_verdicts
 from beidou_governance.verdicts import record as record_verdict
 from beidou_governance.verdicts import review as review_verdict
 from beidou_governance.verdicts import since as verdicts_since
-from beidou_live.config import registry_evidence_problems, store_directory
+from beidou_live.composition import build_model
+from beidou_live.config import registry_dataset_problems, registry_evidence_problems, store_directory
 from beidou_live.construction import CONSTRUCTION_ALIASES
+from beidou_live.engine import registry_digest
 from beidou_shared.config import load_yaml
 
 REGISTRY = "config/alpha_registry.yaml"
@@ -295,12 +298,22 @@ def transactions_cmd(root: str) -> None:
         raise SystemExit("the transaction chain is broken: something changed the registry outside a transaction")
 
 
-def _gate(profile_path: str) -> Callable[[Path], list[str]]:
+def _gate(profile_path: str, data_root: str) -> Callable[[Path], list[str]]:
+    """What an armed `live run` refuses to start on, asked of the file about to be written.
+
+    Both halves of `live_cmd`'s `if problems or dataset.blocking`: the evidence, and the blocking half
+    of D-041's dataset check.  Advisory lines are printed there and refuse nothing, so not here either.
+    Until 2026-09-27 this asked the evidence half alone, and a membership rebuild under unchanged
+    evidence passed here while `live run` refused it.  `tests/cli/test_the_write_refuses_what_an_armed_
+    start_refuses.py` puts each reading to both.
+    """
     profile = load_yaml(profile_path)
+    interval = str((profile.get("market_data") or {}).get("interval", "1h"))
 
     def gate(path: Path) -> list[str]:
         registry = parse_registry(load_yaml(str(path)))
-        return registry_evidence_problems(registry, profile)
+        dataset = registry_dataset_problems(registry, data_root, interval)
+        return [*registry_evidence_problems(registry, profile), *dataset.blocking]
 
     return gate
 
@@ -322,16 +335,32 @@ def _shadow_rows(shadow_dir: str) -> list[dict[str, Any]]:
     return suffixed or _rows(Path(shadow_dir) / "cycles.jsonl")
 
 
-def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, shadow_dir: str) -> Admission:
+def _soaked_as(registry: Registry, profile: dict[str, Any]) -> str | None:
+    """The `registry` digest a loop running ``registry`` stamps on every cycle, or None if none can run it.
+
+    The engine's own recipe - `registry_digest` of the model `build_model` makes - so what L4 compares
+    is what a shadow row records.  `build_model` refuses a registry with no enabled strategy, which is
+    the shape of a stop; a stop promotes nothing, L4 is never asked of it, and it must not raise here.
+    """
+    try:
+        return registry_digest(build_model(registry, profile))
+    except ValueError:
+        return None
+
+
+def _admission(
+    registry_path: str, proposed: str, root: Path, state_dir: str, shadow_dir: str, profile: str
+) -> Admission:
     """R3/R4/R5/R7 and K-EX14, asked of the change before the bytes move.
 
     Added 2026-09-09.  Until then `apply` asked the startup gate and nothing else, so every constraint
     §3 lists as a precondition of `queued -> probe` was decorative on the only path that promotes:
     a proposal moving 0.9 of the book to an unproven sleeve was accepted against a cap of 1/3.
     """
+    after = parse_registry(yaml.safe_load(proposed))
     return admit(
         parse_registry(load_yaml(registry_path)),
-        parse_registry(yaml.safe_load(proposed)),
+        after,
         book=read_state(root / STATE),
         policy=Policy(),
         cycles=_rows(Path(state_dir) / "cycles.jsonl"),
@@ -339,6 +368,7 @@ def _admission(registry_path: str, proposed: str, root: Path, state_dir: str, sh
         # K-EX14's clock reads the canonical construction, not the raw digest: three of the raw
         # changes since 09-04 altered no behaviour and were declared equivalent here on the read side.
         aliases=CONSTRUCTION_ALIASES,
+        registry=_soaked_as(after, load_yaml(profile)),
     )
 
 
@@ -379,13 +409,20 @@ def _report_admission(admission: Admission) -> None:
 @click.option("--root", default=".", help="Checkout holding the governance state and transaction log.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop's record.")
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The canary's record.")
+@click.option("--data-root", default=".beidou/data", show_default=True, help="The data `live run` checks against.")
 def plan_cmd(
-    proposed: str, registry_path: str, profile: str, candidate: str, root: str, state_dir: str, shadow_dir: str
+    proposed: str,
+    registry_path: str,
+    profile: str,
+    candidate: str,
+    root: str,
+    state_dir: str,
+    shadow_dir: str,
+    data_root: str,
 ) -> None:
     """What `apply` would do, asked of the same gate, without touching the file."""
-    admission = _admission(
-        registry_path, Path(proposed).read_text(encoding="utf-8"), Path(root).resolve(), state_dir, shadow_dir
-    )
+    text = Path(proposed).read_text(encoding="utf-8")
+    admission = _admission(registry_path, text, Path(root).resolve(), state_dir, shadow_dir, profile)
     click.echo(
         f"admission: {'ALLOWED' if admission.allowed else 'REFUSED'} "
         f"(promoting: {', '.join(admission.promoting) or 'nothing'})",
@@ -394,10 +431,7 @@ def plan_cmd(
     _report_admission(admission)
     # No `_log_admission` here: a dry run is not a ruling.  See that function's docstring.
     transaction = plan_transaction(
-        Path(registry_path),
-        Path(proposed).read_text(encoding="utf-8"),
-        gate=_gate(profile),
-        candidate=candidate or Path(proposed).name,
+        Path(registry_path), text, gate=_gate(profile, data_root), candidate=candidate or Path(proposed).name
     )
     click.echo(json.dumps(json.loads(transaction.to_json()), indent=2, ensure_ascii=False))
     if transaction.reasons or not admission.allowed:
@@ -640,8 +674,13 @@ def divergence_cmd(root: str, since_at: str, check: bool) -> None:
 @governance.command("canary")
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The soak's state directory.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop, as the baseline.")
-@click.option("--gate-refusals", default=0, show_default=True, help="Startup-gate refusals the soak itself saw.")
-def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
+@click.option(
+    "--remaining",
+    "ask_remaining",
+    is_flag=True,
+    help="Print how many cycles the latest round still needs (0 = finished) and exit.  run_shadow.sh asks this.",
+)
+def canary_cmd(shadow_dir: str, state_dir: str, ask_remaining: bool) -> None:
     """L4 / DL-G5: score a finished shadow soak against the armed loop over the same window.
 
     The soak is `deploy/run_shadow.sh`; this is the half that reads it.  Until 2026-09-09 there was no
@@ -651,13 +690,29 @@ def canary_cmd(shadow_dir: str, state_dir: str, gate_refusals: int) -> None:
     Deployment health only (KILL-AR-04).  A candidate that passes has been shown to deploy, not to
     have edge; a candidate that fails has hit a wiring or venue problem, and reading that as evidence
     against the sleeve is the mistake this command's own docstring exists to prevent.
+
+    Only the latest round is scored; earlier ones are listed and left alone (`canary.rounds`).  The
+    launcher's `--remaining` reads the same cut, so the two cannot disagree about where a soak ends.
     """
     shadow = _shadow_rows(shadow_dir)
+    if ask_remaining:
+        click.echo(remaining(shadow))
+        return
     baseline = _rows(Path(state_dir) / "cycles.jsonl")
     if not shadow:
         looked = store_directory(Path(shadow_dir), dry_run=True)
         raise click.ClickException(f"no shadow record at {looked}/cycles.jsonl; run deploy/run_shadow.sh first")
-    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals, aliases=CONSTRUCTION_ALIASES)
+    cut, first = rounds(shadow), 1
+    for index, soak in enumerate(cut, 1):
+        bars = [str(row["bar"])[:16] for row in soak if row.get("bar")] or ["?"]
+        errors = sum(row.get("phase") == "ERROR" for row in soak)
+        role = "scored below" if index == len(cut) else "not scored"
+        click.echo(
+            f"round {index}: rows {first}-{first + len(soak) - 1}, bars {bars[0]}..{bars[-1]}, "
+            f"{sum(map(attempted, soak))} cycles, {errors} ERROR, {role}"
+        )
+        first += len(soak)
+    result = evaluate_canary(shadow, baseline, aliases=CONSTRUCTION_ALIASES)
     for check in result.checks:
         click.echo(f"{'PASS' if check.passed else 'FAIL'}  {check.name:22s} {check.detail}")
     click.echo(f"{'HEALTHY' if result.healthy else 'UNHEALTHY'}  {result.soaked} cycles soaked")
@@ -693,6 +748,7 @@ def disable_cmd(root: str) -> None:
 @click.option("--root", default=".", help="Checkout holding the switch and the transaction log.")
 @click.option("--state-dir", default=".beidou/live", show_default=True, help="The armed loop's record.")
 @click.option("--shadow-dir", default=".beidou/live-shadow", show_default=True, help="The canary's record.")
+@click.option("--data-root", default=".beidou/data", show_default=True, help="The data `live run` checks against.")
 @click.option("--actor", default="machine", show_default=True, help="Who initiated this; recorded in the log.")
 def apply_cmd(
     proposed: str,
@@ -702,6 +758,7 @@ def apply_cmd(
     root: str,
     state_dir: str,
     shadow_dir: str,
+    data_root: str,
     actor: str,
 ) -> None:
     """Write the registry as a transaction, rolling back if the startup gate refuses.
@@ -717,7 +774,7 @@ def apply_cmd(
             "turns it on; `governance plan` shows what this would do without it."
         )
     text = Path(proposed).read_text(encoding="utf-8")
-    admission = _admission(registry_path, text, checkout, state_dir, shadow_dir)
+    admission = _admission(registry_path, text, checkout, state_dir, shadow_dir, profile)
     _log_admission(checkout, admission, candidate or Path(proposed).name)
     if not admission.allowed:
         _report_admission(admission)
@@ -729,7 +786,7 @@ def apply_cmd(
     transaction = apply_transaction(
         Path(registry_path),
         text,
-        gate=_gate(profile),
+        gate=_gate(profile, data_root),
         log_path=checkout / TRANSACTIONS,
         candidate=candidate or Path(proposed).name,
         actor=actor,

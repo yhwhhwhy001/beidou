@@ -39,6 +39,7 @@ from beidou_alpha.panel import Panel
 from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals import register as register_signal
+from beidou_cli.research_feature_store import with_feature_store
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import SPOT_KLINE_KIND, FundingStore, KlineStore, MetricsStore
 from beidou_live.composition import load_panel, load_registry, portfolio_params, read_universe
@@ -133,8 +134,11 @@ def _entry(strategy: str, registry_path: str, params: str, grids: str = "") -> S
 def _model(entry: StrategyEntry, profile: dict[str, Any], interval: str, min_history: int | None = None) -> AlphaModel:
     if min_history is None:
         min_history = int((profile.get("portfolio", {}) or {}).get("min_history_bars", 720))
-    return AlphaModel(
-        entries=(entry,), portfolio=portfolio_params(profile), interval=interval, min_history_bars=min_history
+    # `with_feature_store` is the identity unless BEIDOU_FEATURE_STORE is set (research only, #9.6).
+    return with_feature_store(
+        AlphaModel(
+            entries=(entry,), portfolio=portfolio_params(profile), interval=interval, min_history_bars=min_history
+        )
     )
 
 

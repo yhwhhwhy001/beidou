@@ -34,7 +34,7 @@ from beidou_governance.policy import Policy, policy_digest
 from beidou_live import soak
 from beidou_live.account_shape import margin_mode_problems
 from beidou_live.alerts import WebhookAlerts
-from beidou_live.attribution import attribute, external_flows
+from beidou_live.attribution import attribute, external_flows, summarize_income
 from beidou_live.construction import CONSTRUCTION_PAYLOAD_VERSION
 from beidou_live.execution import ExecutionReport, execute_order
 from beidou_live.exits import ExitOverlay
@@ -65,6 +65,15 @@ logger = logging.getLogger(__name__)
 # The public kline endpoint serves at most this many bars per request.  A model that needs more must fail loudly at
 # startup instead of trading on a silently truncated window (E-042: 817 bars for a 720-bar horizon).
 MAX_HISTORY_BARS = 1500
+
+# How far behind venue-now the funding window ends (2026-09-27).  The venue stamps a FUNDING_FEE row at
+# the settlement and publishes it later; the cycle asks for income ~27 s after the hour (20-40 s).  From
+# 09-15 to 09-27, 36 settlements queried 24-40 s after owed 507 rows and recorded 6 (BTCUSDT, 24-28 s),
+# while queries 175 s and 259 s after one (09-03T08, 09-04T08) and one an hour late (09-23T16) recorded
+# all of theirs: 12, 10 and 13, i.e. every row of those two was visible within 175 s and 259 s.  The lag
+# must exceed the slowest publication; ten minutes is over twice the looser bound.  That the delay is
+# the cause is inferred - no keyed `incomeType=FUNDING_FEE` reconciliation has confirmed it yet.
+FUNDING_SETTLE_LAG_MS = 10 * 60 * 1000
 
 
 class StopRequested:
@@ -247,7 +256,12 @@ class LiveEngine:
         # them: `cycles.jsonl` and `heartbeat.json` carry a digest and nothing else, a digest does not
         # invert, and the startup heartbeat that does hold the payload is overwritten by the next start.
         # A construction can only change at startup (the engine builds its model once - KILL-Q15), so
-        # writing it on this process's first cycle records every change exactly once.
+        # writing it on this process's first completed cycle row records every change exactly once.
+        # `_finish_cycle` sets this right after `append_cycle`.  Set when `run_cycle` built the row, a
+        # cycle that then failed (orders out, `_quarantine` raising) left an ERROR row without the
+        # payload and a flag saying it was written; set after the heartbeat, a heartbeat that failed
+        # would let the next row write it twice.  Not onto the ERROR row: `report_common._cycles` drops
+        # rows with no equity, and `_liquidity_to_close` would read the previous process's knobs.
         self._construction_recorded = False
         # The cycle currently in flight, for the ERROR path to read.  None between cycles.
         self._cycle_record: dict[str, Any] | None = None
@@ -909,7 +923,6 @@ class LiveEngine:
         # The same object the rest of this method mutates.  `guarded_cycle` reads it when a cycle
         # raises, so an ERROR row can carry the decisions already taken instead of asserting none.
         self._cycle_record = record
-        self._construction_recorded = True
         await self._announce_guards(decision, bar_open_ms)
         # M-Q06.  Before the skip check on purpose: a book approaching liquidation while a guard has
         # stopped it trading is exactly the state an operator needs told about, and it is the state in
@@ -1030,17 +1043,32 @@ class LiveEngine:
         the completion order was), so the record is the same sequence at any concurrency.
 
         Turning it on is a wiring decision, taken outside this file.
+
+        Two rules hold at any concurrency (2026-09-25).  Reductions are sent first: they free margin,
+        and they are the orders a bar can least afford to lose.  And one order raising no longer
+        cancels the orders behind it: the serial path used to stop at the first raise, so a 503 that
+        outlasted the retries of one order's pre-submit query kept every order planned after it -
+        exits included - from being sent.  Both paths now send everything, record what came back, and
+        only then re-raise the first failure, so the ERROR row still says the cycle failed.
         """
+        orders = sorted(orders, key=lambda order: not order.reduce_only)
         if self.config.dry_run:
             for order in orders:
                 record["orders"].append({**order.to_dict(), "status": "DRY_RUN"})
             return []
         if self.order_concurrency <= 1 or len(orders) < 2:
             reports: list[ExecutionReport] = []
+            failure: Exception | None = None
             for order in orders:
-                report = await self._place(order)
+                try:
+                    report = await self._place(order)
+                except Exception as exc:
+                    failure = failure or exc
+                    continue
                 reports.append(report)
                 self._record_fill(report, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
+            if failure is not None:
+                raise failure
             return reports
         gate = asyncio.Semaphore(self.order_concurrency)
 
@@ -1468,6 +1496,14 @@ class LiveEngine:
         it was earned, which is exactly the corruption M-010 cannot tolerate.  The first cycle after this
         change queries from the old host-basis watermark to venue-now, one wider window that recovers the
         gap; from then on the watermark is venue-basis and the window is contiguous.
+
+        FUNDING_FEE rows are the exception (2026-09-27).  The venue stamps them at the settlement and
+        publishes them later, and this window starts where the last one ended, so a row stamped before
+        that and published after it was never asked for again: 6 of 507 recorded over 36 settlements.
+        They are read from a window that trails this one by `FUNDING_SETTLE_LAG_MS` instead
+        (`_settled_funding`), and one stamped before `since` was paid by the book BEFORE
+        `last_contributions` - the cycle in between has traded - so it is credited to that book, under
+        its bar, in a record of its own (`_late_funding_record`).
         """
         now = self.venue_now_ms()
         # Reachable when a cycle runs without `startup` having asked first (`run_cycle` is called
@@ -1476,23 +1512,36 @@ class LiveEngine:
         lost = self._income_watermark_lost or await self._note_lost_income_watermark()
         self._income_watermark_lost = None
         since = self.state.last_income_ms or now
+        if self.state.last_funding_ms is None or lost is not None:
+            # A state.json from before the lagged window, or a first start: begin at `since` and never
+            # before it - the old window already read every row that was visible to it, and reading them
+            # again counts them twice.  After A3 the main window restarts at now, and a funding watermark
+            # left behind would credit the whole outage's funding to the book held before it.
+            self.state.last_funding_ms = since
         if since > now:
             # The watermark is in the future, so [since, now] would be rejected with -1023 and abort the
             # whole cycle before it can trade; moving the watermark back would silently drop the income in
             # between.  Skip ingestion for this cycle, keep the watermark, and let the cycle trade.  Reached
             # on 2026-09-04 when the host clock moved backwards by 3,612 s, and still reachable now that the
             # window is venue-basis: the venue's clock can move too, and a venue that cannot be reached
-            # falls this back to the host's.
+            # falls this back to the host's.  The funding window is skipped with it, both watermarks kept.
             skew = since - now
             logger.warning("income watermark is %d ms ahead of the clock; skipping ingestion this cycle", skew)
             return {"total": 0.0, "rows": 0, "by_type": {}, "rebaselined": False, "clock_skew_ms": skew}
         rows = await self.venue.income(since, now)
+        late, current, window = await self._settled_funding(since, now)
         flows = external_flows(rows)
         flows["rebaselined"] = False
-        if rows and self.state.last_contributions:
+        if window is not None:
+            flows["funding_window"] = window
+        late_record = self._late_funding_record(late, since)
+        records: list[dict[str, Any]] = [] if late_record is None else [late_record]
+        # Every other type exactly as before; this window's own FUNDING_FEE rows are the lagged one's.
+        charged = [row for row in rows if row.get("incomeType") != "FUNDING_FEE"] + current
+        if charged and self.state.last_contributions:
             own_trade_ids = await self._own_trade_ids(since, now)
             result = attribute(
-                rows, self.state.last_contributions, self.config.strategy_weights, own_trade_ids=own_trade_ids
+                charged, self.state.last_contributions, self.config.strategy_weights, own_trade_ids=own_trade_ids
             )
             foreign = result["foreign"]
             if foreign["rows"]:
@@ -1508,10 +1557,16 @@ class LiveEngine:
                     f"（{', '.join(sorted(foreign['by_symbol'])) or '无标的'}），已排除在策略归因之外"
                 )
             if result["by_symbol"] or foreign["rows"]:
-                self.store.append_attribution(
+                records.append(
                     {"bar_open_ms": self.state.last_bar_ms or bar_open_ms, "since_ms": since, "until_ms": now, **result}
                 )
+        for record in records:  # nothing is written until both windows answered; the older bar goes first
+            self.store.append_attribution(record)
         self.state.last_income_ms = now
+        if window is not None:
+            self.state.last_funding_ms = window["until_ms"]
+        self.state.income_prev_contributions = {k: dict(v) for k, v in self.state.last_contributions.items()}
+        self.state.income_prev_bar_ms = self.state.last_bar_ms or bar_open_ms
         if flows["rows"] > 0:
             flows["rebaselined"] = True
             logger.warning(
@@ -1531,6 +1586,63 @@ class LiveEngine:
         if lost is not None:
             flows["watermark_lost"] = lost
         return flows
+
+    async def _settled_funding(
+        self, since: int, now: int
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int] | None]:
+        """FUNDING_FEE rows of ``(last_funding_ms, now - FUNDING_SETTLE_LAG_MS]``: (late, current, window).
+
+        Late is stamped before ``since``, so paid by the book before `last_contributions`; current is
+        the main window's own book.  The same endpoint filtered here rather than by ``incomeType``, so
+        the port, the paper venue and every fake keep one signature; the other types it returns were
+        the main window's, read when it was their turn.  Half-open because `/fapi/v1/income` includes
+        both ends and consecutive windows share one: a row on it belongs to exactly one.  A row whose
+        stamp cannot be read stays with the current book rather than being dropped.
+
+        Not caught: nothing has been written or moved yet, so a failure here costs this cycle and loses
+        nothing.  Skipping the window instead would leave the funding watermark two books behind the
+        main one, and a single previous book could no longer say who paid.  That limit holds anyway
+        when two ingestions land less than the lag apart (a restart's ``--immediate`` cycle re-running
+        a bar that was just traded): the older part of the stretch is then credited to the newer book,
+        still counted once, one bar late.
+        """
+        start, until = int(self.state.last_funding_ms or since), now - FUNDING_SETTLE_LAG_MS
+        if until <= start:
+            return [], [], None
+        late: list[dict[str, Any]] = []
+        current: list[dict[str, Any]] = []
+        for row in await self.venue.income(start, until):
+            if row.get("incomeType") != "FUNDING_FEE":
+                continue
+            try:
+                stamp: int | None = int(row["time"])
+            except (KeyError, TypeError, ValueError):
+                stamp = None
+            if stamp is not None and not start < stamp <= until:
+                continue
+            (late if stamp is not None and stamp < since else current).append(row)
+        return late, current, {"since_ms": start, "until_ms": until, "rows": len(late) + len(current)}
+
+    def _late_funding_record(self, late: list[dict[str, Any]], since: int) -> dict[str, Any] | None:
+        """Funding stamped before ``since``, credited to the book that held the position when it was paid.
+
+        That is the book the previous ingestion charged its window to (`income_prev_*`), and its bar is
+        where these rows would have landed had they been visible in time.  ``own_trade_ids`` is the
+        empty set, not None: funding carries no tradeId, so D-032's split never consults it and every
+        row stays with the book - and ``reconciled`` says the split is complete, rather than reading as
+        a userTrades call that failed.  With no previous book (a first start) nothing held the position,
+        which is how the main window treats a cycle without contributions: not credited, but said.
+        """
+        if not late:
+            return None
+        book, bar = self.state.income_prev_contributions, self.state.income_prev_bar_ms
+        if not book or bar is None:
+            summed = sum(bucket["total"] for bucket in summarize_income(late).values())
+            logger.warning("%d funding row(s), %+.4f USDT, paid before this loop held a book", len(late), summed)
+            return None
+        result = attribute(late, book, self.config.strategy_weights, own_trade_ids=frozenset())
+        start = int(self.state.last_funding_ms or since)
+        return {"bar_open_ms": bar, "since_ms": start, "until_ms": since, "late_funding": True, **result}
 
     async def _risk_ladder(self, bar_open_ms: int) -> dict[str, Any]:
         """R8 / DL-G7: de-escalate the book on ATTRIBUTED drawdown, after two cycles of grace.
@@ -1741,6 +1853,9 @@ class LiveEngine:
         if self.rebalance_window is not None:
             record["window_seconds"] = self.rebalance_window
         self.store.append_cycle(record)
+        # DL-G9: on disk now, and not a line earlier - see `_construction_recorded` for both directions.
+        if "construction_full" in record:
+            self._construction_recorded = True
         self.store.heartbeat(
             {
                 "phase": "SKIPPED" if record["skip"] else "OK",

@@ -24,11 +24,18 @@ stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 #
 # It now calls the same `WebhookAlerts` the loop uses rather than hand-rolling a third copy: one
 # implementation of "which shape does this provider read" and "did it actually take the message".
+#
+# Both channels, as the loop and `report daily` already do (DL-L3: one URL is a single point of
+# silence).  Until 2026-09-25 this job passed the first URL alone, so a dead first channel silenced the
+# one job that says THE LOOP IS DOWN, while the loop's own alerts still reached the second.  The URLs
+# reach python through its environment rather than its argv: argv is readable by every user on the
+# machine through `ps` for as long as a send takes.
 notify() {
   echo "[$(stamp)] FAIL $1: $2"
-  if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}" ]; then
-    "$REPO/.venv/bin/python" -c '
-import asyncio, sys
+  if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}${BEIDOU_ALERTS_WEBHOOK_URL_2:-}" ]; then
+    BEIDOU_ALERTS_WEBHOOK_URL="${BEIDOU_ALERTS_WEBHOOK_URL:-}" BEIDOU_ALERTS_WEBHOOK_URL_2="${BEIDOU_ALERTS_WEBHOOK_URL_2:-}" \
+      "$REPO/.venv/bin/python" -c '
+import asyncio, os, sys
 from pathlib import Path
 from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
 # DL-L3 same-source dedup.  KILL-R7 counted 36 identical FAIL lines over 36 hours and they came from
@@ -40,10 +47,15 @@ from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
 # file of its own ($4).  `_save_state` writes back only the rows its own window kept, so any hourly
 # caller that saves the shared file drops every row older than an hour: a daily row kept there would
 # last only until the next hourly FAIL.  With neither argument this is the hourly window, as before.
-window = float(sys.argv[5]) if sys.argv[5] else HOURLY_CALLER_WINDOW_SECONDS
-alerts = WebhookAlerts(sys.argv[1], state_path=Path(sys.argv[4]), dedup_window_seconds=window)
-sys.exit(0 if asyncio.run(alerts.send(sys.argv[2], key=sys.argv[3])) else 1)
-' "$BEIDOU_ALERTS_WEBHOOK_URL" "北斗巡检失败（$1）：$2" "check-$1" "${4:-$SUPPORT/alert-dedup.json}" "${3:-}" \
+window = float(sys.argv[4]) if sys.argv[4] else HOURLY_CALLER_WINDOW_SECONDS
+alerts = WebhookAlerts(
+    os.environ["BEIDOU_ALERTS_WEBHOOK_URL"],
+    secondary_url=os.environ["BEIDOU_ALERTS_WEBHOOK_URL_2"],
+    state_path=Path(sys.argv[3]),
+    dedup_window_seconds=window,
+)
+sys.exit(0 if asyncio.run(alerts.send(sys.argv[1], key=sys.argv[2])) else 1)
+' "北斗巡检失败（$1）：$2" "check-$1" "${4:-$SUPPORT/alert-dedup.json}" "${3:-}" \
       || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }
@@ -59,9 +71,22 @@ reading() {
   printf ' (max_contribution_diff %s)' "$(printf '%s' "$2" | "$REPO/.venv/bin/python" -c \
     'import json,sys; print(json.load(sys.stdin)["max_contribution_diff"])' 2>/dev/null || echo '?')"
 }
+# The loop writes its heartbeat about 30s after each bar closes (p50 27s, max 50s over the 14 days to
+# 2026-09-25) and this job runs at :10, so a healthy heartbeat is about 570s old here.  An ERROR cycle
+# writes one too, so only a loop that is dead, hung past :10 or on a sleeping machine lets it age - and
+# one bar it did not live to write puts it near 4,170s.  `live status --check` defaults to two bars
+# (7,200s), which left a dead loop unpaged until the SECOND :10: two bars without an exit check.
+HEARTBEAT_MAX_AGE_SECONDS=4000
+live_check() {
+  if [ "$1" = status ]; then
+    "$REPO/.venv/bin/beidou" live status --check --max-age-seconds "$HEARTBEAT_MAX_AGE_SECONDS"
+  else
+    "$REPO/.venv/bin/beidou" live "$1" --check
+  fi
+}
 failed=0
 for check in status verify; do
-  if output="$("$REPO/.venv/bin/beidou" live "$check" --check 2>&1)"; then
+  if output="$(live_check "$check" 2>&1)"; then
     echo "[$(stamp)] ok   $check$(reading "$check" "$output")"
   else
     failed=1

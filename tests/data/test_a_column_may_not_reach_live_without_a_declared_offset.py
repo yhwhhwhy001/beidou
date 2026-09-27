@@ -25,6 +25,7 @@ from beidou_data.alignment import (
     CONTRACTS,
     FAIL,
     METRICS,
+    METRICS_TAKER,
     PASS,
     SPOT,
     SPOT_BASIS_COLUMN,
@@ -320,7 +321,11 @@ def test_every_foreign_column_that_can_reach_the_panel_is_declared() -> None:
     """
     declared = set(VALUE_COLUMNS) | set(SPOT_COLUMNS)
     assert set(CONTRACTS) == declared, "every column a feed can put on the panel, and nothing else"
-    assert all(contract_for(column) is METRICS for column in VALUE_COLUMNS)
+    # 2026-09-27: one metrics column carries its own contract, because its page stamps the bucket OPEN.
+    assert {column: contract_for(column) for column in VALUE_COLUMNS} == {
+        **dict.fromkeys(VALUE_COLUMNS, METRICS),
+        "sum_taker_long_short_vol_ratio": METRICS_TAKER,
+    }
     assert all(contract_for(column) is SPOT for column in SPOT_COLUMNS)
     # Derived, not listed: a sixth spot field would otherwise be carried by `Panel` and unknown to
     # `CONTRACTS` - which fails safe, and invisibly.
@@ -370,7 +375,7 @@ def test_the_contract_and_metrics_parity_reach_the_same_verdict_on_the_same_buck
     correct = metrics_parity(parse_rest_rows(rest_rows, FIVE_MIN_MS), archive)
     naive = metrics_parity(parse_rest_rows(rest_rows, 0), archive)
 
-    assert correct == {"overlapping": 60, "differing": 0, "rate": 0.0}
+    assert correct == {"overlapping": 60, "differing": 0, "rate": 0.0, "through": opens[-1]}
     assert naive["rate"] == 1.0 and naive["differing"] == naive["overlapping"] == 59
     assert verify_stamp_offset(METRICS, _archive_sample(), _rest_sample()).verdict == PASS
     assert (

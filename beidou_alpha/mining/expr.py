@@ -495,6 +495,14 @@ class LongShortRatio(Expr):
         return f"lsr({self.window})"
 
 
+#: The leaves that read `panel.metrics`, and so the columns M-011 vouches for before a candidate reading
+#: one may queue (`beidou_live.report_data`, operator ruling 2026-09-27).  Listed rather than discovered;
+#: a test holds that no other node defines `reads_metrics`, since a leaf missing here would reach live on
+#: a column M-011 never compared.
+METRICS_LEAVES = (OpenInterest, LongShortRatio)
+METRICS_COLUMNS: tuple[str, ...] = tuple(leaf.COLUMN for leaf in METRICS_LEAVES)
+
+
 @dataclass(frozen=True)
 class Basis(Expr):
     """DL-D5, block 2: ``log(perp_close / spot_close)`` on the SAME bar - how rich the perpetual is.

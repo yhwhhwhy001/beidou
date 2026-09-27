@@ -138,6 +138,7 @@ CLI 改动，等四个目标排完序再决定值不值得。
 | probe 的 `stop` | 日报「Probe books (D-019)」 | 越线时引擎自动停掉这本书 |
 | M-005、beta、M-014 | 日报「Exits and pool (M-005 / M-006)」「Market beta (D-045, reported only)」「Probe correlation (M-014)」 | 不告警，只印在日报里 |
 | 持仓间相关、平仓流动性、逐单 TCA、多因子载荷（同日合入，#138–#141） | 日报「Holdings correlation (#3.4 / #8.9, reported only)」「Liquidity to close (#3.9, reported only)」「Per-order TCA (#10.9 / #10.10, reported only)」「Factor loadings (#6.4 / #6.9, reported only)」 | 不告警，只印在日报里 |
+| 事件风险：稳定币脱锚、交易所事故、极端行情（2026-09-25 起） | 日报「Event risk (#8.10, reported only)」；`report_events.event_risk` | 不告警，只印在日报里 |
 
 只提示、只印的读数不会叫醒任何人。症状落在这类仪器上，要写谁来读、多久读一次。
 

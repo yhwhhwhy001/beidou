@@ -91,7 +91,9 @@ def leg_split(store: StateStore, *, since_ms: int | None, equity: float | None) 
         if isinstance(bar, int | float):
             targets_at[int(bar)] = {str(k): float(v) for k, v in (row.get("targets") or {}).items()}
     legs: dict[str, float] = {"long": 0.0, "short": 0.0, "flat": 0.0}
-    counts: dict[str, int] = {"long": 0, "short": 0, "flat": 0}
+    # Distinct (bar, symbol) pairs, not rows: since 2026-09-27 a bar whose book paid funding carries a
+    # second, `late_funding` row, and a symbol that also traded that bar would otherwise count twice.
+    seen: dict[str, set[tuple[int, str]]] = {"long": set(), "short": set(), "flat": set()}
     for row in store.read_jsonl(store.attribution_path):
         bar = row.get("bar_open_ms")
         if not isinstance(bar, int | float) or (since_ms is not None and int(bar) < since_ms):
@@ -105,8 +107,8 @@ def leg_split(store: StateStore, *, since_ms: int | None, equity: float | None) 
             weight = targets.get(str(symbol), 0.0)
             side = "long" if weight > 0 else ("short" if weight < 0 else "flat")
             legs[side] += total
-            counts[side] += 1
-    out: dict[str, Any] = {"pnl": legs, "symbol_bars": counts}
+            seen[side].add((int(bar), str(symbol)))
+    out: dict[str, Any] = {"pnl": legs, "symbol_bars": {side: len(pairs) for side, pairs in seen.items()}}
     if equity and equity > 0:
         out["pnl_pct"] = {side: value / equity for side, value in legs.items()}
     return out
@@ -978,7 +980,15 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
     # Carried on every path, refusals included: it is the number the operator came here to look at,
     # and "the venue is at one leverage for all 15 symbols" is a fact even on a day with no sigma.
     distinct_leverage = len(set(leverage.values()))
-    refused = {"enforced": False, "rows": [], "leverage_distinct": distinct_leverage}
+    refused = {
+        "enforced": False,
+        "rows": [],
+        "leverage_distinct": distinct_leverage,
+        # For `plain_leverage_lines`: the venue values its sentence names, and D3's floor, which splits
+        # the rows below into what the book holds and what the minimum-position rule keeps flat.
+        "leverage_values": sorted(set(leverage.values())),
+        "min_position": min_position_of(store),
+    }
     if not cycles:
         return {**refused, "reason": f"no cycles on {day}"}
     last = cycles[-1]
@@ -1058,11 +1068,38 @@ def risk_adaptation(store: StateStore, day: str) -> dict[str, Any]:
         "limit": RISK_COMPRESSION_LIMIT,
         "status": "ALERT" if compression is not None and compression > RISK_COMPRESSION_LIMIT else "OK",
         "leverage_distinct": distinct_leverage,
+        "leverage_values": refused["leverage_values"],
+        "min_position": refused["min_position"],
         # D-046: one of the four honest causes this docstring lists, turned from a possibility into a
         # reading.  See `weight_cap_bindings`.
         "weight_cap": weight_cap_bindings(cycles, max_weight_of(store)),
         "rows": rows,
     }
+
+
+def min_position_of(store: StateStore) -> float | None:
+    """D3's floor as a fraction of equity, off the newest construction the loop recorded.
+
+    With `flat_inside_band` on, `rebalancer.plan_rebalance` takes a target flat when its notional is
+    under `no_trade_band x band_entry_multiple` of equity, so a name with a target below that is not
+    held.  Read from the record for `max_weight_of`'s reason: the rule the running loop applies, not the
+    file's.  ``None`` when no cycle carries a construction, or the newest one has the rule off.
+    """
+    latest: float | None = None
+    for row in store.read_jsonl(store.cycles_path):
+        full = row.get("construction_full")
+        if not isinstance(full, Mapping):
+            continue
+        rebalance = full.get("rebalance") or {}
+        band, multiple = rebalance.get("no_trade_band"), rebalance.get("band_entry_multiple", 1.0)
+        latest = None
+        if (
+            rebalance.get("flat_inside_band") is True
+            and isinstance(band, int | float)
+            and isinstance(multiple, int | float)
+        ):
+            latest = float(band) * float(multiple)
+    return latest
 
 
 def max_weight_of(store: StateStore) -> float | None:
@@ -1153,6 +1190,7 @@ def latest_risk_adaptation(store: StateStore) -> dict[str, Any]:
             "rows": [],
             "reason": "no cycles recorded",
             "leverage_distinct": len(set(leverage.values())),
+            "leverage_values": sorted(set(leverage.values())),
         }
     return risk_adaptation(store, day)
 
@@ -1186,6 +1224,59 @@ def risk_adaptation_headline(block: Mapping[str, Any]) -> str:
         f"杠杆自适应（M-015）：第一层定价吸收了市场波动离散度的 {1.0 - float(compression):.0%}"
         f"（压缩度 {float(compression):.2f}，{reading}读法，超 {limit:.2f} 告警；{verdict}）；{venue}"
     )
+
+
+def plain_leverage_lines(block: Mapping[str, Any]) -> list[str]:
+    """The same question in the operator's words, for `live status` and the daily report alike.
+
+    2026-09-26, the sixth time "every position is at 5x, nothing tells them apart" came back.  The two
+    answers above it are true and are written in the system's words - "stage 1 absorbs 91% of the
+    market's dispersion", "carries no risk here (D-037)" - and neither prints the number the question is
+    about: each holding's own leverage.  So the uniform 5x stayed the only per-symbol leverage on screen.
+    This states three facts instead: what the venue number does, each holding's real leverage with its
+    volatility and risk share, and which names D3's floor keeps flat.  From 2026-10-13 (k 0.175) that
+    last list holds the four most volatile names, and a book that quietly loses its wildest names is the
+    seventh question (`docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md`, RISK-009).
+
+    One record, one ruler: the rows are M-015's own - the newest cycle's targets as fractions of total
+    equity, collateral included - so these numbers cannot disagree with the reading printed beside them.
+    A target is what the loop steers to this bar, and the no-trade band lets a position sit away from it.
+    The risk share is |weight| x sigma over the names held, and ignores the correlation between them.
+    """
+    values = [int(value) for value in block.get("leverage_values") or []]
+    venue = (
+        "交易所杠杆尚未设置"
+        if not values
+        else f"交易所那一栏的 {values[0]}x 只决定开仓占用多少保证金（名义的 1/{values[0]}），不决定盈亏，也不决定强平"
+        if len(values) == 1
+        else f"交易所那一栏的 {values[0]}x–{values[-1]}x 只决定开仓占用多少保证金，不决定盈亏，也不决定强平"
+    )
+    floor = block.get("min_position")
+    rows = [row for row in block.get("rows") or [] if row.get("weight")]
+    below = [row["symbol"] for row in rows if isinstance(floor, int | float) and abs(row["weight"]) < floor]
+    held = sorted((row for row in rows if row["symbol"] not in below), key=lambda row: -abs(row["weight"]))
+    lines = [f"真实杠杆（白话）：本轮没有读得出的持仓；{venue}"]
+    if held:
+        risk = sum(row["risk"] for row in held)
+        shares = [row["risk"] / risk for row in held]
+        lines = [
+            f"真实杠杆（白话）：{venue}。决定盈亏的是真实杠杆 = 目标名义 ÷ 账户权益，逐个币按波动率定，"
+            "波动越大拿得越少（按本周期目标；实际持仓在不交易带内可能略有出入）",
+            *(
+                f"{row['symbol']}：年化波动 {row['annual_vol']:.0%}，真实杠杆 {abs(row['weight']):.3f}x，"
+                f"风险份额 {share:.1%}"
+                for row, share in zip(held, shares, strict=True)
+            ),
+            f"合计 {len(held)} 个持仓，真实杠杆合计 {sum(abs(row['weight']) for row in held):.2f}x；"
+            f"最高的 {held[0]['symbol']} 是最低的 {held[-1]['symbol']} 的 "
+            f"{abs(held[0]['weight']) / abs(held[-1]['weight']):.1f} 倍，风险份额在 {min(shares):.1%}–{max(shares):.1%} 之间",
+        ]
+    if below:
+        lines.append(
+            f"不持有 {len(below)} 个：{'、'.join(below)}。目标不到权益的 {float(floor or 0.0):.1%}，按最小仓位规则"
+            "（D3）不开仓：这么小的仓位日后会被不交易带卡住、平不掉"
+        )
+    return lines
 
 
 def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:

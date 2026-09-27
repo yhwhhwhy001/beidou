@@ -102,10 +102,18 @@ def attribution_coverage(store: StateStore) -> dict[str, Any]:
     Reported, never enforced.  It carries no threshold and `report daily --check` must not learn to
     exit non-zero on it: the first version of this reading would have called 31 gaps a fault.  When
     it cannot be computed it says so and returns no number (D-035) - above all it never reads 1.0.
+
+    Rows flagged ``late_funding`` (2026-09-27) are left out entirely, from the counts too.  Their window
+    is the tail of a stretch the main window already queried, read again ten minutes later for
+    FUNDING_FEE alone (`engine.FUNDING_SETTLE_LAG_MS`), so every one of them would read here as an
+    "overlap" that double counted nothing.  The chain this reads is the main watermark's; the funding
+    watermark trails it by the lag, and A3 re-anchors the two together.
     """
     windows: list[tuple[int, int]] = []
     unreadable = 0
     for row in store.read_jsonl(store.attribution_path):
+        if row.get("late_funding"):
+            continue
         since, until = row.get("since_ms"), row.get("until_ms")
         if not isinstance(since, int | float) or not isinstance(until, int | float) or until < since:
             unreadable += 1
@@ -196,6 +204,11 @@ def _series_by_strategy(store: StateStore, since_ms: int | None) -> dict[str, li
 
     The grid is bounded by the attribution record's own span.  Zero-filling back to the first cycle
     would assert "no income" over a period when nothing was writing income rows at all.
+
+    A bar's rows are SUMMED.  Since 2026-09-27 a bar has a second row whenever funding settled under
+    its book: that funding is read a cycle later (`engine.FUNDING_SETTLE_LAG_MS`) and written under the
+    bar that paid it, flagged ``late_funding``.  This was an assignment until then, so the later row
+    replaced the earlier one - and a restart whose ``--immediate`` cycle re-runs a bar writes two too.
     """
     attributed: dict[str, dict[int, float]] = {}
     covered: list[int] = []
@@ -206,7 +219,8 @@ def _series_by_strategy(store: StateStore, since_ms: int | None) -> dict[str, li
         covered.append(int(bar))
         for strategy, value in (row.get("by_strategy") or {}).items():
             try:
-                attributed.setdefault(str(strategy), {})[int(bar)] = float(value)
+                bars = attributed.setdefault(str(strategy), {})
+                bars[int(bar)] = bars.get(int(bar), 0.0) + float(value)
             except (TypeError, ValueError):
                 continue
     if not attributed or not covered:

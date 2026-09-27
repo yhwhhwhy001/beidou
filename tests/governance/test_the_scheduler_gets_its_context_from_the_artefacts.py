@@ -18,12 +18,14 @@ the pipeline than the evidence supports.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from click.testing import CliRunner
 
 from beidou_cli.governance_cmd import governance
+from beidou_governance.admission import window_start
 from beidou_governance.lifecycle import Book, Candidate, State
 from beidou_governance.policy import Policy
 from beidou_governance.state import dump
@@ -33,13 +35,18 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _row(param_key: str, *, strategy: str = "tsmom", run_id: str = "r") -> str:
+    """One ledger row, stamped at the opening of the window `governance next` counts on.
+
+    It was the literal 2026-09-05 until 2026-09-27: inside the first window only, so from
+    2026-10-03T00:00Z the spent fixture below spent the previous window and the scheduler said VALIDATE.
+    """
     return json.dumps(
         {
             "strategy": strategy,
             "param_key": param_key,
             "sharpe_annual": 1.0,
             "bars_per_year": 8760.0,
-            "recorded_at": "2026-09-05T00:00:00+00:00",
+            "recorded_at": window_start(Policy(), anchor=ANCHOR).isoformat(),
             "range_start": "a",
             "range_end": "b",
             "symbols": 15,
@@ -253,16 +260,32 @@ def test_an_accepted_book_waits_for_the_parity_status_rather_than_assuming_it(
     assert "next      WAIT" in result.output, result.output
     assert "booked_without_parity" in result.output.split("next      WAIT")[1]
 
+    agreed = {"enforced": True, "symbols_compared": 18, "worst_differing_rate": 0.0}
+    fresh = (datetime.now(UTC) - timedelta(hours=12)).isoformat()
     met = _checkout(
         tmp_path / "met",
         isolated_trials_ledger,
         shortlist=_shortlist(["aa"]),
         reports=reports,
-        daily={"metrics_parity": {"enforced": True, "symbols_compared": 18, "worst_differing_rate": 0.0}},
+        daily={"metrics_parity": {**agreed, "compared_through": fresh}},
     )
     queued = _invoke(met)
     assert "scheduler QUEUE" in queued.output, queued.output
     assert "next      WAIT" not in queued.output
+
+    # 2026-09-27: the same agreement about buckets nobody has refreshed since 2026-09-07 - what every
+    # daily report from 09-09 on actually held - is not parity, and neither is one that does not say.
+    for name, parity in (("frozen", {**agreed, "compared_through": "2026-09-07T23:55:00+00:00"}), ("silent", agreed)):
+        held = _checkout(
+            tmp_path / name,
+            isolated_trials_ledger,
+            shortlist=_shortlist(["aa"]),
+            reports=reports,
+            daily={"metrics_parity": parity},
+        )
+        answer = _invoke(held)
+        assert "scheduler PARITY" in answer.output, (name, answer.output)
+        assert "booked_without_parity    1" in answer.output, (name, answer.output)
 
 
 def test_a_candidate_the_state_already_carries_is_not_scheduled_again(

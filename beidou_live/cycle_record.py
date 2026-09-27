@@ -81,7 +81,7 @@ KEYS: dict[str, str] = {
     "external_flows": "D-021: TRANSFER rows that reset the day and the high-water mark",
     # --- identity of the configuration ---------------------------------------------------------
     "construction": "D-026: digest of the construction this cycle ran",
-    "construction_full": "the full fingerprint, written once per process on the first cycle",
+    "construction_full": "the full fingerprint, once per process, on its first completed row - never an ERROR row",
     "evidence_construction": "DL-G9: the same construction restricted to what a report can describe",
     "governance": "R9: the policy digest, so a threshold change cannot be silent",
     "registry": "DL-Q0: the registry digest the PROCESS holds, which the file may have moved past",

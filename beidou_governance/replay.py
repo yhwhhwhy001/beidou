@@ -59,7 +59,8 @@ class ExceptionEntry:
     covers: tuple[str, ...]  # substrings of the artefacts or reasons this entry accounts for
 
 
-#: The seven rulings Phase 0 was told to account for, plus what each one costs the rule set.
+#: The seven rulings Phase 0 was told to account for, the rulings taken after it, and what each one costs
+#: the rule set.
 EXCEPTIONS: tuple[ExceptionEntry, ...] = (
     ExceptionEntry(
         id="D-019",
@@ -136,6 +137,38 @@ EXCEPTIONS: tuple[ExceptionEntry, ...] = (
         "让机器不能悄悄做同样的事。",
         covers=("max_loss", "vol_target"),
     ),
+    ExceptionEntry(
+        id="16a52547",
+        date="2026-09-19",
+        ruling="tsmom 的 evidence 指针从 `20260913T182325Z`（WEAK_PASS）换到 `20260919T081914Z`（FAIL），"
+        "理由是记账记准。新证据就在当天的成员表上跑，dataset 与磁盘一致；verdict 是诚实的 FAIL。"
+        "两个指针都过不了 armed 启动，只是挡在不同的门上。循环靠 D-041 bridge 照跑。"
+        "`tests/shipped_evidence.py` 的 exemption 只放过这一条精确字符串。它与 bridge 同于 2026-10-13 到期。",
+        rule_conflict="§3 candidate->validated 要求 D-020 的 verdict PASS，也要求过 R0 的分位门。"
+        "这份证据 verdict FAIL，样本外 1.2306，低于 N=167 时的门 1.5129。",
+        why_not_encoded="写成规则就是允许指向 FAIL 证据，等于取消 D-020。这次换指针不改变能否启动，"
+        "只改变由哪道门报出拒绝。「哪份记账更准」是人对两种不过的比较，两份 artefact 上都没有这个字段。"
+        "机器侧的代价照付，exemption 没有覆盖它：registry 不过门，`governance apply` 的写入都会回滚。"
+        "本条按精确文件名，只归因 09-19 这一次采纳。它不随 bridge 到期：采纳是历史，"
+        "到期后还该不该指着它，由启动门与 `shipped_evidence` 管。"
+        "#163 计划在 10-13 之后把指针换到 `20260925T143836Z`（WEAK_PASS）。"
+        "那是另一次采纳，按它自己的 artefact 判，本条不覆盖。",
+        covers=("tsmom-validation-20260919T081914Z.json",),
+    ),
+    ExceptionEntry(
+        id="D-043",
+        date="2026-09-17",
+        ruling="D-043 把没做过选择的证据封顶在 WEAK_PASS，不判 FAIL。理由是 WEAK_PASS 仍可上线，"
+        "封顶不必停掉正在持仓的循环。本条把同一个理由用到换指针上：在跑的书可以换到一份封顶的证据。"
+        "第一次是 tsmom 的 `20260925T143836Z`，预登记 b76de7a0 第 6 节写明 WEAK_PASS 也换，2026-10-13 之后合入。",
+        rule_conflict="§3 candidate->validated 要求 D-020 的 verdict PASS。封顶之后，单配置证据拿不到 PASS。",
+        why_not_encoded="§3 管机器自主晋级。把封顶证据写进 §3，机器就能自己放行单配置证据，挖掘候选全在这一类。"
+        "D-043 的意思是读数成立，「这是一次选择的样本外」不成立。"
+        "给在跑的书换证据，和让机器晋级新候选，不是同一件事。"
+        "本条读 artefact：verdict WEAK_PASS，理由只有 `oos_is_full_sample_tail`，同一策略此前有被采纳的指针。"
+        "只归因 D-020；R0、DL-K3、KILL-AR-07 照判。PBO 豁免那种封顶不在内，新策略头一次上线也不在内。",
+        covers=("oos_is_full_sample_tail",),
+    ),
 )
 
 EXCEPTIONS_BY_ID: dict[str, ExceptionEntry] = {entry.id: entry for entry in EXCEPTIONS}
@@ -157,7 +190,10 @@ class SuspendedCondition:
     fix: str
 
 
-#: Measured against the 201 archived reports and the 153-cycle live record, not assumed.
+#: Measured, not assumed.  Phase 0 (f8a80c95, 2026-09-08) read the 153-cycle live record and wrote "the
+#: 201 archived reports" here - the entry count of `reports/research/` in that commit, of which the replay
+#: reads the 101 JSON; the rest are `.md` twins, one `.jsonl` and `scratch/`.  Rows marked delivered were
+#: re-measured when they changed.
 SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="DL-K3 预登记早于报告",
@@ -205,14 +241,26 @@ SUSPENDED: tuple[SuspendedCondition, ...] = (
     SuspendedCondition(
         condition="M-011 面板平价义务",
         reads="Facts.parity_met",
-        why_unreadable="平价义务随 DL-D4 才存在，本期没有任何一列数据受它约束",
-        fix="Phase 3：DL-D4 落地后自然可读",
+        why_unreadable="**DL-D4 已交付**：日报的 `metrics_parity` 块每天按实盘 universe 量一次平价，2026-09-08 起；"
+        "`governance next` 经 `scheduler.parity_satisfied` 读最新一份，2026-09-10 起。`governance replay` "
+        "仍判不了它：M-011 只守 `booked -> queued`，而 `JUDGEABLE` 只有 VALIDATE 与 BOOK。记录里没有一次 "
+        "`booked -> queued`，`governance_state.json` 里从没出现过 `queued`。生产代码也不执行这条边："
+        "`governance next` 只建议 QUEUE，`Event.PARITY` 只出现在 `lifecycle` 的判据里。平价读数只落在日报里："
+        "按 universe 算，不按候选；`reports/daily/` 也不进仓库",
+        fix="Phase 3 ✔ DL-D4：日报的 `metrics_parity` + `scheduler.parity_satisfied`。"
+        "`governance replay` 要判它还缺三样：执行 `booked -> queued` 的调用者，那一刻按候选落盘的平价读数，"
+        "以及 `JUDGEABLE` 里的 PARITY",
     ),
     SuspendedCondition(
         condition="L4 Canary 浸泡",
         reads="Facts.canary_healthy",
-        why_unreadable="Canary 尚不存在",
-        fix="Phase 2：DL-G5",
+        why_unreadable="**DL-G5 已交付**：`plan`/`apply` 晋级前经 `admission.canary_health` 判 L4，"
+        "shadow soak 2026-09-12 首次开跑。`governance replay` 仍判不了它：L4 只守 `queued -> probe`，"
+        "而 `JUDGEABLE` 只有 VALIDATE 与 BOOK。记录里也没有一次机器晋级：唯一的 probe（flow）"
+        "2026-09-04 按 D-019 上线，早于 canary。canary 的读数不落盘。`verdicts.jsonl` 的 admission 行里，"
+        "L4 只会作为拒绝理由出现；放行的行不记 `promoting`，分不出 L4 是过了还是没被问",
+        fix="Phase 2 ✔ DL-G5：`canary.py` + `governance canary` + `admission.canary_health`。"
+        "`governance replay` 要判它还缺两样：晋级时落盘的 canary 读数，以及 `JUDGEABLE` 里的 PROMOTE",
     ),
 )
 
@@ -393,8 +441,21 @@ def _instant(value: Any) -> datetime | None:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
 
-def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) -> Difference:
-    """Map one refusal to a named cause by inspecting the artefact, never by guessing at a category."""
+def _attribute(
+    reason: str, name: str, report: Mapping[str, Any], history: str, *, incumbent: bool = False
+) -> Difference:
+    """Map one refusal to a named cause by inspecting the artefact, never by guessing at a category.
+
+    `16a52547` matches one file name exactly and reads the artefact's own verdict.  A prefix would
+    quietly cover the next FAIL too, and a name alone would still cover this file if it ever said
+    something else.  It takes D-020 and R0 only: a construction divergence or a late pre-registration
+    on the same artefact is a finding the 2026-09-19 ruling never looked at.
+
+    `D-043` names a shape, so its conditions carry the weight a file name carries above: the verdict,
+    EVERY reason being the `oos_is_full_sample_tail` cap (D-043's other cap is a PBO gate that did not
+    run, which the 2026-09-27 ruling never looked at), and an earlier adoption of the same strategy -
+    the ruling is about a running book changing its evidence, and a first adoption stays a finding.
+    """
     selection = report.get("oos_selection") or {}
     if reason.startswith("D-018") and str(report.get("book_verdict")) == "REJECT":
         entry = EXCEPTIONS_BY_ID["D-029"]
@@ -405,6 +466,28 @@ def _attribute(reason: str, name: str, report: Mapping[str, Any], history: str) 
             EXCEPTION,
             f"{entry.id}（{entry.date}）：探针书可引用 REJECT，"
             "但 registry 必须写明 `probe.accepted_despite: REJECT`；本条指针正是那样写的",
+        )
+    ruled = EXCEPTIONS_BY_ID["16a52547"]
+    if reason.startswith(("D-020", "R0")) and name in ruled.covers and report.get("verdict") == "FAIL":
+        return Difference(
+            name,
+            history,
+            reason,
+            EXCEPTION,
+            f"{ruled.id}（{ruled.date}）：操作者把 tsmom 指向这份诚实的 FAIL，理由是记账记准。"
+            "两个指针都过不了 armed 启动；循环靠 D-041 bridge 照跑到 2026-10-13",
+        )
+    capped = EXCEPTIONS_BY_ID["D-043"]
+    reasons = [str(r) for r in report.get("reasons") or []]
+    only_the_cap = bool(reasons) and all(r.startswith(capped.covers) for r in reasons)
+    if reason.startswith("D-020") and incumbent and report.get("verdict") == "WEAK_PASS" and only_the_cap:
+        return Difference(
+            name,
+            history,
+            reason,
+            EXCEPTION,
+            f"{capped.id}（{capped.date}）：在跑的书换到一份封顶的证据。"
+            "WEAK_PASS 只来自 `oos_is_full_sample_tail`，D-043 写明它仍可上线",
         )
     if reason.startswith("R0"):
         if not selection:
@@ -453,6 +536,7 @@ def replay_adoptions(
     judged: dict[str, int] = {}
 
     adopted_names = {path.rsplit("/", 1)[-1] for path in adoptions}
+    running: set[str] = set()  # strategies an earlier adoption already put in the registry (D-043)
     for path, adopted_on in sorted(adoptions.items(), key=lambda kv: kv[1]):
         name = path.rsplit("/", 1)[-1]
         report = reports.get(path)
@@ -469,6 +553,9 @@ def replay_adoptions(
                 )
             )
             continue
+        strategy = str(report.get("strategy") or "")
+        incumbent = bool(strategy) and strategy in running
+        running.add(strategy)
         event, facts, suspended = _facts_for(report, acknowledged=name in acknowledged, live_constructions=live)
         for condition in suspended:
             suspensions[condition] = suspensions.get(condition, 0) + 1
@@ -481,7 +568,9 @@ def replay_adoptions(
             basis = "；凭 registry 的 D-029 书面承认" if name in acknowledged else ""
             reproduced.append(f"{name}：规则同意采纳（{event.value}{basis}）")
             continue
-        differences.extend(_attribute(reason, name, report, history) for reason in decision.reasons)
+        differences.extend(
+            _attribute(reason, name, report, history, incumbent=incumbent) for reason in decision.reasons
+        )
 
     for condition, count in sorted(judged.items()):
         reproduced.append(
@@ -669,6 +758,42 @@ def _why_not_adopted(
     return Difference(name, "从未写进 registry", rules_say, UNATTRIBUTED, "")
 
 
+def _flat(payload: Mapping[str, Any], prefix: str = "") -> dict[str, str]:
+    """Dotted key -> the value as JSON text, the form `construction_fingerprint` hashed it in."""
+    out: dict[str, str] = {}
+    for key, value in payload.items():
+        if isinstance(value, Mapping):
+            out |= _flat(value, f"{prefix}{key}.")
+        else:
+            out[f"{prefix}{key}"] = json.dumps(value, sort_keys=True, ensure_ascii=False)
+    return out
+
+
+def _moved(before: Any, after: Any) -> str | None:
+    """What one construction change moved, read off two `construction_full` payloads; None without both.
+
+    DL-G9 (a9f4f255) writes the full construction on each process's first cycle, and a construction only
+    changes at a start, so a change after the 2026-09-08T20:00Z restart has both sides on record -
+    measured 2026-09-27, all six raw changes since do.  Compared as JSON text, as the digest hashed it:
+    `False == 0` holds in Python and not in the hash.
+
+    `before` is the RAW digest the loop recorded just before the change, not the canonical one.  An
+    alias in between adds a key at its off value - v8's `trailing_activate` sits between the two digests
+    D3 moved - and diffing against the canonical digest would book that key to D3.  `payload_version`
+    stays in, per v9's note in `beidou_live.construction`: a reader comparing two rows needs to know the
+    field set moved as well as the values.
+    """
+    if not (isinstance(before, Mapping) and isinstance(after, Mapping)):
+        return None
+    old, new = _flat(before), _flat(after)
+    shown = [
+        f"`{key}` {old.get(key, '—')} → {new.get(key, '—')}"
+        for key in sorted((old.keys() | new.keys()) - {"digest"})
+        if old.get(key) != new.get(key)
+    ]
+    return f"改了 {'；'.join(shown)}" if shown else "两侧逐键相同、digest 却不同"
+
+
 def replay_live(
     cycles: Sequence[Mapping[str, Any]],
     attribution: Sequence[Mapping[str, Any]],
@@ -679,9 +804,10 @@ def replay_live(
     """The downgrade side, replayed against the live record (§8 Phase 0 item D).
 
     What this can answer: whether the P&L stop would have fired, whether R5 would have frozen
-    promotion, how many cycles produce no decision at all, and how often the construction changed
-    against a rule that allows one change per window.  What it cannot answer is whether any of that
-    was *right* - the record is five days long and the rules count in months.
+    promotion, how many cycles produce no decision at all, how often the construction changed
+    against a rule that allows one change per window, and - since DL-G9 - which keys each change
+    moved.  What it cannot answer is whether any of that was *right* - the record is weeks long and
+    the rules count in months.
     """
     policy = policy or Policy()
     differences: list[Difference] = []
@@ -700,36 +826,53 @@ def replay_live(
     if not stops:
         reproduced.append("探针 P&L stop 从未触发：R5 连败计数 0，晋级不冻结，与 `stopped_books` 一致")
 
-    # Canonicalise before counting.  `beidou_live.health.CONSTRUCTION_ALIASES` declares digests that
+    # Canonicalise before counting.  `beidou_live.construction.CONSTRUCTION_ALIASES` declares digests that
     # differ from an earlier one only in fields with no behavioural effect - `unit_mode` moved the
     # fingerprint without changing a byte of behaviour, and the four `regime_*` did the same.  Counting
     # raw digests reported six construction changes where four happened, which overstates the very
     # thing §8's freeze is about.  The map is passed in rather than imported: governance depends on
     # alpha and shared, never on live, so that live can record the policy digest without a cycle.
     aliases = dict(construction_aliases or {})
-    fingerprints: list[tuple[str, str]] = []
+    # Each payload keyed by the digest it declares, off every row: a process writes it once, on its first
+    # cycle, and that is not always the row where the change shows - an ERROR row does not carry it.
+    full = {str(p.get("digest")): p for c in cycles if isinstance(p := c.get("construction_full"), Mapping)}
+    fingerprints: list[tuple[str, str, str, str]] = []
+    last = ""
     for cycle in decided:
         digest = str(cycle.get("construction") or "")
         if not digest:
             continue
         canonical = aliases.get(digest, digest)
         if not fingerprints or fingerprints[-1][1] != canonical:
-            fingerprints.append((str(cycle.get("at")), canonical))
+            fingerprints.append((str(cycle.get("at")), canonical, digest, last))
+        last = digest
     seen: set[str] = set()
     if fingerprints:
         seen.add(fingerprints[0][1])
-    for at, digest in fingerprints[1:]:
+    for at, digest, raw, before in fingerprints[1:]:
         rollback = digest in seen
         seen.add(digest)
+        moved = _moved(full.get(before), full.get(raw))
+        if moved:
+            said = (
+                f"**DL-G9 已交付**：两侧的 `construction_full` 都在记录里，{moved}。"
+                "仍归不到具名裁定：记录只说改了什么，不说谁授权"
+            )
+            missing = "要归到具名裁定还缺两样：`EXCEPTIONS` 里授权它的那一条，以及按变动的键匹配它的路由"
+        else:
+            said = (
+                "周期行只存构造的 sha256 digest，不可反解。DL-G9 之前的周期行不带 `construction_full`，"
+                "这次改动至少缺一侧。**改了什么**因此读不出，也就归不到具名裁定"
+            )
+            missing = "这一次缺的那一侧从记录里补不回来"
         differences.append(
             Difference(
                 f"construction {digest[:12]} @ {at}",
                 "构造回到一个此前出现过的指纹（回滚）" if rollback else "构造在实盘运行中改变",
                 f"§8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = {policy.window_days} 天）",
                 EVIDENCE_GAP,
-                "记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，"
-                "也就无法归因到某一条具名裁定",
-                fix="Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖）",
+                said,
+                fix=f"Phase 1 ✔ DL-G9：每个进程的第一个周期行落 `construction_full`。{missing}",
             )
         )
     if len(fingerprints) > 1:

@@ -28,6 +28,7 @@
 | universe | 标的池、宇宙 | `universe` |
 | throttle | 节流阀 | `drawdown_throttle` |
 | family gate | 家族门 | `family_gate` |
+| startup gate | 启动门、启动闸 | `registry_evidence_problems` 与 `registry_dataset_problems` 的 blocking 那一半，armed `live run` 拒绝启动看的就是这两处；写入时由 `governance_cmd._gate` 问（2026-09-27 起，旧文不改） |
 | ceiling | 天花板 | `ceiling` |
 | alert | 呼叫（名词用法） | `alerts` |
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
@@ -39,7 +40,9 @@
 | frozen bar | 冻结 bar（与「构造冻结」撞词）、死 bar | `bar_sanity` 的 `frozen` |
 | probe | 探针、探针书 | `probe`、`PROBE_VERDICT`、`max_concurrent_probes`（2026-09-25 起） |
 | bridge（D-041 bridge） | 桥 | `deploy/run_live.sh` 的 `BRIDGE_UNTIL`（2026-09-25 起） |
-| exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起） |
+| exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起；2026-09-27 随切换删除，只在历史记录里出现） |
+| confirmed gap | 已确认缺口、真缺口 | `confirmed_gaps.json`、`beidou_data/repair.py`（2026-09-25 起） |
+| feature store | 特征库、特征存储、特征缓存 | `beidou_cli/research_feature_store.py`、`BEIDOU_FEATURE_STORE`（2026-09-25 起） |
 
 ## 保留中文的近形词
 
@@ -64,6 +67,11 @@
 与全仓相对。2026-09-25 加日报的平仓流动性一节时定下。`参与率` 在代码里是 `max_participation`，`冲击`
 是 `ImpactModel`，两个词的写法见上面执行成本那一行。
 
+`事件风险`、`脱锚`、`交易所事故`、`极端行情`、`插针`写中文（2026-09-25，日报的 #8.10 一节）。代码里是
+`report_events.event_risk`、`stablecoin_peg`、`venue_incidents`、`market_extremes`。`CONTEXT.md` 把 venue
+写作「场地」，指下单去的 demo 端点；这一节读的是循环去两个 host 的整条路径（行情走 fapi，下单走 demo-fapi），
+分不出是哪一边，所以写**交易所事故**，不写场地事故。`插针`指一根 bar 的最高价或最低价远离收盘价。
+
 `书级` / `仓位级`这对说法改成**组合层** / **仓位层**——两个都是通用中文，不必用 `book-level`。
 
 `预期书`是自造词，`expectation book` 也是自造的英文，两个都不用。写**预期说明**。
@@ -75,6 +83,13 @@
 使年化 Sharpe 等于诚实的选择程序交付的样本外读数（当天是 1.2306），波动与自相关不动。原漂移是不减的
 那条。出处是 #146 体检的「诚实 OOS」；代码里是 `drift` 字段的 `"honest"` / `"orig"`
 （`scratchpad/k_remeasure_honest_drift_20260925.py`）。
+
+`缺口`写中文，指存储里两根相邻 bar（或两次相邻结算）之间少掉的那段，代码里是 `KlineStore.gaps`。
+向源头问过、源头也没有、记进 `confirmed_gaps.json` 的那种写 **confirmed gap**，不写「已确认缺口」
+「真缺口」（2026-09-25，`beidou data repair`）。旧文里的「真缺口」不改。
+
+`轮`写中文，指一份 shadow soak 记录里每 168 个尝试过的周期（OK 与 ERROR 算，SKIPPED 不算），
+说「第二轮」「最近一轮」（2026-09-26）。代码里是 `beidou_governance/canary.py` 的 `rounds`。不写 round。
 
 ## 没定的怎么办
 

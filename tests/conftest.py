@@ -83,3 +83,13 @@ def isolated_app_support(tmp_path_factory: pytest.TempPathFactory, monkeypatch: 
     root = tmp_path_factory.mktemp("app-support")
     monkeypatch.setattr(lock, "APP_SUPPORT", root)
     return root
+
+
+@pytest.fixture(autouse=True)
+def feature_store_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`BEIDOU_FEATURE_STORE` exported in a developer's shell must not reach the suite (#9.6).
+
+    Off is what every research test was written against, and on would write cache files into whatever
+    directory the shell names.  A test that wants the store sets the variable itself.
+    """
+    monkeypatch.delenv("BEIDOU_FEATURE_STORE", raising=False)
