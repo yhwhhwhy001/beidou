@@ -264,7 +264,12 @@ M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录
 
 ## Profile 关键字段（`config/live.demo.yaml`）
 
-- `portfolio.leverage: auto` —— 每个币的交易所杠杆按 `max_gross / margin_cap` 与档位上限推导（当前 5x）；写死整数则固定。
+- `portfolio.leverage: by_vol` —— 每个币的交易所杠杆按它自己的年化波动率分档（分交易对杠杆报告的方案 R1，操作者 2026-09-26 卡片「交易所也分档」；推导见 `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` §5.2）。档位 = 离 `max_leverage × leverage_sigma_ref ÷ σ` 对数距离最近的那一档（`leverage_tiers`，1x–15x；k=0.175 下持有的落在 3x–15x）；要换档须连续 `leverage_hysteresis` 个周期（168，一周；24 在 T-11 回放里一天最多换 9 次，超了报告的上限 5）都要换；交易所档位表在当前名义上不收的档位当周期就降；整本书的初始保证金不超过 `auto` 要的，超了就把最低的档往上抬，**从不缩单**。它只决定开仓占用多少保证金——权重、订单、退出都在读它之前就定了。
+  - 每天第一个周期全量重发一次：demo 的接口读不回杠杆，账户重置会一声不响地改回默认。下发被拒或网络出错：保留原设置、告警（`leverage-refused`），循环照常，迟滞满了再试一次。
+  - 读数在 `cycles.jsonl` 每行的 `leverage_tiers`：`ideal`（波动率档位）、`clamped`（被档位表压住的）、`raised`（被保证金不变量抬起的）、`pending`（正在攒周期的）、`sent` / `refused`（这周期发了什么）、`set`（发完之后的设置）、`margin`（分档与 `auto` 下目标书的初始保证金占权益的比例，前者不得超过后者）。
+  - **上线首日要人看一次（T-12）**：重启后第一个整点周期跑完，在交易所界面上逐个币核对杠杆，与 `tail -1 .beidou/live/cycles.jsonl | python3 -c "import json,sys; print(json.load(sys.stdin)['leverage_tiers']['set'])"` 一致。接口读不回，这一步只能人看。
+  - **回滚**：这一行改回 `auto` 再按上面的纪律重启。启动时全量重发 5x，清掉分档的记忆（`leverage_tiered`、`leverage_streaks`）；构造指纹随之变化，监控窗口再清零一次。
+- `portfolio.leverage: auto` —— 每个币的交易所杠杆按 `max_gross / margin_cap` 与档位上限推导（5x，D-016）；写死整数则固定。`by_vol` 之前的出厂值，也是它的回滚值。
 - `portfolio.max_participation` —— 除完全平仓外，每一单 ≤ 该比例 × 近 24 根 bar 平均报价成交量。纯减仓单也会被截：`exempt_reductions` 默认关，要开就得与回测的 `ParticipationModel` 一起翻（`beidou_live/rebalancer.py` 的注释）。`margin_buffer` —— 保证金不足时按比例缩小加仓单，保留这部分可用余额。
 - `pool.refresh: daily|never` —— 每日自动重排 universe；被移出的币会被 reduce-only 平掉，`cycles.jsonl` 的 `universe_update` 记录进出。
 - `exits` —— 止损 / 移动止损 / 止盈（单位 = 入场时日波动率），0 关闭；`cooldown_bars` 冷却期。

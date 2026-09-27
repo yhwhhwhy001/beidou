@@ -365,7 +365,7 @@ def live_run(
             dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override
         ),
     )
-    leverage = "auto" if config.leverage_mode == "auto" else str(config.leverage)
+    leverage = config.leverage_mode if config.leverage_mode != "fixed" else str(config.leverage)
     click.echo(
         f"universe={engine.universe} interval={config.interval} leverage={leverage} pool_refresh={pool is not None} "
         f"exits={config.exits.enabled} throttle={config.throttle.enabled} dry_run={dry_run} paper={paper} "

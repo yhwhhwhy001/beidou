@@ -3469,7 +3469,23 @@ CEILING = {
     # 标签改名 `_as_read` 的注释 +2，让 09-27 之后的实盘记录自己说明用的是哪一把尺子。
     #
     # 留 40 行（14_952 -> 14_992），理由与上面几格逐字相同，不重述。
-    "beidou_live": 14_992,
+    #
+    # 2026-09-27（不编号，同上）。+366 beidou_live，14_952 -> 15_318，抬到 15_358。
+    #
+    # 交易所杠杆按各交易对的波动率分档（`leverage: by_vol`；分交易对杠杆报告的方案 R1，操作者 2026-09-26 在卡片上
+    # 选了「交易所也分档」）。`leverage.py` +215：档位（`tier_leverage`）、迟滞（`hysteresis_step`）、按当前名义读
+    # 完整档位表（`bracket_leverage`）、保证金不变量（`hold_margin_to_auto`：整本书不超过 `auto` 要的，只抬档、
+    # 不缩单）、启动检查与每周期的决定（`plan_leverage`）。过半是文档串，写的是不能从代码里看出来的三件事：不变量
+    # 为什么以 `auto` 的保证金为界、它管住的是整本书而不是某一周期的订单、迟滞为什么比的是压过上限之后的值。
+    # `engine.py` +127：逐周期下发、每天第一个周期全量重发、下发被拒的告警与随迟滞重试（不按小时重复告警）、
+    # 档位表一天读一次、构造指纹的 `leverage` 块加三个字段。配置、状态、端口、构造版本与周期记录的声明合计 +24。
+    #
+    # 验收：订单在读杠杆之前就定了，三个 σ_ref（全 15x、分开的 4x–8x、全落 1x–2x 而被抬回 5x）下的周期与 `auto`
+    # 逐单相同，预检从不缩单。39 条新测试，其中一条钉住 O-1 那句白话跟着说 4x–8x；`test_construction_identity`
+    # 另证拿掉三个新键、改回 `auto` 逐字节复现 #163 的构造。
+    #
+    # 留 40 行（15_318 -> 15_358），理由与上面几格逐字相同，不重述。
+    "beidou_live": 15_358,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3941,7 +3957,10 @@ CEILING = {
     # client id 去查。代理拒绝 CONNECT 的 `ProxyError`（本机最常见的故障）与 `PoolTimeout` 并入「没发出、
     # 可以重试」。三处拼 `OrderOutcomeUnknown` 的代码收成一个 `_ambiguous`；净增的大半是解释 -1007 为什么
     # 不能重发的注释。
-    "beidou_exchange": 734,
+    # +13 beidou_exchange，2026-09-27（734 -> 747）：`leverage_bracket_table`，把 `/fapi/v1/leverageBracket` 读过
+    # 第一档。`leverage_brackets` 只读第一档，那是最小仓位的上限，`auto` 的 5x 用它就够；`by_vol` 要到 15x，
+    # 在某档名义上限之上交易所会拒（-2027），D-031 连拒三个周期就把币隔离，所以要按名义读整张表（E-029）。
+    "beidou_exchange": 747,
     "beidou_shared": 289,
     # +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
     # an `all(isinstance(...))` generator that mypy 2.x stopped reading - part of the 30 type errors that

@@ -26,6 +26,7 @@ from beidou_exchange.guard import WriteGuard
 from beidou_live.composition import build_model, load_registry, portfolio_params, read_universe, write_universe
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GuardParams
+from beidou_live.leverage import VOL_TIERS
 from beidou_live.lock import account_kill_switch_path
 from beidou_live.ports import UniverseUpdate
 from beidou_live.probe import probes_from_registry
@@ -80,7 +81,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
     pool = profile.get("pool", {}) or {}
     interval = str(market.get("interval", "1h"))
     leverage_raw = portfolio.get("leverage", 2)
-    leverage_mode = "auto" if str(leverage_raw).lower() == "auto" else "fixed"
+    leverage_mode = str(leverage_raw).lower() if str(leverage_raw).lower() in ("auto", "by_vol") else "fixed"
     bars_per_day = max(1, 86_400 // interval_seconds(interval))
     exits = ExitParams.from_mapping({**(profile.get("exits", {}) or {}), "bars_per_day": bars_per_day})
     throttle = DrawdownThrottleParams.from_mapping(profile.get("drawdown_throttle", {}) or {})
@@ -88,7 +89,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         interval=interval,
         history_bars=int(market.get("history_bars", 400)),
         universe=tuple(universe),
-        leverage=2 if leverage_mode == "auto" else int(leverage_raw),
+        leverage=2 if leverage_mode != "fixed" else int(leverage_raw),
         rebalance=RebalanceParams(
             no_trade_band=float(portfolio.get("no_trade_band", 0.005)),
             no_trade_rel_band=float(portfolio.get("no_trade_rel_band", 0.0)),
@@ -128,6 +129,9 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         leverage_mode=leverage_mode,
         margin_cap=float(portfolio.get("margin_cap", 0.40)),
         max_leverage=int(portfolio.get("max_leverage", 5)),
+        leverage_sigma_ref=float(portfolio.get("leverage_sigma_ref", 0.90)),
+        leverage_tiers=tuple(int(tier) for tier in portfolio.get("leverage_tiers", VOL_TIERS)),
+        leverage_hysteresis=int(portfolio.get("leverage_hysteresis", 168)),
         dropped_after=int(pool.get("dropped_after", 1)),
         margin_buffer=float(portfolio.get("margin_buffer", 0.10)),
         universe_refresh=str(pool.get("refresh", "never")).lower() != "never",

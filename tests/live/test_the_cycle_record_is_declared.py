@@ -132,6 +132,7 @@ async def test_every_declared_key_is_reachable_from_some_cycle(world: dict[str, 
     # Written only under conditions this fixture does not create.  Each needs a REASON, not a shrug.
     conditional = {
         "margin": "only when risk-adding orders had to be scaled to available margin",
+        "leverage_tiers": "only under `leverage: by_vol`; its own test runs that mode and joins it",
         "universe_update": "only on the first cycle of a new UTC day",
         "quarantined": "present on both paths, but empty unless the venue rejected repeatedly",
         "summary": "written by the normal path only",

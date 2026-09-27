@@ -51,6 +51,12 @@ class LiveState:
     income_prev_contributions: dict[str, dict[str, float]] = field(default_factory=dict)
     income_prev_bar_ms: int | None = None
     leverage_set: dict[str, int] = field(default_factory=dict)
+    # `by_vol`: which symbols' `leverage_set` entry is a vol tier this loop sent, and how many
+    # consecutive cycles each has asked for a different one (S2).  Persisted so a restart neither hands
+    # every symbol a fresh hysteresis nor re-sends a tier as though it were the first.
+    leverage_tiered: list[str] = field(default_factory=list)
+    leverage_streaks: dict[str, int] = field(default_factory=dict)
+    leverage_reasserted_day: str | None = None  # S4: the UTC day every setting was last re-sent
     exit_states: dict[str, dict[str, Any]] = field(default_factory=dict)  # per-symbol exit overlay state (D-012)
     equity_hwm: float | None = None  # high-water mark for the drawdown throttle (D-015)
     universe: list[str] = field(default_factory=list)  # last refreshed universe (D-014)

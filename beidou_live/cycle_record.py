@@ -48,6 +48,7 @@ KEYS: dict[str, str] = {
     "margin_usage": "M-007: initial margin the standing book consumes",
     "margin_fields_reliable": "whether the account payload carried usable margin fields",
     "margin": "how risk-adding orders were scaled to available margin",
+    "leverage_tiers": "`by_vol` only (2026-09-27): vol tier, bracket clamp and margin raise per symbol, and what was sent",
     "min_liq_distance": "M-Q06: nearest reachable liquidation, in daily-vol units",
     # --- the book ------------------------------------------------------------------------------
     "targets": "target weights per symbol",
