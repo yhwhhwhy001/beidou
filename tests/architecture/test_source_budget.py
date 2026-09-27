@@ -3945,7 +3945,22 @@ CEILING = {
     # route, reading the verdict, every reason being the cap and an earlier adoption of the strategy; 7 its
     # docstring and signature; 6 the adoption-order bookkeeping.  Eight mutations each turned one control
     # red.  The 21 lines over were not golfed.  40 above again.
-    "beidou_governance": 4_256,
+    # +54 beidou_governance (4_216 -> 4_270), 2026-09-27, operator's choice of option B: the replay's
+    # construction rows read what DL-G9 put in the record.  Phase 0 wrote "Phase 1：构造变化时落全量构造"
+    # into every one of them at 20:25 +08:00 on 2026-09-08; DL-G9 (a9f4f255) shipped `construction_full`
+    # 38 minutes later, and the live loop has written it on each process's first cycle since that day's
+    # 20:00Z restart.  The text stood for 19 days, the staleness #170 and #172 fixed in two other rows.
+    # Measured on the real record: of the six changes the aliases leave, the two after 09-08 carry both
+    # sides - `46b8d731` moved `portfolio.vol_target` 0.3 -> 0.6 alone, `0c555e1c` moved D3's three band
+    # keys - and the replay now names them; the four of 09-04 still say they cannot be read.  `_moved`
+    # diffs against the raw digest just before a change, not the canonical one: `b8f215ab` is aliased to
+    # `0c555e1c`, so the canonical side would book v10's `stop_loss_price_cap` to #163's k switch - a
+    # mutation of the new test showed exactly that.  31 of the 54 are code (`_flat`, `_moved`, the two
+    # texts a row can say), 17 the docstrings and comments on why the diff reads raw digests as JSON text
+    # with `payload_version` kept, 6 blank.  `governance replay` on the real record, before and after: 15
+    # reproduced, 34 differences, 0 unattributed; only the six construction rows moved, also on top of #177.
+    # The 14 over were not golfed.  40 above again.
+    "beidou_governance": 4_310,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
