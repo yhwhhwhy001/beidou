@@ -13,8 +13,14 @@
       by runs that are neither dry_run nor paper.  No shared-file contention
       either: `trades_the_account` keeps universe.json and metrics_snapshot
       for the process actually trading.
-      KeepAlive only on a crash, never on a clean exit, because the soak ENDS
-      at 168 cycles and restarting it there would silently begin a second one.
+      KeepAlive relaunches EVERY non-zero exit, and the loop exits 1 when even
+      one of its 168 cycles failed, so KeepAlive alone never ended a soak: on
+      2026-09-23 it silently began a second 168 in the same record, and a
+      clean exit would still meet RunAtLoad at the next login.  What ends a
+      soak is run_shadow.sh, which asks the record how many cycles the latest
+      round still owes before every start and exits 0 when the answer is none
+      (docs/RUNBOOK.md, "shadow soak").  No key below changed for that fix,
+      so an installed copy needs no reload.
       The flags in run_shadow.sh are written without leading dashes in these
       comments on purpose: two dashes in a row end an XML comment.
       Install: cp to ~/Library/LaunchAgents/ and

@@ -127,7 +127,7 @@ EXPECTED_FIELDS = {
     },
     "throttle": {"enabled", "start", "stop", "floor"},
     # v11, `by_vol` (2026-09-27): its three knobs.  Arrived with the mode switched on, so like v9 there
-    # is no alias - `test_r1_moved_only_the_leverage_block` below shows what did and did not move.
+    # is no alias - `test_by_vol_moved_only_the_leverage_block` below shows what did and did not move.
     "leverage": {"mode", "margin_cap", "max_leverage", "margin_buffer", "sigma_ref", "tiers", "hysteresis"},
 }
 

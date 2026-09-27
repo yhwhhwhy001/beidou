@@ -3418,7 +3418,25 @@ CEILING = {
     #
     # 留 40 行（14_653 -> 14_693），理由与上面几格逐字相同，不重述。
     #
-    # 2026-09-27（不编号，同上）。+366 beidou_live，14_654 -> 15_020，抬到 15_060。
+    # 2026-09-26（不编号，同上）。+93 beidou_live，14_653 -> 14_746，抬到 14_786。
+    #
+    # 「所有持仓都是 5 倍、没有区分」第六次被问到。上面第十次抬顶那一格买下的 M-015 那一行答得对，用的却是
+    # 系统的话（「吸收了离散度的 91%」「不承担风险」），也没印出这个问题问的那个数：每个持仓自己的杠杆。
+    # `report_risk.plain_leverage_lines` 51 行（docstring 16 行）用白话写三件事：交易所那一栏的数只管保证金；
+    # 每个持仓的真实杠杆（目标名义 ÷ 权益）、波动与风险份额；最小仓位规则（D3）拿掉了哪些名字、为什么。
+    # 10-13 之后 k=0.175 会拿掉最波动的四个，不说出来就是第七次提问。`min_position_of` 23 行从记录里的构造
+    # 读 D3 的门槛，理由同 `max_weight_of`。`risk_adaptation` 的块多两个键 11 行，函数间空行 4，`reports.py`
+    # 挂接 +4。依据：`docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` 的 O-1（NA-2、T-2、T-3）。
+    #
+    # 验收：同一份合成状态（6 个名字、D3 开），main 与本改动各出一遍：`live status` 与 `live status --check`
+    # 只在 M-015 那行之后多这一段，`--check` 的末三行（巡检告警正文）不变；日报 md 只多「真实杠杆（白话）」
+    # 一节；json 只多 `risk_adaptation.leverage_values` 与 `min_position` 两个键；其余只差状态文件的时间戳。
+    # 没有在实盘状态副本上重出（副本在操作者的 Mac 上）。构造指纹不变，两个构造测试照常通过。
+    #
+    # 留 40 行（14_746 -> 14_786），理由与上面几格逐字相同，不重述。
+    #
+    # 2026-09-27（不编号，同上）。+366 beidou_live，14_763 -> 15_129，抬到 15_169。14_746 -> 14_763 那 17 行是
+    # #176（M-011 的平价读数写明比到哪个桶）在余量内加的 16 行与 #163 自己的 1 行，不在这里。
     #
     # 交易所杠杆按各交易对的波动率分档（`leverage: by_vol`；分交易对杠杆报告的方案 R1，操作者 2026-09-26 在卡片上
     # 选了「交易所也分档」）。`leverage.py` +215：档位（`tier_leverage`）、迟滞（`hysteresis_step`）、按当前名义读
@@ -3429,11 +3447,11 @@ CEILING = {
     # 档位表一天读一次、构造指纹的 `leverage` 块加三个字段。配置、状态、端口、构造版本与周期记录的声明合计 +24。
     #
     # 验收：订单在读杠杆之前就定了，三个 σ_ref（全 15x、分开的 4x–8x、全落 1x–2x 而被抬回 5x）下的周期与 `auto`
-    # 逐单相同，预检从不缩单。38 条新测试；`test_construction_identity` 另证拿掉三个新键、改回 `auto` 逐字节复现
-    # #163 的构造。
+    # 逐单相同，预检从不缩单。39 条新测试，其中一条钉住 O-1 那句白话跟着说 4x–8x；`test_construction_identity`
+    # 另证拿掉三个新键、改回 `auto` 逐字节复现 #163 的构造。
     #
-    # 留 40 行（15_020 -> 15_060），理由与上面几格逐字相同，不重述。
-    "beidou_live": 15_060,
+    # 留 40 行（15_129 -> 15_169），理由与上面几格逐字相同，不重述。
+    "beidou_live": 15_169,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3771,7 +3789,18 @@ CEILING = {
     # `_bit_for_bit` 全部相同；15 个变异全部有测试变红。
     #
     # 留 40 行（8_474 -> 8_514），理由同上，不重述。
-    "beidou_cli": 8_514,
+    #
+    # 2026-09-27（不编号，同上）。+19 beidou_cli，8_503 -> 8_522，抬到 8_562。
+    #
+    # 事务的闸补上 D-041 的 dataset 那一半，操作者当天裁定。`live run` 的 armed 启动拒绝的是 evidence 或
+    # dataset.blocking，`governance_cmd._gate` 只问前一半：membership 重建之后，写入会放行一份启动会拒的
+    # registry。当天读数：09-24 的重建（refreshes 2056 -> 2063）让 shipped registry 过不了 dataset 那一半。
+    # 花在哪：`_gate` 的 docstring 8 行，多问的一半 2 行；`plan`、`apply` 各加 `--data-root`，2 行；`plan_cmd`
+    # 的签名加一个参数后是 121 列，ruff 拆成每行一个，+7；`apply_cmd` 的签名 +1；`governance canary` 删掉
+    # `--gate-refusals`，−1。测试见 `tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`。
+    #
+    # 留 40 行（8_522 -> 8_562），理由同上，不重述。
+    "beidou_cli": 8_562,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -3888,7 +3917,70 @@ CEILING = {
     # `version` is inside `policy_digest()`, and bumping it would make `live status --check` report every
     # hour that the loop runs stale rules when no enforced rule changed.  Left 40 lines above, as the
     # beidou_live cells do since 2026-09-17: a ratchet at zero taxes the next honest change.
-    "beidou_governance": 4_034,
+    # +41 beidou_governance (3_994 -> 4_035), 2026-09-26: the shadow soak did not stop at 168.  `live run`
+    # exits 1 when any of its cycles failed, KeepAlive relaunches every non-zero exit, and on 09-23 a second
+    # 168 began in the same record; the canary then read both as one soak and failed `construction_stable`
+    # on two digests, each stable inside its own soak.  `canary.rounds` cuts the record into soaks of 168
+    # attempted cycles, `evaluate` scores the latest, and `remaining` answers `run_shadow.sh` from the same
+    # cut, so the launcher and its reader cannot disagree about where a soak ends.  Most of the 41 are the
+    # docstrings: why a SKIPPED row is no cycle, and why it stays in its round - measured on the real
+    # `run()`, the backoff after a failed last cycle writes one, and opening a round there reads a finished
+    # soak as 168 to go.  The 1 line over the old ceiling was not golfed away.  40 above again.
+    # +31 beidou_governance (4_041 -> 4_072), 2026-09-26, operator ruling on the canary's two readers.  #167
+    # (+6, inside the old headroom) made `plan`/`apply` judge `construction_stable` on the canonical
+    # construction as `governance canary` does.  This is the other half: `guard_rate` compared the shadow
+    # with the armed loop's whole `cycles.jsonl` while three docstrings said "the same window".
+    # `canary._same_bars` keeps the armed loop's decided cycles over the scored round's own bars, and no
+    # armed cycle there fails the check instead of passing it.  Measured on the real records that day: no
+    # guard had fired in 1,397 rows across five loops, so no reading moved; the denominator went 577 -> 81.
+    # Most of the 31 are docstrings: the whole history misleads both ways - it dilutes an outage both loops
+    # sat through, and an old storm raises the bar the candidate is held to.  40 above again.
+    # +35 beidou_governance (4_080 -> 4_115), 2026-09-27, operator ruling: the 2026-09-19 pointer move
+    # (`16a52547`) joins the replay's exception register.  #170 (+8, inside the old headroom) came first.
+    # Measured before the change, on the real record: 2 unattributed, D-020 and R0 on the FAIL evidence tsmom
+    # has cited since 09-19, while CI was green - the test's hand-written adoption history never learned of
+    # the pointer.  18 lines are the entry: the ruling, the rule it breaks, why it stays a ruling, and
+    # how long it holds against #163.  10 are the `_attribute` route, which matches one file name exactly
+    # and reads the artefact's own verdict; 6 are its docstring, saying why a prefix or the verdict alone
+    # would be a standing permission.  Measured after, `governance replay` on the real record: 15
+    # reproduced, 34 differences, 0 unattributed, exit 0.  The 3 lines over were not golfed.  40 above again.
+    # +32 beidou_governance (4_123 -> 4_155), 2026-09-27, operator ruling on M-011 ("按你的建议执行"): an
+    # agreement is only as recent as the newest bucket it compared.  Measured on the stores that day: the
+    # archive had one ingest, on 09-09, and stopped at 2026-09-07T23:55Z, so the fifteen symbols held since
+    # 09-07 were compared on the same 155-156 buckets of 09-07 in every daily report from 09-09 - two
+    # columns of six, the snapshot's ratios being NaN until 09-12 - and passed; LSKUSDT and NEARUSDT,
+    # entered 09-16, shared none.  `parity_satisfied` now takes `now` and refuses a status that does not
+    # say which bucket it reached and one older than `PARITY_MAX_AGE`; `assemble` hands it the clock.  The
+    # constant sits beside `canary.SOAK_CYCLES` rather than in `Policy`, so the digest the loop records does
+    # not move.  Most of the 32 are its reasoning and the docstring.  The ruling's other half is the nightly
+    # `data metrics` in `deploy/run_data.sh`; live, data and cli grew inside their headroom.  40 above again.
+    # +39 beidou_governance (4_177 -> 4_216), 2026-09-27, operator ruling ("均按推荐处理") on the refusal
+    # #163 will meet: D-043 joins the replay's exception register as a class, not a file.  #163 moves tsmom
+    # to the 2026-09-25 evidence, a WEAK_PASS for one reason only - D-043's cap (2 cells, all five folds
+    # chose `crowding_window` 72) - and §3 admits PASS alone; it was written on 2026-09-08, before the cap
+    # existed.  The operator carried D-043's own reason over to a pointer move: the cap does not stop a book
+    # holding positions, so that book may move onto capped evidence.  Measured on main plus #163 plus its
+    # `ADOPTIONS` row, on the real record: 2 unattributed before, D-020 and KILL-AR-07; 1 after, KILL-AR-07,
+    # which clears with the first decided cycle under `221d001c3c07a626`.  14 lines are the entry; 12 the
+    # route, reading the verdict, every reason being the cap and an earlier adoption of the strategy; 7 its
+    # docstring and signature; 6 the adoption-order bookkeeping.  Eight mutations each turned one control
+    # red.  The 21 lines over were not golfed.  40 above again.
+    # +54 beidou_governance (4_216 -> 4_270), 2026-09-27, operator's choice of option B: the replay's
+    # construction rows read what DL-G9 put in the record.  Phase 0 wrote "Phase 1：构造变化时落全量构造"
+    # into every one of them at 20:25 +08:00 on 2026-09-08; DL-G9 (a9f4f255) shipped `construction_full`
+    # 38 minutes later, and the live loop has written it on each process's first cycle since that day's
+    # 20:00Z restart.  The text stood for 19 days, the staleness #170 and #172 fixed in two other rows.
+    # Measured on the real record: of the six changes the aliases leave, the two after 09-08 carry both
+    # sides - `46b8d731` moved `portfolio.vol_target` 0.3 -> 0.6 alone, `0c555e1c` moved D3's three band
+    # keys - and the replay now names them; the four of 09-04 still say they cannot be read.  `_moved`
+    # diffs against the raw digest just before a change, not the canonical one: `b8f215ab` is aliased to
+    # `0c555e1c`, so the canonical side would book v10's `stop_loss_price_cap` to #163's k switch - a
+    # mutation of the new test showed exactly that.  31 of the 54 are code (`_flat`, `_moved`, the two
+    # texts a row can say), 17 the docstrings and comments on why the diff reads raw digests as JSON text
+    # with `payload_version` kept, 6 blank.  `governance replay` on the real record, before and after: 15
+    # reproduced, 34 differences, 0 unattributed; only the six construction rows moved, also on top of #177.
+    # The 14 over were not golfed.  40 above again.
+    "beidou_governance": 4_310,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

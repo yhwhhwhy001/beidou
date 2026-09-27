@@ -28,6 +28,7 @@
 | universe | 标的池、宇宙 | `universe` |
 | throttle | 节流阀 | `drawdown_throttle` |
 | family gate | 家族门 | `family_gate` |
+| startup gate | 启动门、启动闸 | `registry_evidence_problems` 与 `registry_dataset_problems` 的 blocking 那一半，armed `live run` 拒绝启动看的就是这两处；写入时由 `governance_cmd._gate` 问（2026-09-27 起，旧文不改） |
 | ceiling | 天花板 | `ceiling` |
 | alert | 呼叫（名词用法） | `alerts` |
 | regime | 行情状态 | `regime_split_sharpes`、`regime_window` |
@@ -86,6 +87,9 @@
 `缺口`写中文，指存储里两根相邻 bar（或两次相邻结算）之间少掉的那段，代码里是 `KlineStore.gaps`。
 向源头问过、源头也没有、记进 `confirmed_gaps.json` 的那种写 **confirmed gap**，不写「已确认缺口」
 「真缺口」（2026-09-25，`beidou data repair`）。旧文里的「真缺口」不改。
+
+`轮`写中文，指一份 shadow soak 记录里每 168 个尝试过的周期（OK 与 ERROR 算，SKIPPED 不算），
+说「第二轮」「最近一轮」（2026-09-26）。代码里是 `beidou_governance/canary.py` 的 `rounds`。不写 round。
 
 ## 没定的怎么办
 

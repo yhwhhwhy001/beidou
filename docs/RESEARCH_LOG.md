@@ -16929,3 +16929,336 @@ REST 共 6 次，没有日归档文件。6 个都没有新行，全部记为已�
 合入后快进主 checkout，跑两个构造测试，在安全窗口重启一次，并按 CLAUDE.md 记重启。构造清零 M-010、M-G06
 与 `realised_vol`，这是改 k 的已知代价。
 
+## 2026-09-25 · 重启 #57：操作者要求重启；新进程载入 #155 的下单路径修复，构造不变
+
+只记可观测事实。
+
+- **谁、为什么**：操作者在会话里说「重启北斗量化交易系统」，由该会话执行。
+- **命令与窗口**：2026-09-25T17:08:51Z 发出 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，17:09:21Z 返回。
+  这个时刻在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
+- **重启前**：主 checkout 在 `5fbe4163`（15:47:38Z 快进，见 reflog）。两个构造测试 17:08:34Z 跑，15 passed。
+- **进程**：PID 51356（2026-09-23T16:41:38Z 启动）→ 75336（2026-09-25T17:09:21Z 启动）。`state.restarts` 56 → 57，
+  `restarted_at` 2026-09-25T17:09:21Z。
+- **源文件 mtime 对新进程的启动时刻**：`beidou_live/engine.py`、`beidou_data/live_feed.py`、
+  `beidou_exchange/binance_usdm/rest_client.py` 都是 15:32:53Z；`beidou_governance/policy.py` 07:29:40Z；
+  `deploy/run_live.sh` 05:33:06Z；`config/live.demo.yaml` 09-23T04:55:35Z；`config/alpha_registry.yaml` 09-23T13:31:17Z。
+  全部早于 17:09:21Z，所以新进程跑的是 `5fbe4163` 的代码。旧进程启动时这些文件大多还没改，#155 的四条下单路径
+  修复（−1007 不再重发、代理 503 重试、平仓单先发、单个币 400 不拖垮周期）从这次重启起生效。
+- **启动日志**：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13`；
+  - 交易所时钟偏差 +1.9s；
+  - `restart was 569.1s after the bar close (window 87.2s); reconciled but did not rebalance`，为 16:00Z 那根 bar
+    写了一行 SKIPPED。那根 bar 旧进程已在 17:00:29Z 跑完，没有漏掉退出检查。
+- **启动时的证据门**：都由 bridge 的 `--allow-unvalidated` 放行，与 09-23 那次启动相同。
+  - tsmom 的证据是 FAIL；
+  - tsmom 引用的成员表变了（同日 14:05–14:23Z 重建）；
+  - flow 没有 manifest。
+- **`live status --check`（17:09:53Z）**：registry `7f8adb754962`、治理规则 `d62ac59fa95c` 与在跑的循环一致；
+  最近 24 小时 24 个周期，完成 100%。
+- **第一个真周期**：18:00:29Z 处理 17:00Z 的 bar，没有错误，没有护栏，0 单；心跳 OK，universe 17 个。
+- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。
+
+构造没有变：k 仍是 0.60，档位、规则摘要都没动。改 k 的切换是 #163，按裁定在 2026-10-13T00:00Z 之后合入。
+
+## 2026-09-26 · shadow soak 跑满 168 不停：有失败周期就以 1 退出，launchd 静默起了第二轮
+
+只记可观测事实。读取时刻 2026-09-26T17:40Z 前后，全部只读。
+
+**现象。**
+
+- `~/Library/Application Support/beidou/shadow.stderr.log` 第 487 行：
+  `Error: 3 of 168 cycle(s) failed; see .beidou/live-shadow-dry-run/heartbeat.json`。
+- `launchctl list`：`com.beidou.shadow` 上次退出码 1，当前 PID 26020。
+  `state.json` 的 `restarted_at` 是 2026-09-23T08:00:27Z，`restarts` 是 1。
+- `.beidou/live-shadow-dry-run/cycles.jsonl` 249 行，分两段：
+  - 第一轮：第 1–168 行，bar 09-16T08:00Z 至 09-23T07:00Z，construction `ccd7bb9764b5`。
+    3 个 ERROR（09-16T12:01Z、09-21T18:01Z、09-21T21:00Z），都是代理 503。末行 `at` 是 08:00:26Z。
+  - 第二轮：第 169 行起，bar 09-23T08:00Z 起，construction `b8f215ab706c`。已有 1 个 ERROR（09-23T16:01Z）。
+- `governance canary` 读了全部 249 行：`soak 249/168` PASS，`construction_stable` FAIL
+  （2 distinct construction digests），总判 UNHEALTHY。
+
+**机制。**
+
+- `live run --cycles N` 在 `done < cycles` 时抛 ClickException，退出码 1（`beidou_cli/live_cmd.py`）。
+- plist 设了 `KeepAlive {SuccessfulExit: false}`，非零退出立即拉起。`run_shadow.sh` 用 `exec`，退出码直接交给 launchd。
+- RUNBOOK 与 plist 注释写的是「soak 在 168 周期正常结束」。这句只在 168 个周期全部成功时成立。
+- 还有第二条路：`RunAtLoad`。零失败、以 0 退出的一轮，下次登录或 `launchctl load` 时也会再起一轮。
+
+**切开之后的读数**（同一份记录，只读）：第一轮单独评是 HEALTHY：168/168，最长 ERROR 连续 1，
+construction 只有 1 个。第二轮单独评只差 `soak` 一项，读到的是 82/168。baseline 截到同一窗口不改判，
+shadow 与 armed 的 guard 率都是 0.000。
+
+**修法的定价。** 选 A。
+
+| 修法 | 赶得上 09-30T08:00Z 吗 | 代价 |
+| --- | --- | --- |
+| A. launcher 启动前问记录：满了以 0 退出，没满只跑欠的周期 | 赶得上：launchd 拉起时重新执行脚本 | 每轮结束多一次秒级的拉起；bash 分支要在 3.2 上真跑；进程崩溃后改为接着跑同一轮，此前是另起 168 |
+| B. `live run --cycles N` 有失败也以 0 退出 | 赶不上：PID 26020 跑的是旧代码 | 改 CLI 的退出码契约，手跑 `--cycles 1` 冒烟失败了也是 0 |
+| C. 「跑满但有失败」单独一个退出码 | 赶不上，同上 | `KeepAlive` 不认具体退出码。要在 bash 里翻译就得去掉 `exec`，`launchctl` 的 SIGTERM 会打到 bash 而不是循环，DL-L6 的优雅停机失效 |
+| D. 改 plist 的 `KeepAlive`，例如 `{Crashed: true}` | 要重新装载，bootout 等于停掉 PID 26020 | 操作者动作。Python 崩溃是退出码 1 而不是信号，改完连普通崩溃也不再拉起，这改变了 RUNBOOK 写明的行为。也挡不住 `RunAtLoad` |
+
+A 落地为三处：
+
+- `beidou_governance/canary.py` 的 `rounds` 把记录切成每轮 168 个尝试过的周期（OK 与 ERROR；SKIPPED 不算，`engine.run` 也不数它）。
+  `evaluate` 只评最近一轮，`governance canary` 与 `plan`/`apply` 走的 `canary_health` 因此一起改。
+- `governance canary --remaining` 用同一个切法答最近一轮还欠几个周期。`run_shadow.sh` 每次启动前问它。
+  答 0 就以 0 退出；答 N 就 `--cycles N`。soak 长度只在 `SOAK_CYCLES` 写一次，脚本里的 168 删掉了。
+- RUNBOOK「shadow soak 怎么停」一节与 plist 注释改成实际机制。plist 的键没动。
+
+一个用真实 `run()` 跑出来的读数定了切法的一处细节：最后一个周期失败后，退避会在它后面写 SKIPPED 行。
+若把这些行算作下一轮的开头，launcher 会把跑完的 soak 读成「还欠 168」。所以 SKIPPED 行留在所属的那一轮。
+
+**没做的。** 没重启、没停止 shadow、paper-l3、实盘的任何进程。没改 `~/Library/LaunchAgents` 下的 plist。
+没动 `.beidou/live-shadow-dry-run/` 的任何一行。`live run` 的退出码没改。
+
+**生效条件。** launchd 执行的是主 checkout 的 `deploy/run_shadow.sh` 与 `.venv/bin/beidou`。PID 26020
+约在 2026-09-30T08:00Z 跑满第二轮，照旧以 1 退出；launchd 拉起的是主 checkout 当时那一份。
+所以主 checkout 要在那之前快进到含这次修复的 main。之后第二轮留在记录里，canary 评它；要不要起第三轮，
+按 RUNBOOK 移走记录，由操作者定。
+
+**补记（2026-09-26）：已快进。** #166 于 18:37:23Z 合入，merge commit `06e1d485`。主 checkout 于 18:37:49Z
+从 `593fe4dc` 快进到它，只带进 #166 的提交。快进后，主 checkout 的 venv 答 `--remaining` 为 86。PID 26020 未受影响。
+
+## 2026-09-26 · canary 的两个读者口径不一致：别名与基准窗口
+
+只记可观测事实。读取时刻 2026-09-26T18:00Z 前后，全部只读。两份 `cycles.jsonl` 先拷成快照再算，
+sha256 与源文件一致。两处是修 shadow soak（#166）时顺带发现的。#166 没动它们：它们改变晋级门的读数，
+要先报操作者定。
+
+**第 1 条：别名。**
+
+- `governance canary` 先把 digest 过 `CONSTRUCTION_ALIASES`，再数 `construction_stable`。
+  `plan`/`apply` 经 `_admission` → `admit` → `canary_health` 读同一份记录，按 raw digest 数。
+- `admit` 手里有别名表，只传给了 `clean_days`。同一次 `admit` 里，K-EX14 的时钟读 canonical，
+  canary 读 raw。
+- 来历：`canary_health` 写于 09-09 23:15（3ffe58c6）。13 分钟后 048204f7 给 `canary.evaluate`
+  加了 `aliases`，只改了 `canary_cmd`。
+- 复现：用真实别名对 `b8f215ab → 0c555e1c` 造一轮 168 个周期、中途改名的 soak。
+  `governance canary` 判 HEALTHY；`admit` 判 REFUSED，唯一理由是 `flow: L4: the canary soak did not pass`。
+- 真实记录上不改判。shadow 的两个 raw digest 本就属于两个 canonical 构造（`46b8d731`、`0c555e1c`）。
+  #166 评的最近一轮只有一个 digest。
+- 反事实：把 armed 的 digest 序列当作 shadow 的代理，419 个可能的 soak 起点里有 81 个（19.3%）会分歧。
+  它们全在 09-04..06 与 09-17..18。这个数偏高：digest 只在重启时变，armed 重启过 57 次，
+  shadow 自 09-16 只重启过 1 次。构造冻结期内是 0。
+
+**第 2 条：基准窗口。**
+
+- 三处文字写「同一窗口」：`canary.py` 的模块 docstring、`canary_cmd` 的 docstring、canary 测试的 docstring。
+  两处调用都传 armed 的整份 `cycles.jsonl`。用基准的只有 `guard_rate` 一项。
+- 读数：五份 `cycles.jsonl` 合计 1,397 行，guard 从未触发。#166 评的最近一轮上，shadow 0.000（分母 81），
+  armed 整份 0.000（分母 577），armed 同窗 0.000（分母 81）。不改判。
+- 何时改判：guard 的四个原因里有三个是共模的（`STALE_MARKET_DATA`、`KILL_SWITCH`、`DAILY_LOSS_PAUSE`）。
+  shadow 与 armed 在同一根 bar 上的 equity 中位差是 0。一轮里出现 ≥12 根共模 guard bar，整份口径就误判 FAIL；
+  armed 记录到 5,000 行时，门槛降到 9 根。反方向：armed 早期的 guard 事件抬高基准，
+  能掩护候选自己触发的 `GROSS_CAPPED`。今天这一侧是 0。
+
+**裁定。** 操作者 2026-09-26 选定：第 1 条「传下去」，第 2 条「截到被评那一轮，空窗判 FAIL」。
+代价先报过。第 1 条让 `plan`/`apply` 在别名情形下放松，与 `governance canary` 一致。
+第 2 条把分母从 577 缩到 81，并新增一种失败：armed 在这一轮的 bar 上没有已决周期。
+
+**落地。**
+
+- #167：`canary_health` 加 `aliases` 参数，不给默认值；`admit` 把手里的表传下去。
+- 第 2 条：`canary._same_bars` 取 armed 在被评那一轮 bar 区间里的已决周期当基准。区间按 `bar_open_ms`
+  取闭区间，不按 `at`：两个循环收同一根 bar 的时刻差几秒。空窗时 `guard_rate` 判 FAIL，
+  detail 写 `no decided armed cycle over bars …`。正常时 detail 印出两边分母与 bar 区间。
+  模块 docstring 原写「every check」都对照 armed，改成只有 `guard_rate` 用基准。
+- 新代码在同一份快照上的读数：只有 `soak` 一项 FAIL（82/168）。`guard_rate` 是 PASS，
+  `shadow 0.000 over 81 vs armed 0.000 over 81, bars 2026-09-23T08:00..2026-09-26T17:00`。
+
+**顺带发现，没做。**
+
+- `plan`/`apply` 路径上的 `startup_gate` 永远判 PASS：没有调用者传非零的 `gate_refusals`，
+  只能靠 `governance canary --gate-refusals N` 手填。
+- `beidou_governance/replay.py` 里 L4 的 SuspendedCondition 仍写「Canary 尚不存在」。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。
+没跑 `report daily`，没跑 `governance apply`。
+
+**生效条件。** 两处都只在下次手动跑 `governance canary`、`plan`、`apply` 时生效。运行中的进程在启动时
+已导入旧代码，不会中途换。没有定时任务跑这三个命令。
+
+## 2026-09-27 · startup gate 只在写入时问：canary 删掉恒 PASS 的一项，写入的 gate 补上 dataset 那一半
+
+只记可观测事实。读取时刻 2026-09-26T19:12Z 前后，全部只读。来由是上一节「顺带发现」的第一条：
+`plan`/`apply` 路径上的 `startup_gate` 永远判 PASS。
+
+**shadow 见过的 startup gate 读数。**
+
+- 读数只在 launchd 的两个日志里：`shadow.stdout.log`、`shadow.stderr.log`。`live run --dry-run` 把它打印成
+  `evidence:`、`dataset:` 行，不写 `cycles.jsonl`、`heartbeat.json`、`state.json`。
+- 对齐方法：stderr 的 `venue clock offset` 每个进程只在 `startup` 里打一次，共 7 条，没有 `could not sync`。
+  stdout 的 `shadow: soaking` 也是 7 条，按顺序对上。最后一对用 PID 26020 的启动时刻核过。
+  stderr 用本地时间（+08:00），下表换成了 Z。
+
+| 启动 | 时刻（Z） | 记录 · 轮 | `dataset:` | `evidence:` |
+|---|---|---|---|---|
+| #1 | 09-12 13:21 | 归档记录 · 唯一一轮 | 2 条 advisory | 0 |
+| #2 | 09-12 15:05 | 同上 | 2 条 advisory | 0 |
+| #3 | 09-13 20:39 | 同上 | 2 条 advisory | 1：`tsmom: portfolio vol_target is 0.6 live but 0.3 in the cited evidence` |
+| #4 | 09-14 19:11 | 同上 | 2 条 advisory | 1：同上 |
+| #5 | 09-14 20:25 | 同上 | 2 条 advisory | 1：同上 |
+| #6 | 09-16 08:21 | 当前记录 · 第 1 轮 | 2 条 advisory | 0 |
+| #7 | 09-23 08:00（PID 26020） | 当前记录 · 第 2 轮 | 2 条 advisory | 1：`tsmom: evidence verdict FAIL does not allow live use` |
+
+- 归档记录是 `.beidou/live-shadow-dry-run.20260916-drifted-candidate`，90 行，一轮未满。
+  当前记录 251 行。第 1 轮是行 1–168，3 个 ERROR，已满。第 2 轮是行 169–251，83/168，1 个 ERROR，正在被评。
+- 14 条 `dataset:` 全是 advisory：7 条 `dataset store contents changed`，7 条 `flow: no dataset manifest recorded`。
+  blocking 的措辞一条也没有。
+- 7 次启动里 4 次有 `evidence:`，不带 `--allow-unvalidated` 的 armed 启动会因此拒绝。dry-run 不拒绝，
+  所以它们只进了日志。
+- canary 对第 2 轮读 `startup_gate PASS 0 refusals`。
+
+**写入的 gate 只问一半。**
+
+- armed `live run` 拒绝启动的条件是 `if problems or dataset.blocking`。一半是 evidence，一半是 D-041 的 dataset blocking。
+- `governance_cmd._gate` 只调 `registry_evidence_problems`。`promote.py` 写着「it is the SAME function startup
+  calls」，D-041 之后不再成立。
+- 当天按磁盘上的文件重算，不是日志读数。候选与 armed 结果相同：evidence 1 条（tsmom verdict FAIL），
+  dataset.blocking 1 条（09-24 重建 membership，refreshes 2056 → 2063），advisory 2 条。写入的 gate 只说得出第一条。
+
+**为什么这次改不动任何一次写入。** 当天在真实记录上只读复算 `admit`：
+
+- `promoting ()`。候选与 armed 只差注释，canary 结论不进判定。
+- `clean_days` 9.1，K-EX14 要 30。#163 在 10-13 后把构造指纹 `b8f215ab` 改成 `4b2dc74b`，这个时钟会重置。
+- 写入的 gate 因 verdict FAIL 拒绝一切写入。
+
+所以约 11-12 之前，下面的改动不改变任何一次写入的结果。
+
+**定价与裁定。** 报了四个方案。A：dry-run 把读数写进每行 cycle，两个读者都读它。B：删掉这一项。
+C：只写文档。D：写入的 gate 补上 dataset 那一半，可配 A 或 B。A 记的是 soak 开始时的读数，到写入时至少过期 7 天。
+第 1 轮就是反例：开始时 0 条；09-19 候选的 tsmom 指针在轮中换成 FAIL 证据；A 仍会判它 PASS。
+操作者 2026-09-27 选 B + D。
+
+**落地。**
+
+- B：`canary.evaluate` 删掉 `startup_gate` 与 `gate_refusals`。`canary_health`、`admit` 删掉同名参数，
+  `governance canary` 删掉 `--gate-refusals`。canary 现为 6 项。此前全仓库没有调用者传过非零值。
+- D：`_gate` 问 evidence，再加 `registry_dataset_problems(...).blocking`，与 `live_cmd` 同一判据。
+  `plan`、`apply` 加 `--data-root`，默认 `.beidou/data`，与 `live run` 相同。`live_cmd.py` 没动。
+- 测试：`tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`。四种读数各造一次：没动、sync 追加 bar、
+  membership 重建、verdict FAIL。每种分别交给 `plan` 与 armed `live run`，两边都要等于字面值。armed 那一侧
+  在闸后第一行 `resolve_universe` 抛哨兵异常，碰不到凭据和 venue。
+- 先红后绿。只接上 `--data-root` 时，membership 重建那一格红：`plan` 放行、armed 拒绝，`apply` 真的写了进去。
+  补上 dataset 那一半后全绿。
+- `beidou_cli` 超 ceiling 8 行，同一提交抬顶，理由写在 `test_source_budget.py`。
+- RUNBOOK 加「startup gate 在写入时问」一节；GLOSSARY 加 `startup gate`；计划文档 §5 L4 行加更正注。
+
+**改后的读数。** 同一份真实记录上，canary 对第 2 轮 6 项：`soak` FAIL（83/168），其余 PASS。
+写入的 gate 对候选与 armed 各报两条：evidence FAIL，membership。
+
+**顺带发现，没做。**
+
+- `admit` 不核「被评那一轮跑的 registry」与「要写的 registry」是不是同一份。shadow 每行有 `registry` 摘要，
+  没人拿它比 `after`。只读代码所见，没造数据复现。
+- 候选 registry 头注 2026-09-16 那段写「PID 802, started 09-15T04:24Z」。stderr 里那次启动是本地 04:25，
+  即 09-14T20:25Z，把本地时间标成了 Z。同段写记录移到了 `.beidou/live-shadow-dry-run.20260916`，
+  实际目录名多一个 `-drifted-candidate`。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
+没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
+
+**生效条件。** 只在下次手动跑 `governance canary`、`plan`、`apply` 时生效，没有定时任务跑这三个命令。
+launcher 只问 `--remaining`，这次没动。`live run` 没改，运行中的进程不受影响。
+
+## 2026-09-27 · L4 只为 soak 跑过的那份 registry 作保：admit 核对被评那一轮的 registry 摘要
+
+只记可观测事实。读取时刻 2026-09-26T20:15Z 前后，全部只读。来由是上一节「顺带发现」的第一条，
+操作者当天要求做掉。
+
+**缺口。**
+
+- shadow 的每个已决周期都写 `registry`，即进程持有的 `engine.registry_digest`（DL-Q0）。
+  `admit` 只问最近一轮健康不健康，从不拿这个摘要和要写的 registry 比。
+- 所以一轮 soak 了候选 A，也能为 B 作保。soak 之后改候选，或者给 `apply` 另一个文件，L4 都照读旧 soak 的健康。
+- 摘要覆盖策略、补齐默认值后的参数、权重、books、probe 止损、钉住的 universe。不含 evidence 指针和注释。
+
+**今天的读数。** 当前记录 252 行。两轮的已决周期上都只有一个摘要 `7f8adb754962`。候选与 armed 按引擎的
+算法算出来也是 `7f8adb754962`。所以对当前候选，这一项今天是 PASS，L4 仍只因 `soak`（84/168）不过。
+换一个摘要，L4 会多一条 `registry_soaked (the scored round ran 7f8adb754962; the proposal is …)`。
+
+**落地。**
+
+- `canary.evaluate` 多报一个读数 `registries`：被评那一轮已决周期上的摘要。它只是读数，不是检查：
+  `governance canary` 手里没有提议，判不了。
+- `canary_health` 加必填的 `registry`，新增一项 `registry_soaked`：这一轮只跑过一份 registry，
+  而且就是提议那份，才算过。一轮里有两个摘要也不过：候选在轮中被改，relaunch 会续跑同一轮。
+- `admit` 加 `registry`，默认 None，按关闭处理。L4 只在晋级时被问。
+- `_admission` 用引擎盖章的同一条路径算提议的摘要：`registry_digest(build_model(...))`。
+  当天实测，`build_model` 对没有启用策略的 registry 抛 `ValueError: registry has no enabled strategies`。
+  那是「停」的形状：停不晋级，L4 不会被问到，所以这里记为 None，不抛异常。
+- `plan_cmd` 只读一次提议文件，admission 与事务用同一份字节。`apply_cmd` 本来就是这样。
+- RUNBOOK 加「L4 只为 soak 跑过的那份 registry 作保」一节。
+
+**测试。** 新文件 `tests/governance/test_the_canary_vouches_only_for_the_registry_it_ran.py`，先红后绿。
+
+- 红：6 条。5 条是新参数还不存在，`plan` 那条是断言失败。「全部停用的 plan 仍放行」是护栏，改之前就绿。
+- 四个变异全部被杀死：核对恒过，5 条红；拿当前 registry 而不是提议去算，2 条红；只要求包含、不要求唯一，
+  1 条红；去掉 `ValueError` 的保护，1 条红。
+- 四个已有测试跟着补 `registry`：夹具按真实记录补 `7f8adb754962`，或者盖上引擎对提议的摘要。
+
+**已知的边界。** `registry_digest` 的算法本身变了，摘要也会变，registry 却没变。跨这种改动的 soak 会被判
+不一致。方向是拒绝，处理是重新 soak。这次没有给它做别名表。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行，没打开 `env.sh`。
+没跑 `report daily`。`governance plan`、`apply` 只在测试的临时目录里跑过，没对真实记录跑。
+
+**生效条件。** 只在下次手动跑 `plan`、`apply` 时生效，要等主 checkout 快进之后。没有定时任务跑这两个命令，
+`live run` 与 launcher 都没动。
+
+## 2026-09-27 · M-011 读了十九天的 09-07：归档没人刷新，补齐后比率列第一次被比到
+
+只记可观测事实。读取时刻 2026-09-26T20:00Z 至 09-27T05:10Z，全部只读。唯一一次灌入跑在 scratch 副本上，
+没碰 `.beidou/`。来由是 #172 描述里的顺带发现：日报的平价自 09-16 起每天判未满足。
+
+**缺口。**
+
+- 归档 store `.beidou/data/metrics/` 只在 09-09 手动灌过一次，名单是当时 pit universe 的 205 个币。
+  每个币都停在 2026-09-07T23:55Z。
+- `deploy/run_data.sh` 不排 `data metrics`。那段注释（3fdba392 起）只算了研究面板一个读者，
+  漏了每小时读它的 `report daily`。
+- 快照每个周期只取最近 12 个桶，不回补。LSKUSDT、NEARUSDT 在 09-16T01:00Z 的周期进 universe，
+  快照从 09-15T23:55Z 起，和归档一个桶也碰不上。LSK 09-16 才第一次入池，连归档文件都没有。
+- 其余 15 个币每天比的都是 09-07 10:55–23:55Z 的 155–156 个桶。六列里只比了两列持仓量：
+  快照的四个比率列 09-12 12:55Z 才有值。09-09 至 09-15 七份日报的「满足」，说的都是 09-07。
+
+**落地（#176，c89ef6d4）。**
+
+- 平价块写出 `compared_through`（按最旧的币折叠）、`stalest_symbol`、`why`。
+  `met` 取 `parity_satisfied` 在报告时刻的答案，报告里不再自带一份规则。
+- `parity_satisfied` 要 `now`。没写 `compared_through`，或比 `now` 早超过 `PARITY_MAX_AGE`（3 天），都不算满足。
+- `data metrics` 不带参数时取快照 store 的全部币，截到昨天。`run_data.sh` 每晚跑它。
+- 真实 store 上新旧代码对比，去掉 LSK、NEAR，即 09-09 至 09-15 的形状：旧代码 `met: true`；
+  新代码 `met: false`，理由是最新比对桶 2026-09-07T23:50Z 超过 3 天。
+
+**补齐之后，比率列第一次被比到。** 新步骤在 scratch 副本上跑了一遍：`/bin/bash` 3.2.57，
+09-26T20:28Z 开跑，32 秒，21 个币补到 09-25T23:55Z，LSK 从零 30 天共 8,640 行。在这份数据上算平价：
+
+| 列 | 对齐 | 同桶比对对数 | 相对差 |
+| --- | --- | ---: | --- |
+| `sum_open_interest`、`sum_open_interest_value` | 同桶 | 80,504 | 0 处不同 |
+| `count_toptrader_long_short_ratio` | 同桶 | 58,196 | 中位 1.1e-4，最大 3.9e-4 |
+| `count_long_short_ratio` | 同桶 | 58,172 | 中位 1.1e-4，最大 3.8e-4 |
+| `sum_toptrader_long_short_ratio` | 同桶 | 58,188 | 中位 1.2e-5，最大 8.6e-5 |
+| `sum_taker_long_short_vol_ratio` | **错开 5 分钟** | 53,813 | 同桶中位 45%；快照挪后 5 分钟再比（53,798 对），中位 2.0e-4，最大 8.6e-3，5.8% 超过 1e-3 |
+
+- 三个比率列时间对得上，差在 1e-4 量级，超出 `metrics_parity` 的 1e-6 容差。快照值四位小数（例 1.3031），
+  归档六位（1.302937），差比四舍五入大，机制没查。
+- taker 列：`bucket_open_from_rest` 对五个端点一律减一个周期。这个约定是在持仓量端点上核出来的（166/166）。
+  09-12 加四个比率端点时核的是值域，每个值落在自己那一列的归档区间内，没有逐个端点核时间偏移。
+
+今天没有交易后果：`oi()` 读持仓量，`lsr()` 读 `count_long_short_ratio`，没有叶子读 taker 列，也没有 booked
+候选。但第一次夜间 `data metrics` 之后，M-011 会从「2 个币不可量」变成「最差的币 99.9% 的桶不一致」。
+
+**待操作者裁。**
+
+1. 比率列的容差。维持 1e-6，读比率列的候选永远过不了 M-011；改成相对容差 1e-3，实测全部落在内。
+2. taker 列：修偏移，还是 M-011 只比叶子读的列。修偏移要按偏移契约核过，循环重启后才生效，
+   已写下的快照行仍然错位。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的任何一行。没跑 `report daily`，
+没在真实数据根上跑 `data metrics`，没跑 `governance apply`。
+
+**生效条件。** 本会话在 2026-09-27T05:07Z 把主 checkout 快进到 60468a63（#176）。05:10Z 那次每小时检查
+写出的平价块已是新格式：`compared_through` 2026-09-07T23:50Z，`why` 为 2 symbols have no overlapping buckets。
+第一次夜间 `data metrics` 在 2026-09-27T17:20Z。

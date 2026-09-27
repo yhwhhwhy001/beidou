@@ -131,6 +131,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     margin_and_rejections,
     max_weight_of,
     noise_scale,
+    plain_leverage_lines,
     risk_adaptation,
     risk_adaptation_headline,
     tail_readings,
@@ -154,6 +155,7 @@ def daily_payload(
     closes: Callable[[str], pd.Series] | None = None,
     exits: ExitParams | None = None,
     fidelity: ReplayInputs | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -242,7 +244,9 @@ def daily_payload(
         # they share?  The whole same-source contract is this one number, and until now `metrics_parity`
         # existed with nothing calling it - which is the shape this repository keeps finding, a
         # measurement that is written but never taken.
-        "metrics_parity": metrics_parity_status(sorted(cycles[-1].get("universe") or []) if cycles else [], data_root),
+        "metrics_parity": metrics_parity_status(
+            sorted(cycles[-1].get("universe") or []) if cycles else [], data_root, now=now or datetime.now(UTC)
+        ),
         # The instrument the 2026-09-08 ruling owes: the denominator stays total equity, so the
         # pro-cyclical amplifier is an ACCEPTED risk - and an accepted risk with nothing measuring it is
         # a sentence.  Beside `risk_budget` rather than inside it on purpose: it is not a threshold and
@@ -844,6 +848,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 }
                 or {"none": 0},
             ),
+            # The rows of the section below, in the operator's words (`plain_leverage_lines`, 2026-09-26).
+            ("真实杠杆（白话）", plain_leverage_lines(payload.get("risk_adaptation") or {})),
             (
                 # Where per-symbol adaptation actually lives (D-037): the weight, not the leverage
                 "Risk adaptation per symbol (M-015)",
@@ -868,6 +874,7 @@ __all__ = [
     "daily_payload",
     "expectations_from_evidence",
     "latest_risk_adaptation",
+    "plain_leverage_lines",
     "preregistration_problems",
     "preregistration_skipped",
     "risk_adaptation_headline",

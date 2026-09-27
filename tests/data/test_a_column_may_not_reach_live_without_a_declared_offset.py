@@ -370,7 +370,7 @@ def test_the_contract_and_metrics_parity_reach_the_same_verdict_on_the_same_buck
     correct = metrics_parity(parse_rest_rows(rest_rows, FIVE_MIN_MS), archive)
     naive = metrics_parity(parse_rest_rows(rest_rows, 0), archive)
 
-    assert correct == {"overlapping": 60, "differing": 0, "rate": 0.0}
+    assert correct == {"overlapping": 60, "differing": 0, "rate": 0.0, "through": opens[-1]}
     assert naive["rate"] == 1.0 and naive["differing"] == naive["overlapping"] == 59
     assert verify_stamp_offset(METRICS, _archive_sample(), _rest_sample()).verdict == PASS
     assert (

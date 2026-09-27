@@ -43,10 +43,10 @@ from beidou_live.state import StateStore
 
 HOUR_MS = DAY_MS // 24
 
-# Binance spot, the price of one USDC in USDT: the only stablecoin pair the archive holds.  `beidou data spot`
-# maps every perpetual the kline store holds to its spot leg, and `klines/USDCUSDT/` is there from the 2026-09-18
-# backfill, so this spot series is refreshed every day as a side effect.  Prune that directory, or run `data spot`
-# with `--symbols`, and it stops; `lag_bars` is what would show it.  The series has a 3,996-hour hole, from
+# Binance spot, the price of one USDC in USDT: the only stablecoin pair the archive holds.  The daily `beidou data
+# spot` maps it whatever the kline store holds - `beidou_data.spot.ALWAYS_MAPPED` pins it, and a test keeps this
+# name in that tuple - so pruning `klines/USDCUSDT/` no longer stops it; an explicit `--symbols` run still skips
+# it that day, and `lag_bars` is what would show it.  The series has a 3,996-hour hole, from
 # 2022-09-26T02:00Z to 2023-03-11T14:00Z, so it holds nothing for FTX (2022-11) and picks USDC's own depeg up at
 # its first bar back, whose low was already 0.882.
 PEG_PAIR = "USDCUSDT"

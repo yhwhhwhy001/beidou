@@ -48,6 +48,7 @@ from beidou_live.leverage import (
     tier_leverage,
 )
 from beidou_live.rebalancer import PlannedOrder
+from beidou_live.report_risk import latest_risk_adaptation, plain_leverage_lines
 from beidou_live.state import StateStore
 from beidou_shared.types import Side, VenueError
 from tests.fakes.fake_venue import FakeVenue
@@ -528,6 +529,21 @@ async def test_a_by_vol_cycle_writes_nothing_undeclared(august_panel: Panel, tmp
 
     row = world["store"].read_jsonl(world["store"].cycles_path)[-1]
     assert "leverage_tiers" in row and not undeclared(row)
+
+
+async def test_the_plain_leverage_line_names_the_tiers_by_vol_set(august_panel: Panel, tmp_path: Path) -> None:
+    """O-1（#175）那句白话读的是 `leverage_set`，所以分档之后它说的是「4x–8x」，不再是「一律 5x」。
+
+    这是报告里 O-1 与 R1 接上的那一处：操作者问的就是交易所那一栏的数，分档之后那一栏各不相同，白话要跟着说。
+    钉在这里，免得哪天那句改成读配置里的 `leverage`，分档了却还写 5x。
+    """
+    world = _world(august_panel, tmp_path, leverage_sigma_ref=0.25)
+    await world["engine"].startup()
+    await world["engine"].guarded_cycle(world["bar"])
+
+    assert world["engine"].state.leverage_set == {"BTCUSDT": 6, "ETHUSDT": 5, "BNBUSDT": 8, "SOLUSDT": 4}
+    line = plain_leverage_lines(latest_risk_adaptation(world["store"]))[0]
+    assert "交易所那一栏的 4x–8x 只决定开仓占用多少保证金" in line, line
 
 
 @pytest.mark.parametrize(
