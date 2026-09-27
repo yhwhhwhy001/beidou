@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,8 @@ from beidou_governance.replay import (
     replay_live,
 )
 from beidou_governance.scheduler import parity_satisfied
+from beidou_live.engine import construction_fingerprint
+from tests.live.helpers_construction import live_config_for_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -313,7 +316,7 @@ def test_the_artefact_states_its_own_verdict() -> None:
 def test_a_fingerprint_change_with_no_behaviour_change_is_not_a_construction_change() -> None:
     """The first version of this replay reported six construction changes where four happened.
 
-    `beidou_live.health.CONSTRUCTION_ALIASES` exists precisely because two of the live record's
+    `beidou_live.construction.CONSTRUCTION_ALIASES` exists precisely because two of the live record's
     fingerprints differ from an earlier one only in fields nothing reads differently - `unit_mode`
     moved the digest without changing a byte of behaviour.  Counting raw digests overstates the thing
     §8's construction freeze is about, and it does so in the direction that makes the operator's
@@ -328,6 +331,63 @@ def test_a_fingerprint_change_with_no_behaviour_change_is_not_a_construction_cha
     aliased = replay_live(rows, [], construction_aliases={"renamed": "old"})
     assert len([d for d in raw.differences if "construction" in d.subject]) == 2
     assert len([d for d in aliased.differences if "construction" in d.subject]) == 1
+
+
+def test_the_construction_row_reads_what_dl_g9_put_in_the_record() -> None:
+    """Phase 0 wrote "Phase 1：构造变化时落全量构造" here at 20:25 +08:00 on 2026-09-08; DL-G9 landed at 21:03.
+
+    From the 20:00Z restart that day, every process has written `construction_full` on its first cycle.
+    The row went on saying no record holds what a change changed - for nineteen days, over two changes
+    with both sides on record (`vol_target` on 09-13, D3 on 09-17).  Found 2026-09-27 while #163's
+    replay readings were being checked.
+
+    Pinned to the writer: both payloads come from `beidou_live.engine.construction_fingerprint`, the
+    function the engine writes the field with, so a new shape fails here and not in a report nobody
+    rereads.  The engine side - first cycle only, `digest` equal to `construction` - is
+    `test_a_cycle_records_the_construction_a_report_could_describe`.  What moves is the shipped profile's
+    own `vol_target`, so #163's switch does not turn this red.
+
+    Two shapes from the real record, and the row must still name only the key that moved:
+
+    * the restart before the change is an alias.  `b8f215ab` added v10's `stop_loss_price_cap` at its
+      off value and is declared to be `0c555e1c`; diffing against the canonical side would book that
+      key, and `payload_version`, to the next change - which is #163's k switch, the one built here;
+    * the change row carries no payload and a later row does.  A first cycle that ends in ERROR writes
+      none, so the payload is found by its own digest wherever it landed.
+    """
+    shipped = live_config_for_profile()
+    k = shipped.portfolio.vol_target
+    old = construction_fingerprint(shipped)
+    new = construction_fingerprint(replace(shipped, portfolio=replace(shipped.portfolio, vol_target=k / 2)))
+    v9 = {**old, "digest": "9" * 64, "payload_version": old["payload_version"] - 1, "exits": dict(old["exits"])}
+    v9["exits"].pop("stop_loss_price_cap")
+    rows = [
+        {"at": "2026-10-14T00:00:00+00:00", "construction": v9["digest"], "construction_full": v9},
+        {"at": "2026-10-14T01:00:00+00:00", "construction": old["digest"], "construction_full": old},
+        {"at": "2026-10-14T02:00:00+00:00", "construction": new["digest"]},
+        {"at": "2026-10-14T03:00:00+00:00", "construction": new["digest"], "construction_full": new},
+    ]
+    [change] = replay_live(rows, [], construction_aliases={old["digest"]: v9["digest"]}).differences
+    assert change.subject == f"construction {new['digest'][:12]} @ 2026-10-14T02:00:00+00:00"
+    assert f"，改了 `portfolio.vol_target` {json.dumps(k)} → {json.dumps(k / 2)}。" in change.attribution
+    assert "✔ DL-G9" in change.fix, f"DL-G9 landed; the row still says: {change.fix}"
+    assert change.kind == EVIDENCE_GAP and change.attributed, "what changed is readable; who ruled it is not"
+
+
+def test_a_construction_change_missing_a_side_still_says_it_cannot_be_read() -> None:
+    """The four 2026-09-04 changes predate DL-G9, and one missing side leaves a change as unreadable as two.
+
+    The first restart after DL-G9 has that shape in the real record: `dd32720d` carries the payload and
+    `c0e5c49c` before it does not.  The alias table folds that pair into one book, so it is built bare.
+    """
+    after = construction_fingerprint(live_config_for_profile())
+    rows = [
+        {"at": "2026-09-08T19:00:12+00:00", "construction": "c" * 64},
+        {"at": "2026-09-08T20:00:15+00:00", "construction": after["digest"], "construction_full": after},
+    ]
+    [change] = replay_live(rows, []).differences
+    assert "**改了什么**因此读不出" in change.attribution
+    assert "✔ DL-G9" in change.fix and change.attributed
 
 
 def test_dl_g9_turns_a_permanent_blind_spot_into_an_artefact_age_question() -> None:

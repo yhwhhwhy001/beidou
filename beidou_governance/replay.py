@@ -719,6 +719,42 @@ def _why_not_adopted(
     return Difference(name, "从未写进 registry", rules_say, UNATTRIBUTED, "")
 
 
+def _flat(payload: Mapping[str, Any], prefix: str = "") -> dict[str, str]:
+    """Dotted key -> the value as JSON text, the form `construction_fingerprint` hashed it in."""
+    out: dict[str, str] = {}
+    for key, value in payload.items():
+        if isinstance(value, Mapping):
+            out |= _flat(value, f"{prefix}{key}.")
+        else:
+            out[f"{prefix}{key}"] = json.dumps(value, sort_keys=True, ensure_ascii=False)
+    return out
+
+
+def _moved(before: Any, after: Any) -> str | None:
+    """What one construction change moved, read off two `construction_full` payloads; None without both.
+
+    DL-G9 (a9f4f255) writes the full construction on each process's first cycle, and a construction only
+    changes at a start, so a change after the 2026-09-08T20:00Z restart has both sides on record -
+    measured 2026-09-27, all six raw changes since do.  Compared as JSON text, as the digest hashed it:
+    `False == 0` holds in Python and not in the hash.
+
+    `before` is the RAW digest the loop recorded just before the change, not the canonical one.  An
+    alias in between adds a key at its off value - v8's `trailing_activate` sits between the two digests
+    D3 moved - and diffing against the canonical digest would book that key to D3.  `payload_version`
+    stays in, per v9's note in `beidou_live.construction`: a reader comparing two rows needs to know the
+    field set moved as well as the values.
+    """
+    if not (isinstance(before, Mapping) and isinstance(after, Mapping)):
+        return None
+    old, new = _flat(before), _flat(after)
+    shown = [
+        f"`{key}` {old.get(key, '—')} → {new.get(key, '—')}"
+        for key in sorted((old.keys() | new.keys()) - {"digest"})
+        if old.get(key) != new.get(key)
+    ]
+    return f"改了 {'；'.join(shown)}" if shown else "两侧逐键相同、digest 却不同"
+
+
 def replay_live(
     cycles: Sequence[Mapping[str, Any]],
     attribution: Sequence[Mapping[str, Any]],
@@ -729,9 +765,10 @@ def replay_live(
     """The downgrade side, replayed against the live record (§8 Phase 0 item D).
 
     What this can answer: whether the P&L stop would have fired, whether R5 would have frozen
-    promotion, how many cycles produce no decision at all, and how often the construction changed
-    against a rule that allows one change per window.  What it cannot answer is whether any of that
-    was *right* - the record is five days long and the rules count in months.
+    promotion, how many cycles produce no decision at all, how often the construction changed
+    against a rule that allows one change per window, and - since DL-G9 - which keys each change
+    moved.  What it cannot answer is whether any of that was *right* - the record is weeks long and
+    the rules count in months.
     """
     policy = policy or Policy()
     differences: list[Difference] = []
@@ -750,36 +787,53 @@ def replay_live(
     if not stops:
         reproduced.append("探针 P&L stop 从未触发：R5 连败计数 0，晋级不冻结，与 `stopped_books` 一致")
 
-    # Canonicalise before counting.  `beidou_live.health.CONSTRUCTION_ALIASES` declares digests that
+    # Canonicalise before counting.  `beidou_live.construction.CONSTRUCTION_ALIASES` declares digests that
     # differ from an earlier one only in fields with no behavioural effect - `unit_mode` moved the
     # fingerprint without changing a byte of behaviour, and the four `regime_*` did the same.  Counting
     # raw digests reported six construction changes where four happened, which overstates the very
     # thing §8's freeze is about.  The map is passed in rather than imported: governance depends on
     # alpha and shared, never on live, so that live can record the policy digest without a cycle.
     aliases = dict(construction_aliases or {})
-    fingerprints: list[tuple[str, str]] = []
+    # Each payload keyed by the digest it declares, off every row: a process writes it once, on its first
+    # cycle, and that is not always the row where the change shows - an ERROR row does not carry it.
+    full = {str(p.get("digest")): p for c in cycles if isinstance(p := c.get("construction_full"), Mapping)}
+    fingerprints: list[tuple[str, str, str, str]] = []
+    last = ""
     for cycle in decided:
         digest = str(cycle.get("construction") or "")
         if not digest:
             continue
         canonical = aliases.get(digest, digest)
         if not fingerprints or fingerprints[-1][1] != canonical:
-            fingerprints.append((str(cycle.get("at")), canonical))
+            fingerprints.append((str(cycle.get("at")), canonical, digest, last))
+        last = digest
     seen: set[str] = set()
     if fingerprints:
         seen.add(fingerprints[0][1])
-    for at, digest in fingerprints[1:]:
+    for at, digest, raw, before in fingerprints[1:]:
         rollback = digest in seen
         seen.add(digest)
+        moved = _moved(full.get(before), full.get(raw))
+        if moved:
+            said = (
+                f"**DL-G9 已交付**：两侧的 `construction_full` 都在记录里，{moved}。"
+                "仍归不到具名裁定：记录只说改了什么，不说谁授权"
+            )
+            missing = "要归到具名裁定还缺两样：`EXCEPTIONS` 里授权它的那一条，以及按变动的键匹配它的路由"
+        else:
+            said = (
+                "周期行只存构造的 sha256 digest，不可反解。DL-G9 之前的周期行不带 `construction_full`，"
+                "这次改动至少缺一侧。**改了什么**因此读不出，也就归不到具名裁定"
+            )
+            missing = "这一次缺的那一侧从记录里补不回来"
         differences.append(
             Difference(
                 f"construction {digest[:12]} @ {at}",
                 "构造回到一个此前出现过的指纹（回滚）" if rollback else "构造在实盘运行中改变",
                 f"§8 构造冻结：窗口之间不改 construction_fingerprint（窗口 = {policy.window_days} 天）",
                 EVIDENCE_GAP,
-                "记录只存 12 字符 digest，不存构造输入，因此这次改动**改了什么**无法从 artefact 读出，"
-                "也就无法归因到某一条具名裁定",
-                fix="Phase 1：构造变化时落全量构造（今天只有启动心跳有，且每次启动被覆盖）",
+                said,
+                fix=f"Phase 1 ✔ DL-G9：每个进程的第一个周期行落 `construction_full`。{missing}",
             )
         )
     if len(fingerprints) > 1:
