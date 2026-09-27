@@ -99,6 +99,18 @@ def bucket_open_from_rest(timestamp_ms: int, period: int) -> int:
     return int(timestamp_ms) - int(period)
 
 
+#: The one page that stamps a bucket by its OPEN, naming the instant the archive's `create_time` does.  The
+#: other four stamp the CLOSE.  Measured 2026-09-27 with `alignment.verify_stamp_offset` against the venue;
+#: until then every page took one period off and the snapshot filed each taker value five minutes early.
+#: `alignment.CONTRACTS` declares the same per column, and a test holds the two together.
+REST_STAMPED_AT_OPEN: frozenset[str] = frozenset({"/futures/data/takerlongshortRatio"})
+
+
+def rest_stamp_offset_ms(path: str, period: int) -> int:
+    """`REST stamp - bucket open` for one page: 0 where it stamps the open, one period where it stamps the close."""
+    return 0 if path in REST_STAMPED_AT_OPEN else int(period)
+
+
 def usable_from_ms(open_time_ms: int, period: int) -> int:
     """The earliest instant a bucket exists at all: its close.
 
@@ -144,20 +156,23 @@ def parse_rest_rows(
     mapping: Mapping[str, str] | None = None,
     *,
     symbol: str = "",
+    stamp_offset_ms: int | None = None,
 ) -> pd.DataFrame:
-    """A REST page, in the same canonical shape, with the close-stamp converted once and here.
+    """A REST page, in the same canonical shape, with its stamp converted once and here.
 
     ``mapping`` says which of THIS endpoint's keys are which archive column; the default is the open
     interest page, which is what every caller before 2026-09-12 meant.  ``symbol`` is needed because
     `/futures/data/takerlongshortRatio` is the one page that does not echo it back.
+    ``stamp_offset_ms`` is `rest_stamp_offset_ms` for the page; unset, the close stamp of open interest.
     """
     columns = dict(mapping or REST_TO_ARCHIVE)
+    offset = int(period) if stamp_offset_ms is None else int(stamp_offset_ms)
     out = []
     for row in rows:
         values = {archive: row.get(rest) for rest, archive in columns.items()}
         out.append(
             {
-                "open_time": bucket_open_from_rest(int(row["timestamp"]), period),
+                "open_time": int(row["timestamp"]) - offset,
                 "symbol": str(row.get("symbol") or symbol),
                 **{c: values.get(c) for c in VALUE_COLUMNS},
             }
