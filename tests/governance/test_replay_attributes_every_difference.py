@@ -4,7 +4,10 @@ Two tests carry the acceptance and one carries the register.
 
 T-G0-1 is the register: the seven rulings Phase 0 was told to account for are declared, each with the
 rule it conflicts with and the reason it stays an exception rather than becoming a rule.  A register
-whose entries only said "this happened" would let anything in.
+whose entries only said "this happened" would let anything in.  A ruling taken after Phase 0 joins the
+register with a test of its own, naming what it accounts for: one artefact for `16a52547` (2026-09-19),
+one shape for `D-043` (carried over to pointer moves on 2026-09-27).  T-G0-1 stays the seven the plan
+named.
 
 T-G0-2 is the acceptance, and its teeth are in `Difference.attributed`: an `evidence_gap` counts as
 attributed only when it names the fix that would close it.  Without that clause "we cannot tell"
@@ -18,22 +21,35 @@ clone as in a full one.  The CLI derives the full set from history; this is the 
 
 from __future__ import annotations
 
+import ast
 import json
+import re
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from beidou_governance.admission import canary_health
+from beidou_governance.lifecycle import Event
 from beidou_governance.replay import (
     EVIDENCE_GAP,
+    EXCEPTION,
     EXCEPTIONS,
     EXCEPTIONS_BY_ID,
+    JUDGEABLE,
     SUSPENDED,
+    UNATTRIBUTED,
     Difference,
     load_jsonl,
     render,
     replay_adoptions,
     replay_live,
 )
+from beidou_governance.scheduler import parity_satisfied
+from beidou_live.engine import construction_fingerprint
+from tests.live.helpers_construction import live_config_for_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,6 +78,16 @@ ADOPTIONS = {
     # a report the registry cites and history does not record IS a difference between the rules and
     # what happened.
     "reports/research/tsmom-validation-20260913T182325Z.json": "2026-09-14",
+    # 2026-09-19 (`16a52547`): the operator pointed tsmom at the 16-cell evidence, whose verdict is FAIL.
+    #
+    # Third time this list went stale, and like the first, CI could not see it.  The first was masked by a
+    # bug; this one by the design.  `replay_adoptions` asks "why was this never adopted?" only of a report
+    # that PASSED, so a FAIL the registry cites and this dict omits is read by neither loop.  Run by hand
+    # on 2026-09-27, in passing on #170, `governance replay` read 2 unattributed on the real record - D-020
+    # and R0 on this pointer - while this file was green.  Both refusals are the ruling's named exception,
+    # `EXCEPTIONS_BY_ID["16a52547"]`.  A fourth time is a test failure:
+    # `test_every_pointer_the_registry_cites_is_in_the_adoption_history`.
+    "reports/research/tsmom-validation-20260919T081914Z.json": "2026-09-19",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
@@ -91,12 +117,109 @@ def test_an_exception_entry_has_to_say_which_rule_it_breaks() -> None:
         assert any(token in entry.rule_conflict for token in ("R", "§", "D-", "DL-")), entry.id
 
 
+POINTER_0919 = "reports/research/tsmom-validation-20260919T081914Z.json"
+
+
+def test_the_0919_pointer_is_the_operators_named_exception() -> None:
+    """Both refusals of the 2026-09-19 pointer are the ruling's, and they are one fact seen twice.
+
+    The artefact's verdict is FAIL because its OOS 1.2306 is under the 1.5129 gate at N=167: D-020
+    reads the first half, R0 the second.  The operator pointed tsmom at it anyway, to keep the books
+    straight - both available pointers were refused at an armed start, on different gates.
+    """
+    entry = EXCEPTIONS_BY_ID["16a52547"]
+    assert entry.ruling and entry.rule_conflict and entry.why_not_encoded, "16a52547 is a stub"
+    assert entry.date == "2026-09-19"
+    result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
+    ruled = [d for d in result.differences if d.subject == POINTER_0919.rsplit("/", 1)[-1]]
+    assert sorted(d.rules_say.split(":")[0] for d in ruled) == ["D-020", "R0"]
+    assert all(d.kind == EXCEPTION and d.attribution.startswith("16a52547（2026-09-19）") for d in ruled)
+
+
+def test_the_0919_ruling_covers_one_artefact_and_not_a_shape() -> None:
+    """The ruling covers one artefact and two reasons: not a copy, not a doctored verdict, not a third refusal.
+
+    Written against the route, not the entry.  `_attribute` could match on a prefix, on the verdict
+    alone, or on every reason the artefact draws, and each would turn one ruling into a standing
+    permission.  The first assertion is the real artefact, so this cannot pass by attributing nothing.
+    """
+    real = _reports()[POINTER_0919]
+
+    def kinds(report: dict[str, Any], name: str = POINTER_0919, live: str = real["evidence_construction"]) -> dict:
+        result = replay_adoptions({name: report}, {name: "2026-09-19"}, live_constructions=[live])
+        return {d.rules_say.split(":")[0]: d.kind for d in result.differences}
+
+    assert kinds(real) == {"D-020": EXCEPTION, "R0": EXCEPTION}
+    copy = "reports/research/tsmom-validation-20261001T000000Z.json"
+    assert kinds(real, name=copy) == {"D-020": UNATTRIBUTED, "R0": UNATTRIBUTED}
+    assert kinds({**real, "verdict": "WEAK_PASS"}) == {"D-020": UNATTRIBUTED, "R0": UNATTRIBUTED}
+    diverged = kinds(real, live="0000000000000000")
+    assert diverged == {"D-020": EXCEPTION, "R0": EXCEPTION, "KILL-AR-07": UNATTRIBUTED}
+
+
+POINTER_0925 = "reports/research/tsmom-validation-20260925T143836Z.json"
+POINTER_0913 = "reports/research/tsmom-validation-20260913T182325Z.json"
+
+
+def test_d043_covers_a_running_book_repointed_at_capped_evidence() -> None:
+    """A running book moved onto capped evidence is D-043's; nothing else that shares its verdict is.
+
+    The operator's ruling (2026-09-27) carries D-043's own reason over to a pointer move: the cap exists
+    so that a book holding positions is not stopped, so that book may change its evidence to capped
+    evidence.  Unlike `16a52547` it names a shape, not a file - the next capped tsmom pointer needs no
+    ruling of its own - so every condition gets a control that breaks it alone and must stay
+    unattributed.  The first assertion is the real artefact #163 points tsmom at, so this cannot pass
+    by attributing nothing.
+    """
+    reports = _reports()
+    real, earlier = reports[POINTER_0925], reports[POINTER_0913]
+    pbo = "pbo 0.55 > 0.3 was exempted at 2 grid trials (< 4): the gate did not run rather than passed"
+
+    def kinds(report: dict[str, Any], *, earlier_on: str | None = "2026-09-14", live: str = "") -> dict:
+        book = {POINTER_0925: report} | ({POINTER_0913: earlier} if earlier_on else {})
+        dates = {POINTER_0925: "2026-10-13"} | ({POINTER_0913: earlier_on} if earlier_on else {})
+        seen = [live or real["evidence_construction"], earlier["evidence_construction"]]
+        result = replay_adoptions(book, dates, live_constructions=seen)
+        mine = [d for d in result.differences if d.subject == POINTER_0925.rsplit("/", 1)[-1]]
+        return {d.rules_say.split(":")[0]: (d.kind, d.attribution.split("（")[0]) for d in mine}
+
+    assert kinds(real) == {"D-020": (EXCEPTION, "D-043")}
+    assert kinds(real, earlier_on=None) == {"D-020": (UNATTRIBUTED, "")}  # a first adoption
+    assert kinds(real, earlier_on="2026-10-20") == {"D-020": (UNATTRIBUTED, "")}  # the other pointer came later
+    assert kinds({**real, "reasons": [pbo]}) == {"D-020": (UNATTRIBUTED, "")}  # D-043's other cap
+    assert kinds({**real, "reasons": [*real["reasons"], pbo]}) == {"D-020": (UNATTRIBUTED, "")}  # every reason
+    assert kinds({**real, "reasons": []}) == {"D-020": (UNATTRIBUTED, "")}  # a WEAK_PASS on the Sharpe bar
+    assert kinds({**real, "verdict": "FAIL"}) == {"D-020": (UNATTRIBUTED, "")}
+    diverged = kinds(real, live="0000000000000000")
+    assert diverged == {"D-020": (EXCEPTION, "D-043"), "KILL-AR-07": (UNATTRIBUTED, "")}
+    # #163's switch on the real record: the whole adoption history plus this pointer stays clean.
+    switched = {**ADOPTIONS, POINTER_0925: "2026-10-13"}
+    assert replay_adoptions(reports, switched, acknowledged_rejects=ACKNOWLEDGED).passes_ac_g0
+
+
 def test_t_g0_2_every_difference_carries_a_named_cause() -> None:
     result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
     assert result.differences, "a replay that finds no difference is not replaying anything"
     for difference in result.differences:
         assert difference.attributed, f"unattributed: {difference.subject} / {difference.rules_say}"
     assert result.passes_ac_g0
+
+
+def test_every_pointer_the_registry_cites_is_in_the_adoption_history() -> None:
+    """The fourth staleness, made a failure instead of a finding.
+
+    `ADOPTIONS` went stale three times (09-09, 09-14, 09-19), each time because moving a pointer is one
+    edit and recording the adoption is a second, in another file.  Two of the three were invisible to
+    CI: the first was masked by DL-K3's string compare, and the third pointer was a FAIL, which nothing
+    in this file reads unless it is listed.  The registry on disk is readable in a shallow clone, so
+    this needs no `git log` - the constraint the dict exists for.  It catches a missing line, not a
+    wrong date; the date is still the author's to get right.
+    """
+    registry = (ROOT / "config" / "alpha_registry.yaml").read_text(encoding="utf-8")
+    cited = re.findall(r"^[ \t]+report:[ \t]*(\S+)", registry, re.MULTILINE)
+    assert cited, "the registry cites no report, or this pattern no longer finds its `report:` lines"
+    missing = sorted(set(cited) - set(ADOPTIONS))
+    assert not missing, f"the registry cites {missing} and ADOPTIONS does not record the adoption"
 
 
 def test_an_evidence_gap_without_a_fix_is_not_attributed() -> None:
@@ -122,6 +245,9 @@ def test_only_the_reports_that_name_their_gate_are_the_ones_the_rules_admit() ->
     `embargo` field that landed with `--embargo`.  Its OOS margin is thin - 1.5919 against a 1.5493
     gate at N=242, where the report it replaces cleared by 0.2951 - which is a fact for whoever cites
     it next, not a reason the rules refuse it.
+
+    Still three after 2026-09-19, although `ADOPTIONS` grew.  That pointer names its gate and fails it,
+    and its admission is the operator's `16a52547`, not a rule the replay relaxed.
     """
     result = replay_adoptions(_reports(), ADOPTIONS, acknowledged_rejects=ACKNOWLEDGED)
     admitted = sorted(line.split("：")[0] for line in result.reproduced if "规则同意采纳（validate" in line)
@@ -136,6 +262,65 @@ def test_a_suspended_condition_says_what_would_make_it_readable() -> None:
     for condition in SUSPENDED:
         assert condition.fix.startswith("Phase "), f"{condition.condition} has no owner phase"
         assert condition.reads.startswith("Facts."), condition.condition
+
+
+def test_the_l4_row_agrees_with_the_canary_that_exists() -> None:
+    """Phase 0 wrote "Canary 尚不存在" here at 20:25 +08:00 on 2026-09-08; DL-G5 landed at 22:39.
+
+    The row then stood for eighteen days, printed into every `governance replay`, while `plan`/`apply`
+    judged L4 through `admission.canary_health` (from 2026-09-09) and the shadow soak ran (from
+    2026-09-12).  Found 2026-09-26 while the canary's two readers were being made to agree.
+
+    Each half of the row is pinned to the code it describes, so the next change to either shows up
+    here instead of in a report nobody rereads:
+
+    * the reader exists, so the row says delivered - the `✔` the DL-G9 and `book_limits` rows carry;
+    * the replay still cannot judge it, for a reason in this module: L4 guards `queued -> probe`, and
+      `JUDGEABLE` routes no PROMOTE.  Whoever adds that route fails here and rewrites the row with it.
+    """
+    row = next(s for s in SUSPENDED if s.reads == "Facts.canary_healthy")
+    healthy, why = canary_health([], [], aliases=None, registry=None)
+    assert not healthy and why.startswith("L4:"), "the reader the row says was delivered"
+    assert "✔ DL-G5" in row.fix, f"the canary exists; the row still says: {row.why_unreadable}"
+    assert Event.PROMOTE not in JUDGEABLE, "L4 has a route now; the row's reason is stale"
+    assert "`queued -> probe`" in row.why_unreadable
+
+
+def test_the_m011_row_agrees_with_the_parity_reader_that_exists() -> None:
+    """Phase 0 wrote "平价义务随 DL-D4 才存在" here at 20:25 +08:00 on 2026-09-08; DL-D4 landed at 23:31.
+
+    The row's fix said the condition would become readable "naturally" once DL-D4 landed.  It did not.
+    DL-D4 put `metrics_parity` into the daily report and `scheduler.parity_satisfied` beside it, and
+    `governance next` has read the newest daily report through that function since 2026-09-10 - while
+    the replay still routes nothing to the edge M-011 guards.  Flagged 2026-09-26 beside the L4 row.
+
+    Pinned the way the L4 row is, plus the one claim that sets this row apart from L4's:
+
+    * the reader exists, so the row says delivered;
+    * the replay still cannot judge it: M-011 guards `booked -> queued`, and `JUDGEABLE` routes no
+      PARITY.  Whoever adds that route fails here and rewrites the row with it;
+    * nothing in production applies that edge.  L4's edge has `plan`/`apply` behind it, so the record
+      can one day hold a machine promotion; `governance next` only ADVISES a queue, so nothing the
+      machine does can put a `booked -> queued` in the record.  Whoever builds the executor fails here
+      too.  Read off the source rather than trusted: the one module allowed to name the event is the
+      one that holds the rule.
+    """
+    row = next(s for s in SUSPENDED if s.reads == "Facts.parity_met")
+    met, why = parity_satisfied(None, now=datetime.now(UTC))
+    assert not met and why.startswith("M-011:"), "the reader the row says was delivered"
+    assert "✔ DL-D4" in row.fix, f"DL-D4 landed; the row still says: {row.why_unreadable}"
+    assert Event.PARITY not in JUDGEABLE, "M-011 has a route now; the row's reason is stale"
+    assert "`booked -> queued`" in row.why_unreadable
+    naming = sorted(
+        {
+            path.relative_to(ROOT).as_posix()
+            for path in ROOT.glob("beidou_*/**/*.py")
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+            if isinstance(node, ast.Attribute) and node.attr == "PARITY"
+            if isinstance(node.value, ast.Name) and node.value.id == "Event"
+        }
+    )
+    assert naming == ["beidou_governance/lifecycle.py"], "something applies `booked -> queued` now"
 
 
 def test_the_live_replay_refuses_to_decide_on_an_error_cycle() -> None:
@@ -172,7 +357,7 @@ def test_the_artefact_states_its_own_verdict() -> None:
 def test_a_fingerprint_change_with_no_behaviour_change_is_not_a_construction_change() -> None:
     """The first version of this replay reported six construction changes where four happened.
 
-    `beidou_live.health.CONSTRUCTION_ALIASES` exists precisely because two of the live record's
+    `beidou_live.construction.CONSTRUCTION_ALIASES` exists precisely because two of the live record's
     fingerprints differ from an earlier one only in fields nothing reads differently - `unit_mode`
     moved the digest without changing a byte of behaviour.  Counting raw digests overstates the thing
     §8's construction freeze is about, and it does so in the direction that makes the operator's
@@ -187,6 +372,63 @@ def test_a_fingerprint_change_with_no_behaviour_change_is_not_a_construction_cha
     aliased = replay_live(rows, [], construction_aliases={"renamed": "old"})
     assert len([d for d in raw.differences if "construction" in d.subject]) == 2
     assert len([d for d in aliased.differences if "construction" in d.subject]) == 1
+
+
+def test_the_construction_row_reads_what_dl_g9_put_in_the_record() -> None:
+    """Phase 0 wrote "Phase 1：构造变化时落全量构造" here at 20:25 +08:00 on 2026-09-08; DL-G9 landed at 21:03.
+
+    From the 20:00Z restart that day, every process has written `construction_full` on its first cycle.
+    The row went on saying no record holds what a change changed - for nineteen days, over two changes
+    with both sides on record (`vol_target` on 09-13, D3 on 09-17).  Found 2026-09-27 while #163's
+    replay readings were being checked.
+
+    Pinned to the writer: both payloads come from `beidou_live.engine.construction_fingerprint`, the
+    function the engine writes the field with, so a new shape fails here and not in a report nobody
+    rereads.  The engine side - first cycle only, `digest` equal to `construction` - is
+    `test_a_cycle_records_the_construction_a_report_could_describe`.  What moves is the shipped profile's
+    own `vol_target`, so #163's switch does not turn this red.
+
+    Two shapes from the real record, and the row must still name only the key that moved:
+
+    * the restart before the change is an alias.  `b8f215ab` added v10's `stop_loss_price_cap` at its
+      off value and is declared to be `0c555e1c`; diffing against the canonical side would book that
+      key, and `payload_version`, to the next change - which is #163's k switch, the one built here;
+    * the change row carries no payload and a later row does.  A first cycle that ends in ERROR writes
+      none, so the payload is found by its own digest wherever it landed.
+    """
+    shipped = live_config_for_profile()
+    k = shipped.portfolio.vol_target
+    old = construction_fingerprint(shipped)
+    new = construction_fingerprint(replace(shipped, portfolio=replace(shipped.portfolio, vol_target=k / 2)))
+    v9 = {**old, "digest": "9" * 64, "payload_version": old["payload_version"] - 1, "exits": dict(old["exits"])}
+    v9["exits"].pop("stop_loss_price_cap")
+    rows = [
+        {"at": "2026-10-14T00:00:00+00:00", "construction": v9["digest"], "construction_full": v9},
+        {"at": "2026-10-14T01:00:00+00:00", "construction": old["digest"], "construction_full": old},
+        {"at": "2026-10-14T02:00:00+00:00", "construction": new["digest"]},
+        {"at": "2026-10-14T03:00:00+00:00", "construction": new["digest"], "construction_full": new},
+    ]
+    [change] = replay_live(rows, [], construction_aliases={old["digest"]: v9["digest"]}).differences
+    assert change.subject == f"construction {new['digest'][:12]} @ 2026-10-14T02:00:00+00:00"
+    assert f"，改了 `portfolio.vol_target` {json.dumps(k)} → {json.dumps(k / 2)}。" in change.attribution
+    assert "✔ DL-G9" in change.fix, f"DL-G9 landed; the row still says: {change.fix}"
+    assert change.kind == EVIDENCE_GAP and change.attributed, "what changed is readable; who ruled it is not"
+
+
+def test_a_construction_change_missing_a_side_still_says_it_cannot_be_read() -> None:
+    """The four 2026-09-04 changes predate DL-G9, and one missing side leaves a change as unreadable as two.
+
+    The first restart after DL-G9 has that shape in the real record: `dd32720d` carries the payload and
+    `c0e5c49c` before it does not.  The alias table folds that pair into one book, so it is built bare.
+    """
+    after = construction_fingerprint(live_config_for_profile())
+    rows = [
+        {"at": "2026-09-08T19:00:12+00:00", "construction": "c" * 64},
+        {"at": "2026-09-08T20:00:15+00:00", "construction": after["digest"], "construction_full": after},
+    ]
+    [change] = replay_live(rows, []).differences
+    assert "**改了什么**因此读不出" in change.attribution
+    assert "✔ DL-G9" in change.fix and change.attributed
 
 
 def test_dl_g9_turns_a_permanent_blind_spot_into_an_artefact_age_question() -> None:

@@ -5,9 +5,11 @@ machine writes the registry from the first transaction.  What stands in for the 
 module's ability to undo itself, so these tests are the compensating control, not paperwork.
 
 DRILL-G1 is run against the SHIPPED registry with a real corruption - a report whose sha256 no longer
-matches - and against the REAL startup gate, `beidou_live.config.registry_evidence_problems`.  Using a
-stub gate here would test that `apply` calls whatever it is given, which is not the question; the
-question is whether the thing it is given refuses what the loop would refuse.
+matches - and against the REAL startup gate's evidence half, `beidou_live.config.registry_evidence_problems`.
+Using a stub gate here would test that `apply` calls whatever it is given, which is not the question; the
+question is whether the thing it is given refuses what the loop would refuse.  The dataset half needs a
+data root, which CI does not have; `tests/cli/test_the_write_refuses_what_an_armed_start_refuses.py`
+builds one and puts both halves to `plan`, `apply` and an armed start.
 """
 
 from __future__ import annotations

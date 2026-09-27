@@ -35,6 +35,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from beidou_alpha.registry import MAIN_BOOK, Registry
+from beidou_governance.canary import Check
 from beidou_governance.canary import evaluate as evaluate_canary
 from beidou_governance.lifecycle import Book, Candidate, Event, Facts, evaluate
 from beidou_governance.policy import Policy
@@ -151,19 +152,36 @@ def canary_health(
     shadow: Sequence[Mapping[str, Any]],
     baseline: Sequence[Mapping[str, Any]],
     *,
-    gate_refusals: int = 0,
+    aliases: Mapping[str, str] | None,
+    registry: str | None,
 ) -> tuple[bool, str]:
     """L4 as a fact the promotion rule can read, or the reason it is not one.
 
     An absent soak is False with its own sentence rather than a failed check, because "the canary
     never ran" and "the canary ran and found the deployment sick" are different operator actions.
+
+    ``aliases`` has no default, so a caller has to say which construction it means.  This function
+    predates the parameter by thirteen minutes (048204f7 added it to `canary.evaluate` for
+    `governance canary` alone), so until 2026-09-26 `plan`/`apply` judged `construction_stable` on
+    the raw digest while the command judged the same record on the canonical one.
+
+    ``registry`` is the digest the proposal would run under (`engine.registry_digest`), None when no
+    model can be built from it.  A soak vouches for what it ran, so the scored round must have run
+    that one registry and no other (`registry_soaked`).  Until 2026-09-27 nothing asked: every shadow
+    row carried its process's digest, and a soak of one candidate vouched for any file `apply` was
+    handed.  Asked here and not in `evaluate`, because `governance canary` holds no proposal.
     """
     if not shadow:
         return False, "L4: no shadow record; run deploy/run_shadow.sh first"
-    result = evaluate_canary(shadow, baseline, gate_refusals=gate_refusals)
-    if result.healthy:
-        return True, f"L4: {len(result.checks)} checks pass over {result.soaked} soaked cycles"
-    return False, "L4: " + "; ".join(f"{check.name} ({check.detail})" for check in result.failures)
+    result = evaluate_canary(shadow, baseline, aliases=aliases)
+    ran = f"ran {', '.join(result.registries)}" if result.registries else "has no decided cycle carrying a digest"
+    proposal = f"the proposal is {registry}" if registry else "no model could be built from the proposal"
+    vouched = registry is not None and result.registries == (registry,)
+    checks = (*result.checks, Check("registry_soaked", vouched, f"the scored round {ran}; {proposal}"))
+    failures = [check for check in checks if not check.passed]
+    if not failures:
+        return True, f"L4: {len(checks)} checks pass over {result.soaked} soaked cycles of registry {registry}"
+    return False, "L4: " + "; ".join(f"{check.name} ({check.detail})" for check in failures)
 
 
 #: The calendar §3's monthly windows are counted from: the day the current registry took effect, and
@@ -247,18 +265,22 @@ def admit(
     cycles: Sequence[Mapping[str, Any]] = (),
     shadow: Sequence[Mapping[str, Any]] = (),
     aliases: Mapping[str, str] | None = None,
+    registry: str | None = None,
     anchor: str = WINDOW_ANCHOR,
-    gate_refusals: int = 0,
     now: datetime | None = None,
 ) -> Admission:
-    """May this registry change be written?  Both layers, with everything measured reported back."""
+    """May this registry change be written?  Both layers, with everything measured reported back.
+
+    ``registry`` is ``after``'s digest, computed by the caller because this package does not import
+    `beidou_live`.  None fails L4 closed, and L4 is only ever asked of a promotion.
+    """
     policy = policy or Policy()
     reasons = list(registry_refusals(after, policy))
     promoting = grew(before, after)
     book, window_why = rolled(book, policy, anchor=anchor, now=now)
 
     days, days_why = clean_days(cycles, aliases=aliases, now=now)
-    healthy, canary_why = canary_health(shadow, cycles, gate_refusals=gate_refusals)
+    healthy, canary_why = canary_health(shadow, cycles, aliases=aliases, registry=registry)
     measured = {
         "clean_days": round(days, 3),
         "clean_days_detail": days_why,

@@ -36,6 +36,8 @@ echo "[$(stamp)] data sync"
 "$BEIDOU" data sync || { echo "[$(stamp)] FAIL data sync"; fail=1; }
 echo "[$(stamp)] data spot"
 "$BEIDOU" data spot || { echo "[$(stamp)] FAIL data spot"; fail=1; }
+echo "[$(stamp)] data metrics"
+"$BEIDOU" data metrics || { echo "[$(stamp)] FAIL data metrics"; fail=1; }
 echo "[$(stamp)] pool refresh"
 "$BEIDOU" data pool refresh || { echo "[$(stamp)] FAIL pool refresh"; fail=1; }
 echo "[$(stamp)] status"
@@ -63,4 +65,14 @@ echo "[$(stamp)] status"
 # reader (`_load(metrics=…)`) and is still not scheduled here.  (`data spot` is, above, since 2026-09-09.)
 # This job is the loop's own evidence - klines, funding, spot, pool - and putting a feed nobody reads
 # into it turns a red data job into noise.
+#
+# 2026-09-27: `data metrics` runs above, and the paragraph before this one is why it did not.  It counted
+# one reader of the archive, the research panel.  There was a second, and it reads every hour: `report
+# daily` compares the archive with the loop's own snapshot for M-011.  With nothing refreshing the archive
+# after its one ingest on 09-09, that comparison re-read the buckets of 09-07 for nineteen days and said
+# they agreed, and the two symbols that entered the universe on 09-16 could not be compared at all.  The
+# 09-10 rule stands - a feed belongs here when something reads it on a schedule - and the count was
+# wrong.  Scoped to that reader: with no arguments the command takes every symbol the snapshot store
+# holds, each from its own watermark.  The 205-symbol pit ingest stays a research run by hand.  Placed
+# before `pool refresh` for no reason but grouping: it reads the snapshot store, which neither touches.
 exit "$fail"

@@ -19,7 +19,7 @@
 | 核对实盘输出可复现（M-011） | `beidou live verify --check`（用公共数据 + `state.json` 离线重算上一周期的 contributions；差异必须为 0） |
 | 检查唤醒时刻与 bar 边界的对齐 | `beidou live status --check`（对齐误差 > 60s 非零退出；整数个 bar 的偏移不算问题，D-025） |
 | 因子挖掘（每轮记 514 行 ledger，先看 R1 预算） | `beidou research mine --strategy tsmom --universe pit --baseline tsmom`；只测量不计费：`--measure` |
-| 定时刷新研究数据（每日 01:20，klines + 资金费率 + **现货** + 池刷新） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
+| 定时刷新研究数据（每日 01:20，klines + 资金费率 + **现货** + **metrics 归档** + 池刷新） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
 | 定时跑上面两项（每小时 :10） | `cp deploy/com.beidou.check.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.check.plist` |
 | 一键平仓 | `beidou live flatten --yes` |
 | 停止加仓（可逆） | `beidou live kill-switch --engage` / `--release` |
@@ -46,11 +46,31 @@
 | 进程持有的 registry 与磁盘上的是否分岔 | `beidou governance divergence` |
 | 重开条件 / 批次窗口 | `beidou governance reopen`；`beidou governance window` |
 
+### startup gate 在写入时问（2026-09-27 起）
+
+- `plan` 与 `apply` 写入前问 armed `live run` 的 startup gate，两半都问：evidence，以及 dataset 检查的 blocking
+  那一半。advisory 不拒绝。此前只问 evidence 那一半。
+- dataset 那一半读 `--data-root`，默认 `.beidou/data`，相对当前目录，与 `live run` 相同。所以要在主 checkout 里跑。
+  在没有数据的 worktree 里跑，它会报 `membership: present then, absent now` 并拒绝。
+- membership 重建之后，证据在新表上重出之前，`apply` 会回滚。bridge 过期后 armed 重启会在同一处被拒，这里只是提前说。
+- canary 不再有 `startup_gate`，`--gate-refusals` 也删了。shadow 是 dry run，从不拒绝，这一项从来没有来源。
+  想在 soak 开始时就知道候选过不过 startup gate，跑一次 `beidou governance plan --proposed <候选>`。
+
+### L4 只为 soak 跑过的那份 registry 作保（2026-09-27 起）
+
+- `plan` 与 `apply` 的 L4 多一项 `registry_soaked`。被评那一轮每个已决周期的 `registry` 摘要要只有一个，
+  而且等于提议那份的摘要。摘要是 `engine.registry_digest`：策略、参数、权重、books、钉住的 universe，
+  不含 evidence 指针和注释。
+- 所以换了候选就要重新 soak：用下面「另外两个 launchd 任务」一节那条命令移走记录，launcher 从空记录起新的一轮。
+  只改注释或 evidence 指针，摘要不变，不用重新 soak。
+- 不一致时，`plan` 的 `canary:` 行写出两边的摘要。`governance canary` 不核这一项：它手里没有提议。
+- 全部停用的提议建不出模型，也就没有摘要。它不晋级，L4 不会被问到，照常走到 startup gate。
+
 ## 另外两个 launchd 任务
 
 | 任务 | 干什么 | 装载 |
 | --- | --- | --- |
-| `com.beidou.shadow` | L4 金丝雀 soak：拿 `config/alpha_registry.candidate.yaml` 在 armed 循环旁边跑 168 个 dry-run 周期，写 `.beidou/live-shadow-dry-run`，不碰账户、不重排 universe。`KeepAlive` 只在崩溃时生效——soak 在 168 周期**正常结束**，那里重启等于静默开始第二次。读数：`beidou governance canary` | `cp deploy/com.beidou.shadow.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.shadow.plist` |
+| `com.beidou.shadow` | L4 金丝雀 soak：拿 `config/alpha_registry.candidate.yaml` 在 armed 循环旁边跑 168 个 dry-run 周期，写 `.beidou/live-shadow-dry-run`，不碰账户、不重排 universe。一轮跑满就停，不论其中失败几个。停靠的是 `run_shadow.sh` 启动前问记录，不是 `KeepAlive`，见下文「shadow soak 怎么停」。读数：`beidou governance canary`，只评最近一轮 | `cp deploy/com.beidou.shadow.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.shadow.plist` |
 | `com.beidou.paper-l3` | §5 L3 的七天累积器：`--paper` 在 mainnet 价位上撮合，`--state-dir .beidou/paper-l3`，无凭据、结构上不可能变成交易进程。读数：`beidou live soak --check`（**报告而不闸**：前六天按构造必然为假，接进 `failed` 等于每小时误报一周） | `cp deploy/com.beidou.paper-l3.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.paper-l3.plist` |
 
 `com.beidou.proxy-probe` 曾是第三个，2026-09-22 撤除：它是临时测量，判读做出来了就该收。
@@ -71,6 +91,45 @@ git show 3a4bf6fa:deploy/com.beidou.proxy-probe.plist > ~/Library/LaunchAgents/c
 ```bash
 launchctl bootout gui/$(id -u)/com.beidou.shadow && mv .beidou/live-shadow-dry-run .beidou/live-shadow-dry-run.$(date -u +%Y%m%d) && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.shadow.plist
 ```
+
+一轮跑满之后，launcher 不会自己再起一轮。要再 soak（换了候选，或同一个候选再测一轮），也用上面这条命令。
+记录移走之后，launcher 从空记录起一轮 168。
+
+### shadow soak 怎么停（2026-09-26 更正）
+
+上表那一行此前写的是：`KeepAlive` 只在崩溃时生效，soak 在 168 周期正常结束，那里重启等于静默开始第二次。
+机制写错了：
+
+- `live run --cycles 168` 只要有一个周期失败，就以 1 退出（`beidou_cli/live_cmd.py` 的 `done < cycles`）。
+  代理 503 很常见，几乎每轮都有失败周期。
+- plist 的 `KeepAlive {SuccessfulExit: false}` 把非零退出当崩溃，立刻重新拉起。`run_shadow.sh` 用 `exec`，
+  退出码直接交给 launchd。
+- 2026-09-23 就是这样。第一轮有 3 个 ERROR，08:00:26Z 以 1 退出。launchd 下一秒拉起新进程。
+  第二轮追加进同一个 `cycles.jsonl`，construction 从 `ccd7bb9764b5` 换成 `b8f215ab706c`。
+- `governance canary` 把两轮当一轮读。2026-09-26T17:40Z 的读数：`soak 249/168` PASS，`construction_stable`
+  FAIL，总判 UNHEALTHY。两轮各自只有一个 construction，这个 FAIL 来自混读。
+- 一轮零失败、以 0 退出也拦不住：下次登录或 `launchctl load` 时，`RunAtLoad` 会再起一轮。
+
+现在让 soak 停在 168 的是 launcher：
+
+1. `run_shadow.sh` 启动前先问 `beidou governance canary --remaining`。它读 dry-run 实际写的目录
+   （`store_directory`），答最近一轮还差几个周期。
+2. 答 0：最近一轮已满。打印一行，以 0 退出。launchd 不再拉起，`RunAtLoad` 再跑一次也一样。
+3. 答 N > 0：只跑 N 个周期（`--cycles N`）。进程崩溃或机器重启之后，接着跑同一轮，不另起一轮。
+4. 问不出来（命令本身失败），或答的不是个数：以 70 退出，不起循环。launchd 60 秒后重试，与崩溃时一样。
+
+一轮 = 记录里连续 168 个尝试过的周期。OK 与 ERROR 都算。SKIPPED 不算，`engine.run` 也不数它。
+canary 的 `soak` 按同一口径计数，`--remaining` 与打分共用一个切法（`beidou_governance/canary.py` 的 `rounds`）。
+
+`governance canary`、`plan`、`apply` 只评最近一轮。`governance canary` 先逐轮列出行号、bar 区间与 ERROR 数，
+前面的轮只列不评。
+
+失败周期不影响停不停，交给 canary 的 `no_error_streak` 评。`live run` 的退出码没改：一轮里有失败，它照旧
+以 1 退出。launchd 照旧拉起一次，launcher 看到这一轮已满，以 0 退出。所以 `launchctl list` 上最后的退出码
+是 0。失败要读 canary，不读退出码。
+
+plist 的键没改，只改了注释，已装载的那份不用重新装载。launchd 每次拉起都重新执行 `run_shadow.sh`，新逻辑在下一次拉起时生效。
+launchd 执行的是主 checkout 里的那一份。
 
 ## 成员表落后告警（2026-09-23 起）
 
@@ -246,5 +305,5 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
 - 当前实测：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
-- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data pool refresh`（`data spot` 2026-09-09 加入；每日 01:20，`com.beidou.data.plist`）。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。
+- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data metrics` + `data pool refresh`（`data spot` 2026-09-09 加入，`data metrics` 2026-09-27 加入；每日 01:20，`com.beidou.data.plist`）。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。`data metrics` 不带参数：取快照 store 里的全部币，截到昨天，每个币从自己的水位续传。M-011 每小时拿这份归档和快照比；此前归档只在 09-09 手动灌过一次，停在 09-07，见 RESEARCH_LOG「M-011 读了十九天的 09-07」一节。
 - **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check`、`report daily --check` 与 `data pool lag --check`（成员表落后，见上文「成员表落后告警」），失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。
