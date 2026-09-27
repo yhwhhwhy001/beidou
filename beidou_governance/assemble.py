@@ -27,7 +27,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from beidou_alpha.mining import enumerate_candidates
+from beidou_alpha.mining import Candidate, enumerate_candidates, to_signal
+from beidou_alpha.signals import get_signal
 from beidou_governance.budget import LedgerBudget
 from beidou_governance.family_gate import FAIL as GATE_FAIL
 from beidou_governance.family_gate import PASS as GATE_PASS
@@ -132,6 +133,72 @@ def shortlisted(payload: Mapping[str, Any]) -> tuple[tuple[str, ...], str]:
     return tuple(f"mined_{row['hash']}" for row in best if row.get("hash")), f"top {top} by {ranked_by}"
 
 
+def _knobs(shortlist: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """The `enumerate_candidates` arguments a shortlist recorded, and the knobs it did not record."""
+    run = shortlist.get("run")
+    kwargs: dict[str, Any] = {}
+    defaulted: list[str] = []
+    if isinstance(run, Mapping):
+        for knob in KNOBS:
+            if knob in run:
+                kwargs[knob] = run[knob]
+            else:
+                defaulted.append(knob)
+        grids = run.get("grids")
+        if isinstance(grids, Mapping):
+            kwargs.update(grids)
+        else:
+            defaulted.append("grids")
+    else:
+        defaulted = [*KNOBS, "grids"]
+    return kwargs, defaulted
+
+
+def space_members(shortlist: Mapping[str, Any] | None) -> dict[str, Candidate]:
+    """Every candidate a `mined_<hash>` in a book report can name: the default space and the last round's.
+
+    The default because `research book` resolves a mined id there unless told otherwise; the last round's
+    because that is where its shortlist came from.  Re-derived rather than stored, as `_resolve_mined`
+    does it, so a hash that no longer enumerates resolves to nothing instead of to a stale definition.
+    """
+    spaces: list[dict[str, Any]] = [{}]
+    if isinstance(shortlist, Mapping):
+        spaces.append(_knobs(shortlist)[0])
+    members: dict[str, Candidate] = {}
+    for kwargs in spaces:
+        try:
+            members.update((candidate.hash, candidate) for candidate in enumerate_candidates(**kwargs).candidates)
+        except TypeError:  # a recorded grid key this enumerator no longer has, as in `reconstruct_space`
+            continue
+    return members
+
+
+def owes_parity(strategy: str, params: Mapping[str, Any], members: Mapping[str, Candidate]) -> bool:
+    """T-D4-2: M-011 is owed by a candidate that reads a metrics column, under the params it was booked with.
+
+    The operator's ruling of 2026-09-27; from DL-D4 until then every ACCEPT owed it.  Asked of the
+    signal's own `needs_metrics`, the declaration the live startup gate reads.  A name this process
+    cannot resolve still owes it: not finding the signal is not finding that it reads nothing.
+    """
+    if strategy.startswith("mined_"):
+        candidate = members.get(strategy.removeprefix("mined_"))
+        if candidate is None:
+            return True
+        spec = to_signal(candidate)
+    else:
+        try:
+            spec = get_signal(strategy)
+        except KeyError:
+            return True
+    return bool(spec.needs_metrics(params)) if spec.needs_metrics is not None else False
+
+
+def _sleeve_params(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    sleeve = payload.get("sleeve")
+    params = sleeve.get("params") if isinstance(sleeve, Mapping) else None
+    return params if isinstance(params, Mapping) else {}
+
+
 def reconstruct_space(shortlist: Mapping[str, Any] | None, name: str) -> tuple[str | None, str]:
     """Today's space at the knobs the last round recorded - or None, and why it cannot be compared.
 
@@ -149,22 +216,7 @@ def reconstruct_space(shortlist: Mapping[str, Any] | None, name: str) -> tuple[s
     """
     if not isinstance(shortlist, Mapping):
         return None, "no `mine-shortlist-*.json` to take the knobs from"
-    run = shortlist.get("run")
-    kwargs: dict[str, Any] = {}
-    defaulted: list[str] = []
-    if isinstance(run, Mapping):
-        for knob in KNOBS:
-            if knob in run:
-                kwargs[knob] = run[knob]
-            else:
-                defaulted.append(knob)
-        grids = run.get("grids")
-        if isinstance(grids, Mapping):
-            kwargs.update(grids)
-        else:
-            defaulted.append("grids")
-    else:
-        defaulted = [*KNOBS, "grids"]
+    kwargs, defaulted = _knobs(shortlist)
     try:
         digest = enumerate_candidates(**kwargs).space_digest
     except TypeError as error:  # a recorded grid key this version of the enumerator no longer has
@@ -242,10 +294,8 @@ def assemble(
     validated = {
         name: str(payload.get("verdict", "")) for name, payload in newest(reports, "validation", "strategy").items()
     }
-    booked = {
-        name: str(payload.get("book_verdict", ""))
-        for name, payload in newest(reports, "book", "sleeve.strategy").items()
-    }
+    books = newest(reports, "book", "sleeve.strategy")
+    booked = {name: str(payload.get("book_verdict", "")) for name, payload in books.items()}
 
     if shortlist is None:
         fields.append(Field("shortlist_candidates", 0, "no `mine-shortlist-*.json` under the reports directory", False))
@@ -281,17 +331,29 @@ def assemble(
     accepted = sorted(
         name for name, verdict in booked.items() if verdict == "ACCEPT" and at_least.get(name, 0) < RANK[State.QUEUED]
     )
+    # Only a candidate that reads a metrics column owes M-011 (T-D4-2; operator ruling 2026-09-27).
+    members = space_members(shortlist) if any(name.startswith("mined_") for name in accepted) else {}
+    exempt = [name for name in accepted if not owes_parity(name, _sleeve_params(books[name]), members)]
+    owed = [name for name in accepted if name not in exempt]
+    free = f"{len(exempt)} read no metrics column and owe no M-011: {', '.join(exempt)}" if exempt else ""
     if not accepted:
         why = "no ACCEPT book report outside the state's own candidates"
         fields.append(Field("booked_without_parity", 0, why))
         fields.append(Field("parity_met_unqueued", 0, why))
+    elif not owed:
+        fields.append(Field("booked_without_parity", 0, free))
+        fields.append(Field("parity_met_unqueued", len(exempt), free))
     elif parity is None:
         fields.append(Field("booked_without_parity", 0, parity_source, False))
-        fields.append(Field("parity_met_unqueued", 0, parity_source, False))
+        # Known once anyone is exempt: they queue whatever the report says, and the owed could only add
+        # to the count - which cannot move the answer off QUEUE, so there is no other reading to try.
+        source = "; ".join(filter(None, (parity_source, free)))
+        fields.append(Field("parity_met_unqueued", len(exempt), source, bool(exempt)))
     else:
         met, why = parity_satisfied(parity, now=now or datetime.now(UTC))
-        fields.append(Field("booked_without_parity", 0 if met else len(accepted), f"{parity_source}: {why}"))
-        fields.append(Field("parity_met_unqueued", len(accepted) if met else 0, f"{parity_source}: {why}"))
+        source = "; ".join(filter(None, (f"{parity_source}: {why}", free)))
+        fields.append(Field("booked_without_parity", 0 if met else len(owed), source))
+        fields.append(Field("parity_met_unqueued", len(exempt) + (len(owed) if met else 0), source))
 
     fields.append(Field("budget", budget, budget_source))
     fields.append(Field("wanted_trials", wanted_trials, "--wanted; a mined candidate's validation grid is 1"))

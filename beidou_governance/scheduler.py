@@ -75,7 +75,7 @@ def next_action(context: Context, policy: Policy | None = None) -> Action:
     # Latest first: a shortlist that has already been produced is work in hand, and re-enumerating
     # before spending it is how a family gets charged twice for one hypothesis (R2, ruling Q7).
     if context.parity_met_unqueued > 0:
-        return Action(QUEUE, (f"{context.parity_met_unqueued} booked candidates have their parity evidence",))
+        return Action(QUEUE, (f"{context.parity_met_unqueued} booked candidates have met M-011 or do not owe it",))
     if context.booked_without_parity > 0:
         return Action(PARITY, (f"{context.booked_without_parity} booked candidates lack the M-011 obligation",))
     if context.validated_unbooked > 0:
