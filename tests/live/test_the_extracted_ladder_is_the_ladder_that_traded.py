@@ -26,7 +26,7 @@ from beidou_governance.policy import Policy
 
 GRACE = Policy().drawdown_grace_cycles
 RUNGS = Policy().drawdown_ladder
-# The k the shipped rungs are derived for (policy 0.3.6, 2026-10-13; it was 0.60 before).  At another k the
+# The k the shipped rungs are derived for (policy 0.3.6, 2026-09-27; it was 0.60 before).  At another k the
 # scalars below mean something else - `rung_scalar` divides by it.
 BASE = 0.175
 BAR = 1_757_000_000_000

@@ -13,8 +13,8 @@ the 2026-09-09 audit spent a day separating from controls.」冻结构造是同�
   **10 次**，最长一段 4.7 天。直接后果是 `risk_budget.realised_vol` 拒绝出数，理由逐字是
   「窗口内有 N 个构造」——它需要 30 天窗口内只有一个构造，外加 `min_vol_bars` 240 根（10 天）。
   `beidou live soak` 的 L3 要 7 天无 ERROR 相决定；M-010 的 30 天收入归因窗口自
-  2026-09-17T16:07:34Z（重启 #53）重新起算，满期是 10-17T16:07。`FREEZE_ENDS` 比它早约四天，
-  那是 2026-09-23 的裁定，理由与代价写在那个常量上面。
+  2026-09-17T16:07:34Z（重启 #53）重新起算，满期是 10-17T16:07。`FREEZE_ENDS` 比它早：2026-09-23
+  的裁定早约四天，2026-09-27 的裁定提前到当天，理由与代价写在那个常量上面。
 
 **为什么住在测试里而不是 `Policy`。** `test_policy_is_the_only_place_a_threshold_lives` 管的是
 **机器据以晋级/降级的治理阈值**；这条不是——没有任何自动流程读它，它是一条人的承诺。放进 `Policy`
@@ -37,7 +37,20 @@ from beidou_live.engine import construction_fingerprint
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: 冻结到期。**2026-09-23 操作者裁定：按 10-13。** 取 00:00Z，与 `deploy/run_live.sh` 的
+#: 冻结到期。**2026-09-27 操作者裁定：提前到当天结束，#163（k 0.60 -> 0.175）随即合入。** 06:55:20Z
+#: 在项目话题「10-13 切换」的决定卡片上选「现在结束」，07:54:41Z 打字确认「提前结束构造冻结，合入
+#: #163」。取确认的那一分钟，与下面「取整到分钟」同一个惯例。
+#:
+#: 代价在卡片上写明并被接受：M-010 的 30 天窗口、`realised_vol` 的单构造条件与 L3 的 7 天条件，
+#: 从载入 #163 的那次重启起一起清零，比按 10-13 早约 16 天。那次重启的时刻另由操作者定。
+#:
+#: 两样不跟着动。`FROZEN_CONSTRUCTION` 仍是被冻过的那套：历史不重写，下面第三条测试还要在实盘记录里
+#: 找到它。`deploy/run_live.sh` 的 `BRIDGE_UNTIL` 仍是 10-13：bridge 管的是证据门，#163 把 tsmom
+#: 指向 WEAK_PASS 之后它不再起作用，到期自己失效。
+#:
+#: 以下是 2026-09-23 那次裁定的原文，保留。
+#:
+#: **2026-09-23 操作者裁定：按 10-13。** 取 00:00Z，与 `deploy/run_live.sh` 的
 #: `BRIDGE_UNTIL`、`governance/reopen.yaml` 里那几条 `date_after` 同一个日界。此前那两处写 10-13、
 #: 只有这里写 10-17T16:07：09-17 那次后移（下面原文）没有传到另外两处。
 #:
@@ -56,7 +69,7 @@ ROOT = Path(__file__).resolve().parents[2]
 #: `state.json` 的 `restarted_at` 是 16:07:34Z，+30 天取整到分钟就是下面这个值，比精确的 +30 天早
 #: 34 秒——与上一轮 19:00:00 对 19:00:25Z 的写法同一个惯例。可观测事实记在 `docs/RESEARCH_LOG.md`
 #: 同日那节。
-FREEZE_ENDS = "2026-10-13T00:00:00+00:00"
+FREEZE_ENDS = "2026-09-27T07:54:00+00:00"
 
 #: 2026-09-17 起 armed 循环持有的那套构造：D1 `exempt_crossings`、D2 `flat_inside_band`、
 #: D3 `band_entry_multiple: 2.0` 同时打开，payload v9。**这不是 `46b8d731530a` 的别名**，它是另一
@@ -79,7 +92,7 @@ def test_the_construction_is_frozen_until_the_holdout_matures() -> None:
     if datetime.now(UTC) >= datetime.fromisoformat(FREEZE_ENDS):
         return  # 冻结已到期，这条检查自动变惰，不需要任何人来收拾
     assert _shipped_construction() == FROZEN_CONSTRUCTION, (
-        f"构造在冻结期内变了。操作者 2026-09-23 裁定冻结到 {FREEZE_ENDS}，理由与 09-14 那次相同："
+        f"构造在冻结期内变了。操作者裁定冻结到 {FREEZE_ENDS}，理由与 09-14 那次相同："
         "M-010 的 30 天窗口、`realised_vol` 的单构造条件与 L3 的 7 天条件都要求构造不动。"
         "改构造会把这三个时钟一起清零。要么把改动撤回，要么由操作者重新裁定冻结期并在同一个提交里"
         "更新 FROZEN_CONSTRUCTION 与 FREEZE_ENDS——后者是一次裁定，不是让测试变绿的手段。"

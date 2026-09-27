@@ -34,7 +34,7 @@ def test_the_ladder_fires_at_its_two_thresholds_and_names_the_action() -> None:
     flat = [_cycle(i, 100.0) for i in range(5)]
     assert drawdown_state(flat, params)["action"] is None
     # 2026-09-14: the rungs moved to -49% / -70%, re-derived for the -70% budget declared with k=0.60.
-    # 2026-10-13 (policy 0.3.6): -28.03% / -40.05%, the same rule at k=0.175 with the budget on tradable USDT.
+    # 2026-09-27 (policy 0.3.6): -28.03% / -40.05%, the same rule at k=0.175 with the budget on tradable USDT.
     assert drawdown_state([*flat, _cycle(5, 73.0)], params)["action"] is None  # -27%, inside
     stepped = drawdown_state([*flat, _cycle(5, 70.0)], params)  # -30%
     assert stepped["action"] == "vol_target -> 0.13125"

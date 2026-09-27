@@ -1,6 +1,6 @@
 """P13's pre-registered monitoring: is the book still inside the risk budget it was sized for?
 
-`vol_target` is 0.175 against 70% of tradable USDT (2026-10-13, D-035 under honest drift); 0.60 against 70%
+`vol_target` is 0.175 against 70% of tradable USDT (2026-09-27, D-035 under honest drift); 0.60 against 70%
 of total equity from 2026-09-14; before that 0.30 against 50%, from a bootstrap whose q95 sat at
 -43.7%/-49.5%.  That bootstrap resamples weekly blocks, so it keeps
 within-week autocorrelation and destroys the multi-month regime structure real bear markets have — it is
@@ -31,7 +31,7 @@ DAY_MS = 86_400_000
 
 @dataclass(frozen=True)
 class RiskBudgetParams:
-    # 2026-10-13 (policy 0.3.6): re-derived with k 0.60 -> 0.175 and the -70% budget read on tradable
+    # 2026-09-27 (policy 0.3.6): re-derived with k 0.60 -> 0.175 and the -70% budget read on tradable
     # USDT at factor 1.7479, by the shipped rule transcribed (see `Policy.drawdown_ladder`, which is what
     # ACTS - these four are the reporting copy and the two must not disagree).  0.49/0.70/0.45/0.30 were
     # k=0.60's.  A mismatch here does not raise; it just makes `action` describe a rung the ladder does not have.

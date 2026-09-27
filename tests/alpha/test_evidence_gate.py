@@ -126,9 +126,9 @@ def test_the_shipped_registry_runs_what_its_evidence_validated() -> None:
         load_registry(ROOT / "config" / "alpha_registry.yaml"),
         load_yaml(ROOT / "config" / "live.demo.yaml"),
     )
-    # 2026-09-19 to 2026-10-13 this pair deliberately did not clear: tsmom pointed at FAIL evidence and
+    # 2026-09-19 to 2026-09-27 this pair deliberately did not clear: tsmom pointed at FAIL evidence and
     # `tests/shipped_evidence.py` exempted exactly that one string until `run_live.sh`'s bridge expired.
-    # 2026-10-13: k went to 0.175 and the pointer to the WEAK_PASS re-issue on it, in the same PR, so the
+    # 2026-09-27: k went to 0.175 and the pointer to the WEAK_PASS re-issue on it, in the same PR, so the
     # pair clears the real gate again and the exemption was deleted with its reason.
     assert problems == [], problems
 
@@ -302,9 +302,9 @@ def test_the_shipped_registry_passes_the_new_check() -> None:
     """The guard against shipping a rule that refuses the configuration currently holding positions.
 
     What this test is actually about is the verdict-ordering rule: it must not refuse the shipped pair
-    for being STRICTER than its report.  From 2026-10-13 that pair declares WEAK_PASS against a report
+    for being STRICTER than its report.  From 2026-09-27 that pair declares WEAK_PASS against a report
     that says WEAK_PASS, so the ordering is satisfied and nothing is left for the startup gate to raise.
-    (2026-09-19 to 10-13 it declared FAIL against FAIL, under the exemption deleted with that pointer.)
+    (2026-09-19 to 09-27 it declared FAIL against FAIL, under the exemption deleted with that pointer.)
     """
     problems = registry_evidence_problems(
         load_registry(ROOT / "config" / "alpha_registry.yaml"),

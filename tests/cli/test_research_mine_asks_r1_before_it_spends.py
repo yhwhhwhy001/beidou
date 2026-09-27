@@ -29,6 +29,7 @@ from typing import Any
 from click.testing import CliRunner
 
 from beidou_cli.research_cmd import research
+from beidou_governance.admission import window_start
 from beidou_governance.budget import mine_refusals, window_spend
 from beidou_governance.policy import Policy
 
@@ -52,13 +53,19 @@ def _row(run: int, trial: int, at: str) -> str:
     )
 
 
-def _ledger(path: Path, rounds: int, *, at: str = "2026-09-05T00:00:00+00:00") -> None:
+def _ledger(path: Path, rounds: int) -> None:
     """`rounds` distinct mine runs in the current window; a round is one `run_id`.
 
     Callers pass `Policy().max_mine_rounds_per_window` rather than a literal.  Hard-coding 4 made these
     pass in isolation and fail in the suite the hour the policy went to 5 - a test that asserts a
     refusal has to exhaust whatever the rule currently allows, or it is asserting the old rule.
+
+    The same lesson on the other axis: the rows are stamped at the opening of the window the command
+    will ask about, off the same calendar.  They carried the literal 2026-09-05 until 2026-09-27, which
+    is the first window only.  From 2026-10-03T00:00Z the exhausted window was the previous one, both
+    refusal tests went red, and the `--reauthorize` test passed without anything left to carry it past.
     """
+    at = window_start(Policy()).isoformat()
     path.write_text(
         "\n".join(_row(run, trial, at) for run in range(rounds) for trial in range(3)) + "\n",
         encoding="utf-8",

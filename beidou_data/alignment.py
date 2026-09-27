@@ -207,6 +207,22 @@ METRICS = EventTimeContract(
     ),
 )
 
+# 2026-09-27, and a correction of how far the first one reached.  `METRICS` was measured on
+# `openInterestHist` and every metrics column inherited it.  The three account and position ratio pages
+# verify under it too (145/145 within 1e-3 on BTCUSDT's 2026-09-25 archive, rivals refuted), but the taker
+# page does not: 0 to 3 of 146 at any tolerance.  It stamps a bucket by its OPEN, the instant the archive's
+# `create_time` names, and the snapshot had filed every taker value five minutes early since 2026-09-12.
+METRICS_TAKER = replace(
+    METRICS,
+    name="metrics-taker",
+    rest=Stamp("timestamp", 0, "the bucket OPEN, as the archive's create_time - unlike openInterestHist"),
+    measured=(
+        "2026-09-27 against the venue: BTCUSDT's 2026-09-25 archive against the REST window, 145/145 at "
+        "offset 0 within 1e-3 relative (REST prints four decimals), 1/144 and 1/146 one bucket either "
+        "side, and 0 to 3 of 146 at the METRICS offset of +5m whatever the tolerance."
+    ),
+)
+
 # DL-D5, the second instance, and the interesting half is that its declared offset is ZERO.  That is
 # what makes it worth declaring rather than assuming: "no offset" and "one bucket of offset" look
 # identical in code, and the METRICS contract above exists because the second one was true where
@@ -269,6 +285,7 @@ SPOT_BASIS_COLUMN = spot_column("close")
 # columns share a contract, and a column nobody listed here has none - which is the point.
 CONTRACTS: dict[str, EventTimeContract] = {
     **dict.fromkeys(VALUE_COLUMNS, METRICS),
+    "sum_taker_long_short_vol_ratio": METRICS_TAKER,
     **dict.fromkeys(SPOT_COLUMNS, SPOT),
 }
 

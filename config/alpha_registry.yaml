@@ -223,7 +223,7 @@ strategies:
     # Return shape over the whole sample, for the "is this short volatility wearing a hat" question:
     # hourly skew +1.08 / daily +0.83 (positive, i.e. the opposite sign), hit rate 51%/53%, payoff ratio
     # 1.02/1.16, worst UTC day -6.22%.  The hypothesis is refuted by measurement, not by argument.
-    # 2026-10-13 标注：上面两段（崩盘窗口与收益形状）量于 k = 0.30（09-08 审计），是历史，不是现行构造的读数。
+    # 2026-09-27 标注：上面两段（崩盘窗口与收益形状）量于 k = 0.30（09-08 审计），是历史，不是现行构造的读数。
     # 09-23 的 G4 在 k = 0.60 与 0.30 上重放过同一组窗口（RESEARCH_LOG「G4：崩盘窗口在 k=0.60 下重跑」）：
     # FTX 仍是唯一为负的窗口，0.60 下 -8.54%、0.30 下 -3.78%；窗口回撤 0.60 是 0.30 的 1.91 到 2.72 倍，
     # 收益不按 k 等比放大。k = 0.175 上没有重放过，所以这里不给 0.175 的数。
@@ -350,7 +350,7 @@ strategies:
     # 构造未变:`evidence` 块不进 `registry_digest`,指纹逐位不动(改动前后都核过),所以
     # M-010 的 30 天窗口不重置,`realised_vol` 的单构造窗口也不断。
     #
-    # **2026-10-13：指针换到 k = 0.175 上的重出，WEAK_PASS。** 与 `config/live.demo.yaml` 的 `vol_target`
+    # **2026-09-27：指针换到 k = 0.175 上的重出，WEAK_PASS。** 与 `config/live.demo.yaml` 的 `vol_target`
     # 0.60 -> 0.175 在同一个 PR 里。`vol_target` 在 `CONSTRUCTION_KEYS` 里，改 k 就要换证据，否则
     # `construction_problems` 会报 `portfolio vol_target is 0.175 live but 0.6 in the cited evidence`。
     #   * 协议：预登记 `b76de7a0`（RESEARCH_LOG 2026-09-25「预登记：tsmom 在 k = 0.175 上重出证据」），照抄

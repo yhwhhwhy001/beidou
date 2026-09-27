@@ -52,7 +52,9 @@ class _Client:
         self.calls.append(name)
         if name in self.empty:
             return []
-        return [{**PAGES[name], "timestamp": STAMP}]
+        # Each page in its own convention (2026-09-27): the taker page stamps the bucket OPEN, the other
+        # four its CLOSE.  One shared stamp for all five is the defect this fake used to encode.
+        return [{**PAGES[name], "timestamp": STAMP - FIVE_MIN if name == "takerlongshortRatio" else STAMP}]
 
 
 def _snapshot(tmp_path: Path, client: _Client) -> tuple[dict, pd.DataFrame]:
