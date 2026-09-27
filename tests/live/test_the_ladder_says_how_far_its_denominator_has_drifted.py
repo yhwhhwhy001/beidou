@@ -65,6 +65,7 @@ def _reading(store: StateStore) -> dict[str, Any]:
 def test_the_factor_is_one_while_equity_and_the_path_still_agree(tmp_path: Path) -> None:
     store = StateStore(tmp_path)
     _attribute(store, _cycle(store, 0, 10_000.0), 0.0)
+    _cycle(store, 1, 10_000.0)  # the cycle that read it: income reaches the ruler on its reader's row
 
     assert _reading(store)["equity_over_peak"] == pytest.approx(1.0)
 
@@ -72,8 +73,8 @@ def test_the_factor_is_one_while_equity_and_the_path_still_agree(tmp_path: Path)
 def test_collateral_lifting_equity_shows_up_as_a_factor_above_one(tmp_path: Path) -> None:
     """The live mechanism: equity rises for a reason the book did not earn, and `peak` cannot follow."""
     store = StateStore(tmp_path)
-    _attribute(store, _cycle(store, 0, 10_000.0), 0.0)
-    _attribute(store, _cycle(store, 1, 12_000.0), -100.0)  # BTC up 20%, the book down 100
+    _attribute(store, _cycle(store, 0, 10_000.0), -100.0)
+    _cycle(store, 1, 12_000.0)  # BTC up 20%; this cycle read the book's -100
 
     reading = _reading(store)
 
