@@ -1,7 +1,8 @@
 """``beidou live ...`` and ``beidou report ...`` commands.
 
 报告层（`beidou_live.reports` 与 `beidou_live.report_*`）不在模块顶层 import。只有四个命令用它：
-`live status`、`report daily`、`report weekly`、`report beta`，各自在函数里 import。
+`live status`、`report daily`、`report weekly`、`report beta`，各自在函数里 import。`report weekly` 的 helper
+`_source_lines_days_before_head` 也在函数里 import。
 
 原因是 armed 循环。`beidou live run` 从 `beidou_cli` 起，而 `beidou_cli` 一 import 就载入本模块。
 报告层若在顶层，它 import 时一抛异常，循环和全部 `beidou` 子命令就一起起不来。
@@ -11,11 +12,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import signal
 import subprocess
+import tarfile
+import tempfile
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict
@@ -934,6 +938,32 @@ def _changed_lines(commits: int) -> dict[str, int] | None:
     return totals or None
 
 
+def _source_lines_days_before_head(days: int) -> dict[str, int] | None:
+    """`package_lines` on the tree first-parent history held `days` before HEAD, or None if git cannot say.
+
+    Measured back from HEAD's own commit time, not from today: the main checkout is fast-forwarded by
+    hand, and on a checkout two days behind, a week counted back from today books five days of growth as
+    seven.  The old tree is unpacked and counted by the same function as the working tree, so both ends of
+    the difference share one definition of a line.  A package that did not exist yet counts as 0 lines;
+    `git archive` refuses a path it cannot find, which would have read as "git cannot say".
+    """
+    from beidou_live.report_governance import SOURCE_PACKAGES, package_lines
+
+    def git(*args: str) -> bytes:
+        return subprocess.run(["git", *args], capture_output=True, check=True).stdout
+
+    try:
+        head = int(git("log", "-1", "--format=%ct"))
+        rev = git("rev-list", "-1", "--first-parent", f"--before=@{head - days * 86_400}", "HEAD").decode().strip()
+        present = set(git("ls-tree", "--name-only", rev).decode().split())
+        archive = git("archive", rev, *(package for package in SOURCE_PACKAGES if package in present))
+    except (OSError, ValueError, subprocess.CalledProcessError):  # no git, no checkout, no commit that old
+        return None
+    with tempfile.TemporaryDirectory() as scratch, tarfile.open(fileobj=io.BytesIO(archive)) as tree:
+        tree.extractall(scratch, filter="data")
+        return package_lines(Path(scratch))
+
+
 def _log_first_mentions(strategies: Iterable[str]) -> dict[str, str | None]:
     """The earliest commit that introduced a mention of each strategy into `docs/RESEARCH_LOG.md`.
 
@@ -1012,6 +1042,7 @@ def report_weekly(
     profile: str, paper: bool, day: str | None, out: str | None, commits: int, data_root: str, research_dir: str
 ) -> None:
     """The plan's weekly research report: the week's decisions next to the week's evidence."""
+    from beidou_live.report_governance import package_lines
     from beidou_live.reports import (
         PREREGISTRATION_EFFECTIVE_FROM,
         expectations_from_evidence,
@@ -1031,6 +1062,8 @@ def report_weekly(
         expectations=expectations_from_evidence(_evidence_reports(registry)),
         changed_lines=_changed_lines(commits),
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
+        source_lines=package_lines(Path.cwd()),
+        source_lines_week_ago=_source_lines_days_before_head(7),
     )
     # DL-K3: the week's validations, checked for the one ordering the protocol depends on and nothing
     # verified - that the hypothesis was written down before the result was seen (KILL-R9).

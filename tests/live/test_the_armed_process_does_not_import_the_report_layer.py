@@ -6,10 +6,10 @@
 原地址再导出同一个对象，见 `test_the_report_layer_kept_its_addresses.py` 的 `MOVED_OUT`。
 
 第二步关 CLI。armed 进程是 `deploy/run_live.sh` 起的 `beidou live run --armed`，入口 `beidou_cli:main`。
-`beidou_cli/__init__.py` 一 import 就载入全部命令模块，而 `live_cmd` 原先在模块顶层从报告层取 15 个名字。
-现在这些 import 挪进了用它们的四个命令：`live status`、`report daily`、`report weekly`、`report beta`。
-报告层 import 时抛异常，倒下的只有这四个命令，循环照常起。改前 `import beidou_cli` 带进 10 个报告层模块，
-改后 0 个。
+`beidou_cli/__init__.py` 一 import 就载入全部命令模块，而 `live_cmd` 原先在模块顶层从报告层取 17 个名字。
+现在这些 import 挪进了用它们的函数：四个命令 `live status`、`report daily`、`report weekly`、`report beta`，
+加 `report weekly` 的 helper `_source_lines_days_before_head`。报告层 import 时抛异常，倒下的只有这四个命令，
+循环照常起。改前 `import beidou_cli` 带进 10 个报告层模块，改后 0 个。
 
 **第二条测试才是对 armed 进程本身的断言。** 第一条留着，它钉的是引擎模块的依赖方向。第二条红的时候，
 看第一条就知道是哪一层回退了。文件名在 #210 里没用手册的这个名字，因为当时 armed 进程仍 import 报告层；
@@ -17,7 +17,7 @@
 
 它量不到的是函数内 import：import 时不执行，要等函数被调用。`live run` 调到的函数里若有人写
 `from beidou_live.reports import ...`，这里照绿，循环却会在那个函数第一次跑时载入报告层。今天生产代码里，
-从报告层外面 import 报告层的只有 `live_cmd` 那四个命令。
+从报告层外面 import 报告层的只有 `live_cmd` 里上面那五个函数。
 
 必须在子进程里量，因为 pytest 进程里别的测试早就 import 过报告层。子进程的 cwd 是仓库根，
 `-c` 把 cwd 放在 `sys.path` 最前，所以 worktree 与 CI 里量的都是本树的代码。子进程顺带印出 `__file__`，
