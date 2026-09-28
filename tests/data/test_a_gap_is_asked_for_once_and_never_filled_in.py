@@ -371,6 +371,7 @@ def test_apply_reads_a_delisted_symbol_as_absent_and_records_it(
 # --- the fixtures ---------------------------------------------------------------------------------------
 
 
+@pytest.mark.archive
 @pytest.mark.skipif(
     not (ROOT / ".beidou" / "data" / "klines").exists(), reason="the archive is not in this checkout (CI and worktrees)"
 )

@@ -75,4 +75,54 @@ echo "[$(stamp)] status"
 # wrong.  Scoped to that reader: with no arguments the command takes every symbol the snapshot store
 # holds, each from its own watermark.  The 205-symbol pit ingest stays a research run by hand.  Placed
 # before `pool refresh` for no reason but grouping: it reads the snapshot store, which neither touches.
+#
+# 2026-09-28 (WP-P4): the tests that read `.beidou/` itself - fixtures compared with the archive they
+# were cut from, assertions against the loop's own record.  Each skips where that is absent, which is
+# CI and every worktree, so the one checkout that ran them was this one, where nobody runs the gates.
+# BNX's fixture went red here on 2026-09-25 (that day's `data repair` filled 504 bars into the gap
+# before its 2023-02 redenomination seam) and stayed red, seen by nobody.  This is where they run now.
+# Which side is right is the operator's call; this only makes the disagreement impossible to miss.
+#
+# Green means they RAN.  A pass with anything skipped is a FAIL here: every one of them skips for the
+# same reason, the archive is not where it looks, and a check that did not run must not say ok.  A
+# FAIL pages and sets the exit code, which is safe because this plist has no KeepAlive to relaunch
+# it; `report daily` prints the last verdict.
+#
+# The same `notify` as run_check.sh and run_governance_gate.sh: one implementation of which shape a
+# provider reads and whether it took the message (the reasons are over run_check.sh's copy).  The
+# default hourly window and the shared state file: this job runs once a night, so a standing red
+# pages once a night, and a rerun by hand inside the hour does not page twice.
+notify() {
+  echo "[$(stamp)] FAIL archive tests: $1"
+  if [ -n "${BEIDOU_ALERTS_WEBHOOK_URL:-}${BEIDOU_ALERTS_WEBHOOK_URL_2:-}" ]; then
+    BEIDOU_ALERTS_WEBHOOK_URL="${BEIDOU_ALERTS_WEBHOOK_URL:-}" BEIDOU_ALERTS_WEBHOOK_URL_2="${BEIDOU_ALERTS_WEBHOOK_URL_2:-}" \
+      "$REPO/.venv/bin/python" -c '
+import asyncio, os, sys
+from pathlib import Path
+from beidou_live.alerts import WebhookAlerts
+alerts = WebhookAlerts(
+    os.environ["BEIDOU_ALERTS_WEBHOOK_URL"],
+    secondary_url=os.environ["BEIDOU_ALERTS_WEBHOOK_URL_2"],
+    state_path=Path(sys.argv[3]),
+)
+sys.exit(0 if asyncio.run(alerts.send(sys.argv[1], key=sys.argv[2])) else 1)
+' "北斗归档专属测试失败：$1" "archive-tests" "$SUPPORT/alert-dedup.json" \
+      || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
+  fi
+}
+echo "[$(stamp)] archive tests"
+output="$("$REPO/.venv/bin/python" -m pytest -m archive -p no:cacheprovider -rfEs 2>&1)"
+rc=$?
+summary="$(printf '%s\n' "$output" | tail -n 1)"
+[ -n "$summary" ] || summary="pytest printed nothing (exit $rc)"
+case "$rc:$summary" in
+  0:*skipped*) rc=skipped ;;
+esac
+if [ "$rc" = 0 ]; then
+  echo "[$(stamp)] ok   archive tests: $summary"
+else
+  notify "$(printf '%s\n' "$output" | grep -E '^(FAILED|ERROR|SKIPPED) ' | head -n 3 | tr '\n' ' ')$summary"
+  printf '%s\n' "$output" | tail -n 15 | sed 's/^/           /'
+  fail=1
+fi
 exit "$fail"

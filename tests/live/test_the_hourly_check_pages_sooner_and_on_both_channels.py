@@ -29,6 +29,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 CHECK = ROOT / "deploy" / "run_check.sh"
 GATE = ROOT / "deploy" / "run_governance_gate.sh"
+DATA = ROOT / "deploy" / "run_data.sh"  # the same `notify` since WP-P4 (2026-09-28): it pages the archive tests
 HOUR = 3_600
 
 
@@ -102,7 +103,7 @@ def _run(tmp_path: Path, program: list[str], **urls: str) -> tuple[subprocess.Co
     return result, argv_log.read_text(encoding="utf-8") if argv_log.exists() else ""
 
 
-@pytest.mark.parametrize("script", [CHECK, GATE], ids=["check", "governance_gate"])
+@pytest.mark.parametrize("script", [CHECK, GATE, DATA], ids=["check", "governance_gate", "data"])
 def test_both_channels_get_the_page_and_neither_url_is_on_a_command_line(
     tmp_path: Path, script: Path, first: tuple[str, list[str]], second: tuple[str, list[str]]
 ) -> None:
