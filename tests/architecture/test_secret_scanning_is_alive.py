@@ -6,7 +6,7 @@
 `env.sh` / `~/.zshrc` 读，代码与 plist 里都没有值）。
 
 于是这个文件的职责不是「找密钥」——CI 的 Secrets 门每次跑都在找。它守的是**扫描本身
-还有没有用**，因为这道门有三种坏法，而且都不会自己喊出来：
+还有没有用**，因为这道门有四种坏法，而且都不会自己喊出来：
 
   1. **配置崩了，扫描根本没跑。**  建这道门的当天就撞上了：`.gitleaks.toml` 第一版用
      `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 用 Go 的 RE2，**不支持
@@ -25,6 +25,12 @@
      零命中」也不含 merge 的 diff。文件末尾那组测试守这一条：造一个只活在 merge 提交里的
      假凭据，拿 hook 本身、ci.yml 与 SECURITY.md 里现写的命令去扫。命令不在测试里另抄一份。
      抄一份的话，门上的写法改坏了，测试照绿，真门照哑。
+
+  4. **git log 失败了，gitleaks 照样返回 0。**  gitleaks 8.30.1 只记一行 `ERR [git] fatal`，
+     输出 `no leaks found`，退出码 0。pre-push 此前又把 stderr 丢进 /dev/null。这在运行时
+     真撞得上：`git push --force` 盖过一个没 fetch 的远端 tip 时，remote_sha 本地没有，
+     range 无效，推送不扫就放行。2026-09-29 在临时仓库里复现过，伪造凭据随强推进了远端。
+     守这一条的有两处：`_run_pre_push` 的第三种推送，与文件末尾的 fail-closed 测试。
 
 测试用的「密钥」全部是当场随机生成的假值，不落在仓库里，也从未对应任何账户。
 """
@@ -231,7 +237,10 @@ GIT_CONFIGS: dict[str, str | None] = {
     "default-config": None,
     "log.diffMerges=dense-combined": "dense-combined",
 }
-PUSHES = ("existing-branch", "new-branch")
+PUSHES = ("existing-branch", "new-branch", "unfetched-remote-tip")
+
+# 远端报来、本地没有的 tip。它在不在本地，git 都原样交给 hook。任取一个本地不存在的 sha 就是这个场景。
+UNFETCHED_TIP = "deadbeef" * 5
 
 
 def _git_env(diff_merges: str | None = None) -> dict[str, str]:
@@ -322,14 +331,22 @@ def clean_repo() -> Iterator[_MergeRepo]:
 def _run_pre_push(repo: _MergeRepo, push: str, diff_merges: str | None = None) -> subprocess.CompletedProcess[str]:
     """照 git 的方式调用仓库里那个 hook：参数是远端名与 URL，stdin 每行一个要推送的 ref。
 
-    两种推送走 hook 里两个不同的分支：已有分支扫 `remote..local`，新分支扫
-    `local --not --remotes`。range 在两处分别拼。哪天有人把 `--diff-merges` 挪进其中
-    一处，另一半推送就又看不见 merge。
+    三种推送走 hook 里三个不同的分支：已有分支扫 `remote..local`，新分支扫
+    `local --not --remotes`，远端 tip 本地没有时退回新分支的扫法。range 在各处分别拼。
+    哪天有人把 `--diff-merges` 挪进其中一处，其余推送就又看不见 merge。
+
+    第三种是 2026-09-29 补的。`git push --force` 盖过一个没 fetch 的远端 tip 时，git 把
+    远端报来的 sha 原样交给 hook，本地没有这个提交。不加 `--force` 也一样交过来：git 把这
+    一行标成 fetch first，hook 跑完才拒。此前 hook 照样拼 `remote..local`，git log 因 range
+    无效而 fatal，gitleaks 照样返回 0，推送不扫就放行。
     """
     if push == "existing-branch":
         line = f"refs/heads/main {repo.head} refs/heads/main {repo.remote_tip}\n"
-    else:
+    elif push == "new-branch":
         line = f"refs/heads/topic {repo.head} refs/heads/topic {Z40}\n"
+    else:
+        assert push == "unfetched-remote-tip", push
+        line = f"refs/heads/main {repo.head} refs/heads/main {UNFETCHED_TIP}\n"
     return subprocess.run(
         [str(HOOK), "origin", "https://example.invalid/beidou.git"],
         input=line,
@@ -357,6 +374,7 @@ def test_pre_push_blocks_a_credential_that_only_lives_in_a_merge_commit(
         f"只活在 merge 提交里的假凭据被 pre-push 放过去了（{push}，returncode={proc.returncode}）。\n"
         "gitleaks 的 git 模式跑 `git log -p`，它默认不给 merge 提交出 diff。hook 的 `--log-opts`\n"
         "要带 `--diff-merges=separate`；换成 `-m` 的话，log.diffMerges 一设成合并格式就又哑了。\n"
+        "推送是 unfetched-remote-tip 时先看另一处：remote_sha 本地没有，hook 要退回 `local --not --remotes`。\n"
         f"stderr:\n{proc.stderr[-2000:]}"
     )
 
@@ -366,7 +384,10 @@ def test_pre_push_lets_the_same_merge_through_without_a_credential(clean_repo: _
     """对照：同样的 merge，解冲突写的是普通值，hook 必须放行。
 
     没有这一条，上面那条分不清「看见了 merge 里的假凭据」和「hook 什么都拦」。后者真会
-    发生：hook 把 gitleaks 的 stderr 丢进 /dev/null，而 gitleaks 找不到配置时退出码也是 1。
+    发生：gitleaks 找不到配置时退出码也是 1，而 hook 在 git log 失败时也拦。
+
+    unfetched-remote-tip 这一格还守着另一件事。hook 若只会 fail-closed、不核 remote_sha，
+    这里的 git log 会因 range 无效而失败，干净的推送也被拦下。
     """
     proc = _run_pre_push(clean_repo, push)
     assert proc.returncode == 0, f"干净的 merge 被 pre-push 拦下了（{push}）：\n{proc.stdout}{proc.stderr[-2000:]}"
@@ -465,6 +486,39 @@ def test_full_history_scans_pass_the_same_merge_without_a_credential(clean_repo:
         assert (proc.returncode, findings) == (0, []), (
             f"干净的 merge 在 {source} 的 `{shlex.join(argv)}` 下不干净：\n{findings}\n{proc.stderr[-2000:]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 第四种坏法：git log 失败，gitleaks 照样返回 0
+# ---------------------------------------------------------------------------
+
+# git 解析不了的 `log.diffMerges`。只有 `git log` 读这个键，hook 里其它 git 调用不受影响。
+# 所以它让「git log 失败」单独发生，也不用改 hook。
+UNPARSEABLE_DIFF_MERGES = "no-such-format"
+
+
+@pytest.mark.parametrize("push", PUSHES)
+def test_pre_push_fails_closed_when_git_log_fails(clean_repo: _MergeRepo, push: str) -> None:
+    """git log 失败时 pre-push 必须拦下，哪怕要推的东西是干净的。
+
+    gitleaks 8.30.1 在 git log 失败时只记一行 `ERR [git] fatal: ...`，照样输出
+    `no leaks found`、返回 0。「一个 commit 都没扫」和「扫过了，干净」从退出码上分不开。
+    2026-09-29 撞上的是 remote_sha 本地没有，那个口子由 `_run_pre_push` 的第三种推送守着。
+    这一条守的是下一个：`--log-opts` 拼坏、ref 坏了、缺对象，都该拦下而不是放行。
+
+    用干净的仓库，是为了让拦下只剩一个原因：扫描没跑完。用哪种方式让 git log 失败都行。
+    """
+    proc = _run_pre_push(clean_repo, push, UNPARSEABLE_DIFF_MERGES)
+    assert proc.returncode == 1, (
+        f"git log 失败了，pre-push 却放行（{push}，returncode={proc.returncode}）。\n"
+        "gitleaks 这时返回 0，hook 要看它的 stderr：出现 `[git]` 就当扫描失败。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+    # 查 gitleaks 转来的那一行本身。只查 `[git]` 不够：hook 的拦截框里也写着这几个字。
+    assert "[git] fatal:" in proc.stderr, (
+        f"pre-push 拦下了，却没把 git 的原话给推送的人（{push}）。只看到拦截，不知道该修什么。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
 
 
 # ---------------------------------------------------------------------------
