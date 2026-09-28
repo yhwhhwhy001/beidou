@@ -228,7 +228,9 @@ Sharpe 与 base 完全相同。读数只报不判、不计 ledger（`beidou_cli/
 
 编号 N1–N10。价钱按仓库惯例写：代码量级、ledger 笔数、动不动构造、何时生效。另加一列 effort 分桶：
 `report weekly` 把 `beidou_alpha/` 与 `tests/alpha/` 记作 alpha，`docs/RESEARCH_LOG` 与 `docs/analysis/`
-X**14.1%**（alpha 0、research 301、infrastructure 1,827 行；`reports/weekly/2026-09-27.json`），目标 90%。
+记作 research，其余全是 infrastructure（`beidou_live/report_governance.py:73-84`）。09-27 周报的读数是
+**14.1%**（alpha 0、research 301、infrastructure 1,827 行；`reports/weekly/2026-09-27.json`），目标 90%。
+那份还是「最近 40 个提交」的口径；#242（09-29 合入）起改按这一周合入 main 的改动算，下一个周报才有新口径的数。
 所以每一项 infrastructure 的行数都要说清买到什么。
 
 | # | 缺口 | 现状与证据 | 做法 | 价钱 |
