@@ -3946,7 +3946,27 @@ CEILING = {
     # bridge 读 pending（startup gate 的 dataset 那一半挡 1 条）；`--data-root` 指向真实归档时读 inert。
     #
     # 留 24 行（8_672 -> 8_696）：合并前 main 的余量就是 24（WP-C7 的 +1 没有抬顶），理由同上，不重述。
-    "beidou_cli": 8_696,
+    #
+    # 2026-09-28（不编号，同上）。+11 beidou_cli，8_672 -> 8_683，抬到 8_707。
+    #
+    # #210（WP-C6）描述末尾提议的后续工作包，做法 A。`live_cmd.py` 从报告层取 15 个名字，import 原先在模块顶层，
+    # 现在挪进用它们的四个命令：`live status`、`report daily`、`report weekly`、`report beta`。`beidou_cli` 一 import
+    # 就载入 `live_cmd`，armed 循环 `beidou live run` 也走这条路。挪之前，报告层 import 时抛一次异常，循环与全部
+    # `beidou` 子命令一起起不来；挪之后，倒下的只有这四个命令。干净子进程 `import beidou_cli`：报告层模块 10 -> 0，
+    # beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`，顶层 import 它的只有 `report_data`。
+    #
+    # 花在哪（加 29 行、删 18 行）：模块 docstring 从 1 行写成 9 行，+8，写这条规矩与理由。`live status` +6：import、
+    # 空行各 1 行，注释 4 行。注释写报告层坏了时 `--check` 在这里就退出、每小时巡检报 status 失败、循环不受影响。
+    # 三个 report 命令 +14：import 11 行，空行 3 行；`report weekly` 的六个名字超了行宽，ruff format 拆成 8 行。
+    # 删掉顶层两句 import，−17。
+    #
+    # 验收：#135 协议，实盘状态快照（09-03 至 09-28T12:00Z）上 94 个产物逐字节相同。`live status`、`report weekly`、
+    # `report beta` 经 CLI 新旧各跑一遍，stdout 与写出的文件也逐字节相同。变异检验：给 `report_common` 植入 import
+    # 时异常，改前连 `beidou --help` 都起不来；改后 `live run`、`live verify`、`data pool lag` 照常，`live status`
+    # 先印心跳 JSON 再非零退出。
+    #
+    # 留 24 行（8_683 -> 8_707）：只抬本 PR 的增量，余量保持 24。理由同上，不重述。
+    "beidou_cli": 8_707,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
