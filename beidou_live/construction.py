@@ -57,7 +57,13 @@ from __future__ import annotations
 #      reason for an alias: the leverage block is hashed precisely so that a change to it is visible, and
 #      M-010's window restarting once is the price the operator accepted on 2026-09-26's card
 #      ("交易所也分档"; `docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md` D-007).
-CONSTRUCTION_PAYLOAD_VERSION = 11
+#  12: + `guards.max_gross_denominator` (risk-g11-denominator, operator ruling 2026-09-28).  **v11's shape: no
+#      alias.**  It arrives set to `usdt_equity`, so the gross cap a bar is held to moves from 2.0 x equity to
+#      2.0 x the USDT balance, about 1.14 x equity on the day.  On the record since restart #60 the book never
+#      came near either (target gross at most 0.70 x USDT), but a cap that did not bind on 22 bars is a reading,
+#      not a proof that the books are one, so there is no alias and M-010's window restarts: the price named
+#      on the ruling's card.
+CONSTRUCTION_PAYLOAD_VERSION = 12
 
 # Digests the operator has declared to be the SAME BOOK as an earlier one.  In code rather than config
 # because the declaration is a claim about evidence: it takes a commit, and the commit carries the proof.

@@ -25,7 +25,7 @@ from beidou_exchange.binance_usdm.venue import BinanceUsdmVenue
 from beidou_exchange.guard import WriteGuard
 from beidou_live.composition import build_model, load_registry, portfolio_params, read_universe, write_universe
 from beidou_live.engine import LiveConfig
-from beidou_live.guards import GuardParams
+from beidou_live.guards import GROSS_DENOMINATORS, GuardParams
 from beidou_live.leverage import VOL_TIERS
 from beidou_live.lock import account_kill_switch_path
 from beidou_live.ports import UniverseUpdate
@@ -70,6 +70,7 @@ PROFILE_KEY_READERS: dict[str, str] = {
     "portfolio.max_participation": "beidou_live.config",
     "portfolio.vol_target": "beidou_live.config",
     "portfolio.max_gross": "beidou_live.config",
+    "portfolio.max_gross_denominator": "beidou_live.config",
     "portfolio.max_weight": "beidou_live.config",
     "portfolio.no_trade_band": "beidou_live.config",
     "portfolio.no_trade_rel_band": "beidou_live.config",
@@ -169,6 +170,9 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
     interval = str(market.get("interval", "1h"))
     leverage_raw = portfolio.get("leverage", 2)
     leverage_mode = str(leverage_raw).lower() if str(leverage_raw).lower() in ("auto", "by_vol") else "fixed"
+    denominator = str(portfolio.get("max_gross_denominator", "equity"))
+    if denominator not in GROSS_DENOMINATORS:
+        raise ValueError(f"portfolio.max_gross_denominator must be one of {GROSS_DENOMINATORS}, not {denominator!r}")
     bars_per_day = max(1, 86_400 // interval_seconds(interval))
     exits = ExitParams.from_mapping({**(profile.get("exits", {}) or {}), "bars_per_day": bars_per_day})
     throttle = DrawdownThrottleParams.from_mapping(profile.get("drawdown_throttle", {}) or {})
@@ -201,6 +205,7 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
             stale_bars_max=int(guards.get("stale_bars_max", 2)),
             max_gross=float(portfolio.get("max_gross", 2.0)),
             max_weight=float(portfolio.get("max_weight", 0.15)),
+            max_gross_denominator=denominator,
         ),
         # L1-07: absolute, always.  A relative default resolves against the working directory, so a
         # CLI run from a worktree engaged a switch the loop could not see - the same two-processes,

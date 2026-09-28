@@ -842,6 +842,7 @@ class LiveEngine:
             expected_bar_ms=bar_open_ms,
             interval_ms=config.interval_ms,
             params=config.guards,
+            usdt_equity=snapshot.account.usdt_equity,
         )
         # DL-Q6: record what this loop could read, at the instant it decided.  Best-effort by
         # contract - collecting data may never be the reason a book stops trading.
@@ -852,8 +853,10 @@ class LiveEngine:
             "as_of_ms": latest_bar_ms,
             "equity": snapshot.equity,
             # L1-10: how much of that equity is collateral rather than USDT.  Recorded, not subtracted:
-            # the ladder and the vol sizing still divide by `equity`, and changing that denominator is a
-            # construction decision.  What this buys is telling a BTC-driven drawdown from a real one.
+            # the ladder and the vol sizing still divide by `equity`.  The gross cap reads the USDT slice
+            # when `max_gross_denominator` says so (risk-g11-denominator, 2026-09-28), and from this block
+            # a reader can recompute the cap each bar was held to.  It also tells a BTC-driven drawdown from
+            # a real one.
             "collateral": collateral_share(equity=snapshot.equity, usdt_equity=snapshot.account.usdt_equity),
             # R8's ruler (`attributed_drawdown_state`) needs the book's OPEN P&L, not only what it has
             # realised: an income-only path learns about a drawdown after the position is closed, which
@@ -2327,6 +2330,11 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             "max_weight": config.guards.max_weight,
             "daily_loss_pause": config.guards.daily_loss_pause,
             "stale_bars_max": config.guards.stale_bars_max,
+            # v12 (risk-g11-denominator, 2026-09-28).  What `max_gross` is a multiple of.  Arrived switched to
+            # `usdt_equity`, so like v9 and v11 there is no alias: the cap a bar is held to moved.  Absent from
+            # `evidence_construction` for the reason `exempt_crossings` is: the backtest holds no collateral,
+            # so no report can disagree with it.
+            "max_gross_denominator": config.guards.max_gross_denominator,
         },
         "rebalance": {
             "no_trade_band": config.rebalance.no_trade_band,
