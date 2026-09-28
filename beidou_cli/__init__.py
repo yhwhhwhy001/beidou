@@ -30,7 +30,7 @@ def live() -> None:
 
 @main.group()
 def report() -> None:
-    """Daily attribution reports."""
+    """Daily, weekly and beta reports on the live record."""
 
 
 from beidou_cli import data_cmd, governance_cmd, live_cmd, research_cmd  # noqa: E402  (importing registers them)

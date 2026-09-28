@@ -33,7 +33,7 @@ stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
 BOARD="${BEIDOU_FORWARD_BOARD:-reports/research/forward_board.jsonl}"
 if [ ! -s "$BOARD" ]; then
-  echo "[$(stamp)] 板是空的（$BOARD）——没有候选要读。用 \`research forward add\` 放第一个上去。"
+  echo "[$(stamp)] 板是空的（${BOARD}）——没有候选要读。用 \`research forward add\` 放第一个上去。"
   exit 0
 fi
 

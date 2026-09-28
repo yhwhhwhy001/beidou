@@ -29,7 +29,7 @@
 与 `report weekly`。漏的不是边角——`governance` 是晋级线本身，而漏掉的三个任务里有两个正在这台
 机器上跑。下面两节补上。
 
-## 治理（`beidou governance`，17 个子命令）
+## 治理（`beidou governance`，18 个子命令）
 
 自主开关是**每个工作副本**的运行期状态，不入库：`governance/ENABLED` 存在时这个 checkout 才允许
 写 registry。没有它，`apply` 只会预演。
@@ -45,6 +45,8 @@
 | 状态 / 在位时长 / 事务链 / 机器判定 / 人工复核 | `beidou governance status\|tenure\|transactions\|verdicts\|review` |
 | 进程持有的 registry 与磁盘上的是否分岔 | `beidou governance divergence` |
 | 重开条件 / 批次窗口 | `beidou governance reopen`；`beidou governance window` |
+| 60 天内会翻转的日期开关（只读，不动任何开关） | `beidou governance calendar` |
+| 自主开关：建或删本 checkout 的 `governance/ENABLED` | `beidou governance enable`；`beidou governance disable` |
 
 ### startup gate 在写入时问（2026-09-27 起）
 

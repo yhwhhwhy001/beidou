@@ -357,8 +357,8 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
 def _decay_alerts(block: Mapping[str, Any]) -> list[str]:
     """The paging half of §12.9, and the reason the rule reached the hourly check at all (G1, 2026-09-23).
 
-    Until then the rule's one reader was `report weekly`, which no job runs, so a REVIEW would have been
-    computed and read by nobody.  Only REVIEW pages.  INSUFFICIENT_DATA is what the rule reads for its
+    Until then its one reader was `report weekly`, which no job ran before 2026-09-28 and which never pages;
+    a REVIEW would have been read by nobody.  Only REVIEW pages.  INSUFFICIENT_DATA is what the rule reads for its
     first sixty days under EVERY construction - two whole windows are its minimum - so it is rendered
     and never routed, not even as a notice: M-G06's reason, a finding repeated hourly for two months
     is not a finding.  OK needs no line.
