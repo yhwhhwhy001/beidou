@@ -20160,3 +20160,61 @@ bar；每根 bar 只留最后写的那一行。今天读 0/2，NOT MET。
 重开条件：新信息：时点市值数据，或者一条与动量正交的低波写法，机制在看数之前写下。
 
 这条原样照抄预登记第 6 项。它的后半对这一本已经没有新意义：这一本本来就与动量正交。预登记写死了，这里不改写。
+
+## 2026-09-29 · 重启 #63：载入 #251 的 metrics 桶延迟记录——操作者指示，本会话按 RUNBOOK 纪律执行，构造不变
+
+只记可观测事实。时刻一律 UTC。
+
+**谁、为什么。**
+- 操作者在会话 2a6a59e4 里打字「安全窗口内按纪律重启实盘循环」，本会话执行。
+- 要载入的是 #251：metrics 快照开始记每页最新桶的开盘时刻，日报据此印出它落后 bar 收盘几个桶
+  （本文件「metrics 快照记下每页最新桶落后 bar 收盘几个桶」一节）。
+
+**主 checkout。**
+- 18:24:45Z 一步快进到 `769de3e9`（`main` 的 reflog 记为 `merge 769de3e9…: Fast-forward`）。这是操作者同一会话里
+  「合并后快进主 checkout」的指示，本会话执行。
+- 快进前主 checkout 在 `c88ee6fd`。那是 17:46:15Z 的一次快进，只记在 `main` 的 reflog 里，HEAD 的 reflog 没有这一条。
+  不是本会话做的，这里不归因。
+
+**重启前。**
+- 18:28:48Z，在安全窗口内。`launchctl print` 确认 `com.beidou.live` 管的是 PID 62671（16:29:33Z 起）。
+- `state.restarts` 62，`restarted_at` 16:29:33Z。心跳 18:00:27Z 为 OK，construction `e32f3856ac1e`、registry
+  `7f8adb754962`。最后一个周期 18:00:27Z 处理 17:00 那根，0 单，行里的治理规则摘要是 `9cc96461276f`。
+- 18:29:08Z 在主 checkout（`769de3e9`）上跑两个构造测试：18 passed，退出码 0。
+- 等 18:30Z 的治理 gate 跑完再动手：日志记 `[2026-09-28T18:30:06Z] ok governance-gate`，之后没有 gate 进程。
+
+**重启。**
+- 18:30:48Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，18:31:18Z 返回 0。
+- 新进程 PID 17557，启动于 18:31:18Z；launchd 的 `runs` 17 → 18。
+- `state.restarts` 62 → 63，`restarted_at` 2026-09-28T18:31:18+00:00。
+- 源文件 mtime 都早于进程启动：
+  - `beidou_data/metrics_snapshot.py`、`beidou_live/engine.py`、`config/alpha_registry.yaml`：18:24:45Z；
+  - `beidou_live/risk_budget.py`、`beidou_governance/policy.py`：12:21:42Z；
+  - `config/live.demo.yaml`：16:28:45Z；`deploy/run_live.sh`：09-25T05:33:06Z。
+- 相对重启 #62 载入的 `77aaf2f0`，这次载入、且循环会读到的改动只有三处：
+  - #251：`metrics_snapshot.py` 的新字段；`engine.py` 只加了 docstring；
+  - #241：`beidou_data/store.py` 与 `beidou_live/bar_sanity.py` 只改 docstring 与注释；
+  - registry 只加了注释。`live_cmd.py` 的改动都在 `report daily/weekly` 里，报告层 armed 进程不 import。
+
+**之后。**
+- 启动日志三行：`run_live.sh: D-041 bridge ACTIVE until 2026-10-13 …`，这是 bridge 生效时的固定文案；场地时钟偏差 +2.5s；
+  `restart was 1885.4s after the bar close (window 86.7s); reconciled but did not rebalance`。
+- 18:31:25Z 为 17:00 那根写了一行 SKIPPED，原因「restart outside the rebalance window; this bar was already rebalanced」，
+  `missed_rebalances` 0，无单。那根旧进程已在 18:00:27Z 处理过，不算丢 bar。
+- 心跳 18:31:25Z 的 construction 与 registry 与重启前相同。18:31:43Z 的 `live status --check` 退出码 0，读到的治理规则
+  摘要仍是 `9cc96461276f`。
+- 第一个真周期 19:00:28Z，处理 18:00 那根：OK，0 单，没有护栏原因与退出事件；construction、registry、治理规则三个摘要
+  都没变。
+- 这是第一条带 `metrics_snapshot.newest_open_ms` 的周期行：五个页面都有，16 个币都存了，没有 `error` 与 `missing`。
+- 快照在收盘后约半分钟取。按最慢的币，五个页面都落后 bar 收盘 1 个桶，最新桶 18:50 开。按最快的币，`openInterestHist`、
+  `globalLongShortAccountRatio`、`topLongShortAccountRatio` 已是 0 桶，18:55 开的那个已经发布；另两页仍是 1 桶。
+- 日报「数据族 parity（M-PR06，只报告）」一节的新行，在主 checkout 上按这一行渲染出来：每页「落后 1 桶 1 次」。
+- 读法：`beidou_data/alignment.py` 记的 09-07 实测是桶关后 2–3 分钟才发布。这一次有一部分币半分钟内就发布了。一个周期
+  只是一个点，要看满 24 个周期再说。
+
+**连带的事。**
+- 构造没变，M-010 的 30 天窗口不清零：`e32f3856ac1e` 自 09-28 17:00Z 那一行起，约 10-28 17:00Z 满。
+- `state.restarts` 变了。`docs/MAINNET_READINESS.md` 的 Q-M8 若取 A 口径（30 天 `restarts` 不变），那条钟从这次起重算。
+
+**没动。** paper-l3（PID 811）与 shadow（PID 26020）。它们也跑主 checkout 的代码，要各自重启才载入新代码。共享的
+metrics 快照记录只由 armed 循环写（`LiveEngine._snapshot_metrics` 的 `record_metrics`），所以这两个进程不影响新读数。
