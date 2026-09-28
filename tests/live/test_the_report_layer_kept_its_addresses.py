@@ -48,6 +48,10 @@ AREAS = (
 #: 从来不是 `reports.py` 自己定义的名字，却有调用方从这个地址取。只留确实有人在用的。
 HISTORICAL = {"window_sharpes": "tests/live/test_decay_detector.py"}
 
+#: 定义搬出了报告层、地址仍在 `reports` 上的名字 → 它现在定义在哪个模块。WP-C6（2026-09-28）：引擎原先
+#: 从 `reports` 取 `collateral_share`，这一个名字把整个报告层带进了引擎的 import 闭包，定义因此搬去 `risk_budget`。
+MOVED_OUT = {"collateral_share": "risk_budget"}
+
 
 def _addresses_callers_use() -> dict[str, list[str]]:
     """今天实际写下的 `from beidou_live.reports import X` 与 `reports.X`。"""
@@ -101,6 +105,10 @@ def test_the_addresses_are_the_same_object_not_a_second_copy() -> None:
         if name in ASSEMBLY or name in HISTORICAL:
             continue
         owners = [m for m, names in defined.items() if name in names]
+        if name in MOVED_OUT:  # 报告层里不许再有第二份定义；同一对象核到它现在的家
+            home_name = MOVED_OUT[name]
+            assert not owners and name in _defined_in(home_name), f"{name} 应只定义在 {home_name}，报告层里有 {owners}"
+            owners = [home_name]
         assert len(owners) == 1, f"{name} 应当恰好定义在一个 report_* 模块里，实际是 {owners}"
         home = importlib.import_module(f"beidou_live.{owners[0]}")
         assert getattr(reports, name) is getattr(home, name), f"{name}：`reports` 上的不是 {owners[0]} 里那一个"
