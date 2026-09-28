@@ -3501,7 +3501,26 @@ CEILING = {
     # 或让循环的装配代码读只供日报的键 3 个。三个 digest 与基线逐字相同。任何键的值与 `LiveConfig` 都没改。
     #
     # 留 40 行（15_405 -> 15_445），理由同上，不重述。
-    "beidou_live": 15_445,
+    #
+    # 2026-09-28（不编号，同上）。+35 beidou_live，15_408 -> 15_443，抬到 15_480。写的时候是 15_318 -> 15_353；
+    # 它与 WP-C6（+3，用余量）、WP-C9（+87，上一格）同一波，数按合入那一刻的 main 重量。
+    #
+    # 归档专属测试归位（执行手册 §3.5 WP-P4）。七个读 `.beidou/` 本身的测试在 CI 与 worktree 里跳过，只在主
+    # checkout 上跑，而四道门从不在那里跑：BNX 夹具那条 2026-09-25 起在那里是红的，没人看见。它们现在带
+    # `archive` marker，`deploy/run_data.sh` 每晚跑 `pytest -m archive`、FAIL 时推送（脚本不计入本表）。这里
+    # 花的是日报那一节：`report_data.archive_tests_status` 读 data job 日志里最后一行结果，印「通过 / 失败 /
+    # 未跑」，只印不告警。日志在 `lock.APP_SUPPORT` 下，调用那一刻才去取，测试的重定向才够得着它。
+    #
+    # 花在哪（加 37 行、删 2 行）：代码 18 行（读数 11、文件名与结果行正则两个常量 2、两个 import 2、
+    # `reports.py` 挂接 3）；docstring 9 行（函数 8：为什么这些测试要有执行位置、为什么只印不推、为什么
+    # 结果要带时间；模块说明净 +1）；注释 4 行；空行 4 行。
+    #
+    # 验收：实盘状态快照上新旧各出一遍（#135 协议），94 个产物里告警、周报、beta、status 共 41 个逐字节
+    # 相同；26 份日报的 json 只多 `archive_tests` 一个键，md 只多这一节，删行为 0。对着归档真跑
+    # `pytest -m archive`：11 条，1 failed（BNX）、10 passed，约 4 秒。
+    #
+    # 留 37 行（15_443 -> 15_480）：只抬本 PR 的增量，WP-C6 用掉的 3 行余量不补回。理由同上，不重述。
+    "beidou_live": 15_480,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
