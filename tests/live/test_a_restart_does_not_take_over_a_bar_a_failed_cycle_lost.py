@@ -113,6 +113,7 @@ def test_the_failed_bar_pages_through_the_daily_report(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.archive
 @pytest.mark.skipif(not RECORD.exists(), reason="the live record is not in this checkout (CI and worktrees)")
 def test_the_fixture_is_the_record_verbatim() -> None:
     """A fixture nobody can compare to its source is a fixture someone could have made up."""

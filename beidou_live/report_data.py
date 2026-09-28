@@ -1,12 +1,14 @@
 """Whether the data under the book is the data its evidence was measured on.
 
 Checklist area #9 of `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`: the research
-archive's coverage of what the loop traded, metrics same-source parity (DL-D4 / M-011) and dataset
-provenance (D-041).  Bar sanity (G6) lives in `bar_sanity.py`.
+archive's coverage of what the loop traded, metrics same-source parity (DL-D4 / M-011), dataset
+provenance (D-041), and the nightly verdict on the tests that read the archive itself (WP-P4).  Bar
+sanity (G6) lives in `bar_sanity.py`.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +18,7 @@ from beidou_alpha.mining.expr import METRICS_COLUMNS
 from beidou_data.metrics_snapshot import metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
 from beidou_governance.scheduler import parity_satisfied
+from beidou_live import lock
 from beidou_live.report_common import readable_state
 from beidou_live.state import StateStore
 
@@ -98,3 +101,30 @@ def _dataset_block(dataset: Mapping[str, Any] | None) -> dict[str, Any]:
     """
     block = dict(dataset or {})
     return {"blocking": list(block.get("blocking", [])), "advisory": list(block.get("advisory", []))}
+
+
+#: `StandardOutPath` of `deploy/com.beidou.data.plist`, in the directory `lock.APP_SUPPORT` names.  Looked
+#: up through the module at call time, not imported by value, so that the suite's redirect reaches it.
+DATA_JOB_LOG = "data.stdout.log"
+_ARCHIVE_VERDICT = re.compile(r"^\[(?P<at>[^\]]+)\] (?P<verdict>ok|FAIL) +archive tests: (?P<summary>.*)$")
+
+
+def archive_tests_status(log: Path | None = None) -> dict[str, Any]:
+    """WP-P4: the last verdict `deploy/run_data.sh` wrote on the tests that read `.beidou/` itself.
+
+    They skip wherever the archive is absent - CI and every worktree - so the one checkout that ran them
+    was the one nobody runs the gates in, and BNX's fixture sat red there from 2026-09-25, unseen.  The
+    nightly data job runs them now and pages on a FAIL; this prints the last line it wrote.  Reported
+    only: the job pages once a night, and this runs every hour.  The line carries its own time, so a job
+    that stopped running reads as a date that stopped moving rather than as a pass.
+    """
+    path = log if log is not None else lock.APP_SUPPORT / DATA_JOB_LOG
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {"status": "未跑", "why": f"没有 {path.name}：data job 没装载，或还没跑过"}
+    for line in reversed(lines):
+        if found := _ARCHIVE_VERDICT.match(line):
+            status = "通过" if found["verdict"] == "ok" else "失败"
+            return {"status": status, "at": found["at"], "summary": found["summary"]}
+    return {"status": "未跑", "why": f"{path.name} 里没有 archive tests 的结果行：快进主 checkout 后要等下一个 01:20"}

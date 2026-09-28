@@ -117,5 +117,6 @@ addopts = ["-q", "--strict-markers", "-p", "no:cacheprovider"]
 markers = [
     "network: tests that reach the public internet (deselected by default in CI)",
     "slow: slow tests",
+    "archive: reads .beidou/ on the operator's machine; skipped elsewhere and run by the nightly data job",
 ]
 filterwarnings = ["error::DeprecationWarning:beidou_.*"]

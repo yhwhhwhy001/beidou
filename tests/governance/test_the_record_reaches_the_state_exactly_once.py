@@ -285,6 +285,7 @@ def test_an_empty_state_file_is_refused_rather_than_seeded_from_the_record(tmp_p
 # --- and on the record this deployment actually has ---------------------------------------------
 
 
+@pytest.mark.archive
 def test_it_runs_on_the_armed_loops_own_record_without_writing(tmp_path: Path) -> None:
     """The real `cycles.jsonl` shape, the real registry, the real state - and the honest answer today.
 
