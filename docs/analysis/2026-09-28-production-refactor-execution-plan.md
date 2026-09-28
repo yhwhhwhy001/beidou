@@ -357,3 +357,19 @@ push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理�
 - **O-6**：一次按纪律的重启，载入 C6（与 R1 同批；若裁定修法 A，也同批）。
 - **O-8**：#213 合入且主 checkout 再快进后，装载 `com.beidou.weekly.plist`。
 - **裁定**：WP-C8 的修法 A。
+
+### 补记：报告层 import 那一行已关（#224，会话 8af0084a）
+
+7.3 表里「报告层 import 时异常会让所有 `beidou` 子命令起不来（含 armed 的 `live run`）」一行，去向写的是
+「后续任务卡片」；7.2 第 2 条说的是同一件事。原行不改，这里补记去向。
+
+- **#224 合入**（merge commit dd358e0e，2026-09-28 13:12:34Z），按 #210 描述里的做法 A：`beidou_cli/live_cmd.py`
+  顶层的报告层 import 挪进用它们的五个函数，即四个命令加 `report weekly` 的 helper。干净子进程 `import beidou_cli`，
+  报告层模块 10 → 0。探针测试改回 §3.2 的原名 `tests/live/test_the_armed_process_does_not_import_the_report_layer.py`，
+  多一条 `import beidou_cli` → `[]`。
+- **报告层坏了时**（变异检验量的）：`live run` 与其它命令照常起。`live status` 先印心跳 JSON 再非零退出；
+  `--check` 在 import 处就退出，每小时巡检的 status 与 report 两格报警。RUNBOOK「排障」有一条。
+- **在跑的循环已载入**：主 checkout 14:03:15Z 快进到 7da4f9ad，含 dd358e0e（`git reflog`）。armed 循环
+  PID 35503 启动于 14:06:50Z（`state.restarts` 61），晚于 `beidou_cli/live_cmd.py` 的 mtime 14:03:15Z。
+- **#224 描述里待定的三件**，操作者同日答「按你的建议处理」：附带改动接受；写这条补记；探针量不到的函数内 import
+  由一条 AST 名单测试补上（`REPORT_LAYER_IMPORTERS`，与本补记同一个 PR）。
