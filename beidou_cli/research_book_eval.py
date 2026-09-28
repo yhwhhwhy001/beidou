@@ -168,11 +168,18 @@ def _overlay_metrics(result: BacktestResult, folds: int, min_train: int, bars_pe
 
 
 # D-018: pre-registered acceptance for running a strategy as an independent sleeve (a "small book") next to the
-# main book.  Fixed before the first run and never widened after seeing results; every threshold is written into
-# the report.  Passing this rule is a *portfolio* decision; it does not create a registry verdict for the sleeve.
+# main book.  Fixed before the first run and never moved to fit a result; the one move since came from a derivation
+# written before any candidate was read (below).  Every threshold is written into the report, so an archived verdict
+# keeps the rule it was judged by.  Passing this rule is a *portfolio* decision, not a registry verdict for the sleeve.
 BOOK_RULE: dict[str, float] = {
     "min_delta_oos_sharpe": 0.10,  # total book OOS Sharpe minus main-only OOS Sharpe
-    "max_oos_mdd_worsening": 0.01,  # total OOS max drawdown may not be worse than main-only by more than 1pp
+    # EXP-AE2 (RESEARCH_LOG 2026-09-17 §五), exercised at k=0.175 by operator ruling 2026-09-27; 1pp until then.
+    # The headroom the main book leaves under the declared budget, in a research backtest's units (total equity):
+    # 0.70 / 1.7479 = 0.4005 (R8's `rollback_at`) minus the main book's bootstrap q95 under honest drift, 0.3753
+    # static / 0.3622 pit.  The tighter universe gives 2.52pp, floored to 0.1pp.  The "+4.40pp" beside k=0.175 in
+    # `live.demo.yaml` is the same headroom in tradable USDT.  Re-derived whenever k or R8's rungs move:
+    # `test_the_book_drawdown_allowance_is_the_headroom_the_main_book_leaves` fails until it is.
+    "max_oos_mdd_worsening": 0.025,  # total OOS max drawdown may not be worse than main-only by more than 2.5pp
     "min_fold_win_rate": 0.6,  # total beats main-only in >= 3 of 5 walk-forward folds
     "max_cpcv_negative": 0.10,  # sleeve alone: share of CPCV paths with a negative Sharpe
     "min_cost_x2_sharpe": 0.5,  # sleeve alone: Sharpe with doubled costs

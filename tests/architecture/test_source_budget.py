@@ -4045,7 +4045,19 @@ CEILING = {
     # with `payload_version` kept, 6 blank.  `governance replay` on the real record, before and after: 15
     # reproduced, 34 differences, 0 unattributed; only the six construction rows moved, also on top of #177.
     # The 14 over were not golfed.  40 above again.
-    "beidou_governance": 4_310,
+    # +87 beidou_governance (4_310 -> 4_397), 2026-09-27, operator's choice ("收窄到读 metrics 的候选"): M-011
+    # is owed only by a candidate that reads a metrics column, as T-D4-2 and `parity_satisfied`'s docstring
+    # always said.  From DL-D4 `assemble` asked it of every ACCEPT book, `residual` included, while the daily
+    # report read "not met" every day from 09-16 to 09-27.  `owes_parity` asks the signal's own
+    # `needs_metrics` under the booked params - the declaration the live startup gate reads; a mined id is
+    # re-derived by hash from the default space and the last round's (0.02s for 676 candidates), and a name
+    # that resolves to nothing still owes it.  Measured on the real record, before and after: `governance
+    # next` prints the same text, because the only ACCEPT book reports (`book-tsmom-flow`, 09-03 and 09-04)
+    # name candidates the state carries at probe and main.  Of the 62 lines: 38 code - `space_members`,
+    # `owes_parity`, `_sleeve_params`, the split in `assemble`, and `_knobs` lifted out of
+    # `reconstruct_space` so both replay one set of knobs - 11 docstring, 3 comment, 10 blank.  Four
+    # mutations each turned a test red.  The 47 over were not golfed.  40 above again.
+    "beidou_governance": 4_397,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

@@ -18122,3 +18122,309 @@ exit 0
 
 构造变了（v11）。按 #186 写明的代价（D-007），M-010 的 30 天窗口、`realised_vol` 的单构造条件、L3 的 7 天条件，
 从这次重启起再算一次。
+
+## 2026-09-27 · D-018 的回撤门按 EXP-AE2 在 k=0.175 上行使：1pp → 2.5pp（操作者签字）
+
+起因：两个新信息族零 ledger 看完之后，操作者 16:30Z 在卡片上选「先改规则」：按 k=0.175 复核新书上线的组合回撤门，
+写成规则草案给操作者签，这期间不挖。没有跑任何东西，ledger 一行未动；输入全是已入库的读数，下面每个数都由新测试从
+归档文件重算。
+
+### 一、推导：EXP-AE2 原样，只补了单位
+
+EXP-AE2（2026-09-17 §五）：`max_oos_mdd_worsening` = 声明的回撤预算 − 主书自助 q95 MDD，两个 universe 取更紧的那个；
+行使的前提是操作者先裁定 k。k=0.175 自 13:21:35Z 起在跑。
+
+输入全部来自 `reports/research/k-bisect-0175-20260925.json`，也就是 k 决策本身读的那一次（2,000 draws，诚实漂移，
+09-25 日报的换算因子 1.747858609376565）：
+
+| universe | 主书 q95（总权益） | 同一 q95（可动用 USDT） | 余量（可动用） | 余量（总权益） |
+| --- | ---: | ---: | ---: | ---: |
+| pit | −36.22% | −63.30% | +6.70pp | 3.83pp |
+| static | −37.53% | −65.60% | +4.40pp | **2.52pp** |
+
+取更紧的 static，2.515pp，按 0.1pp 向下取整：**2.5pp**。
+
+**单位是 09-17 写不到的一处。** 那天预算与研究回测同在总权益口径，式子直接相减（k=0.60 得 0.3pp）。policy 0.3.6 起
+−70% 按可动用 USDT 计，而 `research book` 的回撤读的是书自己的资本，即总权益，所以预算要先折过去：
+0.70 / 1.7479 = 0.4005，正是 R8 的 `rollback_at`。`live.demo.yaml` 在 k=0.175 旁边写的「+4.40pp」是同一段余量的
+可动用口径。拿 4.40pp 去比研究回测的读数，等于放一本新书把 static 的 q95 推到可动用资金的约 −73.3%，越过它要守的
+那条线。
+
+### 二、式子没定死、由我选的三处，都取了更紧的一边
+
+| 选择 | 取的 | 另一边 |
+| --- | --- | --- |
+| 单位 | 总权益：2.52pp | 可动用：4.40pp |
+| 漂移 | 诚实（Sharpe 1.2306，k 决策依据的那个）：2.52pp | 样本内：9.39pp |
+| 取整 | 向下到 0.1pp：2.5pp | 不取整：2.52pp |
+
+q95 用点估计，是 EXP-AE2 写的。它自己的抽样误差不小：static q95 的 95% 区间（可动用）是 −67.0% 到 −64.1%，折成门是
+1.7–3.4pp。另外，拿单条样本外路径的回撤差去比自助 q95 的余量，是 EXP-AE2 自带的近似，这次没有重新审视。
+
+### 三、它跟着抵押品走，而常量不跟
+
+门 = 0.70 / 因子 − 0.3753。因子是读数：09-20 1.861，09-22 1.769，09-25 1.748。在 1.769 上门是 2.0pp，在 1.861 上是
+0.08pp，到 1.865 归零，那也正是主书自己的 static q95 越过 −70% 的地方（`b76de7a0` 第 9 项第 1 条）。常量按 09-25 的
+因子定，与 R8 的两档用同一个因子；因子漂了不跟着改，k 或档位重推时一起重推。测试把这一点绑死：profile 的 k 不等于
+这次二分选出的 k，或 R8 的 `rollback_at` 不再等于 0.70 / 因子，测试就红。
+
+### 四、动了什么，没动什么
+
+- `BOOK_RULE["max_oos_mdd_worsening"]` 0.01 → 0.025（`beidou_cli/research_book_eval.py`），旁边写算式与单位。
+- 新测试 `tests/governance/test_the_book_drawdown_allowance_is_the_headroom_the_main_book_leaves.py` 管四件事：从归档
+  读数重推这个数；换算关系（4.40pp 可动用 = 2.52pp 总权益）；三处选择都取了紧的一边；归零的因子 1.865。把常量改回
+  1pp、改成 4.4pp、换 k、换档位，四种改法本地逐一试过，都让它红。
+- `POLICY_VERSION` 的 docstring 记这条裁定，**版本号不动**：`BOOK_RULE` 不是 `Policy` 的字段，实盘也不读它，换版本号
+  只会让每小时的 `live status --check` 误报循环跑着过期规则，与 2026-09-25 那条同理。摘要仍是 `9cc96461276f`。
+- `governance/reopen.yaml` 的 `mined-594a12f9` 补一段：条件 (2) 在 k=0.175 上行使。
+- **只适用此后的候选。** `research book` 在运行时把 `BOOK_RULE` 传进 `marginal_checks`，报告把判它时的规则写进
+  自己的 `rule` 字段，replay 读的是报告里的 `book_verdict`，所以归档判定一个不动。比较的量不变：报告带等风险读数
+  （`oos_mdd_worsening_equal_risk`）就用它。
+- D-018 的另外五条、§3 的三条上限、R3 都不动。R3 的探针份额 1/3 仍被 flow 用满，新书要上线，仍要等 flow 10-02 的
+  复核或另一条规则变更；这次改的只是回撤那一条。
+- 没有跑任何东西，ledger、registry、profile 都没碰，实盘不受影响。
+
+### 五、靠近新线的已知候选
+
+`594a12f9` 过去的回撤读数：P21 pit +4.98pp，P30 两个 cap 臂 +2.52 / +2.69pp，P31 +2.55pp，09-07 等风险 +1.87pp。
+都是 k 还是 0.30 时量的；`research book` 按 profile 的 k 构书，回撤近似随 k 线性（本文件 2026-09-07 那段量过，
+k 0.15 → 0.30 回撤 ×2.08 / ×2.21），所以这些数预测不了 k=0.175 上的重跑。推导没有读它们：数字由预登记的式子和
+k 决策的输入定下，式子没定死的三处都取了紧的一边。它的重开条件 (2) 从此成立；重跑要新预登记、照付 ledger、
+先问操作者。这次没有跑。
+
+### 六、签字
+
+操作者 2026-09-27T17:41:48Z 在本话题打字签字，原话「签 2.5pp」。签的是本节的数字与推导，签字之后才合入；
+签字前草案的本地四道门与 CI 已全绿。
+
+## 2026-09-27 · 补记：第一次夜间 `data metrics`，归档补到 09-26，M-011 按 17 个币满足
+
+只记可观测事实。承接「M-011 读了十九天的 09-07」末尾那句「第一次夜间 `data metrics` 在
+2026-09-27T17:20Z」，那一节原文不改。
+
+- **作业**：`com.beidou.data` 17:20:05Z 起跑。`data metrics` 从 17:21:49Z 跑到 17:22:22Z，用时
+  33 秒。17:22:27Z 进入最后一步 `status`；前六晚进入这一步的时刻在 17:22:05Z–17:22:50Z 之间。
+- **补了什么**：快照 store 的 21 个币全部 `advanced to 2026-09-26T23:55:00+00:00`。21 个是 universe
+  的 17 个，加上已离池的 CYS、LINK、PUMP、TUT。stdout 没有 `FAILED`；stderr 新增 21 行，全是进度行。
+  LSKUSDT 第一次有归档：8,640 行，正好 30 天 × 288 个桶。
+- **跑的是哪份代码**：#194 同日 15:26Z 合入，本会话 15:27Z 把主 checkout 快进到 `e42ed90c`。今晚
+  没有币失败，#194 的新输出没派上用场。
+- **M-011 读数**：照日报的取法复算。universe 取最后一行周期记录的 17 个币，在真实 store 上跑
+  `metrics_parity_status`，只读。
+
+| | 跑之前（15:07Z） | 跑之后（17:23Z） |
+| --- | --- | --- |
+| `met` | false | true |
+| 比到的币 | 15 | 17 |
+| 不可量 | LSKUSDT、NEARUSDT | 无 |
+| 最差不一致率 | 0.0 | 0.0 |
+| `compared_through` | 2026-09-07T23:50Z | 2026-09-26T23:50Z（最旧的是 AKEUSDT） |
+
+- **日报文件本身**：18:10:11Z 的每小时检查重写了 `reports/daily/2026-09-27.json`。它的平价块与上表
+  「跑之后」一列逐项相同，`why` 为 `M-011: 17 symbols agree on every shared bucket through
+  2026-09-26T23:50Z`。`governance next` 读的是目录里最新一份日报，`assemble` 再按当时的 `now` 调
+  `parity_satisfied`。
+
+往后每晚补前一天。报告时刻的 `compared_through` 年龄在 17.5–41.5 小时之间，`PARITY_MAX_AGE` 是
+3 天，连着两晚失败才会过期。universe 每进一个新币，这个币要等约 17–41 小时才可量：它第一批快照桶
+所在那天的归档 T+1 才发布，还要等当晚 17:20Z 取回。
+
+**没做的。** 没重启、没停止任何进程，没改 plist，没动 `.beidou/` 的历史行。`data metrics` 只在
+scratch 根上预跑过 4 个离池币；真实数据根上那次是 launchd 跑的。没跑 `report daily`，没跑
+`governance apply`。
+
+## 2026-09-27 · 操作者裁定：M-011 只对读 metrics 列的候选生效
+
+承接 #172 描述里「顺带发现」第 1 条。那一条量到：`assemble` 把 `parity_satisfied` 套在每一份 ACCEPT
+book 报告上，不看候选读不读 metrics。而 T-D4-2、`parity_satisfied` 的 docstring、DL-D4 一节写的都是
+「读 metrics 列的候选」。操作者当晚在本话题选定「收窄到读 metrics 的候选」。
+
+**落地。**
+
+- `owes_parity` 按 book 报告的 `sleeve.strategy` 取信号，在 `sleeve.params` 下问它自己的
+  `needs_metrics`。实盘启动门读的也是这个声明。
+- 手写信号都没有声明 `needs_metrics`，所以都不欠。挖掘候选按 hash 重新枚举取回：默认空间与上一轮
+  shortlist 的 knobs 各枚举一次。默认空间 676 个候选，枚举约 0.02 秒，其中 90 个读 metrics。
+- 解析不出的名字照样欠。找不到信号，不等于它不读 metrics。
+- 缺平价报告时，免检候选照样得到 QUEUE。它们不管报告怎么说都能排队；欠的候选只会让数目变大，
+  改不了答案。
+- scheduler 的 QUEUE 理由改成 `booked candidates have met M-011 or do not owe it`。
+
+**在真实记录上。** 改前改后，`governance next` 的输出逐字相同。仅有的两份 ACCEPT book 报告
+（`book-tsmom-flow`，09-03 与 09-04）点名的 flow、tsmom，在 state 里已是 probe 与 main。这道闸今天不承重。
+
+**测试。** 两条新测试都走 `governance next` 命令：
+
+- 平价读数冻结在 09-07 时，`residual` 和默认空间里一个不读 metrics 的挖掘候选得到 QUEUE；一个读
+  `lsr` 的挖掘候选和一个不存在的名字得到 PARITY。
+- 没有日报时，`residual` 单独得到 QUEUE；与一个读 metrics 的候选并列时也是 QUEUE。
+
+四个变异各让至少一条测试变红：未知名字当作不读、解析不出的 hash 当作不读、免检下限标成 unknown、
+退回每个 ACCEPT 都欠。
+
+**没做的。** 没动 `lifecycle`：`Event.PARITY` 仍没有生产调用者，`booked -> queued` 仍没有执行者，
+`governance next` 只给建议。日报的平价块仍按 universe 算，不按候选。
+
+## 2026-09-27 · LS 叶那 4 个正形状只在赌方向（择时）：作为选币信号 REFUTED
+
+起因：09-10 那轮 mine 第一次给 LS（账户多空比）叶的 36 个形状打分，4 个边际为正，全在 `squash(-lsr(w), s)` 水平臂，
+横截面臂 32 个无一为正。`governance/reopen.yaml` 的 `ls-leaf` 把「先答那 4 个是不是在赌方向」写成重开的前提，形状取
+basis 叶预登记的 falsifier B（水平臂对照恒定持仓，不是 baseline 书）。操作者 2026-09-27T18:40:46Z 在「挖掘更多策略
+和因子」话题的卡片上选了「答多空比」：零 ledger 先答这一问。
+
+读数、判定与后果在看数之前钉在 `353988b`（#199，`scratchpad/ls_direction_look.py`，sha256 `e4dd5a59…`），之后一个字
+没改。判定线先在四个答案已知的合成世界上试过（`scratchpad/ls_direction_look_synthetic.py`），改了三处才定下，16 个形状
+全判对，经过写在脚本的 docstring 里。设置全部从 `mine-shortlist-20260909T172541Z.json` 读：18 个标的，2021-01-01 到
+2026-09-08 16:00，vol_target 0.30，7bps，资金费开，报告里的 tsmom 参数。
+
+在操作者 Mac 上 `~/beidou` 之外的独立 worktree 里跑一次，20:06:34Z → 20:06:42Z，退出码 0；面板 18 个币 × 49,841 根
+bar，与报告的标的、首末两根、universe 口径逐项相符。跑前跑后逐字相同：`~/beidou` 的 HEAD `40cbe17c`，status 只有
+原来那行 ` M governance/verdicts.jsonl`，`trials.jsonl` 22,205 行，环境里没有 `BEIDOU_TRIALS_LEDGER` /
+`BEIDOU_FEATURE_STORE`；worktree 跑完即删，`git worktree list` 与跑前逐字相同。stdout 全文附在本节末尾（sha256
+`1bc68ea5…`，9,670 字节）；读数 JSON 留在 Mac 的 `/tmp`（sha256 `28680f8c…`，19,974 字节），不入库。
+
+### 一、复现
+
+基准 tsmom Sharpe +1.7317，报告 +1.7327（Δ −0.001）。四个形状的 Sharpe 差 −0.003 / −0.001 / −0.008 / −0.002，边际差
+−0.002 / −0.000 / −0.005 / −0.001，都在 0.05 以内。今天拆的就是 09-10 那 4 个。
+
+### 二、读数
+
+候选每根 bar 的仓位 W 拆成净方向 D = n·b 与净敞口恒为 0 的选币部分 S；D 再拆成恒定部分 C = n̄·b 与择时部分
+T = (n − n̄)·b。各部分带自己的资金费和按成交分摊到的那份手续费，D + S 逐 bar 等于候选。表里的 Sharpe 都是净的。
+
+| 形状 | 候选 Sharpe（边际） | 恒定多 / 恒定空 | 净方向 D | 恒定部分 C | 择时部分 T（t） | 选币 S（t / 扣掉方向后 t） | 判定 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `8a838550` squash(−lsr(168), 1) | 1.37（+0.447） | 0.34 / −0.36 | 1.44 | −0.33 | 1.55（3.64） | 0.23（0.55 / 0.60） | 择时 |
+| `49742e60` squash(−lsr(168), 0.5) | 1.03（+0.285） | 0.34 / −0.36 | 1.64 | −0.33 | 1.68（3.95） | −0.82（−1.95 / −1.84） | 择时 |
+| `2ca33804` squash(−lsr(72), 0.5) | 0.64（+0.056） | 0.30 / −0.31 | 1.42 | −0.33 | 1.46（3.39） | −1.09（−2.60 / −2.49） | 择时 |
+| `8a87c4ae` squash(−lsr(72), 1) | 0.72（+0.055） | 0.30 / −0.31 | 0.88 | −0.32 | 1.04（2.45） | −0.09（−0.22 / −0.11） | 择时 |
+
+排第一的那个，按年、占权益：毛收益 +49.89% = 恒定部分 −2.61% + 择时部分 +39.79% + 选币部分 +12.71%（占 25%）；
+资金费 +0.76%；手续费 −10.99%；净 +39.66%。净敞口均值 −0.085，|净| / 总敞口 0.53，全部同向的 bar 只占 20.3%，
+净多 42.1%、净空 57.9%。
+
+### 三、判定（钉住的 `decide()`，原样套）
+
+四个形状一样走到第三条：边际为正；跑赢恒定持仓（排第一的 Sharpe 1.372，对恒定多 0.338、恒定空 −0.357），所以不是
+恒定的方向押注；选币部分的 t 与扣掉方向后的 t 都不到 2.0；择时部分 t ≥ 2.0。四个都是 **「只在赌方向：择时」**，
+叶的结论看 `8a838550a686852d`，也是它。与看数之前写下的预期相同。
+
+### 四、这说明什么
+
+1. **正边际来自按全市场多空比给整本书的净敞口择时，不来自排币。** 四个形状的净方向部分（手续费按成交分摊）都比候选
+   本身好：1.44 对 1.37、1.64 对 1.03、1.42 对 0.64、0.88 对 0.72。选币那一层在减分。09-10 的横截面臂 32 个全为负，与此一致：
+   多空比排不出币的高下。
+2. **也不是恒定地做多或做空。** 恒定部分是负的（Sharpe −0.33，毛收益每年 −2.61%）：书平均略偏空，而这段行情是涨的。
+   钱全在择时部分：Sharpe 1.55，t 3.64。
+3. **排第一的那个，选币部分毛收益不小，付不起自己的成交。** 毛收益每年 +12.71%，占四分之一，但它要的成交是净方向的
+   两倍多（1,279 对 588），付完分摊到的手续费和自己的资金费，Sharpe 0.23、t 0.55。另外三个的选币部分都为负，`2ca33804`
+   的 t 到了 −2.60。
+
+### 五、落地（按钉住的后果）
+
+- `reopen.yaml` 的 `ls-leaf` 改判 REFUTED（作为选币信号），`check` 从 `date_after` 改成 `operator`；条目数仍是 22。
+  重开条件：这一叶作为选币信号收口，不留重开条件。用全市场多空比做择时是另一条假设：要它自己的预登记、自己的对照
+  （大盘，不是 tsmom）、照付 ledger，不是这一叶的重开；写预登记之前先把 2021-01-31 至 2021-12-01 只有 BTC 有多空比的
+  那一段拆开。
+- 择时那条假设没有开，要不要开由操作者定。没花 ledger，没写 `reports/`；registry、live profile、`costs.yaml`、policy
+  都没碰，实盘不受影响。
+- 2026-10-03 的 R1 窗口不再为这一叶留着。
+
+### 六、判据之外要记下的
+
+- **前 10 个月只有 BTC。** 输出第 3 行：`count_long_short_ratio` 只有 BTCUSDT 从 2021-01-01 起有，其余 17 个币最早
+  2021-12-01。候选从 2021-01-31 起下单，所以到 2021-12-01 这约 10 个月里它能交易的只有 BTC 一个币：S 恒为 0，W 全在 D
+  上，是单币择时。这动不了「只在赌方向」：那段的零把 S 的 t 往 0 拉，按常规的缩放粗算，只看有横截面的那段，S 的 t 也
+  不过 0.6 上下（推算，没有重跑）。但择时部分的 t 3.64 里有多少来自这段单币择时，这份输出分不出来。这就是上面那条
+  重开条件要先拆的东西。
+- **净敞口跟着过去一周的大盘走。** 净敞口与篮子过去 168 根 bar 收益的相关，排第一的 +0.21，另外三个 +0.12 / +0.03 /
+  +0.10：多空比的偏离有一部分在跟趋势。候选与 tsmom 的相关却只有 +0.025。只是描述，不进判定；真要立择时那条假设，
+  对照里要有大盘，也要有简单的趋势跟随。
+- 候选实际成交 880，两部分要的加起来 1,867（588 + 1,279）：两部分的单子在候选里互相抵掉了一半多，这正是手续费要按
+  成交分摊、不能让各部分自己付的原因。
+
+### 附：Mac 上的原始输出（逐字，sha256 `1bc68ea55ad648c93576b7ce8da665dfbbb30627a9533fab0ae1161c700af77b`）
+
+```text
+panel: 18 symbols x 49841 bars, 2021-01-01 00:00:00+00:00 -> 2026-09-08 16:00:00+00:00
+against the report: {"symbols": true, "first_bar": true, "last_bar": true, "universe_mode": true}
+first long/short bucket per symbol: BTCUSDT 2021-01-01, ETHUSDT 2021-12-01, SOLUSDT 2021-12-01, ZECUSDT 2021-12-01, XRPUSDT 2021-12-01, HYPEUSDT 2025-05-30, DOGEUSDT 2021-12-01, BNBUSDT 2021-12-01, TRUMPUSDT 2025-01-18, ENAUSDT 2024-04-02, TUTUSDT 2025-03-20, 1000PEPEUSDT 2023-05-05, PUMPUSDT 2025-04-12, SUIUSDT 2023-05-03, AKEUSDT 2025-09-26, UNIUSDT 2021-12-01, LINKUSDT 2021-12-01, ADAUSDT 2021-12-01
+baseline tsmom: Sharpe +1.7317 (report +1.7327, Δ -0.001)
+
+== 8a838550a686852d  squash((-1 * lsr(168)), 1)
+reproduction: Sharpe Δ -0.003, marginal Δ -0.002 -> ok (tolerance 0.05)
+stream             | Sharpe | NW t   | marginal | corr w/ base | vol / base | MDD     | turnover | first bar
+candidate          |  +1.37 |  +3.27 |   +0.447 |       +0.025 |       0.89 |  -0.329 |      880 | 2021-01-31 00:00:00+00:00
+constant_long      |  +0.34 |  +0.79 |   -0.127 |       -0.126 |       0.92 |  -0.463 |       23 | 2021-01-31 00:00:00+00:00
+constant_short     |  -0.36 |  -0.84 |   -0.762 |       +0.126 |       0.92 |  -0.709 |       23 | 2021-01-31 00:00:00+00:00
+direction          |  +1.44 |  +3.39 |   +0.477 |       +0.038 |       0.78 |  -0.260 |      588 | 2021-01-31 00:00:00+00:00
+selection          |  +0.23 |  +0.55 |   -0.053 |       -0.016 |       0.46 |  -0.323 |     1279 | 2021-01-31 00:00:00+00:00
+direction_constant |  -0.33 |  -0.79 |   -0.133 |       +0.163 |       0.18 |  -0.177 |       17 | 2021-01-31 00:00:00+00:00
+direction_timing   |  +1.55 |  +3.64 |   +0.582 |       -0.000 |       0.76 |  -0.251 |      587 | 2021-01-31 00:00:00+00:00
+(the four parts carry their own funding and the share of the candidate's trading cost their trades asked for; their turnover is what they asked for, not what was paid; marginals against the baseline are shown, not judged)
+falsifier B, on the candidate's bars: candidate Sharpe +1.372 vs constant long +0.338, constant short -0.357
+selection beyond direction: +3.83% a year, Newey-West t +0.60 (betas: basket +0.0075, direction -0.0157)
+per year, fraction of equity: gross +49.89% = direction constant -2.61% + direction timing +39.79% + selection +12.71% (selection share 25%); funding +0.76% (direction +0.43%, selection +0.33%); trading cost -10.99%; net +39.66%
+exposure: mean net -0.085, mean |net| 0.359, mean gross 0.959, |net|/gross 0.532, all one side 20.3%, net long 42.1%, net short 57.9%, corr(net, basket's past 168 bars) +0.212
+verdict: 只在赌方向：择时（选币部分 t 0.55，扣掉方向后 0.60，要都 ≥ 2.0；择时部分 t 3.64）
+
+== 49742e605be41b26  squash((-1 * lsr(168)), 0.5)
+reproduction: Sharpe Δ -0.001, marginal Δ -0.000 -> ok (tolerance 0.05)
+stream             | Sharpe | NW t   | marginal | corr w/ base | vol / base | MDD     | turnover | first bar
+candidate          |  +1.03 |  +2.43 |   +0.285 |       -0.035 |       0.87 |  -0.526 |     1710 | 2021-01-31 00:00:00+00:00
+constant_long      |  +0.34 |  +0.79 |   -0.127 |       -0.126 |       0.92 |  -0.463 |       23 | 2021-01-31 00:00:00+00:00
+constant_short     |  -0.36 |  -0.84 |   -0.762 |       +0.126 |       0.92 |  -0.709 |       23 | 2021-01-31 00:00:00+00:00
+direction          |  +1.64 |  +3.86 |   +0.676 |       -0.029 |       0.77 |  -0.231 |     1077 | 2021-01-31 00:00:00+00:00
+selection          |  -0.82 |  -1.95 |   -0.478 |       -0.019 |       0.45 |  -0.548 |     2392 | 2021-01-31 00:00:00+00:00
+direction_constant |  -0.33 |  -0.80 |   -0.040 |       +0.163 |       0.06 |  -0.061 |        6 | 2021-01-31 00:00:00+00:00
+direction_timing   |  +1.68 |  +3.95 |   +0.713 |       -0.042 |       0.77 |  -0.232 |     1077 | 2021-01-31 00:00:00+00:00
+(the four parts carry their own funding and the share of the candidate's trading cost their trades asked for; their turnover is what they asked for, not what was paid; marginals against the baseline are shown, not judged)
+falsifier B, on the candidate's bars: candidate Sharpe +1.029 vs constant long +0.338, constant short -0.357
+selection beyond direction: -11.25% a year, Newey-West t -1.84 (betas: basket +0.0110, direction -0.0237)
+per year, fraction of equity: gross +50.32% = direction constant -0.86% + direction timing +44.77% + selection +6.41% (selection share 13%); funding +0.25% (direction +0.20%, selection +0.05%); trading cost -21.34%; net +29.23%
+exposure: mean net -0.028, mean |net| 0.367, mean gross 0.882, |net|/gross 0.576, all one side 21.5%, net long 47.6%, net short 52.4%, corr(net, basket's past 168 bars) +0.120
+verdict: 只在赌方向：择时（选币部分 t -1.95，扣掉方向后 -1.84，要都 ≥ 2.0；择时部分 t 3.95）
+
+== 2ca33804038a5a52  squash((-1 * lsr(72)), 0.5)
+reproduction: Sharpe Δ -0.008, marginal Δ -0.005 -> ok (tolerance 0.05)
+stream             | Sharpe | NW t   | marginal | corr w/ base | vol / base | MDD     | turnover | first bar
+candidate          |  +0.64 |  +1.50 |   +0.056 |       -0.072 |       0.89 |  -0.414 |     2243 | 2021-01-31 00:00:00+00:00
+constant_long      |  +0.30 |  +0.69 |   -0.157 |       -0.132 |       0.93 |  -0.500 |       23 | 2021-01-31 00:00:00+00:00
+constant_short     |  -0.31 |  -0.74 |   -0.743 |       +0.132 |       0.93 |  -0.705 |       23 | 2021-01-31 00:00:00+00:00
+direction          |  +1.42 |  +3.30 |   +0.590 |       -0.075 |       0.77 |  -0.229 |     1325 | 2021-01-31 00:00:00+00:00
+selection          |  -1.09 |  -2.60 |   -0.633 |       -0.014 |       0.48 |  -0.660 |     3051 | 2021-01-31 00:00:00+00:00
+direction_constant |  -0.33 |  -0.78 |   -0.048 |       +0.164 |       0.07 |  -0.073 |        7 | 2021-01-31 00:00:00+00:00
+direction_timing   |  +1.46 |  +3.39 |   +0.634 |       -0.091 |       0.76 |  -0.229 |     1325 | 2021-01-31 00:00:00+00:00
+(the four parts carry their own funding and the share of the candidate's trading cost their trades asked for; their turnover is what they asked for, not what was paid; marginals against the baseline are shown, not judged)
+falsifier B, on the candidate's bars: candidate Sharpe +0.642 vs constant long +0.295, constant short -0.314
+selection beyond direction: -16.17% a year, Newey-West t -2.49 (betas: basket +0.0116, direction -0.0278)
+per year, fraction of equity: gross +46.50% = direction constant -1.02% + direction timing +40.09% + selection +7.42% (selection share 16%); funding -0.03% (direction +0.19%, selection -0.22%); trading cost -28.00%; net +18.47%
+exposure: mean net -0.034, mean |net| 0.356, mean gross 0.931, |net|/gross 0.544, all one side 19.7%, net long 46.8%, net short 53.2%, corr(net, basket's past 168 bars) +0.028
+verdict: 只在赌方向：择时（选币部分 t -2.60，扣掉方向后 -2.49，要都 ≥ 2.0；择时部分 t 3.39）
+
+== 8a87c4aea11c7a7a  squash((-1 * lsr(72)), 1)
+reproduction: Sharpe Δ -0.002, marginal Δ -0.001 -> ok (tolerance 0.05)
+stream             | Sharpe | NW t   | marginal | corr w/ base | vol / base | MDD     | turnover | first bar
+candidate          |  +0.72 |  +1.70 |   +0.055 |       -0.015 |       0.89 |  -0.463 |     1024 | 2021-01-31 00:00:00+00:00
+constant_long      |  +0.30 |  +0.69 |   -0.157 |       -0.132 |       0.93 |  -0.500 |       23 | 2021-01-31 00:00:00+00:00
+constant_short     |  -0.31 |  -0.74 |   -0.743 |       +0.132 |       0.93 |  -0.705 |       23 | 2021-01-31 00:00:00+00:00
+direction          |  +0.88 |  +2.10 |   +0.189 |       -0.011 |       0.78 |  -0.314 |      653 | 2021-01-31 00:00:00+00:00
+selection          |  -0.09 |  -0.22 |   -0.206 |       -0.008 |       0.48 |  -0.406 |     1450 | 2021-01-31 00:00:00+00:00
+direction_constant |  -0.32 |  -0.78 |   -0.224 |       +0.164 |       0.29 |  -0.270 |       28 | 2021-01-31 00:00:00+00:00
+direction_timing   |  +1.04 |  +2.45 |   +0.352 |       -0.075 |       0.75 |  -0.253 |      647 | 2021-01-31 00:00:00+00:00
+(the four parts carry their own funding and the share of the candidate's trading cost their trades asked for; their turnover is what they asked for, not what was paid; marginals against the baseline are shown, not judged)
+falsifier B, on the candidate's bars: candidate Sharpe +0.721 vs constant long +0.295, constant short -0.314
+selection beyond direction: -0.73% a year, Newey-West t -0.11 (betas: basket +0.0020, direction -0.0343)
+per year, fraction of equity: gross +32.14% = direction constant -4.09% + direction timing +27.37% + selection +8.86% (selection share 28%); funding +1.44% (direction +0.69%, selection +0.75%); trading cost -12.78%; net +20.79%
+exposure: mean net -0.136, mean |net| 0.358, mean gross 1.003, |net|/gross 0.509, all one side 19.7%, net long 37.0%, net short 62.9%, corr(net, basket's past 168 bars) +0.104
+verdict: 只在赌方向：择时（选币部分 t -0.22，扣掉方向后 -0.11，要都 ≥ 2.0；择时部分 t 2.45）
+
+8a838550a686852d  只在赌方向：择时（选币部分 t 0.55，扣掉方向后 0.60，要都 ≥ 2.0；择时部分 t 3.64）
+49742e605be41b26  只在赌方向：择时（选币部分 t -1.95，扣掉方向后 -1.84，要都 ≥ 2.0；择时部分 t 3.95）
+2ca33804038a5a52  只在赌方向：择时（选币部分 t -2.60，扣掉方向后 -2.49，要都 ≥ 2.0；择时部分 t 3.39）
+8a87c4aea11c7a7a  只在赌方向：择时（选币部分 t -0.22，扣掉方向后 -0.11，要都 ≥ 2.0；择时部分 t 2.45）
+LS leaf: 只在赌方向：择时（选币部分 t 0.55，扣掉方向后 0.60，要都 ≥ 2.0；择时部分 t 3.64）  (governed by 8a838550a686852d; the four agree)
+wrote /tmp/ls_direction_look.json
+exit 0
+```

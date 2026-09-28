@@ -31,7 +31,15 @@ from dataclasses import asdict, dataclass, field
 from beidou_alpha.overlays.ladder import rung_target
 
 POLICY_VERSION = "0.3.6"
-"""0.3.6（2026-09-27 的切换，与 k 0.60 -> 0.175 同一个 PR）：R8 的两档按可动用口径重推。
+"""2026-09-27，版本号不动：D-018 的 `max_oos_mdd_worsening` 1pp -> 2.5pp，操作者裁定行使 EXP-AE2。
+
+推导是 EXP-AE2 在看任何候选之前写下的那条（RESEARCH_LOG 2026-09-17 §五）：门 = 声明预算 − 主书自助 q95 回撤，
+两个 universe 取更紧的；在 k=0.175 上是 0.4005 − 0.3753 = 2.52pp，按 0.1pp 向下取整。算式与单位写在 `BOOK_RULE`
+旁边，钉在 `tests/governance/test_the_book_drawdown_allowance_is_the_headroom_the_main_book_leaves.py`。版本号
+不动，理由同下面 2026-09-25 那条：`BOOK_RULE` 不是 `Policy` 的字段，实盘也不读它，换版本号只会让每小时的
+`live status --check` 报循环跑着过期规则，而那份报告是假的。只适用此后的 `research book`，归档判定一个不动。
+
+0.3.6（2026-09-27 的切换，与 k 0.60 -> 0.175 同一个 PR）：R8 的两档按可动用口径重推。
 
 `drawdown_ladder` 从 ((-0.49, 0.45), (-0.70, 0.30)) 改为 ((-0.2803, 0.13125), (-0.4005, 0.0875))。规则没变，
 仍是 0.3.3 转写的那条：`deescalate_at` = 预算的 70%，`rollback_at` = 预算，`deescalate_to` = 0.75k，
