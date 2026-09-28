@@ -3569,7 +3569,49 @@ CEILING = {
     # 不够；long/short 290（本列有值 205）/ 1,442，不够；spot 0，实盘循环没有 spot 源。
     #
     # 留 37 行（15_662 -> 15_699），理由同上，不重述。
-    "beidou_live": 15_699,
+    #
+    # 2026-09-28（不编号，同上）。+77 beidou_live，15_662 -> 15_739，抬到 15_776。写的时候是 15_318 -> 15_395；
+    # 它与 WP-C6（+3，用余量）、WP-C9（+87）、WP-P4（+35）、WP-P3（+47）、WP-A1（+172，上一格）同一波，数按合入那一刻的 main 重量（操作者合并，合并前若 main 又动，
+    # 协调者再重量一次）。
+    #
+    # D-PR03（执行手册 §3.9；操作者 2026-09-28 裁定 Q5 = 是：非 alpha 的增长率被接受）。`PLAN_BUDGET` 改只记录：
+    # 缺口测试改名 `test_the_plans_budget_is_a_record_not_a_gate`，只钉字面量；缺口本身挪进周报的一节
+    # 「Plan budget gap」（M-PR01）——七包行数、非 alpha 合计、alpha 树占比、近 7 天非 alpha 增长（行/天），
+    # 只印不告警。周报此前没有任何调用者，这次由新的 `deploy/com.beidou.weekly.plist` 每周日 03:00 跑。
+    # 为什么值：那条测试从 09-04 起每天断言「已越界」却推动不了任何决定；裁定之后缺口要有一个记录它的位置，
+    # 否则 M-PR01 只剩一句话。
+    #
+    # 花在哪：`report_governance.py` +68——代码 46（`SOURCE_PACKAGES` 9，ruff 拆成每行一个；`PLAN_BUDGET` 1；
+    # `package_lines` 9；`plan_budget_gap` 12；`_plan_budget_lines` 14；import 1），docstring 10（含模块 docstring
+    # 的 1 行与 docstring 里的 1 行空行），注释 4，空行 8。`package_lines` 是本文件 `_lines` 另写的一份：生产代码
+    # 不 import 测试，`tests/live/test_the_weekly_counts_the_tree_the_way_the_ratchet_does.py` 把两者钉在同一棵树的
+    # 同一个数上（仓库这棵，加一棵放了边角的合成树）。`reports.py` +9：挂接 6（import 2、`weekly_payload` 两个
+    # 参数、payload 一个键、markdown 一节），注释 3。
+    #
+    # 验收：#135 协议，实盘状态快照（09-03 至 09-28T08:00Z）新旧各出一遍，94 个产物里 86 个逐字节相同；4 份周报的 md
+    # 各只多这一节（15 行），json 各只多 `plan_budget` 一个键（20 行），删行 0；新代码自己跑两次逐字节相同，渲染
+    # 前后状态文件的 sha256 不变。三个 digest 逐字相同。16 个变异（逐条把改动改坏）全部有测试变红。
+    #
+    # 留 37 行（15_739 -> 15_776）：只抬本 PR 的增量，WP-C6 用掉的 3 行余量不补回。理由同上，不重述。
+    #
+    # 2026-09-28（不编号，同上）。+8 beidou_live，15_739 -> 15_747，抬到 15_784。写的时候是 15_662 -> 15_670；
+    # 合入时前面多了上一格 D-PR03 的 +77，数按合入那一刻的 main 重量。
+    #
+    # WP-C8 修法 A（操作者 2026-09-28 裁定「按建议处理」）：`ExitOverlay._reconcile` 的 D-045 条件加
+    # `state.direction != held`。`exit_step` 的翻转分支不查 cooldown，模型在 cooldown 内先转到另一侧、再翻回被冷却
+    # 的一侧时，回测持有，实盘却把 overlay 自己刚开的仓当成没成交的退出，下一根 bar 平掉——白付一次往返。
+    # 实盘 585 根 bar 里 0 次，潜伏。D-045 本来要接住的两种情形（规则触发后仓位没平；翻走的单也没成交）
+    # 都与 state 不一致，照旧触发。
+    #
+    # 花在哪：条件本身净 0 行（同一行加一个判断）；docstring +8（为什么只在 overlay 自己不持有那一侧时才算
+    # 没成交的退出，以及 D-045 的两种情形为什么照旧被接住，含 1 行空行）。
+    #
+    # 验收：原先钉分叉的 strict xfail 在修法下 XPASS（因而变红），改成普通回归测试；主测试的输入加进
+    # 「cooldown 内翻回」（撤掉修法时从第 364 根起分叉 8 根，加上修法后两组参数逐位相同）；D-045 的三条既有
+    # 测试照旧绿；三个 digest 与两条构造测试不变。生效：下一次按纪律的重启（与 WP-C6 同批）。
+    #
+    # 留 37 行（15_747 -> 15_784），理由同上，不重述。
+    "beidou_live": 15_784,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3946,7 +3988,47 @@ CEILING = {
     # bridge 读 pending（startup gate 的 dataset 那一半挡 1 条）；`--data-root` 指向真实归档时读 inert。
     #
     # 留 24 行（8_672 -> 8_696）：合并前 main 的余量就是 24（WP-C7 的 +1 没有抬顶），理由同上，不重述。
-    "beidou_cli": 8_696,
+    #
+    # 2026-09-28（不编号，同上）。+31 beidou_cli，8_672 -> 8_703，抬到 8_727。写的时候是 8_631 -> 8_662、抬到 8_687；
+    # 合入时前面多了 WP-C7 的净 +1 与上一格 WP-P3 的 +40，数按合入那一刻的 main 重量。
+    #
+    # D-PR03 的另一半（beidou_live 那格 +77）：`report weekly` 给「Plan budget gap」读工作树与 git 历史。
+    # `_source_lines_days_before_head` 从 HEAD 自己的提交时刻往回数 7 天、沿 first-parent 取 main 当时的树，
+    # `git archive` 解到临时目录，用同一个 `package_lines` 数，差的两端是同一个「行」；一周前还不存在的包按 0 行算，
+    # git 读不出时返回 None，周报印「不可读」而不崩。不按墙钟数：主 checkout 靠手动快进，落后两天的 checkout
+    # 按今天往回数，会把五天的增长记成七天。放在 cli 不放 live：本仓库只有 beidou_cli 起子进程，读 git 的
+    # `_changed_lines`、`_log_first_mentions` 都在这里；周报的输入从这里注入，渲染脚本才能给它固定值。
+    #
+    # 花在哪：代码 19（import 4；函数 13；调用处 2），docstring 8（含 1 行空行），空行 4。
+    #
+    # 验收：`tests/cli/test_the_weekly_job_reads_last_weeks_tree_from_git_and_never_pages.py` 在临时仓库里造一条
+    # 8 天前写、2 天前才合入的分支，钉住 first-parent；日期放在 2020 年，钉住按 HEAD 而不是按墙钟；不是 checkout
+    # 与 PATH 上没有 git 两种情形都出报告；`WebhookAlerts.send` 打桩成一碰就红。5 个 cli 侧变异全部变红。
+    #
+    # 留 24 行（8_703 -> 8_727）：只抬本 PR 的增量，WP-C7 用掉的 1 行余量不补回。理由同上，不重述。
+    #
+    # 2026-09-28（不编号，同上）。+13 beidou_cli，8_703 -> 8_716，抬到 8_740。写的时候是 8_672 -> 8_683、抬到 8_707；
+    # 合入时前面多了上一格 D-PR03 的 +31，数按合入那一刻的 main 重量。
+    #
+    # #210（WP-C6）描述末尾提议的后续工作包，做法 A。`live_cmd.py` 在模块顶层从报告层取 17 个名字（写的时候是 15 个，
+    # D-PR03 又加了 `report_governance` 的两个）。现在挪进用它们的函数：四个命令 `live status`、`report daily`、
+    # `report weekly`、`report beta`，加 `report weekly` 的 helper `_source_lines_days_before_head`。`beidou_cli` 一 import
+    # 就载入 `live_cmd`，armed 循环 `beidou live run` 也走这条路。挪之前，报告层 import 时抛一次异常，循环与全部
+    # `beidou` 子命令一起起不来；挪之后，倒下的只有这四个命令。干净子进程 `import beidou_cli`：报告层模块 10 -> 0，
+    # beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`，顶层 import 它的只有 `report_data`。
+    #
+    # 花在哪（加 32 行、删 19 行）：模块 docstring 从 1 行写成 10 行，+9，写这条规矩与理由。`live status` +6：import、
+    # 空行各 1 行，注释 4 行。注释写报告层坏了时 `--check` 在这里就退出、每小时巡检报 status 失败、循环不受影响。
+    # 三个 report 命令 +15：import 12 行，空行 3 行；`report weekly` 从 `reports` 取的六个名字超了行宽，ruff format
+    # 拆成 8 行。helper +1，一行 import。删掉顶层三句 import，−18。
+    #
+    # 验收：#135 协议，实盘状态快照（09-03 至 09-28T12:00Z）上 94 个产物逐字节相同。`live status`、`report weekly`、
+    # `report beta` 经 CLI 新旧各跑一遍，stdout 与写出的文件也逐字节相同。变异检验：给 `report_common` 植入 import
+    # 时异常，改前连 `beidou --help` 都起不来；改后 `live run`、`live verify`、`data pool lag` 照常，`live status`
+    # 先印心跳 JSON 再非零退出。
+    #
+    # 留 24 行（8_716 -> 8_740）：只抬本 PR 的增量，余量保持 24。理由同上，不重述。
+    "beidou_cli": 8_740,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -4174,7 +4256,23 @@ CEILING = {
     # 验收：两个新测试文件 55 条全绿；19 个变异（逐条把一处判定改坏）每一个都让至少一条测试变红。
     #
     # 留 40 行（4_679 -> 4_719），理由同上，不重述。
-    "beidou_governance": 4_719,
+    #
+    # 2026-09-28（不编号，同上）。+6 beidou_governance，4_679 -> 4_685，抬到 4_725。
+    #
+    # `reopen.evaluate` 读 `args.date` 用的是自己那份 `datetime.fromisoformat`。裸日期（`date: 2026-11-01`）读出来是
+    # naive，减带时区的 `now` 抛 TypeError，`beidou governance reopen` 整条命令崩。`calendar._instant` 把同一个日期
+    # 读成 00:00Z，两处口径不一。真实列表的日期都带 `+00:00`，所以没触发过。`_instant` 下沉进 `reopen.py`，改名
+    # `instant`，`evaluate` 与 `calendar` 都调它。放 `reopen` 不放 `calendar`：`calendar` 在顶层 import `reopen`，
+    # 反过来会成环。
+    #
+    # 花在哪：`reopen.py` +14。函数 6 行，docstring 7 行（为什么放这里、之前怎么崩），空行 2 行；`evaluate` 的
+    # try/except 换成判 None，省 1 行。`calendar.py` -8：删掉原函数连空行 9 行，加 import 1 行。
+    #
+    # 验收：裸日期那条新测试修前红（TypeError），修后绿。7 个变异各让至少一条测试变红。退回原 bug 只有这条新测试
+    # 抓得到；解析失败报 NOT MET、解析失败当作永不到期，只有新补的 UNREADABLE 那条抓得到。
+    #
+    # 留 40 行（4_685 -> 4_725），理由同上，不重述。
+    "beidou_governance": 4_725,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
@@ -4518,13 +4616,22 @@ def test_no_package_grows_past_its_measured_ceiling() -> None:
     )
 
 
-def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined() -> None:
-    """A failing budget the operator has seen is honest; a budget nobody measures is not."""
-    measured = {package: _lines(package) for package in PACKAGES}
-    non_alpha = sum(count for name, count in measured.items() if name != "beidou_alpha")
-    alpha_share = measured["beidou_alpha"] / max(1, sum(measured.values()))
-    # These are the facts the operator is deciding about.  If a future change happens to bring the tree
-    # back inside the plan, this test starts failing and the decision can simply be closed.
-    assert non_alpha > PLAN_BUDGET["non_alpha_total"], "non-alpha is back inside the plan; close the decision"
-    assert measured["beidou_live"] > PLAN_BUDGET["beidou_live"], "beidou_live is back inside the plan"
-    assert alpha_share < PLAN_BUDGET["alpha_share_tree"], "alpha share recovered; close the decision"
+def test_the_plans_budget_is_a_record_not_a_gate() -> None:
+    """2026-09-28 操作者裁定 Q5=是：非 alpha 的增长率被接受，缺口不再断言。
+
+    这条测试原名 `test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`，从
+    2026-09-04 起每天断言「非 alpha 超 6,000、beidou_live 超 2,000、alpha 占比低于 60%」仍然成立。它每天
+    都绿，却推动不了任何决定——缺口一直在长，而「越界」这件事本身已经没有新信息。裁定之后 `PLAN_BUDGET`
+    是历史记录：这里只钉它的字面量，改它等于改写 2026-09-04 定下的预算，要另一次裁定。缺口本身挪进
+    周报的「Plan budget gap」一节（`beidou_live/report_governance.py` 的 `plan_budget_gap`，M-PR01），
+    只印不告警，周日由 `deploy/com.beidou.weekly.plist` 跑。
+
+    出处：`docs/analysis/2026-09-28-production-refactor-execution-plan.md` §3.9；裁定原文在
+    `docs/analysis/2026-09-28-production-refactor-deep-analysis.md` §14（14.1 裁定表的 Q5 行）。
+    """
+    assert PLAN_BUDGET == {
+        "beidou_live": 2_000,
+        "non_alpha_total": 6_000,
+        "alpha_share_tree": 0.60,
+        "alpha_share_effort": 0.90,
+    }, "PLAN_BUDGET 是 2026-09-04 的预算原文；重定价是一次裁定，不是一次编辑"

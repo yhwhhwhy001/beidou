@@ -16,6 +16,7 @@ from pathlib import Path
 from beidou_live.reports import daily_alerts, margin_and_rejections
 from beidou_live.state import StateStore
 
+ROOT = Path(__file__).resolve().parents[2]
 HOUR = 3_600_000
 BAR = 1_789_000_000_000
 
@@ -71,7 +72,8 @@ def test_the_disagreement_between_the_two_rulers_is_reported_once(tmp_path: Path
     tradable = [n for n in notices if "可动用 USDT" in n]
     assert len(tradable) == 1
     assert "48" in tradable[0] and "22" in tradable[0], "both readings are in the one notice"
-    assert "构造冻结" in tradable[0], "and it says the constraint side was not touched"
+    assert "约束侧未改" in tradable[0], "and it says the constraint side was not touched"
+    assert "risk-g11-denominator" in tradable[0], "naming the ruling that keeps it there, not a date"
 
 
 def test_a_breach_on_both_rulers_does_not_produce_two_notices(tmp_path: Path) -> None:
@@ -111,9 +113,10 @@ def test_the_constraint_side_still_divides_by_total_equity(tmp_path: Path) -> No
     """The line this correction must NOT cross, pinned so a later tidy-up cannot cross it quietly.
 
     `max_gross` clips weights in `guards.clamp_book` and `margin_cap` derives venue leverage (D-016),
-    both against total equity, and both sit inside the construction fingerprint frozen to 2026-10-13.
-    Changing either denominator resizes every position and resets M-010, M-G06 and `realised_vol` -
-    a construction decision for the operator.  M-007 measuring the tradable line does not make it.
+    both against total equity, and both sit inside the construction fingerprint.  Changing either
+    denominator resizes every position and resets M-010, M-G06 and `realised_vol` - a construction
+    decision for the operator, held open as `risk-g11-denominator`.  M-007 measuring the tradable line
+    does not make it.
     """
     import inspect
 
@@ -130,3 +133,20 @@ def test_the_constraint_side_still_divides_by_total_equity(tmp_path: Path) -> No
 
     assert capped is False, "gross 2.0 is exactly at the cap and is not clipped"
     assert clamped.tolist() == [1.0, 1.0]
+
+
+def test_the_ruling_the_report_names_is_still_open() -> None:
+    """The M-007 notice and the gross line of `daily_markdown` both say `risk-g11-denominator` awaits a ruling.
+
+    Named rather than dated because the date went stale first: both said the construction was frozen to
+    2026-10-13 after the freeze had ended early on 2026-09-27.  An entry can be resolved by someone who
+    never reads the daily report, so the report's claim is checked against the list itself.
+    """
+    from beidou_governance import reopen
+
+    entry = {entry.id: entry for entry in reopen.load(ROOT / reopen.LIST)}["risk-g11-denominator"]
+
+    assert entry.check != "resolved", (
+        "risk-g11-denominator is resolved, but the M-007 notice in `daily_alerts` and the gross line in "
+        "`daily_markdown` still say it awaits a ruling - rewrite both to what was ruled"
+    )

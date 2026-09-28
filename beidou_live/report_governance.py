@@ -1,9 +1,11 @@
-"""The governance readings: the daily's dated switches, the weekly's effort share and pre-registration order.
+"""Governance readings: dated switches (daily); effort share, plan budget gap, pre-registration order (weekly).
 
 The usage disciplines of `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md` that a
 report can check: effort goes to alpha (operator target 0.90, 2026-09-04), and a hypothesis is
 written down before its result is seen (DL-K3 / KILL-R9).  The daily's dated switches are E-PR16's
-answer: what flips in the coming week, from `beidou_governance.calendar`.
+answer: what flips in the coming week, from `beidou_governance.calendar`.  The plan budget gap is
+M-PR01 of `docs/analysis/2026-09-28-production-refactor-deep-analysis.md`, recorded rather than
+enforced (§14, Q5).
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from beidou_live.report_common import _parsed
+from beidou_live.report_common import _fmt_pct, _parsed
 
 #: How far ahead the daily report looks: a week, so each flip is on the seven reports before its day,
 #: the last of them the day before - the one somebody reads while there is still time to act.
@@ -33,8 +35,8 @@ def dated_switch_block(day: str, *, gate: Callable[[Path], Sequence[str]] | None
     switch that might bite gets.  Reported only, never an alert: nothing about a date can be done inside
     the hour, and the construction-cadence count showed what a standing fact on the paging path costs.
     """
-    # Here, not at the top: `beidou live run` loads this module through `live_cmd` -> `reports`, and a top-level
-    # import would add the calendar and both YAML readers to the armed process, which never calls it.
+    # Here, not at the top: until 2026-09-28 `beidou live run` loaded this module through `live_cmd` -> `reports`.
+    # It loads no report module now; this just keeps the calendar out of commands that never print this section.
     from beidou_governance.calendar import dated_switches
 
     start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
@@ -87,6 +89,72 @@ def effort_share(changed_lines: Mapping[str, int]) -> dict[str, Any]:
         "target": ALPHA_EFFORT_TARGET,
         "on_target": None if share is None else share >= ALPHA_EFFORT_TARGET,
     }
+
+
+# The packages `tests/architecture/test_source_budget.py` counts.  Production code does not import tests,
+# so the count below is written a second time; a test holds the two to one number on the same tree.
+SOURCE_PACKAGES = (
+    "beidou_alpha",
+    "beidou_live",
+    "beidou_cli",
+    "beidou_data",
+    "beidou_exchange",
+    "beidou_shared",
+    "beidou_governance",
+)
+# The plan's 2026-09-04 budget, the same literal as the ratchet file's PLAN_BUDGET.  A record since the
+# operator ruled on 2026-09-28 (Q5) that non-alpha growth is accepted: printed beside the tree, not enforced.
+PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree": 0.60}
+
+
+def package_lines(root: Path) -> dict[str, int]:
+    """Each package's `.py` lines under ``root``, counted the way the source-budget ratchet counts them."""
+    return {
+        package: sum(
+            len(path.read_text(encoding="utf-8").splitlines())
+            for path in sorted((root / package).rglob("*.py"))
+            if "__pycache__" not in path.parts
+        )
+        for package in SOURCE_PACKAGES
+    }
+
+
+def plan_budget_gap(lines: Mapping[str, int], week_ago: Mapping[str, int] | None, *, days: int = 7) -> dict[str, Any]:
+    """M-PR01: the tree against the plan's budget, and how fast non-alpha code grew over the last week.
+
+    The ratchet test asserted this gap every day from 2026-09-04 and it drove no decision; on 2026-09-28
+    the operator ruled the growth is what he wants (Q5), so that test now pins only the budget's literal
+    and the gap is read here - printed, never alerted.  ``week_ago`` is None when git could not say what
+    the tree held a week ago, and the growth then reads as unreadable rather than as zero.
+    """
+    non_alpha = sum(count for name, count in lines.items() if name != "beidou_alpha")
+    total = sum(lines.values())
+    before = None if week_ago is None else sum(count for name, count in week_ago.items() if name != "beidou_alpha")
+    return {
+        "lines": dict(lines),
+        "non_alpha_total": non_alpha,
+        "alpha_share_tree": lines.get("beidou_alpha", 0) / total if total else None,
+        "non_alpha_growth_per_day": None if before is None else (non_alpha - before) / days,
+        "days": days,
+        "plan": dict(PLAN_BUDGET),
+    }
+
+
+def _plan_budget_lines(gap: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The weekly's rows: every package, then the three numbers the plan named, each beside its budget."""
+    if not gap:
+        return {"none": 0}
+    plan = gap["plan"]
+    rows: dict[str, Any] = {
+        name: f"{count:,}" + (f" (plan {plan[name]:,})" if name in plan else "") for name, count in gap["lines"].items()
+    }
+    rows["non_alpha_total"] = f"{gap['non_alpha_total']:,} (plan {plan['non_alpha_total']:,})"
+    rows["alpha_share_tree"] = f"{_fmt_pct(gap['alpha_share_tree'])} (plan {_fmt_pct(plan['alpha_share_tree'])})"
+    growth = gap["non_alpha_growth_per_day"]
+    rows[f"non_alpha_growth_per_day (last {gap['days']}d)"] = (
+        "不可读（git 读不出一周前的树）" if growth is None else f"{growth:+,.1f}"
+    )
+    return rows
 
 
 # DL-K3 landed on this date, and C-P6's rule applies to it exactly as it does to DL-K1: a mechanism

@@ -9,10 +9,15 @@ import 按各块实际用到的名字重算。这个脚本回答它有没有在�
 **二、`render`：产物逐字节相同。** 照 `beidou_cli/live_cmd.py` 的 `report daily`、`report weekly`、
 `report beta` 出报告，但不发 webhook。在同一个 cwd 下（config、registry、reports/research、git 历史
 都相同），只换 PYTHONPATH 指向的代码，各跑一次再 `diff -r`。周报的 alpha 投入占比读 `git log`，
-这里给固定值，量的是代码不是分支。`long_run_sharpe` 是唯一读墙钟的读数，按它当时所在的模块冻结。
+这里给固定值，量的是代码不是分支；2026-09-28 加的 Plan budget gap 读工作树与 git，同样给固定值。
+`long_run_sharpe` 是唯一读墙钟的读数，按它当时所在的模块冻结。
 2026-09-25 的读数：实盘状态快照（09-03 至 09-24T17:00Z）上 22 天日报（md、json、告警）、4 份周报、
 2 份 beta 报告，另加 `live status` 与引擎用的三个读数，81 个产物逐字节相同。冻结时钟后，基线自己
 跑两次也逐字节相同；不冻结时 `calendar_days` 与 `downtime_days` 两个字段会随墙钟变。
+
+2026-09-28 起，报告层的 13 个名字改从 `beidou_live.reports` 取，不再经 `live_cmd`（`L.`）。`live_cmd`
+只在用它们的函数里 import，模块上不再有这些名字，旧写法会 AttributeError。拆分前的
+`reports.py` 就定义着它们，拆分后 `reports` 原地址再导出，所以新旧两棵树都能用这份脚本渲染基线。
 
 复现（父提交是 5fe1e6b3）：
 
@@ -110,11 +115,11 @@ def render(state_dir: str, data_root: str, out_dir: str) -> None:
     payload = L.load_profile("config/live.demo.yaml")
     store = StateStore(Path(state_dir))
     registry = L.load_registry(payload.get("registry", "config/alpha_registry.yaml"))
-    expectations = L.expectations_from_evidence(L._evidence_reports(registry))
+    expectations = reports.expectations_from_evidence(L._evidence_reports(registry))
     dataset = asdict(L.registry_dataset_problems(registry, data_root, L._interval(payload)))
     days = sorted({str(row.get("at", ""))[:10] for row in store.read_jsonl(store.cycles_path) if row.get("at")})
     for day in days:
-        data = L.daily_payload(
+        data = reports.daily_payload(
             store,
             day,
             expectations,
@@ -127,41 +132,61 @@ def render(state_dir: str, data_root: str, out_dir: str) -> None:
             exits=L.ExitParams.from_mapping(payload.get("exits", {}) or {}),
             fidelity=L.ReplayInputs.from_profile(payload, registry, data_root),
         )
-        (out / f"daily-{day}.md").write_text(L.daily_markdown(data), encoding="utf-8")
+        (out / f"daily-{day}.md").write_text(reports.daily_markdown(data), encoding="utf-8")
         (out / f"daily-{day}.json").write_text(dump(data), encoding="utf-8")
-        alerts, notices = L.daily_alerts(data)
+        alerts, notices = reports.daily_alerts(data)
         (out / f"daily-{day}.alerts.json").write_text(dump({"alerts": alerts, "notices": notices}), encoding="utf-8")
     changed = {"beidou_alpha/x.py": 90, "beidou_live/y.py": 10}
+    # 2026-09-28 起周报多一节 Plan budget gap（M-PR01）。它读工作树与 git 历史，与上面的投入占比同理给固定值：
+    # 新旧两棵树的行数本来就不同，读真树量到的是分支，不是代码。
+    lines = {
+        "beidou_alpha": 900,
+        "beidou_live": 700,
+        "beidou_cli": 300,
+        "beidou_data": 50,
+        "beidou_exchange": 25,
+        "beidou_shared": 15,
+        "beidou_governance": 10,
+    }
+    week_ago = {**lines, "beidou_live": 630}
     for day in days[-10::3]:
-        data = L.weekly_payload(store, day, expectations=expectations, changed_lines=changed, dataset=dataset)
+        data = reports.weekly_payload(
+            store,
+            day,
+            expectations=expectations,
+            changed_lines=changed,
+            dataset=dataset,
+            source_lines=lines,
+            source_lines_week_ago=week_ago,
+        )
         validations = L._validations_since(Path("reports/research"), int(data["since_ms"]))
-        skipped = L.preregistration_skipped(validations, effective_from=L.PREREGISTRATION_EFFECTIVE_FROM)
+        skipped = reports.preregistration_skipped(validations, effective_from=reports.PREREGISTRATION_EFFECTIVE_FROM)
         data["preregistration"] = {
             "checked": len(validations) - skipped,
             "skipped_as_predating_the_check": skipped,
-            "effective_from": L.PREREGISTRATION_EFFECTIVE_FROM,
-            "problems": L.preregistration_problems(
+            "effective_from": reports.PREREGISTRATION_EFFECTIVE_FROM,
+            "problems": reports.preregistration_problems(
                 validations,
                 first_mentioned=L._log_first_mentions({row["strategy"] for row in validations}),
                 search_charged=L._search_charged(),
-                effective_from=L.PREREGISTRATION_EFFECTIVE_FROM,
+                effective_from=reports.PREREGISTRATION_EFFECTIVE_FROM,
             ),
         }
-        (out / f"weekly-{day}.md").write_text(L.weekly_markdown(data), encoding="utf-8")
+        (out / f"weekly-{day}.md").write_text(reports.weekly_markdown(data), encoding="utf-8")
         (out / f"weekly-{day}.json").write_text(dump(data), encoding="utf-8")
     for strategy in ("tsmom", "flow"):
         beta = L.beta_reading(
             store.read_jsonl(store.cycles_path),
             store.read_jsonl(store.attribution_path),
-            L._store_closes(data_root, L._interval(payload)),
+            reports._store_closes(data_root, L._interval(payload)),
             strategy,
         )
-        rendered = L.beta_markdown(beta) if "reason" not in beta else f"reason: {beta['reason']}\n"
+        rendered = reports.beta_markdown(beta) if "reason" not in beta else f"reason: {beta['reason']}\n"
         (out / f"beta-{strategy}.md").write_text(rendered, encoding="utf-8")
         (out / f"beta-{strategy}.json").write_text(dump(beta), encoding="utf-8")
-    latest = L.latest_risk_adaptation(store)
+    latest = reports.latest_risk_adaptation(store)
     (out / "status-risk-adaptation.json").write_text(dump(latest), encoding="utf-8")
-    (out / "status-headline.txt").write_text(str(L.risk_adaptation_headline(latest)) + "\n", encoding="utf-8")
+    (out / "status-headline.txt").write_text(str(reports.risk_adaptation_headline(latest)) + "\n", encoding="utf-8")
     (out / "engine-collateral-share.json").write_text(
         dump(collateral_share(equity=1000.0, usdt_equity=640.0)), encoding="utf-8"
     )
