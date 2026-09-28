@@ -3486,7 +3486,24 @@ CEILING = {
     #
     # 留 40 行（15_318 -> 15_358），理由与上面几格逐字相同，不重述。
     #
-    # 2026-09-28（不编号，同上）。+47 beidou_live，15_318 -> 15_365，抬到 15_405。
+    # 2026-09-28（不编号，同上）。+87 beidou_live，15_318 -> 15_405，抬到 15_445。
+    #
+    # WP-C9（E-PR35）：`beidou_live/config.py` 顶部三张表，登记 shipped profile 每个键的读者。`risk_budget` 块 15 个键里
+    # 有 14 个只有 `report daily` 读；循环的 R8 尺子用 `RiskBudgetParams()` 的默认值，所以改这 14 个键不改循环。
+    # digest 那条测试变异的是 registry，也看不到。表放在装载 profile 的模块里，加键的人第一眼就能看到；
+    # `tests/live/test_every_profile_key_has_a_reader.py` 逐键核读者源码，再核三张表与文件互相覆盖。
+    #
+    # 花在哪（加 87 行、删 0 行）：代码 71 行，全是数据。`PROFILE_KEY_READERS` 50 个键一行一个（52 行），
+    # `REPORT_ONLY_KEYS` 14 个（18 行），`UNREAD_KEYS` 1 行。注释 15 行：E-PR35 为什么要这张表、读者名指什么、
+    # `profile: demo` 为什么没人读。空行 1 行。一行一键，是为了能 grep 到 `portfolio.max_weight` 这样的全名。
+    #
+    # 验收：新测试 15 条绿。手工变异 9 个，全部变红：把读者换成不读它的模块 4 个，把键挪错表 2 个，让日报不读、
+    # 或让循环的装配代码读只供日报的键 3 个。三个 digest 与基线逐字相同。任何键的值与 `LiveConfig` 都没改。
+    #
+    # 留 40 行（15_405 -> 15_445），理由同上，不重述。
+    #
+    # 2026-09-28（不编号，同上）。+47 beidou_live，15_408 -> 15_455，抬到 15_492。写的时候是 15_318 -> 15_365；
+    # 合并 origin/main（bf5290bf）时前面多了上一格 WP-C9 的 +87 与 WP-C6 的净 +3，数按合并后的树重量。
     #
     # 执行手册 §3.6（WP-P3，E-PR16）：日报加一节「未来 7 天日期翻转」。09-25 要一份 63 KB 的分析才看清 10-13 有三个
     # 开关同时翻转；现在每个 dated switch 在它翻转前的 7 份日报里各出现一次，最后一份是前一天的。行从
@@ -3495,17 +3512,18 @@ CEILING = {
     #
     # 花在哪（加 51 行、删 4 行）：`report_governance.py` 的 `dated_switch_block` 与 `_dated_switch_lines`——代码 16 行、
     # docstring 14 行（为什么从当天 00:00Z 起算、为什么不告警）、注释 4 行、空行 9 行，模块 docstring 与一行 import
-    # 改写 3 行。4 行注释里有 2 行写 `calendar` 为什么在函数里 import：`engine.py` 仍经 `reports` 导入整个报告层（WP-C6
-    # 去掉它），放在顶层会把七个治理模块带进 armed 进程的 import 闭包。`reports.py`：`daily_payload` 加 `gate` 参数与
-    # 一个键、`daily_markdown` 加一节，代码 5 行、注释 2 行，模块 docstring 改写 1 行。
+    # 改写 3 行。4 行注释里有 2 行写 `calendar` 为什么在函数里 import：`beidou live run` 经 `live_cmd` -> `reports`
+    # 载入这个模块，放在顶层会把 `calendar`、`reopen`、`window_changes` 三个治理模块带进 armed 进程（WP-C6 之后
+    # `import beidou_live.engine` 本身已不含报告层）。`reports.py`：`daily_payload` 加 `gate` 参数与一个键、
+    # `daily_markdown` 加一节，代码 5 行、注释 2 行，模块 docstring 改写 1 行。
     #
     # 验收：#135 协议，实盘状态快照（09-03 至 09-28）上 93 个产物，41 个逐字节相同，其余 52 个（26 份日报的 md 与
     # json）去掉新加的这一节、这个键之后逐字节相同；同一代码渲染两次逐字节相同。09-03 至 09-19 印「无」，09-27 的两行
     # 各在它前面 7 份日报里出现，10-03 的六行从 09-26 起出现。`import beidou_live.engine` 带进的 `beidou_*` 模块改前
     # 改后都是 89 个，逐个相同。
     #
-    # 留 40 行（15_365 -> 15_405），理由同上，不重述。
-    "beidou_live": 15_405,
+    # 留 37 行（15_455 -> 15_492）：合并前 main 的余量就是 37（WP-C6 的 +3 没有抬顶），理由同上，不重述。
+    "beidou_live": 15_492,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3867,7 +3885,8 @@ CEILING = {
     #
     # 留 40 行（8_616 -> 8_656），理由同上，不重述。
     #
-    # 2026-09-28（不编号，同上）。+40 beidou_cli，8_631 -> 8_671，抬到 8_696。
+    # 2026-09-28（不编号，同上）。+40 beidou_cli，8_632 -> 8_672，抬到 8_696。写的时候是 8_631 -> 8_671；合并 origin/main
+    # （bf5290bf）时前面多了 WP-C7 的净 +1，数按合并后的树重量，顶的数没变。
     #
     # 执行手册 §3.6（WP-P3，E-PR16）：`beidou governance calendar [--days 60] [--json]`，按日期升序打印每个 dated
     # switch 的 date | source | reader | consequence | status，已过的与 `--days` 之外的只计数。只读，不动任何开关。
@@ -3880,7 +3899,7 @@ CEILING = {
     # 验收：在 worktree 里跑出 60 天内 9 行（10-03 六行、10-13 三行），另有 2 行已过。worktree 没有 `.beidou/data`，
     # bridge 读 pending（startup gate 的 dataset 那一半挡 1 条）；`--data-root` 指向真实归档时读 inert。
     #
-    # 留 25 行（8_671 -> 8_696），理由同上，不重述。
+    # 留 24 行（8_672 -> 8_696）：合并前 main 的余量就是 24（WP-C7 的 +1 没有抬顶），理由同上，不重述。
     "beidou_cli": 8_696,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot

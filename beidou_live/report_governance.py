@@ -33,8 +33,8 @@ def dated_switch_block(day: str, *, gate: Callable[[Path], Sequence[str]] | None
     switch that might bite gets.  Reported only, never an alert: nothing about a date can be done inside
     the hour, and the construction-cadence count showed what a standing fact on the paging path costs.
     """
-    # Here, not at the top: `engine.py` still imports `reports` (WP-C6 removes that), so a top-level
-    # import would put seven governance modules the armed loop never calls into its import closure.
+    # Here, not at the top: `beidou live run` loads this module through `live_cmd` -> `reports`, and a top-level
+    # import would add the calendar and both YAML readers to the armed process, which never calls it.
     from beidou_governance.calendar import dated_switches
 
     start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)

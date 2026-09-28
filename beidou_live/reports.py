@@ -867,10 +867,10 @@ def daily_markdown(payload: dict[str, Any]) -> str:
     )
 
 
-# What production code imports from this address: the assembly, and nine names `live_cmd` (and, for
-# `collateral_share`, the engine) take from the area modules through here.  mypy's strict mode does
-# not follow an implicit re-export, so these are declared; tests and scratchpad reach the rest of
-# the contract through the imports at the top.
+# What production code imports from this address: the assembly, and nine names `live_cmd` takes from
+# the area modules through here.  mypy's strict mode does not follow an implicit re-export, so these
+# are declared; tests and scratchpad reach the rest of the contract through the imports at the top.
+# `collateral_share` was the engine's too, until WP-C6 (2026-09-28) moved it to `risk_budget`.
 __all__ = [
     "PREREGISTRATION_EFFECTIVE_FROM",
     "_store_closes",
