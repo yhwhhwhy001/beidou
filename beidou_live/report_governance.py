@@ -54,6 +54,22 @@ def _dated_switch_lines(block: Mapping[str, Any]) -> list[str] | str:
     return [f"{r['at'][:16]}Z {r['status']} · {r['source']} · {r['reader']} · {r['consequence']}" for r in rows]
 
 
+def _uncommitted_verdict_lines(block: Mapping[str, Any] | None) -> str | dict[str, Any]:
+    """「无」 when every gate verdict is committed; otherwise how many, the newest, and where the steps are."""
+    if block is None:
+        return "未检查（不在 git checkout 里）"
+    if not block.get("append_only"):
+        return "`governance/verdicts.jsonl` 的本地改动不是纯追加：先查清再入库（RUNBOOK「治理裁决入库」）"
+    if not block.get("rows"):
+        return "无"
+    latest = block.get("latest") or {}
+    return {
+        "未入库": f"{block['rows']} 行：夜间 governance gate 追进 checkout 工作树，没有提交",
+        "最新": f"{str(latest.get('at'))[:19]}Z {latest.get('kind')} {latest.get('subject')} {latest.get('ruling')}",
+        "怎么办": "按 RUNBOOK「治理裁决入库」开 PR；合入后先核对逐字节相同，再撤本地副本并快进",
+    }
+
+
 ALPHA_EFFORT_TARGET = 0.90  # operator decision 2026-09-04; see docs/RESEARCH_LOG.md
 
 
