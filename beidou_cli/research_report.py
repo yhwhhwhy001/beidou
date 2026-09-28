@@ -198,39 +198,43 @@ def _leg_row(leg: Mapping[str, Any] | None) -> str:
 
 def _fit_row(fit: Mapping[str, Any] | None) -> str:
     if not fit:
-        return "n/a (degenerate design)"
+        return "n/a (fewer than 48 bars, or a degenerate design)"
+    short = "" if fit["nw_covers_intended_horizon"] else "; bandwidth clamped short of 48"
     return (
         f"beta={_fmt(fit['beta'])} (t {_fmt(fit['beta_t'])})  alpha={fit['alpha_bps_per_bar']:.3f} bps/bar "
-        f"(t {_fmt(fit['alpha_t'])})  NW lags {fit['nw_lags']}"
+        f"(t {_fmt(fit['alpha_t'])})  NW lags {fit['nw_lags']}{short}"
     )
 
 
 def _basket_rows(block: Mapping[str, Any]) -> dict[str, str]:
-    """`against_basket` as flat rows (N2): the legs, the two betas, and the signal state beside them."""
+    """`against_basket` as flat rows (N2): the legs, the two betas, the signal state, and what they are not."""
+    if "n/a" in block:
+        return {"n/a": str(block["n/a"])}
     state = block["signal_state"]
     return {
         "bars": str(block["bars"]),
         "book (fold-selected, out of sample)": _leg_row(block["book"]),
-        "basket (point-in-time equal weight, zero cost)": _leg_row(block["basket"]),
+        f"basket ({block['basket']}, equal weight, zero cost, rebalanced every bar)": _leg_row(block["basket_leg"]),
         "BTCUSDT buy and hold": _leg_row(block["btc_buy_and_hold"]),
-        "constant: book ~ basket": _fit_row(block["constant"]),
-        "conditional: book ~ exposure x basket (D-045)": _fit_row(block["conditional"]),
+        "constant: book ~ basket (passive market exposure)": _fit_row(block["constant"]),
+        "conditional: book ~ exposure x basket (timing counts as beta here)": _fit_row(block["conditional"]),
         "signal state": (
             f"all long {state['all_long_share']:.1%}  all short {state['all_short_share']:.1%}  "
             f"two-sided {state['two_sided_share']:.1%}  flat {state['flat_share']:.1%}  "
             f"net {_fmt(state['net_exposure_mean'])}  gross {_fmt(state['gross_exposure_mean'])}"
         ),
+        **{f"basis: {key}": str(value) for key, value in block["basis"].items()},
     }
 
 
 def _concentration_rows(block: Mapping[str, Any]) -> dict[str, str]:
-    """`concentration` as flat rows (N3).  Shares are of summed net P&L; n/a when that sum is not positive."""
+    """`concentration` as flat rows (N3); the units and the leave-one-out's limits follow the numbers."""
 
     def shares(part: Mapping[str, Any]) -> str:
         top = ", ".join(f"{name} {value:+.4f}" for name, value in part["top"])
         return (
             f"top1 {_fmt_pct(part['top1_share'])}  top3 {_fmt_pct(part['top3_share'])}  "
-            f"of summed net P&L {part['net_pnl_total']:+.4f}  ({top})"
+            f"of summed net returns {part['net_pnl_total']:+.4f}  (largest: {top})"
         )
 
     oos = block["oos"]
@@ -238,9 +242,9 @@ def _concentration_rows(block: Mapping[str, Any]) -> dict[str, str]:
         "full sample": shares(block["full_sample"]),
         "out of sample": shares(oos),
         "OOS Sharpe without its most important name": (
-            f"{_fmt(oos['leave_one_out_min_sharpe'])} without {oos['leave_one_out_min_without']} "
-            f"(book {_fmt(oos['sharpe'])}; its contribution dropped, weights not renormalised)"
+            f"{_fmt(oos['leave_one_out_min_sharpe'])} without {oos['leave_one_out_min_without']} (book {_fmt(oos['sharpe'])})"
         ),
+        **{f"basis: {key}": str(value) for key, value in block["basis"].items()},
     }
 
 

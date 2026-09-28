@@ -145,13 +145,16 @@ def payoff_ratio(returns: pd.Series | np.ndarray) -> float | None:
 
 
 def cagr(returns: pd.Series | np.ndarray, bars_per_year: float) -> float | None:
-    """Compound annual growth of a per-bar return series: ``compound`` raised to years^-1."""
+    """Compound annual growth of a per-bar return series, through logs; None where a float cannot hold it."""
     values = np.asarray(returns, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
         return None
     growth = 1.0 + compound(values)
-    return -1.0 if growth <= 0.0 else float(growth ** (bars_per_year / values.size) - 1.0)
+    if growth <= 0.0:
+        return -1.0
+    exponent = float(np.log(growth)) * bars_per_year / values.size
+    return float(np.expm1(exponent)) if exponent < 700.0 else None
 
 
 def calmar(returns: pd.Series | np.ndarray, bars_per_year: float) -> float | None:

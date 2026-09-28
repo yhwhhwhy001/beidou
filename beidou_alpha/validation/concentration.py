@@ -4,9 +4,11 @@ The template asks that a strategy not depend on a single asset, and the evidence
 it: `per_symbol_summary` exists, but only `research backtest` printed it.  The failure is not
 hypothetical here - flow's edge came from names that later left the pool (`config/alpha_registry.yaml`).
 
-Contributions are each symbol's net P&L column of the backtest, summed.  The leave-one-out Sharpe drops one
-symbol's column from the book's return without re-pricing the rest: weights are NOT renormalised, so it
-understates how much the book would change and is an approximation that says so.
+Units, printed with the block (`BASIS`): each symbol's net P&L column of the backtest, summed over bars as
+simple returns, not compounded.  A share can exceed 100% when other names lost money, and `top` is the three
+largest contributions by value.  The leave-one-out Sharpe drops one symbol's column from the book's return:
+the rest is not re-priced, weights are not renormalised, and the guards and exits are not replayed, so it is
+an approximation whose error has no known sign.
 """
 
 from __future__ import annotations
@@ -16,6 +18,12 @@ from typing import Any
 import pandas as pd
 
 from beidou_alpha.validation.metrics import sharpe
+
+BASIS = {
+    "units": "sums of per-bar simple net returns, not compounded; a share exceeds 100% when other names lost",
+    "leave_one_out": "one symbol's net column dropped; nothing re-priced, weights not renormalised, guards and "
+    "exits not replayed, so the error has no known sign",
+}
 
 
 def _shares(net_by_symbol: pd.DataFrame) -> dict[str, Any]:
@@ -49,4 +57,5 @@ def concentration(full: pd.DataFrame, oos: pd.DataFrame, bars_per_year: float) -
             "leave_one_out_min_sharpe": None if worst is None else worst[1],
             "leave_one_out_min_without": None if worst is None else worst[0],
         },
+        "basis": BASIS,
     }
