@@ -93,6 +93,28 @@ def _latest_ms(rows: Sequence[Mapping[str, Any]]) -> int:
     return int(rows[-1].get("bar_open_ms") or 0) if rows else 0
 
 
+def collateral_share(*, equity: float, usdt_equity: float | None) -> dict[str, float | None]:
+    """L1-10: the part of `equity` that is collateral rather than the book's own currency.
+
+    The demo account is on multi-assets margin, so `totalMarginBalance` - what `drawdown_state` and the
+    vol sizing divide by - carries non-USDT assets valued at mark.  BTC moves and measured equity moves
+    with it on a bar where the book did nothing, so a drawdown reading that trips the ladder can belong
+    to BTC rather than to the strategy.
+
+    Reported, never enforced, and deliberately NOT subtracted from the equity the book sizes on: changing
+    that denominator changes every position size, which is a construction change - it resets M-010's
+    window and is the operator's decision on its own merits, not a bug fix. What was missing is that the
+    divergence was invisible, and that is what this closes.
+
+    `None` rather than 0.0 when the venue did not report a USDT balance: zero would read as "all of it is
+    collateral", which is the opposite of "we do not know" - the `metrics_parity` lesson again.
+    """
+    if usdt_equity is None or equity <= 0:
+        return {"equity": equity, "usdt_equity": usdt_equity, "collateral": None, "share": None}
+    collateral = equity - usdt_equity
+    return {"equity": equity, "usdt_equity": usdt_equity, "collateral": collateral, "share": collateral / equity}
+
+
 def _latest_collateral_share(rows: Sequence[Mapping[str, Any]]) -> float | None:
     """The newest cycle that recorded one; ``None`` when none did (the field is newer than the log)."""
     block = latest(rows, "collateral")
