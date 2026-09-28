@@ -65,9 +65,11 @@ from beidou_live.report_common import (  # noqa: F401  (re-exported at its histo
     readable_state,
 )
 from beidou_live.report_data import (
+    _data_family_lines,
     _dataset_block,
     archive_tests_status,
     data_coverage,
+    data_family_parity,
     metrics_parity_status,
 )
 from beidou_live.report_decay import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
@@ -301,6 +303,8 @@ def daily_payload(
         "bar_sanity": sanity_status(store.read_jsonl(store.cycles_path), day, day_of=_day_of),
         # WP-P4: the nightly data job's last verdict on the tests that read `.beidou/`.  It pages; this prints.
         "archive_tests": archive_tests_status(),
+        # WP-A1 / M-PR06: each candidate data family's live recording against what its startup gate would ask for.
+        "data_family_parity": data_family_parity(store, data_root, fidelity),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
         # 3.9, reported only: a full close is one market order, so what it costs is impact, not bars.
         "liquidity_to_close": liquidity_to_close(store, day, root=data_root),
@@ -755,6 +759,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ("Bar sanity (G6, alert only)", sanity_lines(payload.get("bar_sanity") or {})),
             # WP-P4, beside both: whether the tests that read that archive and the loop's record passed last night.
             ("归档专属测试（夜间 data job，只报告）", payload.get("archive_tests") or {"none": 0}),
+            # WP-A1, after them: how far live is from being able to trade each family the miner can read.
+            ("数据族 parity（M-PR06，只报告）", _data_family_lines(payload.get("data_family_parity") or {})),
             (
                 "Margin and rejections (M-007)",
                 {
