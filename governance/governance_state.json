@@ -2,16 +2,20 @@
   "candidates": {
     "flow": {
       "cooldown_until_window": -1,
+      "folded_through": "",
       "fraction": 0.3333333333333333,
       "probe_entries": 1,
+      "queued_at": "",
       "state": "probe",
       "windows_survived": 0
     },
     "tsmom": {
       "cooldown_until_window": -1,
+      "folded_through": "2026-09-25T18:30:05.089580+00:00",
       "fraction": 0.0,
       "probe_entries": 0,
-      "state": "main",
+      "queued_at": "",
+      "state": "probe",
       "windows_survived": 0
     }
   },
