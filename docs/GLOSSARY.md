@@ -24,6 +24,7 @@
 | headroom | 余量 | `headroom` |
 | exit overlay | 退出层、退出叠加层 | `overlay` |
 | overlay | 叠加层 | `overlay` |
+| cooldown | 冷却、冷却期 | `cooldown_bars`、`cooldown_until`、`COOLDOWN`（2026-09-28 起；旧文不改） |
 | sleeve | 分仓、袖子 | `sleeve` |
 | universe | 标的池、宇宙 | `universe` |
 | throttle | 节流阀 | `drawdown_throttle` |

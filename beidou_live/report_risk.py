@@ -37,6 +37,10 @@ from beidou_live.report_common import (
     readable_state,
 )
 from beidou_live.risk_budget import books_by_symbol
+
+# Defined in `risk_budget` so the engine reads it without importing the report layer (WP-C6, 2026-09-28);
+# kept at this address because `reports` re-exports it from here.
+from beidou_live.risk_budget import collateral_share as collateral_share
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
@@ -55,28 +59,6 @@ from beidou_shared.config import load_yaml
 # statistic is unbounded above for reasons unrelated to stage 1.  Alert again from a cancellation and
 # the answer is to measure the main book separately, NOT to raise this a second time.
 RISK_COMPRESSION_LIMIT = 0.76
-
-
-def collateral_share(*, equity: float, usdt_equity: float | None) -> dict[str, float | None]:
-    """L1-10: the part of `equity` that is collateral rather than the book's own currency.
-
-    The demo account is on multi-assets margin, so `totalMarginBalance` - what `drawdown_state` and the
-    vol sizing divide by - carries non-USDT assets valued at mark.  BTC moves and measured equity moves
-    with it on a bar where the book did nothing, so a drawdown reading that trips the ladder can belong
-    to BTC rather than to the strategy.
-
-    Reported, never enforced, and deliberately NOT subtracted from the equity the book sizes on: changing
-    that denominator changes every position size, which is a construction change - it resets M-010's
-    window and is the operator's decision on its own merits, not a bug fix. What was missing is that the
-    divergence was invisible, and that is what this closes.
-
-    `None` rather than 0.0 when the venue did not report a USDT balance: zero would read as "all of it is
-    collateral", which is the opposite of "we do not know" - the `metrics_parity` lesson again.
-    """
-    if usdt_equity is None or equity <= 0:
-        return {"equity": equity, "usdt_equity": usdt_equity, "collateral": None, "share": None}
-    collateral = equity - usdt_equity
-    return {"equity": equity, "usdt_equity": usdt_equity, "collateral": collateral, "share": collateral / equity}
 
 
 def leg_split(store: StateStore, *, since_ms: int | None, equity: float | None) -> dict[str, Any]:

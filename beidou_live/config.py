@@ -34,6 +34,93 @@ from beidou_live.rebalancer import RebalanceParams
 from beidou_live.state import StateStore
 from beidou_shared.config import env_secret, load_yaml
 
+# Who reads each key of the shipped profile (`config/live.demo.yaml`, flattened to `section.leaf`; a top-level
+# scalar is its own name).  Every key is in exactly one of the three tables below, and
+# `tests/live/test_every_profile_key_has_a_reader.py` checks each entry against the readers' source, so a key
+# cannot be added to the profile, or stop being read, without this record changing in the same commit.
+#
+# E-PR35 (2026-09-28) is why they exist.  Fourteen of the fifteen `risk_budget` keys are read by `report daily`
+# alone, which hands the block to `RiskBudgetParams.from_mapping` in `beidou_cli/live_cmd.py`.  The loop builds
+# its R8 ruler from `RiskBudgetParams()` - the class defaults - and takes the rungs it acts on from `Policy`.
+# The defaults equal the file today (`test_the_risk_budget_default_does_not_lag_the_profile.py` holds that),
+# but the loop reads the class and not the file: editing one of these keys changes the report, never the loop.
+# `test_the_digest_sees_every_live_knob.py` would not say so either; it mutates the registry, not the profile.
+#
+# A reader is one module that reads the key, not every one.  `beidou_live.config` means the loop reads it,
+# through the functions below.
+PROFILE_KEY_READERS: dict[str, str] = {
+    "venue.rest_url": "beidou_live.config",
+    "venue.api_key_env": "beidou_live.config",
+    "venue.api_secret_env": "beidou_live.config",
+    "venue.recv_window_ms": "beidou_live.config",
+    "venue.multi_assets_margin": "beidou_live.config",
+    "market_data.rest_url": "beidou_live.config",
+    "market_data.interval": "beidou_live.config",
+    "market_data.history_bars": "beidou_live.config",
+    "universe": "beidou_live.config",
+    "registry": "beidou_live.config",
+    "costs": "beidou_live.execution_fidelity",  # only the daily report's fidelity replay; the loop has no cost model
+    "portfolio.leverage": "beidou_live.config",
+    "portfolio.leverage_sigma_ref": "beidou_live.config",
+    "portfolio.leverage_tiers": "beidou_live.config",
+    "portfolio.leverage_hysteresis": "beidou_live.config",
+    "portfolio.margin_cap": "beidou_live.config",
+    "portfolio.max_leverage": "beidou_live.config",
+    "portfolio.margin_buffer": "beidou_live.config",
+    "portfolio.max_participation": "beidou_live.config",
+    "portfolio.vol_target": "beidou_live.config",
+    "portfolio.max_gross": "beidou_live.config",
+    "portfolio.max_weight": "beidou_live.config",
+    "portfolio.no_trade_band": "beidou_live.config",
+    "portfolio.no_trade_rel_band": "beidou_live.config",
+    "portfolio.exempt_crossings": "beidou_live.config",
+    "portfolio.flat_inside_band": "beidou_live.config",
+    "portfolio.band_entry_multiple": "beidou_live.config",
+    "portfolio.min_history_bars": "beidou_live.config",
+    "pool.refresh": "beidou_live.config",
+    "pool.candidates": "beidou_live.config",
+    "pool.liquidity_window": "beidou_live.config",
+    "pool.quarantine_after": "beidou_live.config",
+    "exits.stop_loss": "beidou_live.config",
+    "exits.trailing_stop": "beidou_live.config",
+    "exits.take_profit": "beidou_live.config",
+    "exits.cooldown_bars": "beidou_live.config",
+    "exits.vol_halflife": "beidou_live.config",
+    "drawdown_throttle.enabled": "beidou_live.config",
+    "drawdown_throttle.start": "beidou_live.config",
+    "drawdown_throttle.stop": "beidou_live.config",
+    "drawdown_throttle.floor": "beidou_live.config",
+    "risk_budget.min_liq_distance": "beidou_live.config",  # the one key of that block the loop reads
+    "guards.daily_loss_pause": "beidou_live.config",
+    "guards.stale_bars_max": "beidou_live.config",
+    "guards.max_bar_alignment_seconds": "beidou_live.config",
+    "guards.kill_switch_path": "beidou_live.config",
+    "paths.state_dir": "beidou_live.config",
+    "paths.reports_dir": "beidou_cli.live_cmd",  # where `report daily` / `weekly` write; the loop never reads it
+    "alerts.webhook_url": "beidou_cli.live_cmd",  # `live run` wires both into the loop's alerts
+    "alerts.webhook_url_2": "beidou_cli.live_cmd",
+}
+REPORT_ONLY_KEYS: frozenset[str] = frozenset(
+    {
+        "risk_budget.deescalate_at",
+        "risk_budget.rollback_at",
+        "risk_budget.deescalate_to",
+        "risk_budget.rollback_to",
+        "risk_budget.vol_band",
+        "risk_budget.vol_window_days",
+        "risk_budget.min_vol_bars",
+        "risk_budget.model_slippage_bps",
+        "risk_budget.slippage_multiple",
+        "risk_budget.slippage_window_days",
+        "risk_budget.min_slippage_fills",
+        "risk_budget.max_late_cycle_share",
+        "risk_budget.max_missed_rebalances",
+        "risk_budget.guard_window_days",
+    }
+)
+# `profile: demo` is a label for people.  Nothing reads it: the loop knows its profile by the `--profile` path.
+UNREAD_KEYS: frozenset[str] = frozenset({"profile"})
+
 
 def load_profile(path: str | Path) -> dict[str, Any]:
     return load_yaml(path)

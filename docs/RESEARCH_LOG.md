@@ -18922,3 +18922,265 @@ Sharpe 1.55、B 段 1.49，那是挖掘候选的净方向，四个形状两段�
 
 跑出上表的三个文件就是入库的这一版：`beidou_alpha/signals/lsr_timing.py` `535827d270eaa158`，`scratchpad/lsr_timing_criteria.py`
 `edb2aa2dd58c8c8f`，`scratchpad/lsr_timing_criteria_synthetic.py` `0023dad957c6cd99`（sha256 前 16 位）。
+
+## 2026-09-28 · 补记：重启 #59 的执行人
+
+上面「重启 #59」一节的「谁、为什么」写着，操作者还没有确认是否由他执行。操作者 2026-09-28T07:52:14Z 在项目话题
+「执行 10-13 切换」里答「是」，问题是「昨晚 21:21 那次快进和重启，是你在终端粘贴那条命令跑的吗？」（21:21 是北京
+时间，即 13:21Z）。所以 13:21:04Z 的快进与 13:21:35Z 的重启，是操作者在 Mac 终端粘贴话题 13:20Z 给出的链式命令
+执行的：快进到固定的 `97f81b5a`，跑两个构造测试，两步都成功才 kickstart。
+
+- 两个构造测试通过，仍是推断：输出没有留存。依据是 kickstart 在那条命令里排在两个测试之后、用 `&&` 连着，而它执行了。
+- 原段不改。
+
+## 2026-09-28 · lsr_timing 裁决：**REFUTED**——样本外 Sharpe 1.28 对门 1.65，B 段超出对照 t 1.78 对 2.0
+
+预登记见上面「2026-09-28 · 预登记：全市场多空比择时 lsr_timing」一节（commit `a41a5df`，#204），判据、网格、成本与
+对照一字未改。操作者 07:25:06Z 在「挖掘更多策略和因子」话题里打字「跑」；第一次在 Mac 上被本机 Claude Code 的
+auto mode 拦下，没执行，没花 ledger；07:52:37Z 操作者又打字写明「在 Mac 的 lsr-timing-run worktree 里跑一次
+lsr_timing 的 validate（花 4 行 ledger）和判定脚本，把结果提交推到 claude/alpha-strategy-discovery-gio1g0」。
+
+在操作者 Mac 上 `~/beidou` 之外的独立 worktree（`~/beidou-worktrees/lsr-timing-run`，检出 `a41a5df`；四个代码文件与
+`trials.jsonl` 的 sha256 与 `a41a5df` 上的逐个相同）里，validate（07:53:15Z → 07:54:35Z）与判定脚本（07:55:19Z → 07:56:48Z）
+各跑一次，退出码都是 0，读同一份数据（dataset digest `7632537f930dea28`，212 个币 × 50,297 根 bar）。
+
+- 报告 `reports/research/lsr_timing-validation-20260928T075435Z.json`（sha256 `5abb899c…`），记下的
+  `preregistration.committed_at` 是 2026-09-28T06:00:00Z，早于报告。
+- 判定读数 `reports/research/lsr_timing-criteria-20260928T075648Z.json`（sha256 `773f157b…`）。
+- `trials.jsonl` 22,205 → 22,209 行，+4 全在 `lsr_timing` 桶，删行 0。
+- `~/beidou` 跑前（07:31:38Z）跑后（07:57:21Z）逐字相同：HEAD `40cbe17c`，status 只有原来那行
+  ` M governance/verdicts.jsonl`，`trials.jsonl` 22,205 行、sha256 `4444538a…`，环境里没有 `BEIDOU_TRIALS_LEDGER` /
+  `BEIDOU_FEATURE_STORE`。全程没碰实盘循环与 launchd。
+- 结果提交 `f5f6881` 推上去之后，worktree 已删。
+
+两份 stdout 附在本节末尾。
+
+### 一、读数
+
+| 格（window，scale；入场线 0.2） | 全样本 Sharpe |
+| --- | ---: |
+| 72，0.5 | 1.1006 |
+| **168，0.5**（最优） | **1.4100** |
+| 72，1.0 | 0.5296 |
+| 168，1.0 | 0.9780 |
+
+| 最优格 | 值 |
+| --- | ---: |
+| walk-forward 样本外 Sharpe（逐折选格的混合，判据读这个） | 1.2774 |
+| 最优格自己的 walk-forward 样本外 Sharpe | 1.4206 |
+| 五折 Sharpe | 1.81 / 1.39 / 2.62 / 1.33 / −0.39 |
+| 样本外按时间四等分 | 1.70 / 1.52 / 2.32 / −0.06 |
+| CPCV 均值 / q05 / 负路径占比（15 条路径） | 1.12 / 0.17 / 0.07 |
+| DSR p / PBO | 0.26 / 0.30 |
+| 成本 ×1.5 / ×2 | 1.33 / 1.24 |
+| 全样本最大回撤 / 平均绝对敞口 | −20.2% / 0.22 |
+| 门（D-028，N=662，按这本书自己量的方差） | 1.6533 |
+
+判定脚本按「有没有横截面」切两段：M 第一次由两个以上的名字平均出来的那根是 2021-12-07 23:00Z（`split_decision_bar`），
+A 段到它为止，B 段从下一根起。三段都只算书开始做决定之后的 bar（bar t 赚的是 t − 1 的决定）。
+
+| 段 | bar 数 | 书的 Sharpe（NW t） | 书每年 | 超出对照 NW t | 超出对照每年 | 占全样本净收益 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A（只有 BTC，2021-01-31 起） | 7,463 | 1.87（1.72） | +0.205 | 1.86 | +0.202 | 16.0% |
+| **B（有横截面，2021-12-08 起）** | 42,113 | 1.35（2.86） | +0.190 | **1.78** | +0.102 | 84.0% |
+| 全样本 | 49,576 | 1.41（3.25） | +0.192 | 2.26 | +0.117 | 100% |
+
+「超出对照」是书的逐 bar 净收益对大盘与十条趋势跟随的逐 bar 毛收益回归的截距（β 只在那一段上拟合），每年 = 截距 ×
+8,760。720 根的「涨跌」对照要先攒够历史，所以 A 段与全样本的回归比书少 720 根（6,743 与 48,856 根），B 段一根不少。
+
+### 二、裁决（第 6 项判定表）
+
+| 判据 | 读数 | 结果 |
+| --- | --- | --- |
+| verdict | FAIL：`oos_sharpe 1.28 < the deflated threshold 1.65 at 662 trials, p_family=0.6830` | **未过** |
+| 样本外 Sharpe 对门 | 1.2774 对 max(1.6533, 1.0) = 1.6533 | **未过** |
+| B 段超出对照 | NW t 1.7769（42,113 根） | **未过** |
+| 与 tsmom 的相关 | 0.0279（2,066 个 UTC 日） | 过 |
+| 复现 | 1.4099524398829022，与报告的最优格逐位相同；对照路径喂书自己的分数，权重逐位相同（脚本没停） | 过 |
+
+四条要全过，三条没过 → **REFUTED**。verdict 与样本外对门是同一件事（validate 判 FAIL 的理由就是样本外低于门）；
+B 段超出对照是另一件事，它独立地也没过。
+
+对第 7 项的预期：
+
+- 「最可能挂在第二条（样本外对门）……样本外 Sharpe 在 1.0 到 1.5 之间，四条全过的机会不到三成」：样本外 1.28，
+  挂在这里。对了。
+- 「其次是第三条……十条趋势对照会拿走一部分，我估计剩 2 到 3」：剩 1.78。错在偏乐观，对照拿走的比估的多。
+- 「第四条大概率过」：0.028，过了。
+
+### 三、判据之外要记下的
+
+- **门是 1.6533，不是 1.6466。** 第 5 项借 tsmom 的方差估门，这本书自己的方差让门略高；真 Sharpe 1.5 过门的概率是
+  36.3%（估的是 36.8%）。样本外 1.28 两个数都够不着，不改结论。按全库 N=21,644 的那个口径（只报告），门是 2.00。
+- **不是逐折选格害的，也不是成本。** 前两折选了 scale 1.0，后三折选了 0.5（window 都是 168），所以判据读的 1.28 是
+  一个选格过程的样本外记录；最优格自己的样本外 1.42，同样低于 1.65。成本 ×2 仍有 1.24，成本占毛收益 8.5%。
+- **最近一年在亏。** 五折最后一折 −0.39（按 bar 数推算约为最近一年），样本外四等分的最后一段 −0.06。按日历年，
+  书开始做决定之后的逐 bar 净收益之和：2021 +0.191、2022 +0.167、2023 +0.288、2024 +0.390、2025 +0.172、2026（到 09-27）
+  −0.122。
+- **钱主要在 B 段。** A 段 Sharpe 1.87，但只有约 10 个月，t 1.72，占全样本净收益 16%。所以这不是合成试跑里
+  btc_era 那种「钱只在只有 BTC 的那段」的书。挂住它的是 B 段：书自己 t 2.86，扣掉大盘与十条趋势跟随之后剩 1.78，
+  每年 +0.190 里剩 +0.102。
+- **B 段的书大半时间做空。** 做空 62.8%、做多 37.2%；每年翻面 46 次，最长 42.9 天不翻；对大盘的 β −0.30。同一段里
+  大盘（等权持有 pit 篮子）Sharpe −0.40，24 根的两条趋势跟随分别是 −1.38 与 −1.39（t 都是 −2.87）。A 段只有 BTC 一个名字，
+  每年翻面 128 次，强读数占 64.8%；B 段中位 17 个名字平均之后，强读数只占 32.6%。
+- **只报告、不进判定的一条**：B 段把 tsmom 当第十二个对照再回归，截距 t 2.18（tsmom 的 β −0.087）。它不是判据，
+  第 6 项写明不换对照；就算换了，样本外对门那一条也独立地挂着。记在这里，免得有人把它读成「差一点」而重跑。
+- 按基准波动分三档的样本外 Sharpe：低 0.95、中 1.04、高 2.27（只报告；三档部分是日历段）。
+
+### 四、落地（按第 6 项的判负）
+
+- 择时这条假设 REFUTED。不重跑、不换网格、不换对照、不申诉门、不换 `--prior-trials`、不补数据重跑。
+- `governance/reopen.yaml` 新加一条 `lsr-timing`：REFUTED，`check: operator`。重开条件逐字引第 6 项：「重开要新信息
+  （例如实盘自己攒下的多空比、另一家交易所的多空比），不是同一份日档上的又一个写法或网格。」清单从 22 条变 23 条，
+  `test_every_condition_in_the_log_is_in_the_list` 的计数在同一个提交里改，理由写在它的 docstring 里。`ls-leaf` 不动。
+- 第 7 项写下的判负含义：LS 这条线在北斗里收口，选币（#199）与择时都判过，不再为它建实盘多空比通道。
+- 代码留在仓库里（`beidou_alpha/signals/lsr_timing.py`、判定脚本、合成试跑与测试），与报告、判定读数和 4 笔 ledger
+  一起入库。`lsr_timing` 不在 registry 里，实盘循环够不到它。
+- ledger：`lsr_timing` 桶 4 行，这个桶的 N 是 662（4 + 声明的 658）。这 4 行记在 09-03 起的 R1 窗口里，validate
+  不读 R1。
+
+### 附：Mac 上的原始输出（逐字）
+
+validate 的输出（stdout 与 stderr）加末尾的退出码行，1,410 字节，16 行，sha256 `ebc0340572c5d941fc89229993caa36ee7afe15fb84d2d81eb10df38f60684e9`：
+
+```text
+charge: 4 row(s) to the shared trials ledger
+evaluating 4 parameter sets on 212 symbols x 50297 bars
+trials ledger: /Users/maguannan/beidou-worktrees/lsr-timing-run/reports/research/trials.jsonl (+4; 0 already in ledger, 658 declared pre-ledger)
+best params: {'window': 168, 'scale': 0.5, 'entry_threshold': 0.2}
+walk-forward OOS sharpe=1.28 return=1.4056 consistency=0.80
+  the shipped configuration's own walk-forward OOS is 1.42 (the headline above is the fold-selected mixture)
+cpcv mean=1.12 q05=0.17 negative=0.07
+dsr p=0.26 pbo=0.30 cost_stress={'x1': '1.41', 'x1.5': '1.33', 'x2': '1.24'}
+oos selection threshold=1.65 at 662 trials, alpha=0.05, p_family=0.68 (D-028)
+power of that gate (1.6533, selection binds, se=0.4370): SR1.0->6.7%  SR1.2->15.0%  SR1.5->36.3%  SR2.0->78.6%  (selection + pass line only; CPCV/PBO/fold/cost x2 make the joint power LOWER)
+grid of 4 is worth 3.00 independent trials (reported; the gate's denominator is the raw ledger count)
+VERDICT: FAIL ['oos_sharpe 1.28 < the deflated threshold 1.65 at 662 trials, p_family=0.6830']
+report: reports/research/lsr_timing-validation-20260928T075435Z.json sha256=5abb899cac0feb44f25e45f9f2b7a777f598e1fa40e71ef8ee5911da197f5df8
+registry evidence block:
+    evidence: {report: reports/research/lsr_timing-validation-20260928T075435Z.json, sha256: 5abb899cac0feb44f25e45f9f2b7a777f598e1fa40e71ef8ee5911da197f5df8, verdict: FAIL}
+exit 0
+```
+
+判定脚本的输出加末尾的退出码行，13,090 字节，406 行，sha256
+`3b3c908d72f599589ea2d5506c75ec59457ce698b91b743fb5c1bf5b006bc029`。前 404 行与入库的
+`reports/research/lsr_timing-criteria-20260928T075648Z.json` 逐字节相同（已 diff），这里不重抄；多出的两行是：
+
+```text
+written: /Users/maguannan/beidou-worktrees/lsr-timing-run/reports/research/lsr_timing-criteria-20260928T075648Z.json sha256=773f157b36b5ec6dddb293eaecda924cf16c04231606ec2bb46602a5a33da3fe
+exit 0
+```
+
+## 2026-09-28 · WP-C8：实盘 exit overlay 在 cooldown 内『反向→翻回』会被 D-045 分支当成没成交的退出——潜伏、0 次，修法待操作者裁定
+
+执行手册 §3.4（WP-C8，`docs/analysis/2026-09-28-production-refactor-execution-plan.md`）加了一条同输入测试：
+`tests/live/test_the_live_overlay_is_the_backtest_overlay_on_one_symbol.py`。它把实盘 `ExitOverlay.apply` 与回测
+`apply_exits` 放在同一个单币输入上逐 bar 比。shipped 与 trailing 两组参数逐位一致，只有一种序列例外。本节登记这个
+例外。两侧实现都没改。
+
+### 一、以前记过什么
+
+「2026-09-08 · P24 预登记：判据从回撤换成收益后，exit overlay 第一次被搜索（先写后跑）」一节写过「翻号分支不查
+cooldown」。那一句讲的是回测：两个 tp 值的退出集合因此不嵌套。实盘这一侧没有记过。本节是补充，原节不动。
+
+### 二、机制
+
+触发序列只有一种。下文用 d 指规则触发的那一侧：
+
+1. d 侧的退出规则触发。`cooldown_direction` 记成 d，长度是 `cooldown_bars`。
+2. cooldown 内，模型转向 −d。反向进场不受 cooldown 限制，两侧都开 −d。
+3. cooldown 内，模型又翻回 d。两侧都开 d。
+4. 下一根 bar 起，实盘输出 0 并记 COOLDOWN。回测继续持有 d。
+
+第 3 步两侧一致。`exit_step` 的翻转分支直接调 `_enter`，不查 cooldown（`beidou_alpha/overlays/exits.py:379-380`）。
+cooldown 只在空仓进场那条路径上查（`:383-384`）。向量化引擎也一样：`:672` 的 `opened` 里，翻转那一半不带
+`blocked` 掩码。
+
+第 4 步分叉在实盘的 `_reconcile`。它的 D-045（退出侧）分支在 `beidou_live/exits.py:129-130`：
+
+    if bar < state.cooldown_until and held == state.cooldown_direction:
+        return replace(state, direction=0)
+
+这条分支本来管的是「规则已触发、平仓单没落下」的仓位。它的 docstring 说，state 已带着区分两种情况所需的信息。
+但条件里没有 `state.direction`。overlay 自己经翻转重开的仓位也满足它，于是被当成没成交的退出。
+
+实盘的净效果：翻回那根 bar 买入，下一根卖出，白付一次往返成本。之后直到 cooldown 结束都空仓。回测整段持有。
+
+以前为什么没看见：两个回测引擎共用这套翻转语义，`test_the_vectorised_exit_engine_is_the_same_machine.py` 比不出
+差别。实盘测试都是手工构造的几次调用，没有走过这个序列。
+
+### 三、最小复现
+
+参数是 shipped（`PARAM_SETS[0]`：止损 6、止盈 6、`cooldown_bars` 24）。前 60 根是 ±0.4% 交替的平静序列，只为
+让 σ 有值。实盘侧的喂法与 WP-C8 测试相同：仓位取上一根调整后权重的方向，即每笔单都成交。
+
+| t | close | 目标 | 回测 | 实盘 | 事件 |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 60 | 100.00 | 0.10 | 0.10 | 0.10 | 两侧进场；日 σ 0.0388，6σ 约 23.3% |
+| 61 | 70.00 | 0.10 | 0.00 | 0.00 | 两侧 STOP_LOSS；cooldown 到 bar 85，方向 +1 |
+| 62 | 70.00 | −0.10 | −0.10 | −0.10 | 两侧开空 |
+| 63 | 70.00 | 0.10 | 0.10 | 0.10 | 两侧翻回多头 |
+| 64 | 70.00 | 0.10 | 0.10 | **0.00** | 实盘 COOLDOWN |
+| 65 | 70.00 | 0.10 | 0.10 | **0.00** | 实盘 COOLDOWN |
+| 66 | 70.00 | 0.10 | 0.10 | **0.00** | 实盘 COOLDOWN |
+
+同一序列钉在那个测试文件末尾：`test_a_flip_back_into_the_cooled_side_is_held_live_as_it_is_in_the_backtest`，标
+`xfail(strict=True)`。今天它 xfail。A 或 B 落地那天它会 XPASS，strict 让它变红。
+
+主测试的输入避开这个序列：每段同侧持仓至少 30 根，长于 shipped 的 24 根 cooldown。主测试还断言，每次退出后的
+cooldown 窗口内回测都不持有 d。输入被改坏时，报错会指向这条排除。
+
+### 四、根因证据
+
+随机面板：`PARAM_SETS` 16 组 × 种子 0–19 × 400 bar，每笔单都成交。
+
+- 原版：320 个面板里 277 个分叉。有分叉面板的是 14 组。没有的两组是第 2 组（cooldown 0）和第 12 组（移动止损
+  永不 arm，没有退出）。
+- 只给 D-045 分支加一个条件 `state.direction != held`：0 / 320。根因就在这一行。
+- 原版扫描里 D-045 分支触发 2323 次，全部落在 overlay 自己持有的那一侧。每笔单都成交时，它本不该触发。
+- 按上面收窄后，5 个实盘 exits 测试文件 23 / 23 通过。其中有三条 D-045 测试，以及引擎级的止损 cooldown 集成测试。
+
+这些读数来自会话 scratchpad 里的 monkeypatch。脚本没有入库，仓库文件没动。
+
+### 五、实盘里发生过吗：0 次
+
+只读 `.beidou/live/cycles.jsonl`，截至 2026-09-28T07:00Z 那根 bar。
+
+- 585 根不同的 bar，起点 2026-09-03T12:00Z。13 根有重复记录，取最后一条。
+- COOLDOWN 事件 266 个，TAKE_PROFIT 事件 12 个。
+- 特征一：COOLDOWN 事件带非空 `entry_price`。翻回被拦时，state 还留着翻回那一刻的锚，所以会带。正常退出后的
+  COOLDOWN 不带。命中 0。
+- 特征二：COOLDOWN 事件的上一周期，目标已在 d 侧。命中 0。
+
+潜伏，未发生过。
+
+### 六、选项与价钱
+
+| | 做什么 | 价钱 | 买到什么 |
+| --- | --- | --- | --- |
+| A | `beidou_live/exits.py:129` 的条件加 `and state.direction != held` | 实盘源码改一行条件。`construction_fingerprint` 不变，它只哈希配置值。构造冻结已于 2026-09-27T07:54Z 提前结束（`FREEZE_ENDS`）。生效要按纪律重启 | 实盘回到被测量的那本书。D-045 的保护不减 |
+| B | `exit_step` 的翻转分支也查 cooldown，stepwise 与 vectorised 同改 | `beidou_alpha` 语义变更。含该序列的回测全部改变，现有 exits 证据要重测、计 ledger。实盘调同一个 `exit_step`，也随之改变，生效同样要按纪律重启 | 与模块 docstring 的「After an exit the same direction is suppressed for `cooldown_bars`」字面一致。实盘随之一致 |
+| C | 接受为实盘独有语义，本节登记 | 0 行代码 | 实盘在该序列上偏离被测量的书。至今 0 次 |
+| D | 测试里钉一条 `xfail(strict=True)` 的最小复现 | 测试 +50 行 | A 或 B 落地时它 XPASS 变红，逼着改测试与本节 |
+
+### 七、裁定与建议
+
+协调者裁定 C + D，已做：本节与那条 xfail。A 交操作者裁定。
+
+协调者建议 A，理由四条：
+
+1. 实盘回到被测量的那本书。现有 exits 证据都按回测语义测得，翻回之后继续持有。
+2. D-045 的保护不减。单次失败时 `state.direction` 是 0。双重失败时是 −d：退出单没落下，之后的反向单也没落下。
+   两种都不等于 `held`，收窄后的条件照样触发。
+3. `construction_fingerprint` 不变。
+4. 生效要按纪律重启，可以与 C6、R1 搭同一次（执行手册 §0 的「重启」一行）。
+
+「2026-09-15 · 补记 DL-GB4：平仓会把全部退出锚清到当时的价——09-13 那一节记了 M-010 污染，没记这条」一节，
+把改 `_reconcile` 列为构造变更，受当时的冻结管。冻结已结束。但 A 改的是实盘 overlay 的行为，仍由操作者裁定。
+
+### 八、A 落地时要做的事
+
+1. 删掉主测试里的排除断言，即「cooldown 窗口内回测不持有 d」那段。module docstring 最后一条范围说明一并改掉。
+2. 把翻回序列加进 `SCRIPT`，让主测试直接覆盖它。
+3. 删掉那条 xfail。它会 XPASS，strict 会让它变红。
+4. 另起一节补记修复，引用 commit hash。本节原样保留。

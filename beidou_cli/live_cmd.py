@@ -59,6 +59,7 @@ from beidou_live.health import STUCK_IN_ERROR_STREAK, cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
+from beidou_live.ports import Venue
 from beidou_live.probe import probes_from_registry
 from beidou_live.report_beta import factor_markdown
 from beidou_live.reports import (
@@ -323,7 +324,7 @@ def live_run(
     config = live_config(payload, universe, registry, dry_run=dry_run)
     store = StateStore(_paper_state_dir(payload, state_dir)) if paper else build_store(payload, dry_run=dry_run)
     market = build_market_data(payload)
-    venue: Any
+    venue: Venue
     if paper:
         venue = _paper_venue(market.base_url, paper_balance, store.directory / "paper_venue.json")
     else:
