@@ -48,6 +48,8 @@
 | kill switch | 急停、急停开关 | `kill_switch_path`、`beidou live kill-switch`（2026-09-28 起，`docs/MAINNET_READINESS.md`；旧文不改） |
 | flatten | 清仓、一键平仓（指这条命令时） | `beidou live flatten`、`LiveEngine.flatten`（2026-09-28 起；泛指的「平仓」照写中文；旧文不改） |
 | mainnet | 主网（TCA 一节的固定说法「主网与 demo 的价格差」照旧） | `beidou_exchange/guard.py` 今天拒绝签名请求的场地 `fapi.binance.com`，它不在 `ALLOWED_HOSTS` 里（2026-09-28 起） |
+| fixture | 夹具 | `tests/fixtures/` 下从真实数据切出的文件，测试里的 `FIXTURES`（2026-09-28 起；旧文不改） |
+| seam | 接缝 | 同一个名字下两段序列的分界，如 BNX 2023-02 的重新计价；`scratchpad/seam_membership_after_redenomination.py` 的 `seam_of`（2026-09-28 起；旧文不改）。代码注释里的 test seam 是另一个意思 |
 
 ## 保留中文的近形词
 
