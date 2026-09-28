@@ -109,8 +109,9 @@ class KlineStore:
         A reported gap is not always a sync failure.  It can be an absence upstream: a seam between two series under
         one name (PUMPUSDT: bars from 2025-04-12 end in 639 zero-volume hours at 0.0471; 7 hours later, 2025-07-10
         07:00, a series 9x lower starts), a delisted symbol whose history the venue no longer serves (LITUSDT), a
-        redenomination halt (BNXUSDT: 518 hours, back at 1/55 the price), or a venue outage.  Re-fetching it tells
-        the two apart, so this stays a pure query.
+        redenomination halt (BNXUSDT: 14 hours, back at 1/77 the price; 518 hours at 1/55 until the 2026-09-25 repair
+        recovered the old contract's own bars), or a venue outage.  Re-fetching it tells the two apart, so this stays
+        a pure query.
         """
         frame = self.load(symbol, interval)
         if len(frame) < 2:
