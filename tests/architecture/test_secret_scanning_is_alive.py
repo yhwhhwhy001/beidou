@@ -9,9 +9,11 @@
 还有没有用**，因为这道门有四种坏法，而且都不会自己喊出来：
 
   1. **配置崩了，扫描根本没跑。**  建这道门的当天就撞上了：`.gitleaks.toml` 第一版用
-     `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 用 Go 的 RE2，**不支持
+     `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 的正则是 RE2 语法，**不支持
      lookahead**。它不是报一个配置错误，是带栈回溯地 panic。在 CI 里这会红，能看见。
      本机两个 hook 此前把它报成「有疑似密钥」，panic 的原话被吞掉（2026-09-29 改，见文件末尾那组）。
+     配置文件不在或写坏则是 FTL、退 1，与有命中同码。`install-hooks.sh` 的自检此前把这两种都当成
+     「抓到了」、打 ✓；本文件的 `_scan` 把 FTL 读成零命中（2026-09-29 改，见文件末尾）。
 
   2. **allowlist 被放宽到什么都抓不住。**  这道门上线时压掉了 117 处误报（全部核实过：
      100 处是 trial ledger 的 `param_key`、9 处是 sha256 文件摘要、2 处是 SSH 公钥指纹、
@@ -710,8 +712,9 @@ GITLEAKS_FAULTS = {
     # 配置文件不在：FTL，退出 1。这与「有命中」的默认退出码相同，只看退出码分不开。
     "config-missing": "unable to load gitleaks config",
     # 规则里有 lookahead：panic，退出 2。判据是那条正则本身，panic 的原话里原样带着它。
-    # 不用 Go 的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
-    # CI 用的官方发行版说 `bad perl operator`。措辞跟着编译它的 Go 版本走，钉住 gitleaks 版本也钉不住。
+    # 不用正则引擎的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
+    # CI 用的官方发行版说 `bad perl operator`。两者走的是两个引擎：发行版带构建标签 `gore2regex`，
+    # 用 wasilibs/go-re2；Homebrew 只跑 `go build`，用 Go 标准库 regexp。钉住 gitleaks 版本也钉不住。
     "config-lookahead": LOOKAHEAD_REGEX,
 }
 
@@ -851,7 +854,11 @@ def _run_install_hooks(tmp_path: Path, fault: str | None = None) -> subprocess.C
     )
     # 那条 `git config` 要落在副本里。落到别处时副本里没有这个键，`git config` 退 1。
     wrote = subprocess.run(
-        ["git", "-C", str(clone), "config", "core.hooksPath"], env=_git_env(), capture_output=True, text=True, timeout=60
+        ["git", "-C", str(clone), "config", "core.hooksPath"],
+        env=_git_env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert wrote.returncode == 0, f"core.hooksPath 没写进副本。脚本的输出：\n{(proc.stdout + proc.stderr)[-2000:]}"
     return proc
