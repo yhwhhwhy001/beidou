@@ -76,9 +76,11 @@ if [ "$rc" -ne 0 ]; then
   # 和命令根本没跑起来（.venv 没了、导入炸了）——后者不会印出 `FAIL` 开头的行，而它恰恰是更要紧的
   # 那种。按「grep 到什么发什么」写，第二种会发出一条正文为空的告警，等于告诉操作者「有事」却不说
   # 是什么事。这和 run_check.sh 记下的那次 Lark 静默是同一族：路径通了，内容没到。
+  # 取尾部之前先滤掉空行。没有输出时 `echo "$output"` 仍会印一个换行，`tr` 把它换成空格，
+  # `[ -n ]` 就判它非空。2026-09-19 至 09-29 最后一行因此从没执行过，告警正文只有一个空格。
   detail="$(echo "$output" | grep '^FAIL' | tr '\n' ' ')"
-  [ -n "$detail" ] || detail="$(echo "$output" | tail -n 3 | tr '\n' ' ')"
-  [ -n "$detail" ] || detail="`governance gate --check` 退出码 $rc，且没有任何输出"
+  [ -n "$detail" ] || detail="$(echo "$output" | grep -v '^[[:space:]]*$' | tail -n 3 | tr '\n' ' ')"
+  [ -n "$detail" ] || detail="\`governance gate --check\` 退出码 ${rc}，且没有任何输出"
   notify "$detail"
   exit 1
 fi
