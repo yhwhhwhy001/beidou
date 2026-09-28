@@ -851,7 +851,13 @@ def _evidence_reports(registry: Registry) -> dict[str, Any]:
 @report.command("daily")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
-@click.option("--date", "day", default=None, help="YYYY-MM-DD (default: today UTC)")
+@click.option(
+    "--date",
+    "day",
+    default=None,
+    help="YYYY-MM-DD (default: the UTC day of the newest cycle row, i.e. yesterday until today's first bar "
+    "closes; today UTC when nothing is recorded)",
+)
 @click.option(
     "--out", default=None, help="directory for the markdown/json report (default: profile paths.reports_dir/daily)"
 )
@@ -859,11 +865,13 @@ def _evidence_reports(registry: Registry) -> dict[str, Any]:
 @click.option("--data-root", default=".beidou/data", show_default=True)
 def report_daily(profile: str, paper: bool, day: str | None, out: str | None, check: bool, data_root: str) -> None:
     """Render the daily attribution report (with drift vs validation expectations) from the live state files."""
+    from beidou_live.report_common import newest_day
     from beidou_live.reports import daily_alerts, daily_markdown, daily_payload, expectations_from_evidence
 
     payload = load_profile(profile)
     store = _store_for(payload, paper)
-    chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
+    # Not the host clock's today: the hourly check's 00:10Z run is the one that closes yesterday (`newest_day`).
+    chosen = day or newest_day(store) or datetime.now(UTC).strftime("%Y-%m-%d")
     registry = load_registry(payload.get("registry", "config/alpha_registry.yaml"))
     data = daily_payload(
         store,

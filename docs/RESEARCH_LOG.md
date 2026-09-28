@@ -19552,3 +19552,29 @@ seam 那根 bar 还在，判定不变：02-22 14:00 仍是无成交衔接的跳�
 - `beidou_live/bar_sanity.py` 的模块 docstring，`beidou_data/store.py` 里 `gaps` 的 docstring，还写着 BNX 的
   518 根与 1/55。前者阈值那段是 09-23 全档扫描的记录，要改得先重扫。两处都没改，留给操作者定。
 - 研究读数不在本节。09-25「接缝检查」与「抵押品换不了」两节已记修缺口之后的读数。
+
+## 2026-09-28 · 归档日报修法 A 落地：`report daily` 默认渲染最新一根 bar 所在的日（`18542c0f`），巡检 00:10Z 那次给前一天定稿
+
+补记同日「归档日报缺每天 23:00 那根 bar：成立……修法待操作者选」一节。原节保持原样。
+
+**裁定。** 操作者当日回复「A」。
+
+**改了什么。**
+
+- `beidou_live/report_common.py` 加 `newest_day(store)`：最新一行周期行按 `_day_of` 所在的 UTC 日，没有行时是 None。
+- `beidou_cli/live_cmd.py` 的 `report daily`：不带 `--date` 时默认日期是 `newest_day(store)`，它为 None 才用主机时钟的今天。`--date` 的 help 跟着改。
+- `live status` 的 `latest_risk_adaptation` 原本内联着同一条规则，改成调 `newest_day`。规则只留一份，行为不变。
+- `deploy/run_check.sh`、`_day_of` 与 D-025 都不动。
+- `docs/RUNBOOK.md`「定时健康检查」一条补一句：D 日的文件从此最后写于 D+1 日 00:10Z。
+- source budget：beidou_live +13、beidou_cli +8，都在 #229 重定后的 headroom 之内，不抬顶。
+
+**验收。**
+
+- 新测试 `tests/cli/test_the_daily_report_closes_the_day_its_newest_bar_belongs_to.py` 5 条，经 CLI 跑，告警关着。00:10Z 的状态渲染前一天，含 23:00 那根；01:10Z 的状态移到新的一天；23:00 那根失败时 `failed_bars` 记在前一天；显式 `--date` 优先；没有周期行时回落到时钟。
+- 变异：默认值改回时钟，前三条变红，后两条照过。
+- 实盘快照（09-28T12:27Z）切到三个时刻：09-27T23:10:11Z 与 09-28T00:10:59Z 都得 09-27，01:10:59Z 得 09-28。与 `latest_risk_adaptation` 原来的内联规则逐一相同。00:10:59Z 那一刻渲染出的 09-27 日报有 27 行周期行，归档那份是 26 行。
+- 四道门全绿，在 `402c93a8` 之上跑：pytest 2949 passed, 10 skipped。
+
+**仍缺。** 01:00:2x 才写的归因行没有补：每天 00:00 那次资金费结算，和 23:00 那根 bar 成交的手续费与已实现盈亏。原节 A 那一格写明了这个缺口。已有的归档不重写。
+
+**生效。** 不用重启循环，循环不调 `report daily`。合入后快进主 checkout，巡检每小时新起的进程就载入新代码。快进之后的第一个 00:10Z 给前一天定稿。此后 D 日的文件最后写于 D+1 日 00:10Z，D+1 日的文件从 01:10Z 起才有。
