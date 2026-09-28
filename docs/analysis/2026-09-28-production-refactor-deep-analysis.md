@@ -48,7 +48,7 @@
 | G3 Relative Value | **PARTIAL** | C-PR01、C-PR03（A3） | O-PR4 与本文 WP 已按同一单位（毛触碰行数、同一验收协议）重定价（§4.2 [R 修订]）；卫生项 Strong，其余 Unproven（H5） | PIVOT | — |
 | G4 Strategic / Economic | **PARTIAL** | C-PR05（A4） | 机会成本改按操作者注意力（问题数、PR 数、日报新增节数）定价（§4.3 [R 修订]）；19.71% 是 23 小时的读数，整周口径 32.5% / 36.2% / 21.5%（E-PR41）；Strategic Fit High → Medium | — | — |
 | G5 System / Solution | **PARTIAL** | C-PR02、C-PR03、C-PR06（A5） | WP-P1、WP-C2、D-PR03 不进契约；其余 WP 的包、行数、ratchet 影响、生效时点齐 | — | — |
-| G6 Adversarial Survival | **FAIL → 已处置**（§7） | C-PR01、C-PR02（A6） | 17 条 Kill：CLOSED 11（撤方案、改范围、新证据）、MITIGATED 4、ACCEPTED 2（流程缺口，记进校准行）；**审查者未复审本修订版**，所以本行不写 PASS | PIVOT（H7 处置后不再单独压顶；H1 无 OPEN P0） | 下一份分析对照校准行 |
+| G6 Adversarial Survival | **FAIL → 已处置**（§7） | C-PR01、C-PR02（A6） | 17 条 Kill：CLOSED 12（撤方案、改范围、新证据）、MITIGATED 4、ACCEPTED 1（KILL-13，流程缺口，记进校准行）——**[R3 更正，2026-09-28]** 本格原写「CLOSED 11 / ACCEPTED 2」，与 §7.4 逐行计数不一致，按 §7.4 改；**审查者未复审本修订版**，所以本行不写 PASS | PIVOT（H7 处置后不再单独压顶；H1 无 OPEN P0） | 下一份分析对照校准行 |
 | G7 Delivery / Learning | **PASS（限卫生项）** | C-PR02、C-PR04、C-PR06（A7） | 只为六项卫生项与六个问题写契约；WP-P1 与 F-D 臂不写（审查 G7 意见） | — | §9–§10 |
 
 命中硬门禁：**H2**（审查时存在未处理的强反证——09-06 D-P4、`cycles.jsonl`、CEILING 逐提交构成；本版已处理，决定词按 PIVOT 记）、**H3**（A-PR01 UNKNOWN；C-PR01 吞吐一半 UNKNOWN）、**H5**（卫生项以外 Unproven）。H1：冻结稿 2 条 P0 均以撤方案/改范围 CLOSED（§7），OPEN P0 = 0。H7：L 级 G6 曾 FAIL；处置后审查者未复审，故上限保守记 PIVOT 而非回到 Weak GO。**H8 未命中**：资金边界已知——demo 场地、`guard.py` 拒 mainnet、凭据来自 `~/.zshrc` 的 `export BEIDOU_*` 行（~~`env.sh`~~，本机没有这个文件，E-PR37）。
@@ -221,7 +221,7 @@
 
 **C-PR01** · P0 · 「`beidou_alpha` 的代码结构不是 alpha 产出的瓶颈；重排或重写它不会提高可上线策略的吞吐，也不会提高系统的生产可用性」。
 Axiom Trace：A1：承受损失的是操作者的时间——每一份「重排 alpha」的方案都要他读、裁、等，而 09-25 已经否决过一次同形方案（E-PR22）；A2：结论强度 SUPPORTED 不超过证据强度——三处 E1 独立指向同一方向：逐行审查无行为级 bug（E-PR21）、依赖方向零违规（E-PR17）、失败的候选全部死在统计门与数据上而不是代码上（E-PR11、E-PR12，`governance/reopen.yaml` 每条 condition 写的都是「新的信息不是新的网格」）；A3：相对于「重排」，更便宜的 80% 方案是「不动 alpha，补两件仪器」（§4.2）；A6：Falsifier = 任一候选有过门证据却因 alpha 代码形状（接口、性能、可达性）进不了 registry 或实盘——RESEARCH_LOG 与 reopen.yaml 无此记录；或 `AlphaModel.targets()` 单周期耗时逼近再平衡窗口（今天一次每小时调用，无读数显示接近）。
-支持：E-PR04、E-PR10、E-PR11、E-PR12、E-PR17、E-PR21、E-PR22。反证：E-PR10「一书一策略」是能力限制——但它是被验证的构造选择（D-024），接通它是研究不是重构。~~状态 **SUPPORTED** · High~~ **[R 修订，KILL-03]** 状态 **PARTIAL** · Medium：三条证据测的是相邻命题（E-PR17 只测 alpha → 其它包的 import 方向；E-PR21 测行为级 bug；E-PR11/12 以候选已被测为条件），直接测吞吐的 GAP-PR06 未跑；「耦合」一半新增 E-PR41 R-18 支持；E-PR21 的引用漏了 09-17 的残项（下沉「部分达成」、M-AM06 未归零，`2026-09-17-alpha-module-deep-analysis.md:498`），E-PR22 的「已否决」改为「09-25 执行记录写明没做，依据是清单覆盖」· 决策影响：D-PR04 由作者决定改为 Q6。
+支持：E-PR04、E-PR10、E-PR11、E-PR12、E-PR17、E-PR21、E-PR22。反证：E-PR10「一书一策略」是能力限制——但它是被验证的构造选择（D-024），接通它是研究不是重构。~~状态 **SUPPORTED** · High~~ **[R 修订，KILL-03]** 状态 **PARTIAL** · Medium：三条证据测的是相邻命题（E-PR17 只测 alpha → 其它包的 import 方向；E-PR21 测行为级 bug；E-PR11/12 以候选已被测为条件），直接测吞吐的 GAP-PR06 未跑；「耦合」一半新增 E-PR41 R-18 支持；E-PR21 的引用漏了 09-17 的残项（下沉「部分达成」、M-AM06 未归零，`2026-09-17-alpha-module-deep-analysis.md:498`），E-PR22 的「已否决」改为「09-25 执行记录写明没做，依据是清单覆盖」· 决策影响：D-PR04 由作者决定改为 Q6。 **[R3 更正]** 裁定后再升一级：§14.2 的剖析回答了吞吐一半（计算不是瓶颈），C-PR01 → SUPPORTED（Medium），见 §14.6。
 
 **C-PR02** · P0 · 「系统在『demo 无人值守』层面已具备生产形态；在『真实资金』层面不是，差距不在 alpha：宿主单点且监控同宿、退出只在软件里而场地上无保护单、mainnet 被 guard 结构拒绝、冲击成本系数 E5、部署=重启且重启有价（2.46/天）」。
 Axiom Trace：A1：损失是「宿主一停，持仓无人管，且没人知道」——今天的告警链与被告警的循环在同一台笔记本上（E-PR20）；A5：二阶复杂度——每次重启都可能少一根 bar 的退出检查，M-010 的窗口不因重启清零但因构造变更清零，所以「部署」与「构造变更」被绑在同一个动作上；A7：可交付与可验证——重启安全化、日期登记、dead-man 都能各自测（§9）；A6：Falsifier = 操作者已有一条不在本机的告警路径（Q3 答「已有」）→ 本命题的「无人知道」一半被推翻，WP-P1 撤；或场地上其实挂着保护单（`grep STOP_MARKET beidou_live beidou_exchange` 零命中，RUNBOOK 明写不挂）。
@@ -1173,3 +1173,7 @@ In Scope 的共同边界：不动 `beidou_alpha` 一行；不写 `trials.jsonl`�
 - M-PR01：Q5=是 → 只记录不设阈值；M-PR03 传输层列：代理节点不换，维持现状并继续记录。
 - §1 的 H3：A-PR01 已由 Q1 回答，C-PR01 吞吐一半已量——H3 不再命中；H5 仍命中（卫生批以外的相对价值仍以裁定与测量为条件）。**Final Decision 仍记 PIVOT**：它描述的是冻结稿到修订版这一步；裁定之后的执行授权见 §14.5。
 - §10.4 校准行不改；本节新增的一条流程教训（EXP-PR1 的阈值漏了绝对量条款、看过数据不改阈值只补量）写进 RESEARCH_LOG 的裁定一节，供下一次校准。
+
+### 14.7 可执行版与三处遗漏的落点（2026-09-28，操作者要求「优化到可执行状态」）
+
+执行版在 `docs/analysis/2026-09-28-production-refactor-execution-plan.md`：每个工作包写到文件、行号、改动内容、测试断言、验收命令、谁合并、何时生效，并给出 PR 波次与操作者清单。核查时发现的三处遗漏各有落点：D-PR02 的生产三层定义进 `docs/MAINNET_READINESS.md` §1（执行版 3.11）；M-PR01 的记录器是周报「Plan budget gap」一节加周日 job（执行版 3.9）；CLAUDE.md:23 凭据句的更正是操作者动作 O-1，附了建议文字（执行版 §4）。两处错已在本文改正：§1 G6 行的处置计数（12 / 4 / 1）与 §2.2 C-PR01 的状态指向。
