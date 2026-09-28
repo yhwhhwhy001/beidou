@@ -36,6 +36,18 @@ def _day_of(record: dict[str, Any]) -> str | None:
     return str(stamp)[:10] if stamp else None
 
 
+def newest_day(store: StateStore) -> str | None:
+    """The day of the newest cycle row, by `_day_of`: the day of the last bar the loop closed, or None.
+
+    What a reader with no day in hand reports on, instead of the host clock's today.  For the first hour
+    after midnight the clock names a day with no bar in it: at 00:10Z, when the hourly check runs, today's
+    first bar is still open and yesterday's 23:00 bar closed ten minutes ago.  `report daily` defaulted to
+    the clock, so that bar reached no archived daily - 24 of 24 days to 2026-09-27, with two readings of
+    09-11 the wrong sign (RESEARCH_LOG 2026-09-28).  `live status` asks the same question for M-015.
+    """
+    return next((found for found in map(_day_of, reversed(store.read_jsonl(store.cycles_path))) if found), None)
+
+
 def _day_end_ms(day: str) -> int:
     start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
     return int((start + timedelta(days=1)).timestamp() * 1000)

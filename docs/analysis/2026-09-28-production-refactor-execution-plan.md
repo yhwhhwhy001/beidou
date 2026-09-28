@@ -339,6 +339,14 @@ push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理�
 | `BinanceRestClient` 的 `guard` 是可选参数，不传就没有 host 检查；今天没有生产调用者不传 | #217 | 写进 mainnet 设计的 §4.2（同一 PR 堵口） |
 | 构造冻结那条测试缺记录时 `return` 而不是 `pytest.skip`，所以在 CI 里读作 passed | #212 | 未改（会改默认门读数） |
 
+**补记：上表「不带时区的日期会抛 TypeError」那一行已修于 #222（修复 `5923dd21`，合入 `72ce6b05`，12:53:36Z）。**
+原行保持原样。`calendar._instant` 下沉进 `reopen.py`，改名 `instant`，`reopen.evaluate` 与 `calendar` 共用它。
+不带时区的日期读成 00:00Z，解析失败仍报 UNREADABLE。新增两条测试：一条在 tmp 副本里写 `date: 2026-11-01`，
+修前红在 TypeError；一条守解析失败，这条路径此前没有测试。`test_each_reopen_row_is_what_governance_reopen_would_say`
+的日期判据改用 `reopen.instant`。它原先自己 `fromisoformat` 一遍：真实列表一写进不带时区的日期，naive 与 aware
+比 `==` 恒为 False，会误红。7 个变异各让至少一条测试变红，读数见 #222 描述。没动：`window_changes.evaluate`
+里同口径的内联解析，`replay`、`scheduler` 各自的 `_instant`。
+
 ### 7.4 操作者待办（更新）
 
 - **合并**：#208（O-1）、#213（D-PR03）、#217（P6）、#218（C1，先读首节的 GAP-PR08 读数）。#213 与 #218 改同一文件，建议先 #213。
@@ -350,6 +358,22 @@ push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理�
 - **O-6**：一次按纪律的重启，载入 C6（与 R1 同批；若裁定修法 A，也同批）。
 - **O-8**：#213 合入且主 checkout 再快进后，装载 `com.beidou.weekly.plist`。
 - **裁定**：WP-C8 的修法 A。
+
+### 补记：报告层 import 那一行已关（#224，会话 8af0084a）
+
+7.3 表里「报告层 import 时异常会让所有 `beidou` 子命令起不来（含 armed 的 `live run`）」一行，去向写的是
+「后续任务卡片」；7.2 第 2 条说的是同一件事。原行不改，这里补记去向。
+
+- **#224 合入**（merge commit dd358e0e，2026-09-28 13:12:34Z），按 #210 描述里的做法 A：`beidou_cli/live_cmd.py`
+  顶层的报告层 import 挪进用它们的五个函数，即四个命令加 `report weekly` 的 helper。干净子进程 `import beidou_cli`，
+  报告层模块 10 → 0。探针测试改回 §3.2 的原名 `tests/live/test_the_armed_process_does_not_import_the_report_layer.py`，
+  多一条 `import beidou_cli` → `[]`。
+- **报告层坏了时**（变异检验量的）：`live run` 与其它命令照常起。`live status` 先印心跳 JSON 再非零退出；
+  `--check` 在 import 处就退出，每小时巡检的 status 与 report 两格报警。RUNBOOK「排障」有一条。
+- **在跑的循环已载入**：主 checkout 14:03:15Z 快进到 7da4f9ad，含 dd358e0e（`git reflog`）。armed 循环
+  PID 35503 启动于 14:06:50Z（`state.restarts` 61），晚于 `beidou_cli/live_cmd.py` 的 mtime 14:03:15Z。
+- **#224 描述里待定的三件**，操作者同日答「按你的建议处理」：附带改动接受；写这条补记；探针量不到的函数内 import
+  由一条 AST 名单测试补上（`REPORT_LAYER_IMPORTERS`，与本补记同一个 PR）。
 
 ### 7.5 终态（截至 14:30Z），逐条对照 §6
 
@@ -382,3 +406,5 @@ push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理�
 4. 演练（AC-PR1a）——随 WP-R1 关闭而取消。
 5. **30 天后回填分析 §10.3（约 2026-10-28）：未到期，仍是待办。** 要回填的是：M-PR02（夜间归档测试从今晚起每夜有结果）、M-PR03 两列、M-PR01（周报每周日一份）。M-PR07 随 O-3 不做，记为「无上限，已接受」。
 6. 两项测量进 RESEARCH_LOG——**满足**（#215）。
+
+§7.3 当日开出的四张后续任务卡片都已由操作者启动并合入：#222（reopen 裸日期按 00:00Z）、#224（CLI 在用到时才 import 报告层，#232 补名单测试）、#225（冻结期满后的日报措辞）、#226 与 #233（归档日报缺 23:00 那根 bar，核实成立，修法 A 落地）。
