@@ -61,9 +61,10 @@ async def snapshot_metrics(
     # 503s, and a burst of ninety is how a shared route starts refusing the requests that matter.
     gate = asyncio.Semaphore(concurrency)
 
-    async def one(symbol: str) -> tuple[str, pd.DataFrame | None, list[str]]:
+    async def one(symbol: str) -> tuple[str, pd.DataFrame | None, list[str], dict[str, int]]:
         frame: pd.DataFrame | None = None
         absent: list[str] = []
+        newest: dict[str, int] = {}
         for path, mapping in REST_SOURCES:
             async with gate:
                 rows = await client.get(path, {"symbol": symbol, "period": period, "limit": int(limit)})
@@ -74,11 +75,20 @@ async def snapshot_metrics(
                 absent.append(path.rsplit("/", 1)[-1])
                 continue
             page = parse_rest_rows(rows, step, mapping, symbol=symbol, stamp_offset_ms=rest_stamp_offset_ms(path, step))
+            if not page.empty:
+                newest[path.rsplit("/", 1)[-1]] = int(page["open_time"].max())
             frame = page if frame is None else _merge(frame, page, mapping.values())
-        return symbol, frame, absent
+        return symbol, frame, absent, newest
 
+    # Per page, the oldest and the freshest newest-bucket OPEN across the symbols polled: how far behind the
+    # bar close REST was when the loop asked (`beidou_live.report_data.snapshot_lag`).  Research aligns a bar
+    # to the bucket closing AT its close; `alignment.METRICS` says the latency past that belongs in a report.
+    spans: dict[str, list[int]] = {}
     try:
-        for symbol, frame, absent in await asyncio.gather(*(one(symbol) for symbol in symbols)):
+        for symbol, frame, absent, newest in await asyncio.gather(*(one(symbol) for symbol in symbols)):
+            for name, opened in newest.items():
+                low, high = spans.get(name, [opened, opened])
+                spans[name] = [min(low, opened), max(high, opened)]
             if absent:
                 missing[symbol] = absent
             if frame is not None:
@@ -87,7 +97,11 @@ async def snapshot_metrics(
                 stored[symbol] = store.append(symbol, frame)
     except Exception as exc:
         return {"stored": stored, "missing": missing, "error": f"{type(exc).__name__}: {exc}"}
-    return {"stored": stored, **({"missing": missing} if missing else {})}
+    return {
+        "stored": stored,
+        **({"missing": missing} if missing else {}),
+        **({"newest_open_ms": spans} if spans else {}),
+    }
 
 
 def _merge(frame: pd.DataFrame, page: pd.DataFrame, columns: Any) -> pd.DataFrame:
