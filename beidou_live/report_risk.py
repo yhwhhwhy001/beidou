@@ -143,9 +143,9 @@ def margin_and_rejections(
     what a corrected ruler was wrong ABOUT is the part a later reader needs - the same rule the entry
     above follows.  Nothing here changes what the loop DOES: ``max_gross`` clips weights in
     ``guards.clamp_book`` and ``margin_cap`` derives venue leverage (D-016), both on total equity, and
-    both are inside the construction fingerprint frozen to 2026-10-13.  Moving those denominators
-    would resize every position and reset M-010, M-G06 and `realised_vol`; it is a construction
-    decision for the operator, and this instrument exists to put a number on it first.
+    both are inside the construction fingerprint.  Moving those denominators would resize every position
+    and reset M-010, M-G06 and `realised_vol`; it is a construction decision for the operator, held open
+    as `risk-g11-denominator` in `governance/reopen.yaml`, and this instrument puts a number on it first.
     """
     budget = float(margin_cap) if margin_cap else PLAN_MARGIN_BUDGET
     peak = 0.0
@@ -1216,8 +1216,8 @@ def plain_leverage_lines(block: Mapping[str, Any]) -> list[str]:
     market's dispersion", "carries no risk here (D-037)" - and neither prints the number the question is
     about: each holding's own leverage.  So the uniform 5x stayed the only per-symbol leverage on screen.
     This states three facts instead: what the venue number does, each holding's real leverage with its
-    volatility and risk share, and which names D3's floor keeps flat.  From 2026-10-13 (k 0.175) that
-    last list holds the four most volatile names, and a book that quietly loses its wildest names is the
+    volatility and risk share, and which names D3's floor keeps flat.  Since k 0.175 went live (2026-09-27)
+    that last list holds the most volatile names, and a book that quietly loses its wildest names is the
     seventh question (`docs/analysis/2026-09-26-per-symbol-leverage-first-principles.md`, RISK-009).
 
     One record, one ruler: the rows are M-015's own - the newest cycle's targets as fractions of total
