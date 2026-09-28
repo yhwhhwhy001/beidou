@@ -39,10 +39,14 @@ fi
 
 repo_root="$(git rev-parse --show-toplevel)"
 z40="0000000000000000000000000000000000000000"
-failed=0
+failed=0   # 扫到了疑似密钥
+broken=0   # 扫描没有跑完：gitleaks 调 git log 时 git 失败了
+
+# gitleaks 的 stdout 照旧给终端。循环里只截它的 stderr，见下面 fail-closed 那段。
+exec 3>&1
 
 # stdin 每行是：<local_ref> <local_sha> <remote_ref> <remote_sha>
-while read -r _local_ref local_sha _remote_ref remote_sha; do
+while read -r _local_ref local_sha remote_ref remote_sha; do
     # 删除远端分支：没有内容要扫。
     [ "$local_sha" = "$z40" ] && continue
 
@@ -50,27 +54,64 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
         # 新分支。扫「本地有、任何远端分支都没有」的 commit，而不是扫整个历史——
         # 整个历史归 CI 的 Secrets 门和 `gitleaks detect` 手动审计。
         range="$local_sha --not --remotes"
-    else
+    elif git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
         range="$remote_sha..$local_sha"
+    else
+        # 远端的 tip 本地没有（2026-09-29 补）。remote_sha 是远端报来的值，不保证 fetch 过。
+        # `git push --force` 盖过别处推上去、这里没 fetch 的提交时就是这样。不加 --force
+        # 也会走到这里：git 把这一行标成 fetch first，照样交给 hook，hook 跑完才拒。
+        # 此前这里照样拼 `remote..local`。range 无效，git log 直接 fatal，一个 commit 都没扫
+        # 就放行。临时仓库里实测，伪造凭据随强推进了远端。现在退回新分支的扫法。
+        echo "pre-push: 远端 $remote_ref 的 tip ${remote_sha:0:12} 本地没有（没 fetch 过？），改扫本地有、任何远端分支都没有的 commit" >&2
+        range="$local_sha --not --remotes"
     fi
 
     # 这个范围可能是空的（例如重推一个已经在远端的 commit）。空范围下 gitleaks
     # 会正常返回 0，不需要特别处理。
     #
-    # gitleaks 按单个空格切 `--log-opts`，再原样交给 `git log -p -U0`。拼坏了它不报错：
-    # 多一个空格、选项拼错，git 都会 fatal，而 gitleaks 8.30.1 记一条 ERR 就返回 0
-    # （2026-09-28 实测）。stderr 又被下面丢进 /dev/null，看起来和「扫描通过」一样。
-    # 所以改这一行之后要跑上面说的那个测试，别只看推送有没有被拦。
-    if ! gitleaks detect \
+    # fail-closed（2026-09-29 补）。gitleaks 按单个空格切 `--log-opts`，再原样交给
+    # `git log -p -U0`。git 失败时它不改退出码：range 无效、多一个空格、选项拼错、ref 坏了，
+    # git 都会 fatal，而 gitleaks 8.30.1 只记一行 `ERR [git] fatal: ...`，照样输出
+    # `no leaks found`、返回 0（2026-09-28 实测）。此前 stderr 丢进 /dev/null，这看起来和
+    # 「扫描通过」一样。现在截下 stderr，出现 `[git]` 就当扫描失败。git 的几句已知提示
+    # （rename 上限之类）gitleaks 记成 WRN，不带这个前缀，不会误拦（2026-09-29 实测）。
+    # `--no-color` 让转给推送的人的那几行不带色码。
+    # 改这条命令之后要跑上面说的那个测试，别只看推送有没有被拦。
+    scan_err="$(gitleaks detect \
             --source "$repo_root" \
             --config "$repo_root/.gitleaks.toml" \
             --log-opts "--diff-merges=separate $range" \
-            --redact --no-banner 2>/dev/null; then
-        failed=1
+            --redact --no-banner --no-color 2>&1 >&3)" || failed=1
+    if git_err="$(printf '%s\n' "$scan_err" | grep -F '[git]')"; then
+        printf '%s\n' "$git_err" >&2
+        broken=1
     fi
 done
 
-[ "$failed" -eq 0 ] && exit 0
+[ "$failed" -eq 0 ] && [ "$broken" -eq 0 ] && exit 0
+
+if [ "$broken" -ne 0 ]; then
+    cat >&2 <<'MSG'
+
+╔══════════════════════════════════════════════════════════════════════╗
+║  推送被拦下：密钥扫描没有跑完                                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+上面带 `[git]` 的几行是 git 的原话：gitleaks 调 `git log` 时，git 失败了。
+gitleaks 这时照样输出 `no leaks found`、返回 0。可要推的 commit 没有扫完，
+所以这里当失败处理，不当成「扫描通过」。
+
+  1. 按 git 的原话修。常见的是本地缺对象或 ref 坏了（`git fsck` 看得出来），
+     或者刚改过这个 hook 的 `--log-opts`。
+  2. 修好之后重推，hook 会重新扫。
+  3. `git push --no-verify` 能绕过这里，但后面没有网了：GitHub 的 push protection
+     认不出 Binance 的密钥（不在 partner pattern 列表），CI 的 Secrets 门是事后的。
+
+MSG
+fi
+
+# 只是扫描没跑完、没扫到疑似密钥：下面那个框不适用。
+[ "$failed" -eq 0 ] && exit 1
 
 cat >&2 <<'MSG'
 

@@ -114,6 +114,14 @@ Binance 形态，两层都报 `no leaks found`。现在两处的 `--log-opts` �
 `tests/architecture/test_secret_scanning_is_alive.py` 不另抄命令。它直接跑 pre-push hook，
 并原样执行 ci.yml 与下面「手动全量审计」里的命令，看它们抓不抓得到只活在 merge 提交里的假凭据。
 
+**这一条运行时也撞得上（2026-09-29 补）。** 场景是 `git push --force` 盖过一个没 fetch 的远端 tip。
+git 交给 pre-push 的 remote_sha 这时本地没有，hook 拼出的 `remote..local` 是无效 range。
+git log 直接 fatal，第 2 层一个 commit 都没扫就放行。当天在临时仓库里实测，伪造凭据随强推进了远端。
+不加 `--force` 时 git 随后以 fetch first 拒掉推送，漏不出去。hook 现在补了两处：
+
+- 先用 `git cat-file -e` 核 remote_sha。本地没有，就退回新分支的扫法，扫本地有、任何远端分支都没有的 commit。
+- 截下 gitleaks 的 stderr，出现 `[git]` 就当扫描失败，拦下推送。以后别的原因让 git log 失败，也是拦下，不再放行。
+
 ### 新 clone 的第一件事
 
 ```bash
