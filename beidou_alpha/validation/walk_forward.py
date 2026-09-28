@@ -209,3 +209,19 @@ def walk_forward_evaluate(
         oos_sharpes=oos_table,
         net_returns_by_params=dict(net_returns_by_params),
     )
+
+
+def stitched_oos(
+    result: WalkForwardResult, frames: Mapping[str, tuple[pd.DataFrame, pd.DataFrame]], index: pd.Index
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The frames behind ``oos_returns``: each fold's test bars from the configuration THAT fold chose.
+
+    ``frames`` maps a param key to (executed weights, net by symbol), both on the backtest's own index;
+    ``index`` is the common index the folds were cut on.  The net frame's row sums are ``oos_returns``
+    bit for bit, which is what lets the evidence file's basket and concentration readings (09-29 N2, N3)
+    describe the same series as the headline instead of the full-sample argmax.
+    """
+    cells = [(param_key(outcome.chosen_params), outcome.fold.test_slice) for outcome in result.folds]
+    weights = pd.concat([frames[key][0].reindex(index).iloc[cut] for key, cut in cells])
+    net = pd.concat([frames[key][1].reindex(index).fillna(0.0).iloc[cut] for key, cut in cells])
+    return weights, net

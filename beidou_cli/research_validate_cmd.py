@@ -16,11 +16,20 @@ import click
 import numpy as np
 import pandas as pd
 
-from beidou_alpha.backtest import BacktestResult, CostModel, benchmark_returns, run_backtest
+from beidou_alpha.backtest import (
+    BacktestResult,
+    CostModel,
+    asset_returns,
+    benchmark_basket,
+    benchmark_returns,
+    run_backtest,
+)
 from beidou_alpha.hedged import spread_panel
 from beidou_alpha.registry import StrategyEntry, evidence_construction_digest
 from beidou_alpha.report import render_markdown
 from beidou_alpha.signals import get_signal
+from beidou_alpha.validation.basket import against_basket
+from beidou_alpha.validation.concentration import concentration
 from beidou_alpha.validation.cpcv import cpcv_evaluate, cpcv_splits
 from beidou_alpha.validation.ledger import (
     TrialRecord,
@@ -32,6 +41,9 @@ from beidou_alpha.validation.ledger import (
     unique_trials,
 )
 from beidou_alpha.validation.metrics import (
+    cagr,
+    calmar,
+    payoff_ratio,
     sharpe,
 )
 from beidou_alpha.validation.multiple_testing import (
@@ -51,7 +63,12 @@ from beidou_alpha.validation.stability import (
     trailing_benchmark_vol,
 )
 from beidou_alpha.validation.verdict import decide
-from beidou_alpha.validation.walk_forward import param_key, walk_forward_evaluate, walk_forward_folds
+from beidou_alpha.validation.walk_forward import (
+    param_key,
+    stitched_oos,
+    walk_forward_evaluate,
+    walk_forward_folds,
+)
 from beidou_cli import research
 from beidou_cli.research_book_eval import (
     _book_guards,
@@ -98,8 +115,10 @@ from beidou_cli.research_panel import (
 )
 from beidou_cli.research_report import (
     _MARGIN_BUFFER_NOTE,
+    _basket_rows,
     _break_even_row,
     _caliber_note,
+    _concentration_rows,
     _embargo_note,
     _fmt,
     _full_sample_tail_note,
@@ -117,6 +136,18 @@ from beidou_live.composition import (
     impact_model,
 )
 from beidou_shared.config import load_yaml
+
+
+def _neighbourhood_keys(strategy: str, combos: list[dict[str, Any]]) -> tuple[str, ...]:
+    """The dimensions `parameter_neighborhood` perturbs: the default grid's and the ones this run searched.
+
+    Until 2026-09-29 it was the default grid's alone, so the evidence tsmom ships - a search over
+    `crowding_window` [0, 72] - reported a neighbourhood that never moved the parameter it had selected on.
+    `parameter_neighborhood` still skips a list-valued dimension (`horizons`) and moves a selected 0 to -1 and
+    +1; the report lists what it could not move under `not_perturbed`.
+    """
+    searched = {key for key in combos[0] if len({json.dumps(c.get(key), sort_keys=True) for c in combos}) > 1}
+    return tuple(sorted(set(DEFAULT_GRIDS.get(strategy, {})) | searched))
 
 
 @research.command("validate")
@@ -404,9 +435,9 @@ def research_validate(
         )
         return sharpe(priced.portfolio_net, bpy)
 
-    neighbourhood = parameter_neighborhood(
-        evaluate_params, params_by_key[best_key], numeric_keys=tuple(sorted(DEFAULT_GRIDS.get(strategy, {})))
-    )
+    probed = _neighbourhood_keys(strategy, combos)
+    neighbourhood = parameter_neighborhood(evaluate_params, params_by_key[best_key], numeric_keys=probed)
+    neighbourhood["not_perturbed"] = sorted(set(probed) - set(neighbourhood["neighbours"]))
     # `decisions[best_key]`, not `results[best_key].weights.shift(-1)`: the executed frame is post-guard,
     # so inverting it would re-price a book the guards had already trimmed and then trim it again.
     best_weights = decisions[best_key]
@@ -515,6 +546,18 @@ def research_validate(
     # only: `decide` never reads it.
     bench = benchmark_returns(panel, execution, panel.symbols, membership)  # type: ignore[arg-type]
     regime_vol = trailing_benchmark_vol(bench, bpy, REGIME_VOL_WINDOW_DAYS)
+    # N2 / N3 (09-29 checklist): the OOS book against its own basket, and how much of it is one or three names.
+    # Each fold's test bars from the configuration THAT fold chose, so both describe the series
+    # `walk_forward.oos_sharpe` is computed from.  Reported only: `decide` reads neither.
+    oos_weights, oos_net = stitched_oos(wf, {k: (r.weights, r.net) for k, r in results.items()}, common_index)
+    btc = asset_returns(panel, execution)["BTCUSDT"] if "BTCUSDT" in panel.symbols else None  # type: ignore[arg-type]
+    # A hedged book is priced on `spread_panel`: a market-neutral spread whose weights are non-negative notional,
+    # so a perpetual basket and a net exposure describe nothing about it (review M2).
+    basket_block = (
+        {"enforced": False, "n/a": "hedged book: priced on the spread panel, which no perpetual basket describes"}
+        if hedged
+        else against_basket(wf.oos_returns, oos_weights, bench, btc, bpy, basket_name=benchmark_basket(membership))
+    )
     report: dict[str, Any] = {
         "kind": "validation",
         "strategy": strategy,
@@ -582,13 +625,28 @@ def research_validate(
         # timestamp is in the artefact.
         "best_params_selected_by": "pre-registered rule (--select)" if select else "full-sample argmax",
         "full_sample_argmax_params": params_by_key[argmax_key],
-        "full_sample": results[best_key].summary(),
+        "full_sample": {
+            **results[best_key].summary(),
+            # N5.  Full-sample drift of the selected book: NOT the honest-drift bootstrap median the k
+            # decision reads (config/live.demo.yaml), which is why the name carries the caliber.
+            "cagr_full_sample": cagr(results[best_key].portfolio_net, bpy),
+            "calmar_full_sample": calmar(results[best_key].portfolio_net, bpy),
+            "payoff_ratio_bar": payoff_ratio(results[best_key].portfolio_net),
+            "cagr_caliber": "full-sample drift of the selected book, not the honest-drift bootstrap CAGR median "
+            "the k decision reads beside vol_target in config/live.demo.yaml",
+        },
         # F3 (KILL-Q2): `best_params` is the full-sample argmax and is what reaches the registry,
         # while `walk_forward.oos_sharpe` belongs to whatever each fold chose.  When the two differ
         # the headline describes a mixture no configuration ever was, so the shipped configuration's
         # own walk-forward number is recorded next to it rather than left for a reader to assume.
         "best_key_oos_sharpe": wf.oos_sharpe_for(best_key, fold_list, bpy),
-        "walk_forward": wf_summary,
+        "walk_forward": {
+            **wf_summary,
+            "oos_cagr": cagr(wf.oos_returns, bpy),
+            "oos_calmar": calmar(wf.oos_returns, bpy),
+        },
+        "against_basket": basket_block,
+        "concentration": concentration(results[best_key].net, oos_net, bpy),
         # D-028: the OOS Sharpe a strategy must clear given how many configurations were tried on it.
         "oos_selection": oos_selection_threshold(
             wf.oos_returns.to_numpy(dtype=float), n_trials=pooled["n_trials"], bars_per_year=bpy
@@ -741,12 +799,18 @@ def research_validate(
                         key: f"down={_fmt(value.get('down'))} base={_fmt(neighbourhood['base'])} up={_fmt(value.get('up'))}"
                         for key, value in (neighbourhood.get("neighbours") or {}).items()
                     },
+                    "parameter_neighbourhood_not_perturbed": ", ".join(neighbourhood["not_perturbed"]) or "-",
                 },
             ),
             (
                 "Sharpe by benchmark-volatility regime (reported, never enforced)",
                 _regime_rows(report["stability"]["regime_split_sharpes"], report["stability"]["regime_split_basis"]),
             ),
+            (
+                "Against its own basket, out of sample (N2; reported, never enforced)",
+                _basket_rows(report["against_basket"]),
+            ),
+            ("Concentration by symbol (N3; reported, never enforced)", _concentration_rows(report["concentration"])),
             ("Grid (full-sample Sharpe per configuration)", _grid_table(params_by_key, full_sharpes_raw)),
             (
                 "Cost stress (Sharpe)",
