@@ -220,4 +220,4 @@ clientOrderId 按 bar 派生，先查后下）。要确认循环此刻跑的是�
 
 ## 改 ratchet 要带理由
 
-`CEILING_SECONDS` 与 source budget 表都是 ratchet：**抬顶只允许发生在写明理由的那个 commit 里**。source budget 表的理由写进 `docs/SOURCE_BUDGET_LOG.md` 对应包的一节（带日期、增量、测量数据），常量旁只留指向那一节的一行。2026-09-28 之前的理由都在那个文件里，原文逐字。`CEILING_SECONDS`（`tests/architecture/suite_duration.py`）的理由照旧写在紧挨着常量的注释里。不要为了过顶把注释 golf 掉——第九次抬顶的注释记下了原因：a ratchet with no headroom stops being a ratchet and becomes a tax on the first honest change, paid in deleted comments。
+`CEILING_SECONDS` 与 source budget 表都是 ratchet：**抬顶只允许发生在写明理由的那个 commit 里**。source budget 表的理由写进 `docs/SOURCE_BUDGET_LOG.md` 对应包的一节（带日期、增量、测量数据），常量旁只留指向那一节的一行。2026-09-28 之前的理由都在那个文件里，原文逐字。headroom 由 `headroom_policy` 定义（`max(40 行, 顶的 1%)`，2026-09-28 裁定）：抬顶抬到「实测 + 政策」为止；删代码多出来的余量容忍到两份政策，再多就是囤积，测试会红，要把顶降回「实测 + 政策」。`CEILING_SECONDS`（`tests/architecture/suite_duration.py`）的理由照旧写在紧挨着常量的注释里。不要为了过顶把注释 golf 掉——第九次抬顶的注释记下了原因：a ratchet with no headroom stops being a ratchet and becomes a tax on the first honest change, paid in deleted comments。

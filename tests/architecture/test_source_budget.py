@@ -38,19 +38,19 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 2026-09-28 操作者裁定 Q2a）。以后抬顶，理由写进那个文件对应包的一节；这里每个条目上方只留一行指向那一节。
 CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_live
-    "beidou_live": 15_784,
+    "beidou_live": 15_907,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_cli
-    "beidou_cli": 8_740,
+    "beidou_cli": 8_804,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_data
-    "beidou_data": 3_677,
+    "beidou_data": 3_682,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_exchange
-    "beidou_exchange": 747,
+    "beidou_exchange": 787,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_shared
-    "beidou_shared": 289,
+    "beidou_shared": 329,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_governance
-    "beidou_governance": 4_725,
+    "beidou_governance": 4_732,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_alpha
-    "beidou_alpha": 11_110,
+    "beidou_alpha": 11_179,
 }
 
 
@@ -62,12 +62,42 @@ def _lines(package: str) -> int:
     )
 
 
+# 2026-09-28 操作者裁定 Q2b「好」，数字经 O-4 确认（执行手册 §3.8，WP-C2）：headroom 写成政策，不再是「约 40 行」
+# 的惯例。小包维持 40 行，大包按顶的 1% 放宽；08-28 起 420 次分包抬顶里 328 次（78%）落在它之内（分析 §14.3），
+# 这是操作者用「好」接受的代价：那些增长不再逐次写理由。抬顶照旧只在写理由的那个 commit 里，抬到「实测 + 政策」为止。
+HEADROOM_FLOOR = 40
+HEADROOM_RATE = 0.01
+# 防囤积的容忍度，以政策的份数计。抬顶抬到一份政策为止；第二份留给删代码：净删让余量变大，这不是囤积，
+# 要是一删就红，删代码就成了要交的税，CEILING 行也会被频繁改动，而那些数值行正是 GAP-PR08 量出的冲突来源。
+# 余量超过两份才算囤积，要把顶降到「实测 + 政策」。操作者想要严格版（一删就降顶），把它改成 1。
+HOARD_TOLERANCE = 2
+
+
+def headroom_policy(ceiling: int) -> int:
+    """How much headroom a raise may leave: 40 lines, or 1% of the ceiling when that is larger."""
+    return max(HEADROOM_FLOOR, round(HEADROOM_RATE * ceiling))
+
+
 def test_no_package_grows_past_its_measured_ceiling() -> None:
     measured = {package: _lines(package) for package in PACKAGES}
     over = {name: (count, CEILING[name]) for name, count in measured.items() if count > CEILING[name]}
     assert not over, (
         f"these packages grew past the ratchet: {over}. "
         "Either take the growth back out, or raise the ceiling in the same commit that justifies it."
+    )
+
+
+def test_no_ceiling_hoards_more_headroom_than_the_policy_allows() -> None:
+    """A ceiling may sit at most `HOARD_TOLERANCE` policies above the code: one for the raise, one for deletions."""
+    measured = {package: _lines(package) for package in PACKAGES}
+    hoarded = {
+        name: (CEILING[name] - count, HOARD_TOLERANCE * headroom_policy(CEILING[name]))
+        for name, count in measured.items()
+        if CEILING[name] - count > HOARD_TOLERANCE * headroom_policy(CEILING[name])
+    }
+    assert not hoarded, (
+        f"headroom beyond the policy (held, allowed): {hoarded}. "
+        "Lower the ceiling to measured + headroom_policy(ceiling); a raise stops there too."
     )
 
 
