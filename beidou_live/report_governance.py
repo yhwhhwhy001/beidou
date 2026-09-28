@@ -1,16 +1,56 @@
-"""The weekly report's two governance readings: alpha effort share and pre-registration order.
+"""The governance readings: the daily's dated switches, the weekly's effort share and pre-registration order.
 
 The usage disciplines of `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md` that a
 report can check: effort goes to alpha (operator target 0.90, 2026-09-04), and a hypothesis is
-written down before its result is seen (DL-K3 / KILL-R9).
+written down before its result is seen (DL-K3 / KILL-R9).  The daily's dated switches are E-PR16's
+answer: what flips in the coming week, from `beidou_governance.calendar`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from beidou_live.report_common import _parsed
+
+#: How far ahead the daily report looks: a week, so each flip is on the seven reports before its day,
+#: the last of them the day before - the one somebody reads while there is still time to act.
+FLIP_HORIZON_DAYS = 7
+
+
+def dated_switch_block(day: str, *, gate: Callable[[Path], Sequence[str]] | None = None) -> dict[str, Any]:
+    """The checkout's dated switches that flip in the week from the start of this report's UTC day.
+
+    From the START of the day, not from now: a day's report then comes out the same bytes whenever it is
+    rendered over the same files, and today's report - rendered every hour by the check - still shows a
+    flip due later today, while one that happened at 00:00 has left it (the day before's report carried it).
+
+    The rows are `beidou_governance.calendar`'s, read off the working directory's files: the same rows
+    `beidou governance calendar` prints, filtered and nothing else, so the two cannot disagree about what
+    a switch does.  `gate` is the startup gate; without it the bridge reads `pending`, the answer a
+    switch that might bite gets.  Reported only, never an alert: nothing about a date can be done inside
+    the hour, and the construction-cadence count showed what a standing fact on the paging path costs.
+    """
+    # Here, not at the top: `beidou live run` loads this module through `live_cmd` -> `reports`, and a top-level
+    # import would add the calendar and both YAML readers to the armed process, which never calls it.
+    from beidou_governance.calendar import dated_switches
+
+    start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)
+    until = start + timedelta(days=FLIP_HORIZON_DAYS)
+    rows = dated_switches(repo=Path("."), now=start, gate=gate, until=until)
+    flips = [row.as_dict() for row in rows if row.at > start]
+    return {"from": start.isoformat(), "until": until.isoformat(), "flips": flips}
+
+
+def _dated_switch_lines(block: Mapping[str, Any]) -> list[str] | str:
+    """One line a flip.  「无」 when the week holds none, so an empty section reads as checked, not as lost."""
+    rows = block.get("flips") or []
+    if not rows:
+        return "无"
+    return [f"{r['at'][:16]}Z {r['status']} · {r['source']} · {r['reader']} · {r['consequence']}" for r in rows]
+
 
 ALPHA_EFFORT_TARGET = 0.90  # operator decision 2026-09-04; see docs/RESEARCH_LOG.md
 

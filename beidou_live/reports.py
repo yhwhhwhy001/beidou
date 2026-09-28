@@ -12,7 +12,7 @@ answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
     report_data        #9 data (bar sanity is bar_sanity.py)
     report_events      #8.10 event risk: the stablecoin peg, venue incidents and extreme moves, reported only
     report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
-    report_governance  the weekly's effort share and pre-registration order
+    report_governance  the daily's dated switches (E-PR16), the weekly's effort share and pre-registration order
     report_common      what all of them read the state files with
 
 What stays here is the assembly - `daily_payload`, `daily_alerts`, `daily_markdown`,
@@ -105,6 +105,8 @@ from beidou_live.report_exits import (
 from beidou_live.report_governance import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     ALPHA_EFFORT_TARGET,
     PREREGISTRATION_EFFECTIVE_FROM,
+    _dated_switch_lines,
+    dated_switch_block,
     effort_share,
     preregistration_problems,
     preregistration_skipped,
@@ -157,6 +159,7 @@ def daily_payload(
     exits: ExitParams | None = None,
     fidelity: ReplayInputs | None = None,
     now: datetime | None = None,
+    gate: Callable[[Path], Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -306,6 +309,8 @@ def daily_payload(
         "liquidity_to_close": liquidity_to_close(store, day, root=data_root),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
+        # E-PR16: the week's date flips, off the checkout's files.  `gate` lets the bridge read `inert`.
+        "dated_switches": dated_switch_block(day, gate=gate),
         "dataset": _dataset_block(dataset),
     }
 
@@ -606,6 +611,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
                 },
             ),
+            # Second, because a date is the one finding here that has a deadline (E-PR16).
+            ("未来 7 天日期翻转", _dated_switch_lines(payload.get("dated_switches") or {})),
             (
                 # L1-10: the ladder and the vol sizing divide by the line above, and on multi-assets
                 # margin that line carries BTC.  Printing the split is what lets a reader tell a

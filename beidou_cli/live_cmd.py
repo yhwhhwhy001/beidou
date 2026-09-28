@@ -24,6 +24,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, resolve_ledger_path
 from beidou_cli import live, report
+from beidou_cli.governance_cmd import _gate as startup_gate
 from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore, interval_ms
@@ -875,6 +876,8 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         data_root=data_root,
         exits=ExitParams.from_mapping(payload.get("exits", {}) or {}),
         fidelity=ReplayInputs.from_profile(payload, registry, data_root),
+        # The startup gate `governance plan`/`apply` ask, so the week's bridge row says whether it bites.
+        gate=startup_gate(profile, data_root),
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
