@@ -83,11 +83,19 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     of CAGR for a budget still breached in 94.5% of draws.  That is exactly the shape that expires into
     nobody remembering, because the visible outcome is "nothing changed" - and the entry is what says
     the nothing was measured.
+
+    2026-09-28 raised it 22 -> 23 for `lsr-timing`, the whole-market long/short timing book: pre-registered
+    in #204, run once on its 4 ledger rows the same morning, refuted (OOS 1.28 against a gate of 1.65; the
+    part beyond the market and ten trend controls t 1.78 against 2.0).  It is the plainest case of what
+    this list is for, because the pre-registration wrote the reopen condition down before any number
+    existed, and it is `operator` because "new information" - the loop's own recorded ratios, another
+    venue's - is a judgement about where data came from, not a column a machine can count.  `ls-leaf`,
+    the selection-signal ruling this hypothesis was split out of, keeps its own entry unchanged.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 22, (
+    assert len(entries) == 23, (
         f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, EXP-SL1's, "
-        "and the two denominators (RISK-G11's and P13's drawdown budget)"
+        "the two denominators (RISK-G11's and P13's drawdown budget), and lsr-timing"
     )
 
 
