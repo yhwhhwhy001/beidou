@@ -206,17 +206,17 @@ def test_a_hole_no_source_holds_is_confirmed_once_and_status_stops_counting_it(t
         in runner.invoke(main, ["data", "status", "--root", str(tmp_path)]).output
     )
     (gap,) = find_gaps(tmp_path, "1h")
-    assert (gap.after, gap.before, gap.missing) == (1_675_206_000_000, 1_677_074_400_000, 518)
+    assert (gap.after, gap.before, gap.missing) == (1_677_020_400_000, 1_677_074_400_000, 14)
 
     transport, asked, _ = _daily_archive(symbol, rows.iloc[:0])  # the archive has none of those days
     with ArchiveClient(transport=transport) as archive:
         outcome = repair(gap, root=tmp_path, sources=_sources(archive, rest_klines=lambda *_: None), now_ms=NOW)
-    assert outcome.confirmed == [gap] and outcome.added == 0 and len(asked) == 22
-    assert outcome.answers == {"archive": "22 day files, 22 absent (404), 0 bars inside", "rest": "not listed (-1121)"}
+    assert outcome.confirmed == [gap] and outcome.added == 0 and len(asked) == 1
+    assert outcome.answers == {"archive": "1 day files, 1 absent (404), 0 bars inside", "rest": "not listed (-1121)"}
     path, new = record_confirmed(tmp_path, [outcome], NOW)
     assert new == 1 and path == tmp_path / CONFIRMED_GAPS_FILE
     (entry,) = read_confirmed(tmp_path).values()
-    assert entry["after_utc"] == "2023-01-31T23:00Z" and entry["before_utc"] == "2023-02-22T14:00Z"
+    assert entry["after_utc"] == "2023-02-21T23:00Z" and entry["before_utc"] == "2023-02-22T14:00Z"
     assert record_confirmed(tmp_path, [outcome], NOW + H)[1] == 0, "recorded once; a second answer adds nothing"
 
     status = runner.invoke(main, ["data", "status", "--root", str(tmp_path)]).output
@@ -360,12 +360,11 @@ def test_apply_reads_a_delisted_symbol_as_absent_and_records_it(
 
     result = CliRunner().invoke(main, ["data", "repair", "--root", str(tmp_path), "--apply"])
     assert result.exit_code == 0, result.output
-    assert (
-        "+0 row(s), confirmed 1 (archive: 22 day files, 22 absent (404), 0 bars inside; rest: not listed (-1121))"
-        in (result.output)
+    assert "+0 row(s), confirmed 1 (archive: 1 day files, 1 absent (404), 0 bars inside; rest: not listed (-1121))" in (
+        result.output
     )
-    assert "1 newly confirmed" in result.output and len(asked) == 22
-    assert list(read_confirmed(tmp_path)) == [("klines/1h", symbol, 1_675_206_000_000, 1_677_074_400_000)]
+    assert "1 newly confirmed" in result.output and len(asked) == 1
+    assert list(read_confirmed(tmp_path)) == [("klines/1h", symbol, 1_677_020_400_000, 1_677_074_400_000)]
 
 
 # --- the fixtures ---------------------------------------------------------------------------------------

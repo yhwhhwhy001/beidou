@@ -43,7 +43,8 @@ from tests.live.fakes import FakeClock, FakeMarketData
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "bar_sanity"
 SLICES = ("BNXUSDT_2023-02-22.json", "LUNAUSDT_2022-05-12.json")
-BNX_BAR = 1_677_074_400_000  # 2023-02-22 14:00Z, the first bar after the 518-bar halt
+BNX_BAR = 1_677_074_400_000  # 2023-02-22 14:00Z, the new series' first bar, 14 bars after the old one's last
+BNX_HALT = 1_676_088_000_000  # 2023-02-11 04:00Z, the old contract's first hour after it settled: flat, empty
 HOUR = 3_600_000
 FIELDS = ("open", "high", "low", "close", "volume")
 AUGUST_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")  # the four `august_panel` loads
@@ -70,11 +71,13 @@ def test_the_bnx_redenomination_in_the_archive_is_flagged() -> None:
 
     reading = check_bars({symbol: frame})
 
-    assert reading["counts"] == {"ohlc": 0, "frozen": 0, "jump": 1}
+    assert reading["counts"] == {"ohlc": 0, "frozen": 1, "jump": 1}
+    [halt] = _of(reading, "frozen")
+    assert (halt["open_time"], halt["bars"], halt["price"]) == (BNX_HALT, 260, 119.93), "the old contract, settled"
     [flag] = _of(reading, "jump")
     assert flag["open_time"] == BNX_BAR
-    assert flag["log_return"] == pytest.approx(math.log(1.552 / 85.59), abs=1e-4), "x1/55 in one bar"
-    assert flag["gap_bars"] == 518, "the halt it came back from"
+    assert flag["log_return"] == pytest.approx(math.log(1.552 / 119.93), abs=1e-4), "x1/77 in one bar"
+    assert flag["gap_bars"] == 14, "the hours no source holds, between the old series and the new"
     assert flag["continuous"] is False, "no trade bridged the two closes - which is what makes it an artifact"
 
 
@@ -272,7 +275,10 @@ async def _one_cycle(panel: Panel, directory: Path) -> dict[str, Any]:
 
 @pytest.fixture
 def redenominated(august_dir: Path) -> tuple[Panel, int]:
-    """BTCUSDT divided by 55 from bar 350 on - BNX's ratio, inside the 300-bar window a cycle at 400 reads."""
+    """BTCUSDT divided by 55 from bar 350 on, inside the 300-bar window a cycle at 400 reads.
+
+    55 is BNX's step as the archive read it before the 2026-09-25 repair (85.59 -> 1.552); it reads 77 now.
+    """
     frames = _august(august_dir)
     frames["BTCUSDT"].loc[350:, ["open", "high", "low", "close"]] /= 55.0
     return Panel.from_frames(frames, interval="1h"), int(frames["BTCUSDT"].at[350, "open_time"])
@@ -339,12 +345,12 @@ def test_a_flag_pages_on_the_day_it_is_first_seen_and_not_after(tmp_path: Path) 
     day_one = daily_payload(store, "2026-09-15")
     alerts, _notices = daily_alerts(day_one)
     [page] = [text for text in alerts if "bar sanity" in text]
-    assert "BNXUSDT" in page and "缺 518 根" in page and "今天首次出现 1 处" in page
-    assert day_one["bar_sanity"]["cycles"] == 3 and len(day_one["bar_sanity"]["new"]) == 1
+    assert "BNXUSDT" in page and "缺 14 根" in page and "今天首次出现 2 处" in page
+    assert day_one["bar_sanity"]["cycles"] == 3 and len(day_one["bar_sanity"]["new"]) == 2
     assert "Bar sanity (G6, alert only)" in daily_markdown(day_one)
 
     day_two = daily_payload(store, "2026-09-16")
-    assert day_two["bar_sanity"]["new"] == [] and day_two["bar_sanity"]["standing"] == 1
+    assert day_two["bar_sanity"]["new"] == [] and day_two["bar_sanity"]["standing"] == 2
     assert not [text for text in daily_alerts(day_two)[0] if "bar sanity" in text], "seen yesterday: no page today"
 
 
@@ -356,7 +362,7 @@ def test_a_symbol_entering_the_pool_with_an_old_redenomination_still_pages() -> 
 
     status = sanity_status(rows, "2026-09-16", day_of=_day_of)
 
-    assert [flag["open_time"] for flag in status["new"]] == [BNX_BAR]
+    assert [flag["open_time"] for flag in status["new"]] == [BNX_HALT, BNX_BAR]
 
 
 def test_a_check_that_could_not_run_is_a_notice_not_a_page() -> None:
@@ -404,6 +410,7 @@ def test_traded_through_jumps_alone_page_nothing_and_a_gap_bridged_jump_still_do
     symbol, frame = _slice("BNXUSDT_2023-02-22.json")
     today = 1_789_516_800_000
     bnx = sanity_status([_row(today, check_bars({symbol: frame}))], "2026-09-16", day_of=_day_of)
-    assert [flag["continuous"] for flag in bnx["new"]] == [False]
-    alerts, notices = sanity_findings(bnx)
+    jump = {**bnx, "new": [flag for flag in bnx["new"] if flag["check"] == "jump"]}  # the halt pages by itself
+    assert [flag["continuous"] for flag in jump["new"]] == [False]
+    alerts, notices = sanity_findings(jump)
     assert len(alerts) == 1 and "BNXUSDT" in alerts[0] and notices == [], "a re-denomination is not a market"

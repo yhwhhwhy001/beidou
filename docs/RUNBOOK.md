@@ -229,9 +229,9 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 
 **收到告警怎么办。**
 
-1. 先看是哪一条。`test_the_fixtures_are_the_archive_verbatim[BNXUSDT_2023-02-22.json]` 自 2026-09-25 起就是红的：
-   夹具 48 行，归档 552 行。那天的 `data repair` 给 2023-02 重新计价接缝前的缺口补进了 504 根 bar。哪边对由操作者定，
-   定下来之前每晚都会推这一条。
+1. 先看是哪一条。`test_the_fixtures_are_the_archive_verbatim[BNXUSDT_2023-02-22.json]` 从 2026-09-25 起红过：
+   夹具 48 行，归档 552 行。那天的 `data repair` 给 2023-02 重新计价接缝前的缺口补进了 504 根 bar。09-28 查明归档对，
+   已按归档重切，见 RESEARCH_LOG「O-5：BNX 2023-02 的 fixture 与归档」一节。它再红，就是归档又变了，照第 2 条先判断。
 2. 不要为了变绿去改夹具或归档。这条测试说的是「归档在夹具之后变了」，先判断哪一边对。
 3. 在主 checkout 上复现：`.venv/bin/python -m pytest -m archive -rfEs`，约 4 秒。
 
