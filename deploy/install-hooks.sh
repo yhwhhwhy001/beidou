@@ -54,14 +54,34 @@ random.shuffle(v)
 pathlib.Path(sys.argv[1], "canary.txt").write_text(
     "BEIDOU_BINANCE_API_KEY=%s\n" % "".join(v), encoding="utf-8")
 PY
-    if gitleaks detect --source "$tmp" --config "$repo_root/.gitleaks.toml" \
-            --no-git --redact --no-banner >/dev/null 2>&1; then
-        echo "  ✗ 自检失败：伪造的凭据形态没有被拦下。"
-        echo "    这说明 .gitleaks.toml 的 allowlist 被放得太宽，扫描已经失去意义。"
-        exit 1
-    else
-        echo "  ✓ 伪造的凭据形态被拦下，扫描是活的。"
-    fi
+    # 有命中时让 gitleaks 用这个码退出（`--exit-code`），与两个 hook 同一个判据。只认它才打 ✓。
+    # gitleaks 自己出错时也是非 0：配置不在或写坏是 FTL、退 1，与有命中时的默认退出码相同；
+    # 规则里有 lookahead 是 panic、退 2。2026-09-29 之前这里只看非 0，这两种情况都打 ✓，
+    # gitleaks 的原话进了 /dev/null。SECURITY.md 让人「看到 ✓ 才算装好」，防的正是这两种。
+    leaks_rc=42
+    rc=0
+    scan_out="$(gitleaks detect --source "$tmp" --config "$repo_root/.gitleaks.toml" \
+            --no-git --redact --no-banner --no-color --exit-code "$leaks_rc" 2>&1)" || rc=$?
+    case "$rc" in
+        "$leaks_rc")
+            echo "  ✓ 伪造的凭据形态被拦下，扫描是活的。"
+            ;;
+        0)
+            echo "  ✗ 自检失败：伪造的凭据形态没有被拦下。"
+            echo "    这说明 .gitleaks.toml 的 allowlist 被放得太宽，扫描已经失去意义。"
+            exit 1
+            ;;
+        *)
+            # `${rc}` 的花括号不能省：UTF-8 locale 下 macOS 的 bash 3.2 会把紧跟的全角括号
+            # 读进变量名，`set -u` 下脚本当场崩掉。
+            echo "  ✗ 自检没有跑完：gitleaks 没有扫完就退出了（退出码 ${rc}），它的原话："
+            printf '%s\n' "$scan_out" | sed 's/^/    /'
+            echo '    按上面的原话修。常见的两种都是一行没扫：.gitleaks.toml 不在或写坏了；'
+            echo '    规则里写了 RE2 不支持的正则，例如 lookahead `(?=`，gitleaks 会直接 panic。'
+            echo '    修好之后重跑这个脚本，看到 ✓ 才算装好。'
+            exit 1
+            ;;
+    esac
 else
     echo "  (跳过：gitleaks 未安装)"
 fi
