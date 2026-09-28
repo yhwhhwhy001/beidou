@@ -19070,3 +19070,117 @@ exit 0
 written: /Users/maguannan/beidou-worktrees/lsr-timing-run/reports/research/lsr_timing-criteria-20260928T075648Z.json sha256=773f157b36b5ec6dddb293eaecda924cf16c04231606ec2bb46602a5a33da3fe
 exit 0
 ```
+
+## 2026-09-28 · WP-C8：实盘 exit overlay 在 cooldown 内『反向→翻回』会被 D-045 分支当成没成交的退出——潜伏、0 次，修法待操作者裁定
+
+执行手册 §3.4（WP-C8，`docs/analysis/2026-09-28-production-refactor-execution-plan.md`）加了一条同输入测试：
+`tests/live/test_the_live_overlay_is_the_backtest_overlay_on_one_symbol.py`。它把实盘 `ExitOverlay.apply` 与回测
+`apply_exits` 放在同一个单币输入上逐 bar 比。shipped 与 trailing 两组参数逐位一致，只有一种序列例外。本节登记这个
+例外。两侧实现都没改。
+
+### 一、以前记过什么
+
+「2026-09-08 · P24 预登记：判据从回撤换成收益后，exit overlay 第一次被搜索（先写后跑）」一节写过「翻号分支不查
+cooldown」。那一句讲的是回测：两个 tp 值的退出集合因此不嵌套。实盘这一侧没有记过。本节是补充，原节不动。
+
+### 二、机制
+
+触发序列只有一种。下文用 d 指规则触发的那一侧：
+
+1. d 侧的退出规则触发。`cooldown_direction` 记成 d，长度是 `cooldown_bars`。
+2. cooldown 内，模型转向 −d。反向进场不受 cooldown 限制，两侧都开 −d。
+3. cooldown 内，模型又翻回 d。两侧都开 d。
+4. 下一根 bar 起，实盘输出 0 并记 COOLDOWN。回测继续持有 d。
+
+第 3 步两侧一致。`exit_step` 的翻转分支直接调 `_enter`，不查 cooldown（`beidou_alpha/overlays/exits.py:379-380`）。
+cooldown 只在空仓进场那条路径上查（`:383-384`）。向量化引擎也一样：`:672` 的 `opened` 里，翻转那一半不带
+`blocked` 掩码。
+
+第 4 步分叉在实盘的 `_reconcile`。它的 D-045（退出侧）分支在 `beidou_live/exits.py:129-130`：
+
+    if bar < state.cooldown_until and held == state.cooldown_direction:
+        return replace(state, direction=0)
+
+这条分支本来管的是「规则已触发、平仓单没落下」的仓位。它的 docstring 说，state 已带着区分两种情况所需的信息。
+但条件里没有 `state.direction`。overlay 自己经翻转重开的仓位也满足它，于是被当成没成交的退出。
+
+实盘的净效果：翻回那根 bar 买入，下一根卖出，白付一次往返成本。之后直到 cooldown 结束都空仓。回测整段持有。
+
+以前为什么没看见：两个回测引擎共用这套翻转语义，`test_the_vectorised_exit_engine_is_the_same_machine.py` 比不出
+差别。实盘测试都是手工构造的几次调用，没有走过这个序列。
+
+### 三、最小复现
+
+参数是 shipped（`PARAM_SETS[0]`：止损 6、止盈 6、`cooldown_bars` 24）。前 60 根是 ±0.4% 交替的平静序列，只为
+让 σ 有值。实盘侧的喂法与 WP-C8 测试相同：仓位取上一根调整后权重的方向，即每笔单都成交。
+
+| t | close | 目标 | 回测 | 实盘 | 事件 |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 60 | 100.00 | 0.10 | 0.10 | 0.10 | 两侧进场；日 σ 0.0388，6σ 约 23.3% |
+| 61 | 70.00 | 0.10 | 0.00 | 0.00 | 两侧 STOP_LOSS；cooldown 到 bar 85，方向 +1 |
+| 62 | 70.00 | −0.10 | −0.10 | −0.10 | 两侧开空 |
+| 63 | 70.00 | 0.10 | 0.10 | 0.10 | 两侧翻回多头 |
+| 64 | 70.00 | 0.10 | 0.10 | **0.00** | 实盘 COOLDOWN |
+| 65 | 70.00 | 0.10 | 0.10 | **0.00** | 实盘 COOLDOWN |
+| 66 | 70.00 | 0.10 | 0.10 | **0.00** | 实盘 COOLDOWN |
+
+同一序列钉在那个测试文件末尾：`test_a_flip_back_into_the_cooled_side_is_held_live_as_it_is_in_the_backtest`，标
+`xfail(strict=True)`。今天它 xfail。A 或 B 落地那天它会 XPASS，strict 让它变红。
+
+主测试的输入避开这个序列：每段同侧持仓至少 30 根，长于 shipped 的 24 根 cooldown。主测试还断言，每次退出后的
+cooldown 窗口内回测都不持有 d。输入被改坏时，报错会指向这条排除。
+
+### 四、根因证据
+
+随机面板：`PARAM_SETS` 16 组 × 种子 0–19 × 400 bar，每笔单都成交。
+
+- 原版：320 个面板里 277 个分叉。有分叉面板的是 14 组。没有的两组是第 2 组（cooldown 0）和第 12 组（移动止损
+  永不 arm，没有退出）。
+- 只给 D-045 分支加一个条件 `state.direction != held`：0 / 320。根因就在这一行。
+- 原版扫描里 D-045 分支触发 2323 次，全部落在 overlay 自己持有的那一侧。每笔单都成交时，它本不该触发。
+- 按上面收窄后，5 个实盘 exits 测试文件 23 / 23 通过。其中有三条 D-045 测试，以及引擎级的止损 cooldown 集成测试。
+
+这些读数来自会话 scratchpad 里的 monkeypatch。脚本没有入库，仓库文件没动。
+
+### 五、实盘里发生过吗：0 次
+
+只读 `.beidou/live/cycles.jsonl`，截至 2026-09-28T07:00Z 那根 bar。
+
+- 585 根不同的 bar，起点 2026-09-03T12:00Z。13 根有重复记录，取最后一条。
+- COOLDOWN 事件 266 个，TAKE_PROFIT 事件 12 个。
+- 特征一：COOLDOWN 事件带非空 `entry_price`。翻回被拦时，state 还留着翻回那一刻的锚，所以会带。正常退出后的
+  COOLDOWN 不带。命中 0。
+- 特征二：COOLDOWN 事件的上一周期，目标已在 d 侧。命中 0。
+
+潜伏，未发生过。
+
+### 六、选项与价钱
+
+| | 做什么 | 价钱 | 买到什么 |
+| --- | --- | --- | --- |
+| A | `beidou_live/exits.py:129` 的条件加 `and state.direction != held` | 实盘源码改一行条件。`construction_fingerprint` 不变，它只哈希配置值。构造冻结已于 2026-09-27T07:54Z 提前结束（`FREEZE_ENDS`）。生效要按纪律重启 | 实盘回到被测量的那本书。D-045 的保护不减 |
+| B | `exit_step` 的翻转分支也查 cooldown，stepwise 与 vectorised 同改 | `beidou_alpha` 语义变更。含该序列的回测全部改变，现有 exits 证据要重测、计 ledger。实盘调同一个 `exit_step`，也随之改变，生效同样要按纪律重启 | 与模块 docstring 的「After an exit the same direction is suppressed for `cooldown_bars`」字面一致。实盘随之一致 |
+| C | 接受为实盘独有语义，本节登记 | 0 行代码 | 实盘在该序列上偏离被测量的书。至今 0 次 |
+| D | 测试里钉一条 `xfail(strict=True)` 的最小复现 | 测试 +50 行 | A 或 B 落地时它 XPASS 变红，逼着改测试与本节 |
+
+### 七、裁定与建议
+
+协调者裁定 C + D，已做：本节与那条 xfail。A 交操作者裁定。
+
+协调者建议 A，理由四条：
+
+1. 实盘回到被测量的那本书。现有 exits 证据都按回测语义测得，翻回之后继续持有。
+2. D-045 的保护不减。单次失败时 `state.direction` 是 0。双重失败时是 −d：退出单没落下，之后的反向单也没落下。
+   两种都不等于 `held`，收窄后的条件照样触发。
+3. `construction_fingerprint` 不变。
+4. 生效要按纪律重启，可以与 C6、R1 搭同一次（执行手册 §0 的「重启」一行）。
+
+「2026-09-15 · 补记 DL-GB4：平仓会把全部退出锚清到当时的价——09-13 那一节记了 M-010 污染，没记这条」一节，
+把改 `_reconcile` 列为构造变更，受当时的冻结管。冻结已结束。但 A 改的是实盘 overlay 的行为，仍由操作者裁定。
+
+### 八、A 落地时要做的事
+
+1. 删掉主测试里的排除断言，即「cooldown 窗口内回测不持有 d」那段。module docstring 最后一条范围说明一并改掉。
+2. 把翻回序列加进 `SCRIPT`，让主测试直接覆盖它。
+3. 删掉那条 xfail。它会 XPASS，strict 会让它变红。
+4. 另起一节补记修复，引用 commit hash。本节原样保留。

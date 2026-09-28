@@ -66,6 +66,7 @@ from beidou_live.report_common import (  # noqa: F401  (re-exported at its histo
 )
 from beidou_live.report_data import (
     _dataset_block,
+    archive_tests_status,
     data_coverage,
     metrics_parity_status,
 )
@@ -300,6 +301,8 @@ def daily_payload(
         "data_coverage": data_coverage(store, root=data_root),
         # G6: bars the loop fed its model that did not look like prices, split into first-seen-today and not.
         "bar_sanity": sanity_status(store.read_jsonl(store.cycles_path), day, day_of=_day_of),
+        # WP-P4: the nightly data job's last verdict on the tests that read `.beidou/`.  It pages; this prints.
+        "archive_tests": archive_tests_status(),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
         # 3.9, reported only: a full close is one market order, so what it costs is impact, not bars.
         "liquidity_to_close": liquidity_to_close(store, day, root=data_root),
@@ -759,6 +762,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ),
             # G6, beside the archive's coverage: whether the bars the LOOP read looked like prices at all.
             ("Bar sanity (G6, alert only)", sanity_lines(payload.get("bar_sanity") or {})),
+            # WP-P4, beside both: whether the tests that read that archive and the loop's record passed last night.
+            ("归档专属测试（夜间 data job，只报告）", payload.get("archive_tests") or {"none": 0}),
             (
                 "Margin and rejections (M-007)",
                 {
