@@ -195,6 +195,21 @@ entries:
       当天零 ledger 答了：是，赌的是择时。读数与判定线在看数之前钉在 353988b（#199）。
     log: "2026-09-10 上一条预登记的答案；2026-09-27「LS 叶那 4 个正形状只在赌方向（择时）：作为选币信号 REFUTED」"
 
+  - id: lsr-timing
+    subject: 全市场多空比择时 `lsr_timing`
+    ruled: 2026-09-28
+    verdict: >-
+      REFUTED（测过）。2026-09-28 按预登记跑了 4 格（新桶 `lsr_timing`，`--prior-trials 658`，N=662），verdict
+      FAIL：最优格 window 168、scale 0.5，样本外 Sharpe 1.28（逐折选格的混合；最优格自己的是 1.42），低于门 1.65；
+      有横截面那段（B 段）超出大盘与十条趋势跟随的部分 NW t 1.78，不到 2.0。与 tsmom 的日相关 0.03，这一条过了。
+    condition: 重开要新信息（例如实盘自己攒下的多空比、另一家交易所的多空比），不是同一份日档上的又一个写法或网格。
+    check: operator
+    note: >-
+      预登记第 6 项：判负之后不重跑、不换网格、不换对照、不申诉门、不换 `--prior-trials`、不补数据重跑。
+      按第 7 项，LS 这条线在北斗里收口：选币（`ls-leaf`，#199）与择时都判过，不为它建实盘多空比通道。
+      `ls-leaf` 这一条不动。
+    log: "2026-09-28「预登记：全市场多空比择时 lsr_timing」与「lsr_timing 裁决：REFUTED」"
+
   - id: oi-leaf
     subject: OI（持仓量）叶
     ruled: 2026-09-10
