@@ -350,7 +350,7 @@ push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理�
 - **O-8**：#213 合入且主 checkout 再快进后，装载 `com.beidou.weekly.plist`。
 - **裁定**：WP-C8 的修法 A。
 
-### 7.5 补记：报告层 import 那一行已关（#224，会话 8af0084a）
+### 补记：报告层 import 那一行已关（#224，会话 8af0084a）
 
 7.3 表里「报告层 import 时异常会让所有 `beidou` 子命令起不来（含 armed 的 `live run`）」一行，去向写的是
 「后续任务卡片」；7.2 第 2 条说的是同一件事。原行不改，这里补记去向。
