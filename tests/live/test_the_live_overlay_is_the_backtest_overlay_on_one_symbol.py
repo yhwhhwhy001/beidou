@@ -44,13 +44,15 @@ Out of scope, each for its own reason:
   overlay itself just opened as an exit that failed to land - live emits 0 with COOLDOWN where the
   backtest keeps holding.  Every side run in the input outlasts the shipped cooldown, and the test
   asserts that no weight lands on a cooled side inside its window, so the exclusion cannot widen
-  silently.
+  silently.  The difference itself is pinned by the strict xfail at the bottom of this file and
+  recorded in `docs/RESEARCH_LOG.md` under `RESEARCH_LOG_SECTION`; the fix is the operator's call.
 """
 
 from __future__ import annotations
 
 import math
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -65,6 +67,12 @@ from tests.alpha.test_the_vectorised_exit_engine_is_the_same_machine import PARA
 
 HOUR = 3_600_000
 SYMBOL = "BTCUSDT"
+ROOT = Path(__file__).resolve().parents[2]
+# Where the flip-back difference is recorded.  RESEARCH_LOG sections are cited by title, never by number.
+RESEARCH_LOG_SECTION = (
+    "2026-09-28 · WP-C8：实盘 exit overlay 在 cooldown 内『反向→翻回』会被 D-045 分支当成没成交的退出"
+    "——潜伏、0 次，修法待操作者裁定"
+)
 
 # (bars, decision weight, drift per bar).  The drift legs are what make the shipped thresholds reachable:
 # six daily sigmas is about 29 hourly ones (6 x sqrt(24)), a distance a driftless walk needs on the order
@@ -187,3 +195,44 @@ def test_the_live_overlay_emits_the_backtest_weights_and_exits_bar_for_bar(param
     assert all(counts[rule] > 0 for rule, setting in enabled.items() if setting > 0), counts
     moves = _moves(emitted, set(exit_bars))
     assert set(moves) == {"enter long", "enter short", "add", "reduce", "flip", "close"}, moves
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "live `_reconcile`'s D-045 clause takes a position the overlay re-opened by a sign flip inside the "
+        f"cooldown for an exit that failed to land, and goes flat where the backtest holds: 「{RESEARCH_LOG_SECTION}」"
+    ),
+)
+def test_a_flip_back_into_the_cooled_side_is_held_live_as_it_is_in_the_backtest() -> None:
+    """The excluded sequence, pinned as it behaves today: a strict xfail, so a fix on either side turns it red.
+
+    Shipped parameters.  Sixty calm bars give sigma a value; then a long is entered at 100, a crash to 70
+    stops it at bar 61 (cooldown on the long side until bar 85), the model goes short at 62 and back to
+    long at 63.  Both halves hold the long at 63; from 64 live emits 0 and the backtest keeps holding.
+
+    Only the final comparison may fail as expected, hence ``raises=AssertionError``.  The two checks before
+    it use `pytest.fail`, which is not an AssertionError, so a missing log section or an input that stopped
+    reaching the sequence fails outright instead of being counted as the known difference.  When the
+    operator's fix lands this XPASSes: delete it, drop the exclusion from the test above and add the flip
+    back to `SCRIPT`.  The log section lists the same steps, plus a new section to record the fix.
+    """
+    if f"## {RESEARCH_LOG_SECTION}\n" not in (ROOT / "docs" / "RESEARCH_LOG.md").read_text(encoding="utf-8"):
+        pytest.fail("the RESEARCH_LOG section this xfail points at is gone")
+    params = PARAM_SETS[0]
+    closes = [100.0 * (1 + 0.004 * (-1) ** i) for i in range(60)] + [100.0, 70.0, 70.0, 70.0, 70.0, 70.0, 70.0]
+    index = pd.date_range("2024-01-01", periods=len(closes), freq="h", tz="UTC")
+    close = pd.Series(closes, index=index, name=SYMBOL)
+    decisions = pd.Series([0.0] * 60 + [0.1, 0.1, -0.1, 0.1, 0.1, 0.1, 0.1], index=index, name=SYMBOL)
+    backtest = apply_exits(decisions.to_frame(), close.to_frame(), params)
+    live_weights, live_events = _live(close, decisions, params)
+
+    stops = (
+        [e["bar"] for e in live_events if e["rule"] == STOP_LOSS],
+        close.index.get_indexer(backtest.events["time"][backtest.events["rule"] == STOP_LOSS]).tolist(),
+    )
+    flips = [tuple(side.iloc[62:64]) for side in (live_weights, backtest.weights[SYMBOL])]
+    if stops != ([61], [61]) or flips != [(-0.1, 0.1)] * 2:
+        pytest.fail(f"the input no longer reaches the flip back inside the cooldown: stops {stops}, flips {flips}")
+    _bit_for_bit(live_weights.iloc[60:], backtest.weights[SYMBOL].iloc[60:])
