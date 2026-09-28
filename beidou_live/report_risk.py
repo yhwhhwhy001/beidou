@@ -719,28 +719,30 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
     }
 
 
-# G4, 2026-09-23: the backtest's one-day tail on the construction that trades - registry book (tsmom main +
-# flow_short sleeve), exits, both book guards, the live band (D2 + D3) and R8's ladder at vol_target 0.60, pit
-# universe, every complete UTC day 2021-02-01 -> 2026-09-21 (n = 2,059), from
-# `scratchpad/g4_stress_windows_and_var_at_k060.py`.  Historical: VaR is the m-th worst day and ES the mean of
-# the m worst, m = ceil(n x (1 - level)) = 103 / 21.  Fractions of equity, positive = a loss.  Measured at ONE
-# vol_target, so `tail_readings` refuses to convert them under another.
-TAIL_VOL_TARGET = 0.60
+# G4, re-measured 2026-09-29 at the k that trades: the backtest's one-day tail on the registry book (tsmom main +
+# flow_short sleeve), exits, both book guards, the live band (D2 + D3) and R8's ladder at vol_target 0.175, pit
+# universe, every complete UTC day 2021-02-01 -> 2026-09-27 (n = 2,065), from
+# `scratchpad/g4_stress_windows_and_var_at_k0175.py`, full precision in `reports/research/g4-k0175-20260929/`.
+# Historical: VaR is the m-th worst day and ES the mean of the m worst, m = ceil(n x (1 - level)) = 104 / 21.
+# Fractions of equity, positive = a loss.  Measured at ONE vol_target, so `tail_readings` refuses to convert
+# them under another.  The 09-23 set was k = 0.60's (`..._k060.py`: 0.043210 / 0.078255 / 0.063345 / 0.092512);
+# from the 09-27 switch to this change the section printed n/a, and a test now binds this to the profile's k.
+TAIL_VOL_TARGET = 0.175
 
 
-BACKTEST_DAILY_VAR = {0.95: 0.043210, 0.99: 0.078255}
+BACKTEST_DAILY_VAR = {0.95: 0.013513, 0.99: 0.023229}
 
 
-BACKTEST_DAILY_ES = {0.95: 0.063345, 0.99: 0.092512}
+BACKTEST_DAILY_ES = {0.95: 0.019489, 0.99: 0.028118}
 
 
 def tail_readings(store: StateStore, day: str, *, vol_target: float | None) -> dict[str, Any]:
     """G4: the backtest's one-day VaR / ES in USDT at the day's last equity, and live days past the VaR.
 
     Beside DL-EX0 because sigma sizes a normal day, and read as a normal distribution it misplaces the bad
-    ones.  The same replay's daily sd is 3.17% (design 3.14%), but its 99% day sits at 2.47 sd with ES 2.92
-    sd, where a normal day would put them at 2.33 and 2.67; its 95% day is 1.36 sd against 1.645.  The
-    conversion multiplies by the equity `design_daily_sigma_u` scales, because the weights are fractions of it.
+    ones.  At k = 0.175 the same replay's daily sd is 1.02% (design 0.92%); its 99% day sits at 2.29 sd with
+    ES 2.77 sd, where a normal day would put them at 2.33 and 2.67, and its 95% day at 1.33 sd against 1.645
+    (k = 0.60: 2.47 / 2.92 / 1.36).  The conversion multiplies by the equity `design_daily_sigma_u` scales.
 
     The live day is `noise_scale`'s series compounded: total equity cycle to cycle, a step whose later
     cycle re-baselined on a transfer skipped, bucketed by `_day_of` of the later cycle.  Measured over the
@@ -1319,7 +1321,7 @@ def _tail_readings_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         return {"status": "n/a", "why": block.get("why") or "no reading"}
     lines: dict[str, Any] = {}
     for tag in ("95", "99"):
-        lines[f"VaR {tag}% / ES {tag}% (1 day, backtest k={TAIL_VOL_TARGET:.2f})"] = (
+        lines[f"VaR {tag}% / ES {tag}% (1 day, backtest k={TAIL_VOL_TARGET:g})"] = (
             f"{_fmt_pct(block.get(f'var_{tag}'))} / {_fmt_pct(block.get(f'es_{tag}'))} of equity = "
             f"{_fmt_num(block.get(f'var_{tag}_u'))} / {_fmt_num(block.get(f'es_{tag}_u'))} U"
         )

@@ -2118,6 +2118,10 @@ def metrics_refusal(*, needs_metrics: Sequence[str], live_coverage_bars: int, re
     So the ingestion ships with its own refusal: a strategy that declares it needs metrics does not
     start until the LIVE source can answer for the history it needs.  Costs nothing to any strategy
     shipping today, because none of them declare it.
+
+    History is not all the wiring job owes (backtest-guard 2026-09-29).  Research gives a bar the bucket that
+    closed AT its close; REST publishes it minutes later (`report_data.snapshot_lag` counts how late), and
+    `run_cycle` polls after the targets.  A decision reading the store before its own poll is an hour behind.
     """
     if not needs_metrics:
         return None

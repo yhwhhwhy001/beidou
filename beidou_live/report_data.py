@@ -23,6 +23,7 @@ from beidou_alpha.model import AlphaModel
 from beidou_alpha.panel import interval_seconds
 from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN
+from beidou_data.metrics import PERIOD_MS
 from beidou_data.metrics_snapshot import live_coverage_bars, metrics_parity
 from beidou_data.store import KlineStore, MetricsStore
 from beidou_governance.scheduler import parity_satisfied
@@ -30,7 +31,7 @@ from beidou_live import lock
 from beidou_live.engine import metrics_refusal
 from beidou_live.execution_fidelity import ReplayInputs
 from beidou_live.inputs import required_history
-from beidou_live.report_common import readable_state
+from beidou_live.report_common import _cycles, readable_state
 from beidou_live.state import LiveState, StateStore
 
 
@@ -219,12 +220,36 @@ def data_family_parity(store: StateStore, data_root: str | Path, fidelity: Repla
     if unreadable:
         return {"readable": False, "why": unreadable}
     try:
-        return _families(fidelity.model, fidelity.history_bars, state, data_root)
+        return _families(fidelity.model, fidelity.history_bars, state, data_root, _cycles(store))
     except Exception as error:
         return {"readable": False, "why": f"{type(error).__name__}: {error}"}
 
 
-def _families(model: AlphaModel, floor: int, state: LiveState, data_root: str | Path) -> dict[str, Any]:
+#: The newest cycles `snapshot_lag` reads: one day of hourly polls.
+SNAPSHOT_LAG_CYCLES = 24
+
+
+def snapshot_lag(rows: Sequence[Mapping[str, Any]], interval_ms: int, period_ms: int) -> dict[str, Any]:
+    """Per REST page, how many 5m buckets the newest one polled sat behind the bar close, most-lagging symbol.
+
+    Research gives a bar the bucket that closed AT the bar's close (`beidou_data.metrics.align_to_bars`), and
+    `alignment.METRICS` leaves the latency past that close to a health report; this is that report.  The poll
+    runs after the cycle's targets (`LiveEngine.run_cycle`), about 30 s past the close, so 0 means REST had
+    already published research's bucket and 1 means it had not.  No decision reads metrics yet.
+    """
+    polled = [row for row in rows if (row.get("metrics_snapshot") or {}).get("newest_open_ms") and "bar_open_ms" in row]
+    counts: dict[str, dict[str, int]] = {}
+    for row in polled[-SNAPSHOT_LAG_CYCLES:]:
+        close = int(row["bar_open_ms"]) + interval_ms
+        for page, (oldest, _freshest) in row["metrics_snapshot"]["newest_open_ms"].items():
+            lag = str((close - (int(oldest) + period_ms)) // period_ms)
+            counts.setdefault(page, {})[lag] = counts.get(page, {}).get(lag, 0) + 1
+    return {"cycles": min(len(polled), SNAPSHOT_LAG_CYCLES), "by_page": counts}
+
+
+def _families(
+    model: AlphaModel, floor: int, state: LiveState, data_root: str | Path, rows: Sequence[Mapping[str, Any]] = ()
+) -> dict[str, Any]:
     if state.stopped_books:  # as `LiveEngine.__init__` does, before anything reads `history_bars`
         model = model.without_books(list(state.stopped_books))
     symbols = list(dict.fromkeys([*state.universe, *state.leaving]))  # `LiveEngine.managed_symbols`
@@ -263,7 +288,14 @@ def _families(model: AlphaModel, floor: int, state: LiveState, data_root: str | 
                 "why": why,
             }
         )
-    return {"readable": True, "symbols": len(symbols), "request_window": window, "families": families}
+    lag = snapshot_lag(rows, interval_ms, PERIOD_MS["5m"])
+    return {
+        "readable": True,
+        "symbols": len(symbols),
+        "request_window": window,
+        "families": families,
+        "snapshot_lag": lag,
+    }
 
 
 def _data_family_lines(block: Mapping[str, Any]) -> dict[str, Any]:
@@ -283,6 +315,16 @@ def _data_family_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         lines[row["column"]] = (
             f"覆盖 {row['held_bars']}（{own}）/ {asked} = {row['ratio']:.2f}，{verdict}；{readers}；{leaf}"
         )
+    lag = block.get("snapshot_lag") or {}
+    lines["快照时的桶延迟"] = (
+        "；".join(
+            f"{page} " + "、".join(f"落后 {n} 桶 {c} 次" for n, c in sorted(tally.items(), key=lambda kv: int(kv[0])))
+            for page, tally in sorted((lag.get("by_page") or {}).items())
+        )
+        + f"（最近 {lag['cycles']} 个周期，取最慢的 managed symbol；研究按 bar 收盘时刚关的那个桶对齐，即 0 桶）"
+        if lag.get("cycles")
+        else "还没有读数：周期行里没有 newest_open_ms，载入它的那次重启之后才开始记"
+    )
     lines["口径"] = (
         f"覆盖是启动门的 live_coverage_bars：{block['symbols']} 个 managed symbol 里最薄的一个，5m 桶折成 bar；"
         "括号里只数本列有值的桶，不进判定。需要是门交给 metrics_refusal 的 required_bars，"
