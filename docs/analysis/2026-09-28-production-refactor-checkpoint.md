@@ -17,4 +17,5 @@
   3. 操作者动作：补 `BEIDOU_ALERTS_WEBHOOK_URL_2`；建 dead-man 账号并放 URL（HC-2）；HC-8 定 BNX 夹具与归档哪边对；代理节点按裁定暂不换。
   4. 下一会话：GAP-PR08（ratchet 冲突成本）、GAP-PR10（失败周期窗口内重试收益）两项零 ledger 测量；WP-R2 在 WP-R1 满 14 天后写预登记。
   5. 卫生项之外不执行任何未经裁定的默认（D-PR06）。
+- **执行版**：`docs/analysis/2026-09-28-production-refactor-execution-plan.md`（2026-09-28，操作者要求「优化到可执行状态」后写；PR 波次、每包规格、操作者清单 O-1–O-9、完成定义）。
 - **关联文件**：`docs/analysis/2026-09-28-production-refactor-deep-analysis.md`（定稿，§0–§6 保留冻结稿原文并标 [R 修订]）；`docs/analysis/2026-09-28-production-refactor-adversarial-review.md`（Opus 审查稿原样）；`docs/analysis/analysis-calibration.md`（新增 2026-09-28 行）；冻结稿原件在会话 scratchpad `beidou-production-refactor-frozen.md`（sha256 `1a3e51c1…e863c`，不入库）；Constitution：无，建议用 Q1–Q6 的答案生成。
