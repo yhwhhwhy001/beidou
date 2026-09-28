@@ -9,7 +9,8 @@ import 按各块实际用到的名字重算。这个脚本回答它有没有在�
 **二、`render`：产物逐字节相同。** 照 `beidou_cli/live_cmd.py` 的 `report daily`、`report weekly`、
 `report beta` 出报告，但不发 webhook。在同一个 cwd 下（config、registry、reports/research、git 历史
 都相同），只换 PYTHONPATH 指向的代码，各跑一次再 `diff -r`。周报的 alpha 投入占比读 `git log`，
-这里给固定值，量的是代码不是分支。`long_run_sharpe` 是唯一读墙钟的读数，按它当时所在的模块冻结。
+这里给固定值，量的是代码不是分支；2026-09-28 加的 Plan budget gap 读工作树与 git，同样给固定值。
+`long_run_sharpe` 是唯一读墙钟的读数，按它当时所在的模块冻结。
 2026-09-25 的读数：实盘状态快照（09-03 至 09-24T17:00Z）上 22 天日报（md、json、告警）、4 份周报、
 2 份 beta 报告，另加 `live status` 与引擎用的三个读数，81 个产物逐字节相同。冻结时钟后，基线自己
 跑两次也逐字节相同；不冻结时 `calendar_days` 与 `downtime_days` 两个字段会随墙钟变。
@@ -132,8 +133,28 @@ def render(state_dir: str, data_root: str, out_dir: str) -> None:
         alerts, notices = L.daily_alerts(data)
         (out / f"daily-{day}.alerts.json").write_text(dump({"alerts": alerts, "notices": notices}), encoding="utf-8")
     changed = {"beidou_alpha/x.py": 90, "beidou_live/y.py": 10}
+    # 2026-09-28 起周报多一节 Plan budget gap（M-PR01）。它读工作树与 git 历史，与上面的投入占比同理给固定值：
+    # 新旧两棵树的行数本来就不同，读真树量到的是分支，不是代码。
+    lines = {
+        "beidou_alpha": 900,
+        "beidou_live": 700,
+        "beidou_cli": 300,
+        "beidou_data": 50,
+        "beidou_exchange": 25,
+        "beidou_shared": 15,
+        "beidou_governance": 10,
+    }
+    week_ago = {**lines, "beidou_live": 630}
     for day in days[-10::3]:
-        data = L.weekly_payload(store, day, expectations=expectations, changed_lines=changed, dataset=dataset)
+        data = L.weekly_payload(
+            store,
+            day,
+            expectations=expectations,
+            changed_lines=changed,
+            dataset=dataset,
+            source_lines=lines,
+            source_lines_week_ago=week_ago,
+        )
         validations = L._validations_since(Path("reports/research"), int(data["since_ms"]))
         skipped = L.preregistration_skipped(validations, effective_from=L.PREREGISTRATION_EFFECTIVE_FROM)
         data["preregistration"] = {

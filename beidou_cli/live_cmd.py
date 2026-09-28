@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import signal
 import subprocess
+import tarfile
+import tempfile
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict
@@ -63,6 +66,7 @@ from beidou_live.paper import PaperVenue
 from beidou_live.ports import Venue
 from beidou_live.probe import probes_from_registry
 from beidou_live.report_beta import factor_markdown
+from beidou_live.report_governance import SOURCE_PACKAGES, package_lines
 from beidou_live.reports import (
     PREREGISTRATION_EFFECTIVE_FROM,
     _store_closes,
@@ -935,6 +939,31 @@ def _changed_lines(commits: int) -> dict[str, int] | None:
     return totals or None
 
 
+def _source_lines_days_before_head(days: int) -> dict[str, int] | None:
+    """`package_lines` on the tree first-parent history held `days` before HEAD, or None if git cannot say.
+
+    Measured back from HEAD's own commit time, not from today: the main checkout is fast-forwarded by
+    hand, and on a checkout two days behind, a week counted back from today books five days of growth as
+    seven.  The old tree is unpacked and counted by the same function as the working tree, so both ends of
+    the difference share one definition of a line.  A package that did not exist yet counts as 0 lines;
+    `git archive` refuses a path it cannot find, which would have read as "git cannot say".
+    """
+
+    def git(*args: str) -> bytes:
+        return subprocess.run(["git", *args], capture_output=True, check=True).stdout
+
+    try:
+        head = int(git("log", "-1", "--format=%ct"))
+        rev = git("rev-list", "-1", "--first-parent", f"--before=@{head - days * 86_400}", "HEAD").decode().strip()
+        present = set(git("ls-tree", "--name-only", rev).decode().split())
+        archive = git("archive", rev, *(package for package in SOURCE_PACKAGES if package in present))
+    except (OSError, ValueError, subprocess.CalledProcessError):  # no git, no checkout, no commit that old
+        return None
+    with tempfile.TemporaryDirectory() as scratch, tarfile.open(fileobj=io.BytesIO(archive)) as tree:
+        tree.extractall(scratch, filter="data")
+        return package_lines(Path(scratch))
+
+
 def _log_first_mentions(strategies: Iterable[str]) -> dict[str, str | None]:
     """The earliest commit that introduced a mention of each strategy into `docs/RESEARCH_LOG.md`.
 
@@ -1023,6 +1052,8 @@ def report_weekly(
         expectations=expectations_from_evidence(_evidence_reports(registry)),
         changed_lines=_changed_lines(commits),
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
+        source_lines=package_lines(Path.cwd()),
+        source_lines_week_ago=_source_lines_days_before_head(7),
     )
     # DL-K3: the week's validations, checked for the one ordering the protocol depends on and nothing
     # verified - that the hypothesis was written down before the result was seen (KILL-R9).
