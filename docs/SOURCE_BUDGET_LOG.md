@@ -4064,7 +4064,7 @@ beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`�
 
 实测 8_716，余量 24 -> 88（= `headroom_policy(8_804)`）。理由不在这里重述，见文末「2026-09-28 headroom 政策（WP-C2）」一节。
 
-### 2026-09-29 · 顶 8_804 -> 8_993（validate 接上 N2–N5，与两个把读数印成扁平行的 helper）
+### 2026-09-29 · 顶 8_804 -> 8_994（validate 接上 N2–N5，与两个把读数印成扁平行的 helper）
 
 - +63 `research_validate_cmd.py`：`_neighbourhood_keys`（N4：邻域扰动默认网格与本次真搜过的维度）；经 `stitched_oos` 取样本外帧；
   对冲书的对篮子写 n/a（审查 M2）；报告 dict 的新键（`cagr_full_sample`、`calmar_full_sample`、`payoff_ratio_bar`、`cagr_caliber`、
@@ -4073,7 +4073,8 @@ beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`�
 - +61 `research_report.py`：`_leg_row`、`_fit_row`、`_basket_rows`、`_concentration_rows`。`render_markdown` 把嵌套 dict 印成一格，
   所以读数与它们的口径（basis）拆成扁平行，同 `_regime_rows` 的理由。
 
-实测 8_903，顶抬到「实测 + 政策」：8_993，余量 90（= `headroom_policy(8_993)`）。在途的 #255 会再加 13 行，落在这份余量里。
+实测 8_904，已含同日先合入的 #255 的 13 行（`governance reopen` 读实盘记录）。顶抬到「实测 + 政策」：8_994，余量 90
+（= `headroom_policy(8_994)`）。
 
 ## beidou_data
 
