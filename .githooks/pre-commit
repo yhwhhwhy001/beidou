@@ -72,9 +72,8 @@ if [ "$rc" -ne "$leaks_rc" ]; then
 
 暂存区没有扫完，所以拦下。它既不算「扫描通过」，也不算「有疑似密钥」。
 
-  1. 按上面的原话修。gitleaks 这时一行都没扫。常见的是 `.gitleaks.toml` 不在或
-     写坏了。规则里写了 RE2 不支持的正则也会这样，例如 lookahead `(?=`，
-     gitleaks 会直接 panic。
+  1. 按上面的原话修。常见的有两种，都是一行没扫：`.gitleaks.toml` 不在或写坏了；
+     规则里写了 RE2 不支持的正则，例如 lookahead `(?=`，gitleaks 会直接 panic。
   2. 修好之后重新提交，hook 会重新扫。
   3. `--no-verify` 能绕过这里。可 push 时 pre-push 读的是同一份 `.gitleaks.toml`，
      多半同样扫不完。再往后没有网接得住 Binance 的密钥：GitHub 的 push protection
