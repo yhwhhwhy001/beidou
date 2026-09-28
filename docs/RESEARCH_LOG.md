@@ -19413,7 +19413,7 @@ D 日的文件最后写于 D 日 23:10Z，此后没人再渲染 D。所以那根
 
 ### 三、渲染核对
 
-用 `scratchpad/reports_split_byte_identity.py render`，代码是 `1b8da65c`。其后合入的 #213、#222 只动周报与 `governance reopen`，#225 只改日报里 M-007 两句提示的措辞，都不碰按日取行这条路径。09-11、09-16、09-27 各切三份状态：归档 mtime、00:10:59、01:10:59。只截 JSONL 的行；`state.json` 倒不回去，三份共用今天那份。各渲染一次，比同一天的 JSON。
+用 `scratchpad/reports_split_byte_identity.py render`，代码是 `1b8da65c`。其后合入 main 的 #213、#222、#223、#225 都不碰按日取行这条路径：#213、#222 动周报与 `governance reopen`，#223 改实盘 exit overlay，#225 改日报里 M-007 两句提示的措辞。09-11、09-16、09-27 各切三份状态：归档 mtime、00:10:59、01:10:59。只截 JSONL 的行；`state.json` 倒不回去，三份共用今天那份。各渲染一次，比同一天的 JSON。
 
 归档那份与归档文件逐项相同：周期数、成交数、成交额、归因 P&L、已实现盈亏、手续费、资金费、首末权益、`failed_bars`、`fills_measured`。09-11 的归档早于 `failed_bars` 字段，那一项不比。
 
