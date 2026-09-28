@@ -122,11 +122,19 @@ class ExitOverlay:
         decision stands.  Inside that window the overlay keeps saying flat - `exit_step` reaches its
         COOLDOWN branch and returns 0.0 - so the rebalancer keeps being asked to close.  Past it, a
         position still standing is a fresh holding decision and re-anchoring is the honest reading.
+
+        Only when the overlay does not itself hold that side (WP-C8, operator's ruling 2026-09-28).
+        `exit_step`'s sign-flip branch re-enters without consulting the cooldown, so a model that goes
+        to the other side inside the window and straight back re-opens the cooled side in the backtest.
+        Without ``state.direction != held`` that position read here as an exit that failed to land, and
+        live went flat a bar later: one round trip for nothing, while the backtest held.  An exit that
+        did fail still disagrees with the state - flat after the rule fired, or the other side if the
+        flip away missed too - so D-045's case is caught exactly as before.
         """
         held = 0 if position is None or position.qty == 0.0 else (1 if position.qty > 0 else -1)
         if held == 0:
             return replace(state, direction=0)
-        if bar < state.cooldown_until and held == state.cooldown_direction:
+        if bar < state.cooldown_until and held == state.cooldown_direction and state.direction != held:
             return replace(state, direction=0)
         if state.direction != held or math.isnan(state.entry_price) or math.isnan(state.unit):
             entry = position.entry_price if position is not None and position.entry_price > 0 else close

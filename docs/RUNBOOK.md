@@ -396,6 +396,7 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 ## 排障
 
 - 心跳超时：`beidou live status --check`；看 `~/Library/Application Support/beidou/live.err.log`。
+- **巡检的 status 与 report 两格一起失败，告警末三行是 Python traceback，verify 那格照常 ok**：报告层 import 时坏了。循环不 import 报告层（2026-09-28 起），照常交易；不需要重启，重启也修不好。代价在巡检这边：`live status --check` 在报告层那三个读数处就退出，时钟、两个 digest、心跳与成功率这一小时都没查。循环活没活，看 `beidou live status` 先印出的心跳 JSON，报告层坏了它照样印，报错在它后面。修好报告层并快进主 checkout，下一个 :10 两格自己转绿。
 - 连续 12 个周期失败触发熔断（`beidou_live/engine.py` 的 `breaker_stop`）。告警送达就以 0 退出，launchd **不会**再拉起（`KeepAlive.SuccessfulExit=false`）；恢复是一次重启，按上文「改了 registry / profile 之后」的窗口与纪律做。没有任何通道收下告警时才非零退出，launchd 60s 后拉起。失败之间循环自己按指数退避，上限 1 小时。根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
 - `cycles.jsonl` 每周期一行：`targets`、`orders`（含 `note`：`PARTICIPATION_CAPPED` / `MARGIN_SCALED`）、`exit_events`、`throttle`、`universe_update`、`skipped`。
 - `state.json` 的 `exit_states`（入场价/极值/冷却）、`equity_hwm`、`universe`、`leaving` 在重启后恢复；入场价以交易所为准。

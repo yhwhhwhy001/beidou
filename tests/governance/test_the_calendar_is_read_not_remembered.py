@@ -22,6 +22,7 @@ from click.testing import CliRunner
 
 from beidou_cli import governance_cmd, main
 from beidou_governance.calendar import FREEZE, LAUNCHER, SOURCES, dated_switches
+from beidou_governance.reopen import LIST, MET, NOT_MET, evaluate, load
 from beidou_live.report_governance import dated_switch_block
 from beidou_live.reports import daily_markdown, daily_payload
 from beidou_live.state import StateStore
@@ -31,8 +32,8 @@ ROOT = Path(__file__).resolve().parents[2]
 NOW = datetime(2026, 9, 28, 9, tzinfo=UTC)
 NOVEMBER_1 = datetime(2026, 11, 1, tzinfo=UTC)
 
-#: Shaped like the file's own `date_after` entries: a quoted instant under `args`, which is what
-#: `reopen.evaluate` parses.  The `date:` line is the last one.
+#: Shaped like the file's own `date_after` entries: an instant under `args`, which is what `reopen.evaluate`
+#: parses - quoted and zoned like every real one, unless a test writes another.  The `date:` line is the last.
 ADDED = """  - id: calendar-reads-its-dates
     subject: a condition written after the calendar was
     ruled: 2026-09-28
@@ -40,7 +41,7 @@ ADDED = """  - id: calendar-reads-its-dates
     condition: none
     check: {check}
     args:
-      date: '2026-11-01T00:00:00+00:00'
+      date: {date}
 """
 
 
@@ -51,10 +52,11 @@ def _copy(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _add_a_condition(checkout: Path, check: str = "date_after") -> int:
+def _add_a_condition(checkout: Path, check: str = "date_after", date: str = "'2026-11-01T00:00:00+00:00'") -> int:
     listing = checkout / "governance" / "reopen.yaml"
     text = listing.read_text(encoding="utf-8")
-    listing.write_text(text + ("" if text.endswith("\n") else "\n") + ADDED.format(check=check), encoding="utf-8")
+    added = ADDED.format(check=check, date=date)
+    listing.write_text(text + ("" if text.endswith("\n") else "\n") + added, encoding="utf-8")
     return len(listing.read_text(encoding="utf-8").splitlines())
 
 
@@ -83,6 +85,27 @@ def test_a_date_under_a_check_that_never_reads_it_is_not_a_switch(tmp_path: Path
     checkout = _copy(tmp_path)
     _add_a_condition(checkout, check="operator")
     assert not [row for row in dated_switches(repo=checkout, now=NOW) if row.at == NOVEMBER_1]
+
+
+def test_a_bare_date_flips_its_reader_at_the_midnight_utc_the_calendar_lists(tmp_path: Path) -> None:
+    """`date: 2026-11-01`, no zone.  The calendar always listed it at 00:00Z; the reader crashed on it.
+
+    `fromisoformat` reads a bare date as a naive datetime, `now` is aware, and the subtraction raised
+    TypeError out of `reopen.evaluate` - taking all of `beidou governance reopen` down over one entry.
+    Nobody had written one yet: every date in the real list carries `+00:00`.  Both now read the date
+    through `reopen.instant`, so the reader flips at the instant the calendar lists, and not a microsecond
+    before it.
+    """
+    checkout = _copy(tmp_path)
+    line = _add_a_condition(checkout, date="2026-11-01")  # unquoted, so yaml hands `load` a date, not a str
+    (row,) = [row for row in dated_switches(repo=checkout, now=NOW) if row.source == f"{LIST}:{line}"]
+    assert row.at == NOVEMBER_1
+    (entry,) = [entry for entry in load(checkout / LIST) if entry.id == "calendar-reads-its-dates"]
+    moments = (NOVEMBER_1 - timedelta(microseconds=1), NOVEMBER_1)
+    assert [evaluate(entry, {"now": moment}).state for moment in moments] == [NOT_MET, MET]
+    result = CliRunner().invoke(governance_cmd.reopen_cmd, ["--root", str(checkout)])
+    assert result.exit_code == 0, result.output
+    assert "calendar-reads-its-dates" in result.output
 
 
 @pytest.mark.parametrize("source", sorted({row.source for row in dated_switches(repo=ROOT, now=NOW)}))

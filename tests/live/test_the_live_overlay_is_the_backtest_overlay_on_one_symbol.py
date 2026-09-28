@@ -37,22 +37,20 @@ Out of scope, each for its own reason:
 - A bar with no close.  The halves disagree on purpose, and `beidou_live/staleness.py` tables it.
 - The live loop's bounded history.  Handed the whole history, live computes the backtest's sigma; the
   loop's 1,442-bar window starts its EWMA later, which is a question about data, not about the overlay.
-- Flipping straight back into the side an exit cooled before its cooldown ends (exit a long, go short,
-  go long again inside `cooldown_bars`).  The halves do differ there, found by this test on 2026-09-28:
-  `exit_step`'s sign-flip branch re-enters without consulting the cooldown, and on the next cycle
-  `_reconcile`'s D-045 clause (`held == cooldown_direction` inside the window) reads the position the
-  overlay itself just opened as an exit that failed to land - live emits 0 with COOLDOWN where the
-  backtest keeps holding.  Every side run in the input outlasts the shipped cooldown, and the test
-  asserts that no weight lands on a cooled side inside its window, so the exclusion cannot widen
-  silently.  The difference itself is pinned by the strict xfail at the bottom of this file and
-  recorded in `docs/RESEARCH_LOG.md` under `RESEARCH_LOG_SECTION`; the fix is the operator's call.
+
+Flipping straight back into the side an exit cooled, before its cooldown ends (exit a long, go short, go
+long again inside `cooldown_bars`), is in scope.  This test found the halves differing there on
+2026-09-28: `exit_step`'s sign-flip branch re-enters without consulting the cooldown, and `_reconcile`'s
+D-045 clause read the position the overlay itself had just opened as an exit that failed to land, so
+live went flat a bar later where the backtest held.  The operator ruled the same day to fix the live
+half (`state.direction != held` in that clause, WP-C8); `docs/RESEARCH_LOG.md` has both sections.
+`SCRIPT` now walks through the sequence, and the last test pins its minimal case.
 """
 
 from __future__ import annotations
 
 import math
 from collections import Counter
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -67,17 +65,12 @@ from tests.alpha.test_the_vectorised_exit_engine_is_the_same_machine import PARA
 
 HOUR = 3_600_000
 SYMBOL = "BTCUSDT"
-ROOT = Path(__file__).resolve().parents[2]
-# Where the flip-back difference is recorded.  RESEARCH_LOG sections are cited by title, never by number.
-RESEARCH_LOG_SECTION = (
-    "2026-09-28 · WP-C8：实盘 exit overlay 在 cooldown 内『反向→翻回』会被 D-045 分支当成没成交的退出"
-    "——潜伏、0 次，修法待操作者裁定"
-)
 
 # (bars, decision weight, drift per bar).  The drift legs are what make the shipped thresholds reachable:
 # six daily sigmas is about 29 hourly ones (6 x sqrt(24)), a distance a driftless walk needs on the order
 # of 29^2 ~ 850 bars to cover, not 30.  Every side run lasts at least 30 bars, longer than the shipped
-# 24-bar cooldown (the last scope item in the module docstring).
+# 24-bar cooldown, except the three-bar short after the take-profit: it is there to flip straight back
+# into the cooled long, the sequence WP-C8 fixed (module docstring).
 SCRIPT = [
     (60, 0.0, 0.0),  # warm-up: `daily_vol` has no sigma before 48 returns
     (30, 0.10, 0.0),  # enter long from flat
@@ -89,8 +82,8 @@ SCRIPT = [
     (30, 0.0, 0.0),  # the model goes flat
     (30, 0.20, 0.0),  # enter long
     (30, 0.20, 0.025),  # a rally with it: take-profit, then the cooldown blocks the same side
-    (30, -0.10, 0.0),  # the other side enters at once, inside the long's cooldown
-    (40, 0.10, 0.0),  # flip back to long, past the cooldown
+    (3, -0.10, 0.0),  # the other side enters at once, inside the long's cooldown
+    (67, 0.10, 0.0),  # and flips straight back into the cooled long, still inside it (WP-C8)
     (30, 0.0, 0.0),  # the model closes it
 ]
 
@@ -170,9 +163,13 @@ def test_the_live_overlay_emits_the_backtest_weights_and_exits_bar_for_bar(param
 
     exit_bars = close.index.get_indexer(backtest.events["time"]).tolist()
     emitted = backtest.weights[SYMBOL].to_numpy()
-    for exit_bar, side in zip(exit_bars, backtest.events["direction"], strict=True):
-        cooled = emitted[exit_bar + 1 : exit_bar + params.cooldown_bars]
-        assert not (np.sign(cooled) == side).any(), f"bar {exit_bar}: the input re-entered a cooled side (scope)"
+    if params.cooldown_bars > 0:  # the input must still reach the flip back into a cooled side (WP-C8)
+        reentered = [
+            exit_bar
+            for exit_bar, side in zip(exit_bars, backtest.events["direction"], strict=True)
+            if (np.sign(emitted[exit_bar + 1 : exit_bar + params.cooldown_bars]) == side).any()
+        ]
+        assert reentered, "the input no longer flips back into a cooled side inside its cooldown"
 
     _bit_for_bit(live_weights, backtest.weights[SYMBOL])
     exits = [
@@ -197,29 +194,15 @@ def test_the_live_overlay_emits_the_backtest_weights_and_exits_bar_for_bar(param
     assert set(moves) == {"enter long", "enter short", "add", "reduce", "flip", "close"}, moves
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "live `_reconcile`'s D-045 clause takes a position the overlay re-opened by a sign flip inside the "
-        f"cooldown for an exit that failed to land, and goes flat where the backtest holds: 「{RESEARCH_LOG_SECTION}」"
-    ),
-)
 def test_a_flip_back_into_the_cooled_side_is_held_live_as_it_is_in_the_backtest() -> None:
-    """The excluded sequence, pinned as it behaves today: a strict xfail, so a fix on either side turns it red.
+    """The minimal case of the sequence WP-C8 fixed; a strict xfail until the operator's ruling of 2026-09-28.
 
     Shipped parameters.  Sixty calm bars give sigma a value; then a long is entered at 100, a crash to 70
     stops it at bar 61 (cooldown on the long side until bar 85), the model goes short at 62 and back to
-    long at 63.  Both halves hold the long at 63; from 64 live emits 0 and the backtest keeps holding.
-
-    Only the final comparison may fail as expected, hence ``raises=AssertionError``.  The two checks before
-    it use `pytest.fail`, which is not an AssertionError, so a missing log section or an input that stopped
-    reaching the sequence fails outright instead of being counted as the known difference.  When the
-    operator's fix lands this XPASSes: delete it, drop the exclusion from the test above and add the flip
-    back to `SCRIPT`.  The log section lists the same steps, plus a new section to record the fix.
+    long at 63.  Both halves hold the long at 63; before the fix, live emitted 0 from 64 on while the
+    backtest kept holding.  The check before the comparison keeps the input honest: if it stops reaching
+    the flip back inside the cooldown, this fails as that, not as a pass that tests nothing.
     """
-    if f"## {RESEARCH_LOG_SECTION}\n" not in (ROOT / "docs" / "RESEARCH_LOG.md").read_text(encoding="utf-8"):
-        pytest.fail("the RESEARCH_LOG section this xfail points at is gone")
     params = PARAM_SETS[0]
     closes = [100.0 * (1 + 0.004 * (-1) ** i) for i in range(60)] + [100.0, 70.0, 70.0, 70.0, 70.0, 70.0, 70.0]
     index = pd.date_range("2024-01-01", periods=len(closes), freq="h", tz="UTC")
@@ -233,6 +216,5 @@ def test_a_flip_back_into_the_cooled_side_is_held_live_as_it_is_in_the_backtest(
         close.index.get_indexer(backtest.events["time"][backtest.events["rule"] == STOP_LOSS]).tolist(),
     )
     flips = [tuple(side.iloc[62:64]) for side in (live_weights, backtest.weights[SYMBOL])]
-    if stops != ([61], [61]) or flips != [(-0.1, 0.1)] * 2:
-        pytest.fail(f"the input no longer reaches the flip back inside the cooldown: stops {stops}, flips {flips}")
+    assert stops == ([61], [61]) and flips == [(-0.1, 0.1)] * 2, f"input no longer reaches it: {stops}, {flips}"
     _bit_for_bit(live_weights.iloc[60:], backtest.weights[SYMBOL].iloc[60:])

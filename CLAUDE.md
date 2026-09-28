@@ -220,6 +220,4 @@ clientOrderId 按 bar 派生，先查后下）。要确认循环此刻跑的是�
 
 ## 改 ratchet 要带理由
 
-`CEILING_SECONDS`（`tests/architecture/suite_duration.py`）和 source budget 表（`tests/architecture/test_source_budget.py`）都是 ratchet：**抬顶只允许发生在写明理由的那个 commit 里**，理由写进紧挨着常量的注释，带上测量数据。
-
-不要为了过顶把注释 golf 掉。第九次抬顶的注释记下了原因：a ratchet with no headroom stops being a ratchet and becomes a tax on the first honest change, paid in deleted comments.
+`CEILING_SECONDS` 与 source budget 表都是 ratchet：**抬顶只允许发生在写明理由的那个 commit 里**。source budget 表的理由写进 `docs/SOURCE_BUDGET_LOG.md` 对应包的一节（带日期、增量、测量数据），常量旁只留指向那一节的一行。2026-09-28 之前的理由都在那个文件里，原文逐字。`CEILING_SECONDS`（`tests/architecture/suite_duration.py`）的理由照旧写在紧挨着常量的注释里。不要为了过顶把注释 golf 掉——第九次抬顶的注释记下了原因：a ratchet with no headroom stops being a ratchet and becomes a tax on the first honest change, paid in deleted comments。

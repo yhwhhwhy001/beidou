@@ -38,6 +38,7 @@ def test_the_repo_ships_the_plists_the_deployment_needs() -> None:
         "com.beidou.data.plist",
         "com.beidou.live.plist",
         "com.beidou.paper-l3.plist",
+        "com.beidou.weekly.plist",
     }
 
 
