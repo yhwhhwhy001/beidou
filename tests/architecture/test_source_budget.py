@@ -3485,7 +3485,23 @@ CEILING = {
     # 另证拿掉三个新键、改回 `auto` 逐字节复现 #163 的构造。
     #
     # 留 40 行（15_318 -> 15_358），理由与上面几格逐字相同，不重述。
-    "beidou_live": 15_358,
+    #
+    # 2026-09-28（不编号，同上）。+87 beidou_live，15_318 -> 15_405，抬到 15_445。
+    #
+    # WP-C9（E-PR35）：`beidou_live/config.py` 顶部三张表，登记 shipped profile 每个键的读者。`risk_budget` 块 15 个键里
+    # 有 14 个只有 `report daily` 读；循环的 R8 尺子用 `RiskBudgetParams()` 的默认值，所以改这 14 个键不改循环。
+    # digest 那条测试变异的是 registry，也看不到。表放在装载 profile 的模块里，加键的人第一眼就能看到；
+    # `tests/live/test_every_profile_key_has_a_reader.py` 逐键核读者源码，再核三张表与文件互相覆盖。
+    #
+    # 花在哪（加 87 行、删 0 行）：代码 71 行，全是数据。`PROFILE_KEY_READERS` 50 个键一行一个（52 行），
+    # `REPORT_ONLY_KEYS` 14 个（18 行），`UNREAD_KEYS` 1 行。注释 15 行：E-PR35 为什么要这张表、读者名指什么、
+    # `profile: demo` 为什么没人读。空行 1 行。一行一键，是为了能 grep 到 `portfolio.max_weight` 这样的全名。
+    #
+    # 验收：新测试 15 条绿。手工变异 9 个，全部变红：把读者换成不读它的模块 4 个，把键挪错表 2 个，让日报不读、
+    # 或让循环的装配代码读只供日报的键 3 个。三个 digest 与基线逐字相同。任何键的值与 `LiveConfig` 都没改。
+    #
+    # 留 40 行（15_405 -> 15_445），理由同上，不重述。
+    "beidou_live": 15_445,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
