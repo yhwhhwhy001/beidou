@@ -36,6 +36,7 @@ from beidou_governance.reopen import (
     evaluate,
     load,
     render,
+    short_legs,
     survey,
 )
 
@@ -91,11 +92,22 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     existed, and it is `operator` because "new information" - the loop's own recorded ratios, another
     venue's - is a judgement about where data came from, not a column a machine can count.  `ls-leaf`,
     the selection-signal ruling this hypothesis was split out of, keeps its own entry unchanged.
+
+    2026-09-29 raised it 23 -> 25.  `news-flow` writes down a decision that had never been made, only
+    left undone: news is not a data source (the time of a story cannot be pinned, and nothing reads it).
+    `net-exposure-cap-g11` defers G11 with a condition a machine CAN answer, `short_leg`, because the
+    condition is a shape of the live record and not a judgement.  Its first wording, "any short weight",
+    was met by flow_short's sleeve alone - two bars in, both holding -0.2% to -0.5% on BNBUSDT - so it
+    reads the short leg's share of gross instead.
+
+    The same day raised it 25 -> 26 for `xs-lowvol-g12`: pre-registered in #256, stage 0 passed (correlation
+    with tsmom -0.04), stage 1 refuted on its 4 ledger rows (OOS 0.54 against a gate of 0.98).  `operator`,
+    because its condition is new information, the same judgement `lsr-timing` carries.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 23, (
+    assert len(entries) == 26, (
         f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, EXP-SL1's, "
-        "the two denominators (RISK-G11's and P13's drawdown budget), and lsr-timing"
+        "the two denominators (RISK-G11's and P13's drawdown budget), lsr-timing, news-flow, G11 and xs-lowvol"
     )
 
 
@@ -213,3 +225,38 @@ def test_the_command_runs_and_reopens_nothing() -> None:
 
     assert result.exit_code == 0, result.output
     assert "NEEDS A PERSON" in result.output
+
+
+def test_a_short_leg_on_enough_bars_is_met() -> None:
+    status = evaluate(_entry("short_leg", leg=0.10, share=0.20, bars=4), {"short_legs": [0.0, 0.02, 0.05, 0.30]})
+    assert status.state == MET, status.why
+    assert "1/4" in status.why
+
+
+def test_a_sleeve_s_sliver_of_short_is_not_a_two_sided_book() -> None:
+    """flow_short alone puts a short of about 2% of gross on the book; the line is the leg's share, not its sign."""
+    status = evaluate(_entry("short_leg", leg=0.10, share=0.20, bars=2), {"short_legs": [0.018, 0.018]})
+    assert status.state == NOT_MET, status.why
+
+
+def test_a_window_shorter_than_the_line_is_not_met_however_short_the_book() -> None:
+    status = evaluate(_entry("short_leg", leg=0.10, share=0.20, bars=720), {"short_legs": [0.5] * 24})
+    assert status.state == NOT_MET, status.why
+
+
+def test_no_bar_since_the_construction_began_is_unreadable_rather_than_unmet() -> None:
+    for facts in ({}, {"short_legs": None}, {"short_legs": []}):
+        assert evaluate(_entry("short_leg", leg=0.10, share=0.20, bars=720), facts).state == UNREADABLE
+
+
+def test_short_legs_counts_from_the_construction_and_keeps_the_last_row_of_a_bar() -> None:
+    rows = [
+        {"bar_open_ms": 1, "targets": {"A": -1.0}},  # before the construction: not counted
+        {"bar_open_ms": 2, "targets": {"A": 0.20, "B": -0.05}},  # rewritten below
+        {"bar_open_ms": 2, "targets": {"A": 0.20, "B": 0.0}},
+        {"bar_open_ms": 3, "targets": {"A": 0.30, "B": -0.10}},
+        {"bar_open_ms": 4, "targets": {}},  # flat: no leg, still a bar
+        {"bar_open_ms": 5},  # no targets written: not a bar this can read
+    ]
+    assert short_legs(rows, None) is None
+    assert short_legs(rows, 2) == [0.0, 0.25, 0.0]

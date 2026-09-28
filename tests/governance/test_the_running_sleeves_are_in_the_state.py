@@ -24,10 +24,16 @@ STATE = Path("governance/governance_state.json")
 
 
 def test_the_shipped_state_holds_the_two_sleeves_the_plan_grandfathered() -> None:
-    """KILL-AR-06: tsmom is main and flow is a probe, both from the registry's effective date."""
+    """KILL-AR-06: both running sleeves are IN the state, holding the slots they hold in the world.
+
+    Until 2026-09-29 this also pinned tsmom as main, the seed's value.  That day `governance advance --commit`
+    folded the 2026-09-19 family-gate refusal (10-13 ruling table #8) and tsmom went main -> probe under the
+    operator's 2026-09-23 rule; the loop trades as it did.  What the seed exists for is that neither sleeve
+    reads as headroom, and a demoted main is still a running sleeve holding one of R3's two slots.
+    """
     book = read_state(STATE)
     assert set(book.candidates) >= {"tsmom", "flow"}, "the running sleeves are not in the governance state"
-    assert book.candidates["tsmom"].state is State.MAIN
+    assert book.candidates["tsmom"].state in {State.MAIN, State.PROBE}, "tsmom runs; it cannot read as gone"
     assert book.candidates["flow"].state is State.PROBE
     # flow occupies one of R3's two slots AND the whole 1/3 share; §3 says a second probe therefore
     # has to wait for it to leave or come in at 1/6 with its own book report.
