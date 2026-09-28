@@ -19578,3 +19578,42 @@ seam 那根 bar 还在，判定不变：02-22 14:00 仍是无成交衔接的跳�
 **仍缺。** 01:00:2x 才写的归因行没有补：每天 00:00 那次资金费结算，和 23:00 那根 bar 成交的手续费与已实现盈亏。原节 A 那一格写明了这个缺口。已有的归档不重写。
 
 **生效。** 不用重启循环，循环不调 `report daily`。合入后快进主 checkout，巡检每小时新起的进程就载入新代码。快进之后的第一个 00:10Z 给前一天定稿。此后 D 日的文件最后写于 D+1 日 00:10Z，D+1 日的文件从 01:10Z 起才有。
+
+## 2026-09-28 · 重启 #61：载入 WP-C6 与 WP-C8 修法 A——操作者指示，本会话按 RUNBOOK 纪律执行，构造不变
+
+**谁、为什么。** 操作者在会话 ce8d8edb 里写「5直接重启」，指执行手册 §4 的 O-6。本会话按 CLAUDE.md「重启实盘循环」的三条执行。这次重启有两个目的：
+- 载入 WP-C6（#210，引擎不再 import 报告层）；
+- 载入 WP-C8 修法 A（#223，D-045 条件加 `state.direction != held`）。
+
+同批的 WP-R1 已关闭（见下一节），所以没有载入。
+
+**之前**（只写可观测事实）：
+- 主 checkout 由操作者在终端快进：`git -C ~/beidou merge --ff-only origin/main`，870ec80f -> 7da4f9ad，输出在本会话可见。
+- 14:06:02Z 读心跳：14:00:30Z 那一行 `phase: OK`，处理的是 13:00 那根 bar。旧进程 PID 96836，启动于 2026-09-27T16:35:46Z（重启 #60）。`state.restarts` 为 60。
+- 两条构造测试在主 checkout（7da4f9ad）上 17 passed（14:06:14Z）。
+- `launchctl print` 确认 `com.beidou.live` 管的是 PID 96836，即 `live run … --armed`。另外两个 `live run` 进程没碰：811 是 paper-l3，26020 是 shadow。
+
+**重启。** 14:06:20Z `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，退出码 0。
+
+**之后：**
+- 新进程 PID 35503，启动于 14:06:50Z。`state.restarts` 60 -> 61，`restarted_at` 为 2026-09-28T14:06:50+00:00。
+- 第一行 14:07:09Z `SKIPPED`，原因是「restart outside the rebalance window; this bar was already rebalanced」（late 429.7 s，window 98.9 s）。13:00 那根旧进程已在 14:00:30Z 再平衡过，所以这不是一根丢掉的 bar。
+- 心跳 construction `2ee491c13971`、registry `7f8adb754962` 不变。`live status --check` 退出码 0，registry 与治理规则（`9cc96461276f`）都与运行中的循环一致。
+- 源文件 mtime 与进程启动时刻：`engine.py`、`risk_budget.py` 为 12:21:42Z，`exits.py`、`beidou_cli/live_cmd.py` 为 14:03:15Z，进程 14:06:50Z。循环跑的是含 C6 与 C8 修法 A 的代码。
+
+**顺带核过的三件事：**
+- 用主 checkout 的新代码，在 14:04Z 的状态快照上渲染日报与周报，退出码 0。「未来 7 天日期翻转」「归档专属测试」「数据族 parity」三节都在日报里，4 份周报都有「Plan budget gap」。
+- 在主 checkout 上跑 `pytest -m archive`：11 passed，退出码 0。今晚本机 01:20 的 data job 应报 ok，不会推送（BNX 夹具已由 #227 按归档重切）。
+- 构造不变，所以 M-010 的窗口不受这次重启影响。`live status` 的「连续无故障无重启」按它自己的定义清零，这正是 `docs/MAINNET_READINESS.md` §8 Q-M8 的读法问题。
+
+## 2026-09-28 · 操作者：O-2、O-3 不做——不额外建告警；WP-R1（#228）关闭不合，D-P4 的宿主离线残余风险回到 ACCEPTED
+
+**裁定（原话）。** 「3 和 4 不做，不额外建告警」。
+- 3 指执行手册 §4 的 O-2：补第二告警通道 `BEIDOU_ALERTS_WEBHOOK_URL_2`。
+- 4 指 O-3：在 healthchecks.io 建两个 dead-man check，URL 写进 `~/.zshrc`。
+
+**后果。**
+- **WP-R1（#228）关闭不合。** 它的代码只在两个 URL 存在时才起作用。没有服务，它是死代码；RUNBOOK 那一节还会让人以为有宿主外告警。分支 `live/wp-r1-dead-man-pings` 留在远端，要做时可以重开。PR 描述里有它的设计，包括「URL 只交给 armed 进程，shadow 不 ping」与「巡检的 URL 不上 argv」，还有 24 个变异与 616 个 OK 周期的重放读数。
+- **D-P4 回到 ACCEPTED。** Q3 重开之后，操作者决定不建宿主外告警。宿主离线时告警为 0，这一残余风险回到 09-06 原裁定的 ACCEPTED；M-PR07（宿主离线到操作者知道的最长延迟）仍无上限。
+- **告警仍只有一个通道。** #219 让测试套件够不着 `BEIDOU_ALERTS_*`，这与本裁定无关，照旧保留。
+- **只影响 demo（L-A）。** `docs/MAINNET_READINESS.md` 的 B5（第二通道）与 B6（宿主外告警与远端 kill switch）仍是开 L-B 之前的门：09-05 附录 D 把它们列为真实资金的 P0。这次裁定只针对 demo。
