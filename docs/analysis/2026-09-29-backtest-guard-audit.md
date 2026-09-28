@@ -132,7 +132,7 @@ carry_hedged 的预登记特意把决策放在 00:00 那根 bar，让「执行�
 依据（`cycles.jsonl` 全部 673 个 armed 周期按构造指纹分段，本次统计）：
 
 - 09-04 以来 15 个构造指纹（含几次只活了一个周期的过渡），最长的一个活了 **8.8 天**（`b8f215ab706c`，09-18T17 → 09-27T13），
-  中位 1.0 天；最近 7 天换了 4 个（`b8f215ab` → `4b2dc74b` → `2ee491c1` → `e32f3856`）。
+  中位 1.0 天；最近 7 天换了 3 次、经手 4 个指纹（`b8f215ab` → `4b2dc74b` → `2ee491c1` → `e32f3856`），与日报「Evidence window」的 `construction_changes_last_7d 3` 一致。
 - 日报 09-28：M-010 `INSUFFICIENT_DATA days=0.00`；衰减规则「不早于 2026-11-27」；M-G06「最早可判 2028-03-28」；
   `realised vol not enforced (窗口内有 8 个构造)`。
 - 仓库自己的定位：KILL-006「实盘期就是 holdout」；`beidou_alpha/signals/tsmom.py` docstring「The live arbiter is M-010 income
