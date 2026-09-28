@@ -75,13 +75,19 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
     # `no leaks found`、返回 0（2026-09-28 实测）。此前 stderr 丢进 /dev/null，这看起来和
     # 「扫描通过」一样。现在截下 stderr，出现 `[git]` 就当扫描失败。git 的几句已知提示
     # （rename 上限之类）gitleaks 记成 WRN，不带这个前缀，不会误拦（2026-09-29 实测）。
-    # `--no-color` 让转给推送的人的那几行不带色码。
+    #
+    # `--verbose`（2026-09-29 补）把每处命中打到 stdout：commit、文件、行号、规则。值由
+    # `--redact` 脱敏。stdout 经 fd 3 照旧给终端，下面拦截框里的「上面列出了」指的就是它。
+    # 此前没带这个参数，gitleaks 只在 stderr 报一句 `leaks found`。stderr 又只转 `[git]`
+    # 那几行，被拦时屏幕上只剩拦截框。`--verbose` 不改 stderr，干净的扫描也不多打一行
+    # （2026-09-29 实测）。`--no-color` 让命中清单与转出去的 `[git]` 行都不带色码。
+    #
     # 改这条命令之后要跑上面说的那个测试，别只看推送有没有被拦。
     scan_err="$(gitleaks detect \
             --source "$repo_root" \
             --config "$repo_root/.gitleaks.toml" \
             --log-opts "--diff-merges=separate $range" \
-            --redact --no-banner --no-color 2>&1 >&3)" || failed=1
+            --redact --verbose --no-banner --no-color 2>&1 >&3)" || failed=1
     if git_err="$(printf '%s\n' "$scan_err" | grep -F '[git]')"; then
         printf '%s\n' "$git_err" >&2
         broken=1
@@ -118,6 +124,8 @@ cat >&2 <<'MSG'
 ╔══════════════════════════════════════════════════════════════════════╗
 ║  推送被拦下：将要进入远端的 commit 里有疑似密钥                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
+
+上面列出了命中的 commit、文件与行号（值已脱敏）。
 
 注意这些 commit **已经在本地历史里了**，光改文件不够——那只会再加一个 commit，
 旧的那个照样会被推上去。

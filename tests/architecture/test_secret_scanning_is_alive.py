@@ -274,6 +274,7 @@ class _MergeRepo:
     """一个临时仓库，里面有一个解冲突时写进指定值的 merge 提交。"""
 
     path: Path
+    resolution: str  # 解冲突时写进 merge 提交的值
     remote_tip: str  # 推送前远端 main 的位置，即 merge 之前 main 的 tip
     merge: str  # 那个 merge 提交
     head: str  # merge 之后的提交，把那一行又改掉了
@@ -313,7 +314,7 @@ def _build_merge_repo(path: Path, resolution: str) -> _MergeRepo:
     _git(path, "update-ref", "refs/remotes/origin/main", remote_tip)
     # hook 与 ci.yml 都按仓库根的相对位置找配置。不提交它，扫 git 历史时它不在视野里。
     shutil.copy(CONFIG, path / ".gitleaks.toml")
-    return _MergeRepo(path=path, remote_tip=remote_tip, merge=merge, head=head)
+    return _MergeRepo(path=path, resolution=resolution, remote_tip=remote_tip, merge=merge, head=head)
 
 
 @pytest.fixture(scope="module")
@@ -391,6 +392,9 @@ def test_pre_push_lets_the_same_merge_through_without_a_credential(clean_repo: _
     """
     proc = _run_pre_push(clean_repo, push)
     assert proc.returncode == 0, f"干净的 merge 被 pre-push 拦下了（{push}）：\n{proc.stdout}{proc.stderr[-2000:]}"
+    # hook 的 stdout 只留给命中清单，见文件末尾那组。干净的推送在这里出声，就是每推一次响一次，
+    # 推送的人很快就不再读 hook 的输出了。
+    assert proc.stdout == "", f"干净的推送往 stdout 打了东西（{push}）：\n{proc.stdout[-2000:]}"
 
 
 def _history_scans(script: str) -> list[list[str]]:
@@ -636,4 +640,33 @@ def test_the_local_hooks_never_offer_push_protection_as_a_backstop(name: str) ->
         + "\n\n".join(stale)
         + "\n\n对 Binance 密钥，push protection 不是一层网（见 SECURITY.md 第二节）。"
         "提示里把它说成兜底，读的人就会得出「`--no-verify` 一下没关系」。"
+    )
+
+
+# ---------------------------------------------------------------------------
+# pre-push 被拦时说的话
+# ---------------------------------------------------------------------------
+#
+# 拦截框让推送的人「`git rebase -i` 改掉那个 commit」。2026-09-29 补 `--verbose` 之前，屏幕上
+# 既没有那个 commit，也没有文件。gitleaks 不带 `--verbose` 时只在 stderr 报一句 `leaks found`，
+# 而 hook 截下 stderr 之后只转带 `[git]` 的行。这是上面 pre-commit 那组的同一个缺口。
+
+
+@pytest.mark.parametrize("push", PUSHES)
+def test_pre_push_lists_the_blocked_commit_and_file_redacted(leaky_repo: _MergeRepo, push: str) -> None:
+    """被拦时要列出命中的 commit 与文件，值要脱敏。
+
+    判据只用命中清单里才有的串：merge 提交的 sha 与文件名。「commit」「文件」这类词
+    拦截框里本来就有，拿它们当判据，清单没了照样绿。
+    """
+    proc = _run_pre_push(leaky_repo, push)
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 1, f"假凭据没被 pre-push 拦下（{push}，returncode={proc.returncode}）：\n{shown[-2000:]}"
+    assert leaky_repo.merge in shown and "settings.py" in shown, (
+        f"pre-push 拦下了，屏幕上却没列出命中的 commit 与文件（{push}）。拦截框让人改掉「那个 commit」，\n"
+        "照着做的人不知道是哪个。gitleaks 要带 `--verbose` 才把命中打到 stdout，hook 再经 fd 3 交给终端。\n"
+        f"屏幕上实际是：\n{shown[-2000:]}"
+    )
+    assert leaky_repo.resolution not in shown, (
+        "pre-push 把假凭据的原值打到了屏幕上。检查 hook 里的 `--redact` 还在不在。"
     )
