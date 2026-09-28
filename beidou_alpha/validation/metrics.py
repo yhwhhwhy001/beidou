@@ -133,6 +133,33 @@ def hit_rate(returns: pd.Series | np.ndarray) -> float | None:
     return float(np.mean(active > 0))
 
 
+def payoff_ratio(returns: pd.Series | np.ndarray) -> float | None:
+    """Bar level, on the same bars as ``hit_rate``: the mean winning bar over the mean losing bar's size.
+
+    Not a per-trade payoff: a target-weight book has no trades to count (09-29 checklist, N5).
+    """
+    values = np.asarray(returns, dtype=float)
+    active = values[np.isfinite(values) & (values != 0.0)]
+    wins, losses = active[active > 0], active[active < 0]
+    return None if not wins.size or not losses.size else float(wins.mean() / -losses.mean())
+
+
+def cagr(returns: pd.Series | np.ndarray, bars_per_year: float) -> float | None:
+    """Compound annual growth of a per-bar return series: ``compound`` raised to years^-1."""
+    values = np.asarray(returns, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return None
+    growth = 1.0 + compound(values)
+    return -1.0 if growth <= 0.0 else float(growth ** (bars_per_year / values.size) - 1.0)
+
+
+def calmar(returns: pd.Series | np.ndarray, bars_per_year: float) -> float | None:
+    """``cagr`` over the size of ``max_drawdown`` on the same series; None without a drawdown."""
+    growth, drawdown = cagr(returns, bars_per_year), max_drawdown(returns)
+    return None if growth is None or drawdown == 0.0 else growth / abs(drawdown)
+
+
 def turnover_units(weights: pd.DataFrame | pd.Series) -> float:
     """Sum over time of |w_t - w_{t-1}| (per symbol summed); the legacy 'turnover units'."""
     frame = weights.to_frame() if isinstance(weights, pd.Series) else weights
