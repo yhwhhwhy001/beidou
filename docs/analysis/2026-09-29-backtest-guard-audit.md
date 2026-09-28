@@ -297,8 +297,8 @@ k 或构造的重出。第二遍的五条里，三条要操作者定，下面三
 ### 卡 1：构造变更的预算（第二遍第一条高危）
 
 `e32f3856ac1e` 不变的话，M-010 的第一个完整窗口约在 10-28T17:00Z；衰减规则要两个窗口，最早 11-27。10-03 已经排着两件会
-清零它的事：`probe-stop-caliber` 那天变 DUE，`max_loss` 在构造指纹里（`beidou_live/engine.py:2236`）；flow 复审若退役
-flow，也是构造变更，`strategy_weights` 在指纹里（`:2432`）。
+清零它的事：`probe-stop-caliber` 那天变 DUE，`max_loss` 在构造指纹里（`beidou_live/engine.py:2240`）；flow 复审若退役
+flow，也是构造变更，`strategy_weights` 在指纹里（`:2436`）。
 
 | 选项 | 内容 | 价钱 |
 | --- | --- | --- |
