@@ -594,7 +594,7 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
             ),
             ("Legs (M-008)", (payload.get("legs") or {}).get("pnl") or {"none": 0}),
             (
-                "Effort share (target 90% on alpha)",
+                "Effort share (target 90% on alpha; this week's merges on main)",
                 {
                     "alpha_share": _fmt_pct((payload.get("effort") or {}).get("alpha_share")),
                     "target": _fmt_pct((payload.get("effort") or {}).get("target")),
