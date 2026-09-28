@@ -81,12 +81,29 @@ jobs:
       #   为什么扫全历史而不是只扫这次改动：密钥一旦进了历史，把文件删掉不会让它消失。
       #   只扫工作树的检查会对着一个仍然公开可读的密钥报平安。
       #
+      #   为什么显式写 `--log-opts "--full-history --all --diff-merges=separate"`（2026-09-28 加）：
+      #   gitleaks 的 git 模式跑的是 `git log -p -U0`，不传 `--log-opts` 时它自己补上
+      #   `--full-history --all`。而 `git log -p` 默认**不给 merge 提交出 diff**：解冲突时写进
+      #   merge 提交的东西，这道门此前一直看不见。上面 09-19 那次「零泄漏」也不含 merge 的 diff。
+      #   在 GitHub 网页上解冲突时本机一个 hook 都不跑，这里是唯一看得见它的一层。
+      #   传了 `--log-opts` 就整个替换掉那两个默认值，所以要写回来。
+      #   不用 `-m`：它的格式听 git 配置 `log.diffMerges` 的，设成合并格式时照样静默漏扫。
+      #   代价是量过的。同日本机对 `--remotes=origin` 的读数：1,875 → 2,311 个 commit，
+      #   76.9 → 159.4 MB，约 7 → 10 秒，仍然零泄漏。多出来的是 436 个 merge 对每个 parent 的 diff。
+      #   这一行拼坏了不会红：git 报 fatal 时 gitleaks 记一条 ERR，照样返回 0。守它的是
+      #   `tests/architecture/test_secret_scanning_is_alive.py`，那里原样执行这一行。
+      #
       #   为什么钉版本而不用 `gitleaks/gitleaks-action@v2`：与「依赖按 requirements.lock
       #   安装、不每次重新解析」同一条理由。扫描规则集会随版本变，一次规则更新让这道门
       #   在没人改过代码的情况下变红或者变哑，都不是这里想要的。升级版本是一次显式提交，
       #   升级时要重跑 `.gitleaks.toml` 的自检（见 deploy/install-hooks.sh 末尾那段）。
       #
       #   这道门与其它四道一样带 `if: !cancelled()`，红了不遮挡后面的步骤。
+      #
+      #   扫描之前先把这个 gitleaks 放进 PATH（2026-09-28 加）。后面 Tests 那一步里的
+      #   `test_secret_scanning_is_alive.py` 找不到 gitleaks 就整个跳过，此前在 CI 上一条都没跑过。
+      #   放进 PATH 之后，那组测试拿的正是这道门钉住的版本。放在扫描之前，是为了扫描红了
+      #   也不连累那组测试跳过。
       - name: Secrets（全历史扫描）
         if: ${{ !cancelled() }}
         env:
@@ -95,8 +112,10 @@ jobs:
           curl -sSfL -o /tmp/gitleaks.tar.gz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin" && cp /tmp/gitleaks "$RUNNER_TEMP/gitleaks-bin/"
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
           /tmp/gitleaks version
-          /tmp/gitleaks detect --source . --config .gitleaks.toml --redact --no-banner
+          /tmp/gitleaks detect --source . --config .gitleaks.toml --log-opts "--full-history --all --diff-merges=separate" --redact --no-banner
 
       - uses: actions/setup-python@v7
         with:
