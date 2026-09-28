@@ -228,8 +228,7 @@ Sharpe 与 base 完全相同。读数只报不判、不计 ledger（`beidou_cli/
 
 编号 N1–N10。价钱按仓库惯例写：代码量级、ledger 笔数、动不动构造、何时生效。另加一列 effort 分桶：
 `report weekly` 把 `beidou_alpha/` 与 `tests/alpha/` 记作 alpha，`docs/RESEARCH_LOG` 与 `docs/analysis/`
-记作 research，其余全是 infrastructure（`beidou_live/report_governance.py:73-84`）。09-27 那周的读数是
-**14.1%**（alpha 0、research 301、infrastructure 1,827 行；`reports/weekly/2026-09-27.json`），目标 90%。
+X**14.1%**（alpha 0、research 301、infrastructure 1,827 行；`reports/weekly/2026-09-27.json`），目标 90%。
 所以每一项 infrastructure 的行数都要说清买到什么。
 
 | # | 缺口 | 现状与证据 | 做法 | 价钱 |
@@ -303,7 +302,7 @@ N2 与 N3 有一条共同的边界：它们只读已经计过费的格子，不�
 - **09-28 六条裁定**里与本文相关的：O-2、O-3 不建告警，所以 N8 即使做也只印不响；「alpha 先剖析」已跑，
   计算不是研究吞吐的瓶颈，本文没有性能项。
 - **在途**：`ps` 显示 armed 进程于 09-28T16:29:33Z 启动，晚于 #237 合入（16:28:31Z）；RESEARCH_LOG 里最后一节
-  重启是 #61。对应的重启记录在分支 `docs/restart-62-usdt-gross-cap` 上，尚未合入。本文不替它写。
+  重启是 #61。对应的重启记录有两份在途：#243（`docs/restart-62-record`）与 #244（`docs/restart-62-usdt-gross-cap`），两个会话各写了一份，尚未合入。本文不替它写，也不裁哪份对。
 
 ## 顺带发现，未修
 
