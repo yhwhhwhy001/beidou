@@ -31,7 +31,7 @@ from beidou_alpha.registry import evidence_construction_digest
 from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_governance.policy import Policy, policy_digest
-from beidou_live import soak
+from beidou_live import deadman, soak
 from beidou_live.account_shape import margin_mode_problems
 from beidou_live.alerts import WebhookAlerts
 from beidou_live.attribution import attribute, external_flows, summarize_income
@@ -233,6 +233,7 @@ class LiveEngine:
         metrics_store: Any = None,
         spot_verification: Verification | None = None,
         record_metrics: bool = True,
+        deadman_url: str = "",
         dropped_after: int | None = None,
         order_concurrency: int = 1,
         state: LiveState | None = None,
@@ -254,6 +255,9 @@ class LiveEngine:
         # writing, and rows a paper process added would make M-011 compare the live decision
         # against data no live decision was made on.
         self.record_metrics = record_metrics
+        # WP-R1: pinged after each cycle that gets through execution.  Empty - the default, and what
+        # every caller but the armed `live run` passes - pings nothing; `deadman` says why.
+        self.deadman_url = deadman_url
         self.pool = pool
         self.universe_sink = universe_sink
         # DL-G9: the construction's INPUTS, written once per process into the append-only record.
@@ -991,6 +995,11 @@ class LiveEngine:
         reports = await self._execute_orders(orders, record, bar_open_ms=bar_open_ms, decision_closes=decision_closes)
         record["quarantined"] = await self._quarantine(reports)
         record["summary"] = _summarize(reports, orders if config.dry_run else [])
+        if self.deadman_url:
+            # After the orders are out: a ping may take its whole timeout, the rebalance window is about
+            # 90 s.  Not in `_finish_cycle`, which a guard-skipped cycle also reaches: nothing traded or
+            # exited there, so it is not the OK the service is being told about.
+            record["deadman"] = await deadman.ping(self.deadman_url)
         self._finish_cycle(record, targets.contributions, getattr(targets, "book_weights", None), latest_closes(usable))
         return record
 

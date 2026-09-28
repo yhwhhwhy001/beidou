@@ -3569,7 +3569,27 @@ CEILING = {
     # 不够；long/short 290（本列有值 205）/ 1,442，不够；spot 0，实盘循环没有 spot 源。
     #
     # 留 37 行（15_662 -> 15_699），理由同上，不重述。
-    "beidou_live": 15_699,
+    #
+    # 2026-09-28（不编号，同上）。+63 beidou_live，15_662 -> 15_725，抬到 15_762。
+    #
+    # 执行手册 §3.10（WP-R1，D-P4 重开的第一半）：宿主外告警。此前每一条告警都从跑循环的那台机器发出，宿主合盖、
+    # 断网、断电时推送数是 0（E-PR20/37）。现在 armed 循环在每个走完执行的周期之后 ping 一次 healthchecks.io，
+    # ping 断了由服务端推送，结果写进 `cycles.jsonl` 那一行的 `deadman`。ping 在下单与退出检查之后，吞掉一切异常，
+    # 总时长由外层 `asyncio.timeout` 封顶。URL 从环境读，不进 `LiveConfig`。`live_cmd` 只把它交给交易账户的那个
+    # 进程（beidou_cli +4，落在余量里）：shadow soak 读同一份 `~/.zshrc`，它的 ping 会在 armed 循环死后让 check 保持绿。
+    #
+    # 花在哪（加 64 行、删 1 行）：`deadman.py`（新）53 行——代码 19；docstring 25，其中模块 18 行写为什么要宿主外、
+    # 为什么不能拖累周期、为什么 URL 是令牌且只交给 armed 进程，`ping` 6 行写为什么要外层超时、为什么只接
+    # `Exception`；空行 9。`engine.py` 净 +9：代码 4（构造参数、属性、ping 两行），注释 5（为什么在执行之后、为什么
+    # 不放进 `_finish_cycle`：护栏跳过的周期也会走到那里）。`cycle_record.KEYS` 登记 `deadman` 1 行。
+    #
+    # 验收：新测试 22 条绿。24 个变异（去掉外层超时、只接 httpx 异常、把 ping 挪到下单前 / `_quarantine` 前 / 写行之后 /
+    # 跳过路径上、shadow 留着 URL、巡检只在全过时 ping、URL 上 curl 的 argv、`set -e`、规则丢一种形态、全局 allowlist
+    # 放行、lookahead 等）逐个让至少一条变红。三个 digest 与基线逐字相同。按 09-03 至 09-28 的 616 个 OK 周期重放，
+    # 相邻最大间隔 120.2 分钟，没有一次超过 135，这组阈值 25 天推送 0 次。
+    #
+    # 留 37 行（15_725 -> 15_762）：只抬本 PR 的增量。理由同上，不重述。
+    "beidou_live": 15_762,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

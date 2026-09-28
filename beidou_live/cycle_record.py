@@ -79,6 +79,7 @@ KEYS: dict[str, str] = {
     "guard_reasons": "which guards fired",
     "skip": "whether the guards stopped the cycle before planning",
     "dry_run": "whether the venue was written to at all",
+    "deadman": "WP-R1: whether the off-host dead-man took this cycle's ping; absent when no URL was given",
     "external_flows": "D-021: TRANSFER rows that reset the day and the high-water mark",
     # --- identity of the configuration ---------------------------------------------------------
     "construction": "D-026: digest of the construction this cycle ran",

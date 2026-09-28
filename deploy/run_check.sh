@@ -184,4 +184,15 @@ if [ -f "$REPO/.beidou/paper-l3/cycles.jsonl" ]; then
     echo "[$(stamp)] soak not yet passing:"; echo "$output" | sed "s/^/           /"
   fi
 fi
+# 宿主外 dead-man（WP-R1，D-P4 重开，2026-09-28）。宿主一停，上面每一行连同 notify 都跟着停，所以要由宿主外的
+# 服务在 ping 断掉时推送。它证明的是「巡检还活着」，不是「检查都过了」：检查结果照旧走 notify 与退出码，
+# 而这个任务常带着 FAIL 跑（2026-09-28 每小时都有一条 report FAIL）。所以无论 $failed 都 ping，位置在 exit
+# 之前、不在任何 $failed 分支里（tests/live/test_the_check_job_pings_regardless_of_its_result.py 按文本与
+# /bin/bash 桩测两头钉住）。
+# URL 是能压住告警的令牌，与 notify 的 webhook 同一个理由不上 argv：`ps` 读得到 argv。printf 是 builtin，
+# URL 经管道进 curl 的 `--config -`。curl 的报错只带主机、不带路径（curl 8.7.1 实测 404、503、拒连、DNS 四种）。
+if [ -n "${BEIDOU_DEADMAN_CHECK_URL:-}" ]; then
+  printf 'url = "%s"\n' "$BEIDOU_DEADMAN_CHECK_URL" | curl -fsS -m 10 --retry 2 --config - >/dev/null \
+    || echo "[$(stamp)] dead-man ping failed"
+fi
 exit "$failed"

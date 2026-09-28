@@ -68,6 +68,26 @@ description = "锁文件里的 wheel 摘要与 base64 编码块不是凭据"
 paths = ['''.*\.lock$''']
 
 # ---------------------------------------------------------------------------
+# 自定义规则：healthchecks.io 的 ping URL（WP-R1，2026-09-28）
+#
+# dead-man 的 ping URL 是一枚能压住告警的令牌：谁拿到它，谁就能替循环 ping，宿主外的告警就永远不响。
+# 它与凭据同级，只放在 `~/.zshrc` 的 `export BEIDOU_DEADMAN_*` 行里。URL 本身就是令牌，形态有两种：
+#   https://hc-ping.com/<uuid>              check 自己的 UUID
+#   https://hc-ping.com/<ping-key>/<slug>   项目级 ping key（22 位 url-safe base64）加 check 的 slug
+# 泄漏最可能的样子是整条 URL 贴进注释或报告，没有 `key =` 之类的上下文，所以这条和 Binance 那条一样只看形态。
+#
+# 两个静默坑。一，RE2 不支持 lookahead，写了是 panic 不是报错（见上面 Binance 那条）；下面只用分组与字符类。
+# 二，全局 allowlist 的 regex 对的是 secret 本身，而这条规则的 secret 就是整条 URL，那里多一条没锚定的
+# regex 就可能把它放行掉。所以本条规则不设自己的 allowlist，也不设 entropy（UUID 本来就是随机串，entropy
+# 只会让伪造值漏过金丝雀）。金丝雀在 `tests/architecture/test_secret_scanning_is_alive.py`：每次现造两种
+# 形态，断言命中的是本条规则的 ID，而不只是「有命中」。
+[[rules]]
+id = "beidou-healthchecks-ping-url"
+description = "healthchecks.io 的 ping URL（dead-man 令牌）"
+regex = '''https?://hc-ping\.com/(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[A-Za-z0-9_-]{16,}/[A-Za-z0-9_-]+)'''
+keywords = ["hc-ping.com"]
+
+# ---------------------------------------------------------------------------
 # 全局 allowlist：逐条对应 2026-09-19 那 117 处误报
 # ---------------------------------------------------------------------------
 [allowlist]

@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import json
 import random
+import secrets
 import shutil
 import string
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -58,6 +60,17 @@ def _forged_binance_credential() -> str:
     forged = "".join(chars)
     assert len(forged) == 64
     return forged
+
+
+def _forged_dead_man_url(shape: str) -> str:
+    """造一条 healthchecks.io 的 ping URL（WP-R1）：check 的 UUID，或项目 ping key 加 slug。
+
+    与上面那个一样当场随机生成、不落在仓库里，理由也一样：写死的值会被将来某次 allowlist 按值放行掉。
+    slug 用本仓库 check 的真名，于是将来有人按 `beidou-` 前缀放行时，这里也会红。
+    """
+    if shape == "uuid":
+        return f"https://hc-ping.com/{uuid.uuid4()}"
+    return f"https://hc-ping.com/{secrets.token_urlsafe(16)}/beidou-live"
 
 
 def _scan(contents: dict[str, str]) -> list[dict]:
@@ -134,6 +147,28 @@ def test_a_credential_with_no_assignment_context_is_caught() -> None:
     )
 
 
+@pytest.mark.parametrize("shape", ["uuid", "slug"])
+def test_a_forged_dead_man_url_is_caught_by_its_own_rule(shape: str) -> None:
+    """dead-man 的 ping URL 是一枚能压住告警的令牌（WP-R1），两种形态、有没有赋值上下文都要抓到。
+
+    断言的是规则 ID，不只是「有命中」：`export` 那一行将来也许被别的规则顺手抓到，那样
+    `beidou-healthchecks-ping-url` 坏了这里照样绿。2026-09-28 实测，加这条规则之前的配置对这两个
+    文件是零命中。零命中既可能是干净，也可能是扫描坏了，所以金丝雀必须真的命中。
+    """
+    url = _forged_dead_man_url(shape)
+    findings = _scan(
+        {
+            "zshrc.txt": f"export BEIDOU_DEADMAN_LOOP_URL={url}\n",
+            "note.md": f"巡检那条 check 的地址是 {url} ，先别动。\n",
+        }
+    )
+    caught = {Path(finding["File"]).name for finding in findings if finding["RuleID"] == "beidou-healthchecks-ping-url"}
+    assert caught == {"zshrc.txt", "note.md"}, (
+        f"伪造的 dead-man URL（{shape} 形态）没有被本条规则拦下：{findings}\n"
+        "检查 `.gitleaks.toml` 的 `beidou-healthchecks-ping-url` 是不是被删掉、改窄，或被全局 allowlist 放行了。"
+    )
+
+
 @pytest.mark.parametrize(
     ("name", "text"),
     [
@@ -142,6 +177,8 @@ def test_a_credential_with_no_assignment_context_is_caught() -> None:
         ("digest.json", '{"api.py": "4c4148b58b39095d1a004b3e9af4c3715b7448765850d7140572b6805f9bb735"}\n'),
         ("trials.jsonl", '{"param_key": "207ad3fb54979ace", "trial": 1}\n'),
         ("objectid.txt", "9ca85c6900000000000000000000000000000000\n"),
+        # WP-R1：RUNBOOK 与规则注释里写的是占位形态，它们也必须是零。
+        ("runbook.md", "形态：`https://hc-ping.com/<uuid>` 或 `https://hc-ping.com/<ping-key>/<slug>`\n"),
     ],
 )
 def test_repository_hash_shapes_do_not_false_positive(name: str, text: str) -> None:

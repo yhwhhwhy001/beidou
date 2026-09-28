@@ -235,6 +235,78 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 2. 不要为了变绿去改夹具或归档。这条测试说的是「归档在夹具之后变了」，先判断哪一边对。
 3. 在主 checkout 上复现：`.venv/bin/python -m pytest -m archive -rfEs`，约 4 秒。
 
+## 宿主外告警（D-P4 重开，2026-09-28）
+
+操作者 2026-09-28 裁定 Q3：重开 09-06 的 D-P4。此前每一条告警都从跑循环的这台机器发出。宿主合盖、断网、断电时，
+巡检与 webhook 跟着一起停，推送数是 0（E-PR20/37）。现在由宿主外的 dead-man 服务（healthchecks.io）在 ping
+断掉时推送。两个 check 由操作者在服务端建。ping URL（形如 `https://hc-ping.com/<uuid>`）写进 `~/.zshrc` 的
+`export BEIDOU_*` 行，与凭据同一处，**不新建 `env.sh`**。
+
+| check | 周期 / grace | 谁来 ping | ping 说明什么 | 服务端何时推送 |
+| --- | --- | --- | --- | --- |
+| `beidou-live` | 60 / 75 分钟 | armed 循环，读 `BEIDOU_DEADMAN_LOOP_URL` | 这根 bar 走完了执行：下单与退出检查之后 | 距上一次 ping 超过 135 分钟，即连续两根 bar 没走完 |
+| `beidou-check` | 60 / 20 分钟 | 每小时 :10 的巡检，读 `BEIDOU_DEADMAN_CHECK_URL` | 巡检跑到了最后一行，不论检查过没过 | 距上一次 ping 超过 80 分钟，即错过一次 :10 |
+
+- 循环只在 OK 周期 ping。ERROR 周期不 ping；护栏因行情陈旧跳过的周期也不 ping，那一根什么都没交易、没查退出。
+  结果写进 `cycles.jsonl` 那一行的 `deadman`（`true` / `false`），没有 URL 时这一键不存在。
+- URL 只交给 armed 循环。shadow soak 的 launcher 读同一份 `~/.zshrc`，但 `live run` 不把 URL 交给 `--dry-run`、
+  `--paper` 的进程：否则 armed 循环死了，shadow 每小时一次的 ping 会让 `beidou-live` 一直绿着。
+- 巡检无论 `$failed` 都 ping。检查结果照旧走 webhook 与退出码，这个 ping 只证明巡检还活着。
+- ping 失败不影响周期，也不影响巡检：循环那一行写 `deadman: false`，巡检日志记一行 `dead-man ping failed`。
+  单次失败不推送，grace 会吸收它。
+- URL 是能压住告警的令牌：谁拿到它，谁就能替循环 ping。所以不进仓库（`.gitleaks.toml` 的
+  `beidou-healthchecks-ping-url` 会拦），不进日志，不上任何命令行。
+
+**按实盘记录重放这组阈值。** 09-03 至 09-28 共 616 个 OK 周期，相邻两个 OK 的最大间隔 120.2 分钟。约 120 分钟的
+有 11 次，每次都是中间一根 bar 失败，或因重启落在再平衡窗口之外而错过。没有一次超过 135 分钟，即 `beidou-live`
+这 25 天会推送 0 次。巡检日志里 586 次运行，间隔超过 80 分钟的有 1 次：巡检上线第一天（09-04），11:10 那次没跑。
+
+**生效。** 巡检侧：主 checkout 快进之后的下一个 :10。循环侧：下一次按纪律的重启，与 WP-C6 同一次。
+`deploy/run_live.sh` 只在启动时读 `~/.zshrc`，所以 URL 写进去之后也要等这次重启。两侧都生效后到服务端核一次：
+`beidou-live` 的最后一次 ping 在整点后约 30 秒，`beidou-check` 的在 :10 之后十几秒。反过来就是两个变量填反了。
+巡检日志每小时一行 `dead-man ping failed`：巡检用 curl 发 ping，launchd 的环境里没有代理变量，走的不是循环
+那条显式代理。先查这条路到不到得了 hc-ping.com。
+
+**维护前先在服务端暂停。**
+
+- 循环：按纪律的重启（整点后 5–50 分钟，秒级回来）一根 bar 都不错过，不用暂停。要让循环连续错过两根 bar 的
+  停机，先暂停 `beidou-live`。
+- 巡检：`com.beidou.check` 停着时只要跨过一个 :10，就要先暂停 `beidou-check`。
+- 恢复之后到服务端看一眼，check 要回到 up，不能还停在 paused。
+
+**演练（操作者做）。** 两个 check 各一次，读数记进 `docs/RESEARCH_LOG.md`。验收 AC-PR1a：宿主外推送在 2 个整点
++ 15 分钟内到达。
+
+循环：
+
+1. 挑时间：整点后 5–50 分钟，与重启同一个窗口；先跑两个构造测试（CLAUDE.md「重启实盘循环」）。演练期间持仓
+   没有退出检查，挑一个愿意承担两根 bar 的时刻。
+2. `launchctl bootout gui/$(id -u)/com.beidou.live`，记下时刻。
+3. 计时。最后一次 ping 在 bootout 前那个整点后约 30 秒，所以推送应在那个整点之后 2 小时 15 分钟左右到达。
+4. 收到推送后 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.live.plist`。
+5. 下一个 OK 周期之后，服务端应推送恢复，`cycles.jsonl` 的最后一行带 `deadman: true`。
+6. 按重启纪律把谁、为什么记进 RESEARCH_LOG。
+
+巡检：`launchctl bootout gui/$(id -u)/com.beidou.check`。上一次 ping 在 bootout 前那个 :10，所以 `beidou-check`
+应在下一个整点的 :30 前后推送，而 `beidou-live` 保持 up。然后
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.check.plist`，下一个 :10 之后应推送恢复。
+
+**两条 falsifier。** 出现任一条，说明阈值或接线错了。先查，不要直接放宽：
+
+1. 循环活着、某个周期只是迟到不到 15 分钟，不得触发 `beidou-live`。一个周期迟到或失败，间隔最多约 120 分钟，
+   离 135 还有 15 分钟。若 `beidou-live` 推送了，而 `cycles.jsonl` 每小时都有带 `deadman: true` 的 OK 行，
+   就是服务端的周期或 grace 配错了。
+2. 巡检死、循环活，只触发 `beidou-check`。巡检演练时推送的是 `beidou-live`，就是两个变量填反了。
+
+上线后 30 天，不是真停机的推送不超过 2 次（AC-PR1b），超了回来看这两个阈值。
+
+**收到推送怎么办。**
+
+- `beidou-live`：先确认宿主在不在。在：跑 `beidou live status`，看 `live.stderr.log` 与 `cycles.jsonl` 最后几行，
+  连续失败按下面「排障」一节处理。不在：持仓此刻没有退出检查，止盈止损从不在交易所挂单。回得到宿主就
+  `beidou live flatten --yes`，回不去就在交易所界面手动处理。宿主外的自动平仓是 WP-R2，还没做。
+- `beidou-check`：巡检停了，循环可能还活着。看 `launchctl list | grep com.beidou` 与 `check.stdout.log` 最后几行。
+
 ## D-041 bridge 到期（2026-10-13）
 
 **切换之后（2026-09-27 的切换 PR，分支 `live/k0175-switch-after-1013`）**：k 改为 0.175，tsmom 指向 k = 0.175 上的

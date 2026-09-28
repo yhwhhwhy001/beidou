@@ -14,7 +14,10 @@ one.  Both refuse to run armed, for reasons that are different and both load-bea
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+import pytest
+import yaml
 from click.testing import CliRunner
 
 from beidou_cli import main
@@ -116,6 +119,49 @@ def test_the_shared_records_are_written_by_the_account_process_and_only_it() -> 
         assert trades_the_account(**{**live, flag: True}) is False
     assert trades_the_account(**{**live, "state_dir": "/tmp/canary"}) is False
     assert trades_the_account(**{**live, "registry_override": "candidate.yaml"}) is False
+
+
+def test_a_shadow_does_not_tell_the_dead_man_the_armed_loop_is_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The third shared thing, and the one whose failure is silence (WP-R1, 2026-09-28).
+
+    The service pages when the ARMED loop's pings stop.  The shadow soak's launcher evals the same
+    `~/.zshrc` exports as the armed one, so it holds the same URL, and its OK cycles would ping on the
+    hour - keeping the check green after the armed loop had died, the one outage the service exists to
+    report.  So `live run` hands the URL to the process trading the account and to no other.  Run here
+    as `--paper`, the mode this suite can start without credentials; `trades_the_account` treats
+    `--dry-run`, `--state-dir` and `--registry` the same way (asserted above).
+    """
+    import beidou_cli.live_cmd as live_cmd
+    from beidou_live import deadman
+    from beidou_live.engine import LiveEngine
+    from tests.live.fakes import UNREACHABLE, paper_venue_from
+
+    handed: dict[str, Any] = {}
+
+    class Recorded(LiveEngine):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            handed.update(kwargs)
+            super().__init__(*args, **kwargs)
+
+    root = Path(__file__).resolve().parents[2]
+    profile = yaml.safe_load((root / "config" / "live.demo.yaml").read_text(encoding="utf-8"))
+    profile["market_data"]["rest_url"] = UNREACHABLE
+    profile["paths"] = {"state_dir": str(tmp_path / "live"), "reports_dir": str(tmp_path / "reports")}
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text(yaml.safe_dump(profile), encoding="utf-8")
+    monkeypatch.setattr(live_cmd, "_paper_venue", paper_venue_from())
+    monkeypatch.setattr(live_cmd, "LiveEngine", Recorded)
+    monkeypatch.setenv(deadman.LOOP_URL_ENV, "http://127.0.0.1:9/ping/beidou-live")
+    assert deadman.loop_url(), "precondition: the URL is exported to this process, as `run_shadow.sh` exports it"
+
+    result = CliRunner().invoke(
+        main, ["live", "run", "--profile", str(profile_path), "--paper", "--cycles", "0", "--symbols", "BTCUSDT"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert handed["deadman_url"] == "", "a process that does not trade the account was handed the dead-man URL"
 
 
 def test_the_candidate_does_not_lie_about_what_it_is() -> None:

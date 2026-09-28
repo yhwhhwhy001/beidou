@@ -139,6 +139,7 @@ async def test_every_declared_key_is_reachable_from_some_cycle(world: dict[str, 
         "external_flows": "only when the venue reported a TRANSFER row",
         "governance": "only while Policy.record_digest_every_cycle is on",
         "registry": "written from the process's held digest, which this engine has not built",
+        "deadman": "only when the engine was handed a dead-man URL; test_the_loop_pings_only_after_an_ok_cycle writes it",
     }
     missing = set(KEYS) - seen - set(conditional)
     assert not missing, f"cycle_record.KEYS declares {sorted(missing)}, which no cycle writes"

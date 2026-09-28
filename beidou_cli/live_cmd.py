@@ -46,6 +46,7 @@ from beidou_live.config import (
     resolve_universe,
     universe_sink,
 )
+from beidou_live.deadman import loop_url
 from beidou_live.engine import (
     BreakerTripped,
     LiveEngine,
@@ -341,8 +342,10 @@ def live_run(
         state_path=ALERT_DEDUP_STATE,
     )
     pool = build_pool(payload, market)
+    deadman_url = loop_url()  # WP-R1: only the process trading the account pings; `deadman` says why
     if not trades_the_account(dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override):
         pool = None
+        deadman_url = ""
     engine = LiveEngine(
         config,
         model=model,
@@ -366,6 +369,7 @@ def live_run(
         record_metrics=trades_the_account(
             dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override
         ),
+        deadman_url=deadman_url,
     )
     leverage = config.leverage_mode if config.leverage_mode != "fixed" else str(config.leverage)
     click.echo(
