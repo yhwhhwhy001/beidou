@@ -18,6 +18,7 @@ import json
 import os
 import plistlib
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ import yaml
 from click.testing import CliRunner
 
 from beidou_cli import main
-from beidou_cli.live_cmd import _source_lines_days_before_head
+from beidou_cli.live_cmd import _changed_lines, _source_lines_days_before_head
 from beidou_live.alerts import WebhookAlerts
 from beidou_shared.config import load_yaml
 
@@ -102,6 +103,44 @@ def test_last_weeks_tree_is_the_one_main_held_seven_days_before_head(
     # beidou_shared did not exist on 09-17, and `git archive` refuses a missing path: it has to read as 0.
     assert _source_lines_days_before_head(7) == TEN_DAYS_BEFORE
     assert _source_lines_days_before_head(1) == {**AT_HEAD, "beidou_cli": 1}, "the merge's tree, side included"
+
+
+def _week_ending(day: str) -> tuple[datetime, datetime]:
+    """The weekly's window: seven days ending at the end of ``day`` (UTC), as `weekly_payload` draws it."""
+    end = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)
+    return end - timedelta(days=7), end
+
+
+def test_the_effort_share_counts_what_merged_on_main_in_the_week(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operator 2026-09-29: a week's effort, not the last 40 commits.  A PR counts once, in the week it merged.
+
+    The side branch is written on 09-19 and merged on 09-25.  The week ending 09-26 sees it through the
+    merge's diff against main (beidou_live 3 -> 13 lines: +10) beside 09-24's beidou_shared; HEAD's 09-27
+    commit sits exactly on the window's end and is out.  The week ending 09-20 sees only 09-17's commit:
+    walking every commit by date would have counted the side branch there too, a week before main had it.
+    """
+    monkeypatch.chdir(_repository(tmp_path))
+    assert _changed_lines(*_week_ending("2020-09-26")) == {"beidou_shared/module.py": 2, "beidou_live/module.py": 10}
+    first_week = _changed_lines(*_week_ending("2020-09-20"))
+    assert first_week == {f"{package}/module.py": count for package, count in TEN_DAYS_BEFORE.items() if count}
+
+
+def test_a_users_diff_merges_setting_does_not_change_the_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The count is a property of the history, not of the operator's git config: ``log.diffMerges=cc`` changes nothing.
+
+    With git 2.54 ``--first-parent`` alone already yields first-parent diffs (a mutation dropping the explicit
+    ``--diff-merges`` stays green), so this pins the property, not the flag.
+    """
+    monkeypatch.chdir(_repository(tmp_path))
+    for key, value in {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "log.diffMerges",
+        "GIT_CONFIG_VALUE_0": "cc",
+    }.items():
+        monkeypatch.setenv(key, value)
+    assert _changed_lines(*_week_ending("2020-09-26")) == {"beidou_shared/module.py": 2, "beidou_live/module.py": 10}
 
 
 def _profile(root: Path) -> str:

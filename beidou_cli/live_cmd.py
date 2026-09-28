@@ -23,7 +23,7 @@ import tempfile
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -924,11 +924,28 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         raise SystemExit(1)
 
 
-def _changed_lines(commits: int) -> dict[str, int] | None:
-    """Lines added plus removed per path over the last N commits, or None outside a git checkout."""
+def _changed_lines(since: datetime, until: datetime) -> dict[str, int] | None:
+    """Lines added plus removed per path over what landed on main in [since, until); None outside a git checkout.
+
+    The weekly's own window, not the last N commits (operator, 2026-09-29): M-PR01 asks for the effort share
+    of a whole week.  Counted on HEAD's first-parent chain with each merge diffed against its first parent,
+    so a PR counts once, in the week it merged, whatever dates its branch commits carry, and "merge main
+    into the branch" commits are never walked.  ``--first-parent`` has implied ``--diff-merges=first-parent``
+    since git 2.31; it is spelled out anyway so the count leans on neither that nor ``log.diffMerges``.
+    """
     try:
         raw = subprocess.run(
-            ["git", "log", "--numstat", "--format=", f"-{max(1, commits)}"],
+            [
+                "git",
+                "log",
+                "--first-parent",
+                "--diff-merges=first-parent",
+                "--numstat",
+                "--format=",
+                f"--since={since.isoformat()}",
+                f"--until={(until - timedelta(seconds=1)).isoformat()}",  # --until is inclusive
+                "HEAD",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -1043,11 +1060,10 @@ def _validations_since(directory: Path, since_ms: int) -> list[dict[str, str]]:
 @click.option("--paper", is_flag=True, help="report on the paper-mode state directory")
 @click.option("--date", "day", default=None, help="YYYY-MM-DD, the last day of the week (default: today UTC)")
 @click.option("--out", default=None, help="directory for the report (default: profile paths.reports_dir/weekly)")
-@click.option("--commits", default=40, show_default=True, help="commits to measure the alpha effort share over")
 @click.option("--data-root", default=".beidou/data", show_default=True)
 @click.option("--research-dir", "research_dir", default="reports/research", show_default=True)
 def report_weekly(
-    profile: str, paper: bool, day: str | None, out: str | None, commits: int, data_root: str, research_dir: str
+    profile: str, paper: bool, day: str | None, out: str | None, data_root: str, research_dir: str
 ) -> None:
     """The plan's weekly research report: the week's decisions next to the week's evidence."""
     from beidou_live.report_governance import package_lines
@@ -1063,12 +1079,13 @@ def report_weekly(
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
+    week_end = datetime.strptime(chosen, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=1)  # weekly_payload's end
     registry = load_registry(payload.get("registry", "config/alpha_registry.yaml"))
     data = weekly_payload(
         store,
         chosen,
         expectations=expectations_from_evidence(_evidence_reports(registry)),
-        changed_lines=_changed_lines(commits),
+        changed_lines=_changed_lines(week_end - timedelta(days=7), week_end),
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
         source_lines=package_lines(Path.cwd()),
         source_lines_week_ago=_source_lines_days_before_head(7),
