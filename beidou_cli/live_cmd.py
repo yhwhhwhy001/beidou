@@ -889,6 +889,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         fidelity=ReplayInputs.from_profile(payload, registry, data_root),
         # The startup gate `governance plan`/`apply` ask, so the week's bridge row says whether it bites.
         gate=startup_gate(profile, data_root),
+        ledger=_uncommitted_verdicts(),
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")
@@ -961,6 +962,33 @@ def _changed_lines(since: datetime, until: datetime) -> dict[str, int] | None:
         count = (int(added) if added.isdigit() else 0) + (int(removed) if removed.isdigit() else 0)
         totals[path] = totals.get(path, 0) + count
     return totals or None
+
+
+def _uncommitted_verdicts(path: str = "governance/verdicts.jsonl") -> dict[str, Any] | None:
+    """Rows the nightly governance gate appended in this checkout and nobody committed; None outside git.
+
+    `deploy/run_governance_gate.sh` appends to a tracked file in the checkout it runs from, and committing
+    it is a manual step (RUNBOOK「治理裁决入库」).  The rows of 2026-09-25 and 09-27 sat uncommitted in the
+    main checkout until 09-28 (#239), one `git checkout -- .` from lost, and no report said so.  Reported
+    only: the gate pages on its own FAIL, and a missing commit is not something to fix inside the hour.
+    """
+    try:
+        committed = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, text=True, check=True).stdout
+        current = Path(path).read_text(encoding="utf-8")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    if not current.startswith(committed):  # a committed row changed: not the gate's append, and not ours to guess
+        return {"rows": None, "append_only": False, "latest": None}
+    try:
+        rows = [json.loads(line) for line in current[len(committed) :].splitlines() if line.strip()]
+    except ValueError:
+        return {"rows": None, "append_only": False, "latest": None}
+    latest = rows[-1] if rows else {}
+    return {
+        "rows": len(rows),
+        "append_only": True,
+        "latest": {key: latest.get(key) for key in ("at", "kind", "subject", "ruling")} if rows else None,
+    }
 
 
 def _source_lines_days_before_head(days: int) -> dict[str, int] | None:

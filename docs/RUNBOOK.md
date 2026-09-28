@@ -235,6 +235,24 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 2. 不要为了变绿去改夹具或归档。这条测试说的是「归档在夹具之后变了」，先判断哪一边对。
 3. 在主 checkout 上复现：`.venv/bin/python -m pytest -m archive -rfEs`，约 4 秒。
 
+## 治理裁决入库（2026-09-29 起）
+
+夜间 `com.beidou.governance-gate`（本机 02:30，即 18:30Z）按设计往 `governance/verdicts.jsonl` 追一行。它追在主 checkout 的工作树里，**不会自己提交**。
+2026-09-25 与 09-27 两行就这样在工作树里放了三天，一次 `git checkout -- .` 就会丢，直到 #239 才入库。
+日报「治理裁决入库（只报告）」一节会印出未入库的行数和最新一行；它读 `governance/verdicts.jsonl` 的工作树与 HEAD 的差。不告警。
+
+入库步骤（顺序不能反）：
+
+1. 从最新 `origin/main` 开 worktree，把主 checkout 的 `governance/verdicts.jsonl` **原样复制**过去（`cp`，逐字节）。
+   `git diff` 只应该是追加行；不是纯追加就停下，先查清是谁改了历史行。
+2. 四道门；`beidou governance replay` 的未归因项为 0。提交信息写清每行的时刻、kind、subject、ruling 与理由原文（09-20 的 f2d94275 与 #239 是先例）。review 字段照原样留空，审阅另走 `beidou governance review`。
+3. 开 PR，CI 绿后合入。
+4. **合入后在主 checkout 收尾**：先核对主 checkout 的文件与 `origin/main` 逐字节相同（`git diff --quiet origin/main -- governance/verdicts.jsonl`），
+   再 `git checkout -- governance/verdicts.jsonl && git merge --ff-only origin/main`。
+   这一步不能省：本地改动哪怕与合入的内容逐字节相同，`git merge --ff-only` 也会以「本地改动会被覆盖」中止（2026-09-28 在临时仓库实测）。
+   不收尾的话，之后每个会话快进主 checkout 都会被挡住。
+   避开 18:30Z（gate 追加的时刻）与整点前后；快进前看一眼这次会带进哪些提交，里面有需要重启的构造变更就先不快进，交给操作者。
+
 ## D-041 bridge 到期（2026-10-13）
 
 **切换之后（2026-09-27 的切换 PR，分支 `live/k0175-switch-after-1013`）**：k 改为 0.175，tsmom 指向 k = 0.175 上的

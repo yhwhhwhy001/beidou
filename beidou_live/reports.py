@@ -109,6 +109,7 @@ from beidou_live.report_governance import (  # noqa: F401  (re-exported at its h
     PREREGISTRATION_EFFECTIVE_FROM,
     _dated_switch_lines,
     _plan_budget_lines,
+    _uncommitted_verdict_lines,
     dated_switch_block,
     effort_share,
     plan_budget_gap,
@@ -164,6 +165,7 @@ def daily_payload(
     fidelity: ReplayInputs | None = None,
     now: datetime | None = None,
     gate: Callable[[Path], Sequence[str]] | None = None,
+    ledger: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -317,6 +319,8 @@ def daily_payload(
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
         # E-PR16: the week's date flips, off the checkout's files.  `gate` lets the bridge read `inert`.
         "dated_switches": dated_switch_block(day, gate=gate),
+        # 2026-09-29: gate verdicts appended in the checkout and never committed (#239 found two).  Reported only.
+        "uncommitted_verdicts": ledger,
         "dataset": _dataset_block(dataset),
     }
 
@@ -631,6 +635,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ),
             # Second, because a date is the one finding here that has a deadline (E-PR16).
             ("未来 7 天日期翻转", _dated_switch_lines(payload.get("dated_switches") or {})),
+            ("治理裁决入库（只报告）", _uncommitted_verdict_lines(payload.get("uncommitted_verdicts"))),
             (
                 # L1-10: the ladder and the vol sizing divide by the line above, and on multi-assets
                 # margin that line carries BTC.  Printing the split is what lets a reader tell a
