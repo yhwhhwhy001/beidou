@@ -19884,6 +19884,115 @@ backtest-guard 2026-09-29 体检第一遍的 🔵：「研究按桶在 bar 收�
   最快的币、读全部记录而不是最近一天）各让它变红，按字节还原。
 - 状态快照上新旧代码各渲染一次数据族一节：只多一行「还没有读数」，其余逐字相同。
 
+## 2026-09-29 · 预登记：横截面低波 xs_lowvol（G12；写于任何读数之前）
+
+操作者 2026-09-29：「批 A 和批 B 全做」。批 B 是 `docs/analysis/2026-09-29-research-analyst-prompt-vs-beidou.md`
+的 N7：把 `docs/analysis/2026-09-25-october-13-readiness.md` §5 的 G12 草稿更新成正式预登记，入库后跑阶段 0。
+草稿写于 09-25，这里改了四处，都写在对应项里：#140 的因子载荷、probe 位、阶段 1 在阶段 0 过线后不再裁量、
+R1 本窗口的额度。size 一族不做，理由照草稿 §5.2：仓库没有市值数据；在按 30 日成交额选出的池子里按成交额排序，
+量的是「谁快被踢出去」，不是规模溢价。
+
+### 1. 假设
+
+在 pit universe 的时点成员里，按过去 `window` 根 bar 的已实现波动排序，做多低波、做空高波。经逆波动率定价之后，
+样本外 Sharpe 过门，而且与 tsmom 的收益相关 < 0.5。
+
+为什么可能成立：股票里有两种解释，杠杆受限的资金去买高 beta，爱彩票的资金去买高波动，两者都让高波动的名字被买贵。
+加密永续上若也有这群买家，低波减高波就有正的风险调整收益。
+
+若不成立会看到：阶段 0 相关 ≥ 0.5，或阶段 1 判 FAIL。永续上加杠杆便宜，第一种解释可能不成立。
+
+### 2. 这是「新信息」还是「新网格」
+
+新信息。09-23 清点的反向搜索（`low vol factor`、`size factor`、`market cap`）零命中；`reports/research/mine*.json`
+里 914 个不同表达式，没有一个对波动水平本身做横截面排序（10-13 文档附录 A7）。
+
+写这份预登记之前看过的信息：
+
+- flow 的 edge 来自后来离池的名字（`config/alpha_registry.yaml:479-481`），与「高波」一端重叠。
+- 日报的多因子载荷（#140）：书对「低波（低减高）」的载荷 0.14（t 5.93）；size 与低波的相关 0.80，市场与低波的
+  VIF ≥ 5，载荷不稳（`reports/daily/2026-09-28.md`，09-29 读取）。读法：在跑的书已经带着低波倾斜。
+- 10-13 文档 §5 的草稿与它引的功效表。
+
+没有看过：xs_lowvol 在任何数据上的任何读数。
+
+### 3. 协议
+
+- **信号**：`beidou_alpha/signals/xs_lowvol.py`，与本节同一个提交入库。分数是参照总体里 `-realized_vol(window)` 的
+  横截面秩，映到 [-1, 1]；参照总体里有波动读数的名字少于 `min_symbols`（3）时整行 NaN。研究侧的参照总体是
+  `eligible`，实盘侧是当周期管理的 universe（D-042 的 `Panel.reference`）。
+- **阶段 0，零 ledger**：
+  `beidou research correlate --strategies tsmom,xs_lowvol --universe pit`
+  tsmom 用 registry 参数；xs_lowvol 用信号的默认参数 `window 720`、`entry_threshold 0.20`、`min_symbols 3`，
+  是网格里的一格。判据读报告的 `correlation`：两本书逐 bar 净收益的 Pearson 相关，是 `research correlate` 自己的
+  口径（不套护栏与退出，全区间）。这条命令也会印两本书各自的 Sharpe 与等权边际，判据不读它们。
+- **阶段 1，4 笔 ledger，阶段 0 过线就跑，不再裁量**：
+  `beidou research validate --strategy xs_lowvol --universe pit --grid '{"window": [168, 720], "entry_threshold": [0.20, 0.30]}' --charge 4 --prior-trials 0 --prereg <本节所在的提交>`
+  其余取默认：`--folds 5 --min-train 4000 --purge 50`，护栏与 exit overlay 开，`--capital 0`，资金费开，
+  `--execution open_to_close`。
+  「过线就跑」是相对草稿改的一处。阶段 0 会先印出候选的 Sharpe；看过之后再决定付不付这 4 笔，付钱的决定就读了
+  那个数。所以付钱的条件在这里写死，只读相关。操作者 09-29「批 B 全做」是这 4 笔的授权。
+- 两个阶段都在 `~/beidou` 之外的独立 worktree 里跑，检出本节所在的提交，数据走只读软链；跑前跑后记
+  `reports/research/trials.jsonl` 的行数与 sha256；不写 registry，不碰实盘循环。
+
+### 4. 计费与桶
+
+- 新桶 `xs_lowvol`。手写策略的 `ledger_scope` 只返回自己（`beidou_alpha/validation/ledger.py:237-253`）。
+  今天 0 行，阶段 1 跑完 4 行。不动 tsmom 的门，也不动别的桶。
+- 阶段 0 不写 `trials.jsonl`：`research correlate` 不计费。
+- R1 本窗口的额度已超：`governance next` 09-29 读 20,089/1,700 行。R1 的读者是 `research mine` 与
+  `governance next`（`beidou_governance/admission.py:190`），不挡手工预登记的 validate。09-27 的 carry_hedged、
+  09-28 的 lsr_timing 都在这个窗口里跑过。
+
+### 5. 功效读数
+
+`beidou research power --evidence reports/research/xsmom-validation-20260917T092142Z.json --trials 0 --charge 4`，
+零 ledger，09-29 跑，跑前跑后 `trials.jsonl` 的 sha256 都是 `fbc1ad8d66eea334…`。方差借自最近一份横截面族的报告，
+se 0.4398。
+
+| N | 门 | 挡路的一半 | 真 Sharpe 0.5 | 0.8 | 1.0 | 1.5 |
+| ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 4 | 1.0000 | D-020 PASS 线（D-028 选择门 0.9825） | 12.8% | 32.5% | 50.0% | 87.2% |
+
+这是上界：不含 CPCV 负路径、PBO、fold 一致性与成本 ×2。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| 阶段 0 | 报告里 tsmom 与 xs_lowvol 的 `correlation` < 0.50 | 恰好 0.50 算挡住；读不出（NaN 或缺键）按挡住 |
+| 阶段 1 | 报告的 `verdict` ∈ {PASS, WEAK_PASS} | 读 `verdict.decide` 写进报告的判定，不手算 |
+| 阶段 1 | `walk_forward.oos_is_full_sample_tail` 为 False | 布尔值，无容差 |
+
+判负之后：不重跑，不换网格，不换 id 重来。`governance/reopen.yaml` 加一条，重开条件写「新信息」：时点市值数据，
+或者一条与动量正交的低波写法，机制在看数之前写下。
+
+两道都过，也只到阶段 1 为止。下一步是书级报告（D-018）与一个 probe 位，那是另一份预登记与另一次裁定。
+
+### 7. 预期
+
+- 最可能挂在阶段 0。两条理由：逆波动率定价把低波多头腿放大、高波空头腿缩小，书净多头，与 tsmom 同向（推理）；
+  #140 已经量到在跑的书带低波倾斜（0.14，t 5.93）。
+- 阶段 0 过了，最可能挂在阶段 1 的 D-020 PASS 线：N=4 时，真 Sharpe 1.0 只有 50% 过线。
+- 价钱：挂在阶段 0，零 ledger 关掉清单 6.1 的一半；挂在阶段 1，4 笔关掉；过了，是 F4 第一个低相关候选，花 4 笔。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务 G-B（同收益下更小回撤：一本低相关的书，接 F4），其次 G-A。
+
+### 9. 实盘失效方式（How this fails）
+
+假设它以 probe 上线之后：
+
+| 失效方式 | 最早的症状（现有仪器） | 盯的读数与阈值 | 亏钱前怎么抓 |
+| --- | --- | --- | --- |
+| 1. 低波一族成了第二本多头书：逆波动率定价后净多头，与 tsmom 同向 | 日报「Probe correlation (M-014)」；「Market beta (D-045)」的净敞口均值上升 | M-014 ≥ 0.5（168 根 bar） | 阶段 0 的 correlate；上线后第一个 168 根读 M-014，≥ 0.5 就按 D-019 停书，不等 P&L 止损 |
+| 2. 高波空头腿在暴涨时被挤：高波名字一天的涨幅远大于低波 | 「Probe books (D-019)」的 `pnl_30d`；「Event risk (#8.10)」的极端行情 | `pnl_30d` 越过 probe 止损 | probe 止损的盯市口径（`governance/window_changes.yaml` 的 probe-stop-caliber，10-03 起 DUE）；空头腿受 `max_weight` 与 2% 参与率截 |
+| 3. 研究与实盘不是同一个信号：参照总体不同（D-042），或选池同变量带来换手 | 「Execution fidelity (M-Q08)」的换手 实盘/回测；「Exits and pool (M-005 / M-006)」的 `pool_left` 与本 sleeve 持仓的重叠 | 满 14 个完整日后，换手比落在 0.75–1.25 之外 | 上线前在 `cycles.jsonl` 副本上按实盘 universe 重算排序，对照研究侧 |
+
+还有一件与失效无关、但会挡上线的事：R3 的 probe 上限是 2 个。flow 占一个；裁定表 #8 执行之后，tsmom 在治理记录里
+也记作 probe，两个位子都满。阶段 1 即便判 PASS，晋级也要等位子。
+
 ## 2026-09-29 · 10-13 裁定表 #8：`governance advance --commit` 执行一次，tsmom 在治理记录里降回 probe
 
 操作者 2026-09-29「修复发现的所有问题」。`docs/analysis/2026-09-29-research-analyst-prompt-vs-beidou.md` 的「顺带发现」

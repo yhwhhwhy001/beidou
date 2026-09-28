@@ -15,6 +15,7 @@ from beidou_alpha.signals import (
     pairs,
     residual,
     tsmom,
+    xs_lowvol,
     xsmom,
 )
 from beidou_alpha.signals.base import SignalSpec, scores_to_targets
@@ -66,6 +67,17 @@ SIGNALS: dict[str, SignalSpec] = {
         xsmom.XsmomParams().warmup_bars,
         warmup=lambda params: xsmom.XsmomParams.from_mapping(params).warmup_bars,
         canonical=lambda params: asdict(xsmom.XsmomParams.from_mapping(params)),
+    ),
+    # G12, pre-registered 2026-09-29 (RESEARCH_LOG 「预登记：横截面低波 xs_lowvol」).  Not in the registry;
+    # `research correlate` reads these defaults for stage 0, so they are the pre-registered stage-0 cell.
+    "xs_lowvol": SignalSpec(
+        "xs_lowvol",
+        xs_lowvol.compute,
+        asdict(xs_lowvol.XsLowvolParams()),
+        "cross-sectional low volatility: long the calmest pool members, short the most volatile",
+        xs_lowvol.XsLowvolParams().warmup_bars,
+        warmup=lambda params: xs_lowvol.XsLowvolParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(xs_lowvol.XsLowvolParams.from_mapping(params)),
     ),
     "carry": SignalSpec(
         "carry",
