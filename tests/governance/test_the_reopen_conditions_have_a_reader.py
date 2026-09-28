@@ -99,11 +99,15 @@ def test_every_condition_in_the_log_is_in_the_list() -> None:
     condition is a shape of the live record and not a judgement.  Its first wording, "any short weight",
     was met by flow_short's sleeve alone - two bars in, both holding -0.2% to -0.5% on BNBUSDT - so it
     reads the short leg's share of gross instead.
+
+    The same day raised it 25 -> 26 for `xs-lowvol-g12`: pre-registered in #256, stage 0 passed (correlation
+    with tsmom -0.04), stage 1 refuted on its 4 ledger rows (OOS 0.54 against a gate of 0.98).  `operator`,
+    because its condition is new information, the same judgement `lsr-timing` carries.
     """
     entries = load(ROOT / LIST)
-    assert len(entries) == 25, (
+    assert len(entries) == 26, (
         f"the list holds {len(entries)}; 13 from the audit, P30's, Q-SF2's five, EXP-SL1's, "
-        "the two denominators (RISK-G11's and P13's drawdown budget), lsr-timing, news-flow and G11"
+        "the two denominators (RISK-G11's and P13's drawdown budget), lsr-timing, news-flow, G11 and xs-lowvol"
     )
 
 
