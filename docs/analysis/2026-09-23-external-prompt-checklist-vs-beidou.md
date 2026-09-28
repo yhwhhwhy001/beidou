@@ -146,6 +146,11 @@ G11、G12 要等冻结结束。
 「不做图」的决定（D-047），D.1 进了预登记模板。本文的判定表保持清点当时的样子。结果与要操作者定的事，见
 `docs/analysis/2026-09-25-external-checklist-round-two.md`。
 
+**后续（五）（2026-09-29）**：逐项表里有两处说法已经过时，表格照旧不改。1.9 与「说法与行为不符」第 4 行说研究侧
+对照取全体 `panel.symbols`：#113 已把 backtest 与 decompose 改成当期成员。结论三与 4.8 说 `regime_split_sharpes`
+零调用者：#104 已把它接进 validate，只报告、不判定。出处是 `docs/analysis/2026-09-29-research-analyst-prompt-vs-beidou.md`
+的「顺带发现」。
+
 ## 逐项
 
 ### #1 策略架构（Goldman Sachs）

@@ -286,8 +286,8 @@ def run_backtest(
     costs = turnover * (cost.turnover_bps / 10_000.0) + executed.abs() * (cost.carry_bps_per_bar / 10_000.0)
     if impact is not None and impact.enabled:
         # Stated limit: the guard replay above priced its own equity path at the flat rate, so a
-        # daily-loss pause is decided without impact.  At demo notional impact is under 0.01 bps and the
-        # difference is unmeasurable; at the capital where this model bends, the pause would fire
+        # daily-loss pause is decided without impact.  At demo notional impact reads 0.48 bps (costs.yaml,
+        # 2026-09-09), inside the fills' spread; at the capital where this model bends, the pause would fire
         # slightly earlier than replayed here.  Recorded rather than fixed, because moving impact inside
         # the replay makes it path dependent on a quantity the replay is itself producing.
         costs = costs + impact_costs(turnover, rets, panel, columns, impact)
