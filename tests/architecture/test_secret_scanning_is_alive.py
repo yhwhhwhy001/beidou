@@ -688,13 +688,18 @@ def test_pre_push_lists_the_blocked_commit_and_file_redacted(leaky_repo: _MergeR
 # 现在两个 hook 给 gitleaks 传 `--exit-code`，有命中时退一个它出错时不用的码。别的非 0
 # 都当「扫描没有跑完」，gitleaks 的 stderr 原样转给人看。
 
+# 09-19 第一版配置想用 lookahead 表达「大小写混排」。RE2 不支持它，gitleaks 加载配置时 panic。
+LOOKAHEAD_REGEX = "(?=.*[A-Z])[A-Za-z0-9]{64}"
+
 # 让 gitleaks 自己出错的两种办法，2026-09-29 实测 8.30.1。值是只有 gitleaks 会说的话，
 # 原话转没转出来，只能拿它判断。
 GITLEAKS_FAULTS = {
     # 配置文件不在：FTL，退出 1。这与「有命中」的默认退出码相同，只看退出码分不开。
     "config-missing": "unable to load gitleaks config",
-    # 规则里有 lookahead：RE2 不支持，panic，退出 2。09-19 第一版配置就是这么写的。
-    "config-lookahead": "invalid or unsupported Perl syntax",
+    # 规则里有 lookahead：panic，退出 2。判据是那条正则本身，panic 的原话里原样带着它。
+    # 不用 Go 的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
+    # CI 用的官方发行版说 `bad perl operator`。措辞跟着编译它的 Go 版本走，钉住 gitleaks 版本也钉不住。
+    "config-lookahead": LOOKAHEAD_REGEX,
 }
 
 # 每个 hook 有两个拦截框。测试按框的标题判断 hook 走了哪一支。
@@ -711,9 +716,7 @@ def _break_config(repo: Path, fault: str) -> None:
         config.unlink()
     else:
         assert fault == "config-lookahead", fault
-        config.write_text(
-            "[[rules]]\nid = \"mixed-case\"\nregex = '''(?=.*[A-Z])[A-Za-z0-9]{64}'''\n", encoding="utf-8"
-        )
+        config.write_text(f"[[rules]]\nid = \"mixed-case\"\nregex = '''{LOOKAHEAD_REGEX}'''\n", encoding="utf-8")
 
 
 @pytest.mark.parametrize("fault", list(GITLEAKS_FAULTS))
