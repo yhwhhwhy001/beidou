@@ -128,8 +128,17 @@ git log 直接 fatal，第 2 层一个 commit 都没扫就放行。当天在临�
 brew install gitleaks && bash deploy/install-hooks.sh
 ```
 
-脚本末尾会自检：造一个伪造的凭据形态，确认它真的被拦下。**看到 `✓` 才算装好**——
-配置崩掉时 gitleaks 是 panic 而不是报错，安静地什么都不扫。
+脚本末尾会自检：造一个伪造的凭据形态扫一遍。**看到 `✓` 才算装好。** 结果有三种：
+
+- `✓`：gitleaks 抓到了伪造凭据。自检传了 `--exit-code 42`，只认 42。
+- `✗ 自检失败`：gitleaks 跑完了，没抓到。`.gitleaks.toml` 的 allowlist 放得太宽了。
+- `✗ 自检没有跑完`：gitleaks 自己出错，一行没扫就退出。下面跟着它的原话，照着修。
+  配置文件不在或 TOML 写坏是 FTL、退 1。规则里有 lookahead 是 panic、退 2。
+
+退 1 恰好也是 gitleaks「有命中」的默认退出码，所以不能只看退出码非 0。
+2026-09-29 之前自检就是这么看的。配置不在、规则崩掉，它都照样打 `✓`，gitleaks 的原话进了 /dev/null。
+这里原先写「配置崩掉时 gitleaks 是 panic 而不是报错，安静地什么都不扫」，也只对了一半：
+文件不在是 FTL，不是 panic；安静是自检自己造成的。
 
 `git worktree` 不用再跑，`core.hooksPath` 是仓库级配置，worktree 自动继承。
 

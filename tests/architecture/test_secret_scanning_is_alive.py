@@ -9,9 +9,11 @@
 还有没有用**，因为这道门有四种坏法，而且都不会自己喊出来：
 
   1. **配置崩了，扫描根本没跑。**  建这道门的当天就撞上了：`.gitleaks.toml` 第一版用
-     `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 用 Go 的 RE2，**不支持
+     `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 的正则是 RE2 语法，**不支持
      lookahead**。它不是报一个配置错误，是带栈回溯地 panic。在 CI 里这会红，能看见。
      本机两个 hook 此前把它报成「有疑似密钥」，panic 的原话被吞掉（2026-09-29 改，见文件末尾那组）。
+     配置文件不在或写坏则是 FTL、退 1，与有命中同码。`install-hooks.sh` 的自检此前把这两种都当成
+     「抓到了」、打 ✓；本文件的 `_scan` 把 FTL 读成零命中（2026-09-29 改，见文件末尾）。
 
   2. **allowlist 被放宽到什么都抓不住。**  这道门上线时压掉了 117 处误报（全部核实过：
      100 处是 trial ledger 的 `param_key`、9 处是 sha256 文件摘要、2 处是 SSH 公钥指纹、
@@ -79,8 +81,17 @@ def _forged_binance_credential() -> str:
     return forged
 
 
-def _scan(contents: dict[str, str]) -> list[dict]:
-    """把给定内容写进一个临时目录，用仓库的配置扫它，返回命中列表。"""
+# `_scan` 让 gitleaks 有命中时用这个码退出（`--exit-code`）。gitleaks 自己出错时退 1、2 或 126，
+# 取一个离它们都远的值，与两个 hook 和 install-hooks.sh 的 `leaks_rc` 相同。
+LEAKS_RC = 42
+
+
+def _scan(contents: dict[str, str], config: Path | None = None) -> list[dict]:
+    """把给定内容写进一个临时目录，用仓库的配置扫它，返回命中列表。
+
+    给了 `config` 就用它代替仓库的配置。只有测 `_scan` 自己的那条用得上，见文件末尾。
+    """
+    config = CONFIG if config is None else config
     with tempfile.TemporaryDirectory() as tmp:
         for name, text in contents.items():
             (Path(tmp) / name).write_text(text, encoding="utf-8")
@@ -92,9 +103,11 @@ def _scan(contents: dict[str, str]) -> list[dict]:
                 "--source",
                 tmp,
                 "--config",
-                str(CONFIG),
+                str(config),
                 "--no-git",
                 "--no-banner",
+                "--exit-code",
+                str(LEAKS_RC),
                 "--report-format",
                 "json",
                 "--report-path",
@@ -104,16 +117,18 @@ def _scan(contents: dict[str, str]) -> list[dict]:
             text=True,
             timeout=120,
         )
-        # returncode 1 = 有命中，0 = 干净。其它值意味着 gitleaks 自己出了问题
-        # （配置加载失败会是 2 或者一个 panic），那必须炸出来而不是当成「没命中」。
-        assert proc.returncode in (0, 1), (
+        # 0 = 干净，LEAKS_RC = 有命中。别的值都是 gitleaks 自己没跑完，必须炸出来，不能当成「没命中」。
+        # 配置不在或写坏是 FTL、退 1，正是 gitleaks 有命中时的默认退出码，所以要传 `--exit-code` 分开它们。
+        # 规则里有 RE2 不支持的正则是 panic、退 2。2026-09-29 之前这里认 0 与 1，配置写坏也过得去，见文件末尾。
+        assert proc.returncode in (0, LEAKS_RC), (
             f"gitleaks 没能正常跑完（returncode={proc.returncode}）。\n"
-            f"这通常意味着 .gitleaks.toml 加载失败——RE2 不支持 lookahead，\n"
-            f"写了 (?=...) 会让它 panic 而不是报错。\n"
+            "这通常意味着 .gitleaks.toml 加载失败：文件不在或写坏了是 FTL、退 1；\n"
+            "规则里有 RE2 不支持的正则（例如 lookahead）是 panic、退 2。\n"
             f"stderr:\n{proc.stderr[:2000]}"
         )
-        if not report.exists():
-            return []
+        # 退出码是 0 或 LEAKS_RC 时，gitleaks 已经写了报告，干净时是 `[]`。报告不在只能是出了别的错，
+        # 不能读成「没命中」。此前这里返回 []，配置写坏时的零命中就是从这条路出来的。
+        assert report.exists(), f"gitleaks 退出码是 {proc.returncode}，却没写报告。\nstderr:\n{proc.stderr[:2000]}"
         return json.loads(report.read_text(encoding="utf-8") or "[]")
 
 
@@ -697,8 +712,9 @@ GITLEAKS_FAULTS = {
     # 配置文件不在：FTL，退出 1。这与「有命中」的默认退出码相同，只看退出码分不开。
     "config-missing": "unable to load gitleaks config",
     # 规则里有 lookahead：panic，退出 2。判据是那条正则本身，panic 的原话里原样带着它。
-    # 不用 Go 的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
-    # CI 用的官方发行版说 `bad perl operator`。措辞跟着编译它的 Go 版本走，钉住 gitleaks 版本也钉不住。
+    # 不用正则引擎的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
+    # CI 用的官方发行版说 `bad perl operator`。两者走的是两个引擎：发行版带构建标签 `gore2regex`，
+    # 用 wasilibs/go-re2；Homebrew 只跑 `go build`，用 Go 标准库 regexp。钉住 gitleaks 版本也钉不住。
     "config-lookahead": LOOKAHEAD_REGEX,
 }
 
@@ -793,3 +809,106 @@ def test_pre_commit_still_reports_a_finding_as_a_finding(
         "真有命中，pre-commit 却没报「有疑似密钥」，或者报成了扫描没跑完。检查 hook 里的 `--exit-code` 还在不在。\n"
         f"{shown[-2000:]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# install-hooks.sh 的自检，与这个文件自己的 `_scan`
+# ---------------------------------------------------------------------------
+#
+# 两处都拿 gitleaks 的退出码判断「抓到了」，犯的是两个 hook 此前的同一个错。配置不在或写坏时，
+# gitleaks 是 FTL、退 1，与有命中时的默认退出码相同。2026-09-29 实测：
+#
+#   - 自检只看退出码非 0。配置不在、规则里有 lookahead（panic，退 2），它都打「✓ 扫描是活的」、
+#     退 0，gitleaks 的原话进了 /dev/null。SECURITY.md 说「看到 ✓ 才算装好」，接不住的恰恰是这两种。
+#   - `_scan` 认 0 与 1，报告不在就返回 []。配置写坏时，`test_the_config_loads_at_all` 与哈希误报
+#     那几条照样通过：尺子坏了，量出来是零。
+#
+# 修法与两个 hook 相同：传 `--exit-code`，有命中时退 42，别的非 0 都当没跑完。
+
+INSTALL_HOOKS = ROOT / "deploy" / "install-hooks.sh"
+
+
+def _run_install_hooks(tmp_path: Path, fault: str | None = None) -> subprocess.CompletedProcess[str]:
+    """照新 clone 的做法跑 `bash deploy/install-hooks.sh`，但跑在临时仓库的副本里。
+
+    只能在副本里跑：脚本会执行 `git config core.hooksPath .githooks`。本机的真仓库配的是绝对路径，
+    在它或任何 worktree 里跑一次，所有会话的 hook 指向都会变。脚本按自己的位置找仓库根，所以把它与
+    `.githooks/`、配置一起拷进副本。环境用 `_git_env()`：在 hook 里跑 pytest 时，外层的 `GIT_DIR`
+    会把那条 `git config` 带回真仓库。给了 `fault` 就照 `_break_config` 弄坏副本的配置。
+    """
+    clone = tmp_path / "clone"
+    (clone / "deploy").mkdir(parents=True)
+    _git(clone, "init", "-q", "-b", "main")
+    shutil.copy(INSTALL_HOOKS, clone / "deploy" / INSTALL_HOOKS.name)
+    shutil.copytree(ROOT / ".githooks", clone / ".githooks")
+    shutil.copy(CONFIG, clone / ".gitleaks.toml")
+    if fault is not None:
+        _break_config(clone, fault)
+    proc = subprocess.run(
+        ["bash", str(clone / "deploy" / INSTALL_HOOKS.name)],
+        cwd=clone,
+        env=_git_env(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    # 那条 `git config` 要落在副本里。落到别处时副本里没有这个键，`git config` 退 1。
+    wrote = subprocess.run(
+        ["git", "-C", str(clone), "config", "core.hooksPath"],
+        env=_git_env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert wrote.returncode == 0, f"core.hooksPath 没写进副本。脚本的输出：\n{(proc.stdout + proc.stderr)[-2000:]}"
+    return proc
+
+
+@pytest.mark.parametrize("fault", list(GITLEAKS_FAULTS))
+def test_install_hooks_self_check_reports_a_gitleaks_error_as_unfinished(tmp_path: Path, fault: str) -> None:
+    """gitleaks 自己出错时，自检不能打 ✓：脚本要以非 0 退出，并把 gitleaks 的原话给装 hook 的人。
+
+    判据只用 gitleaks 的原话。自检自己的文字证明不了转发，理由同两个 hook 那组。
+    """
+    marker = GITLEAKS_FAULTS[fault]
+    assert marker not in INSTALL_HOOKS.read_text(encoding="utf-8"), (
+        f"`{marker}` 写进了 install-hooks.sh 自己的文字，它证明不了转发"
+    )
+    proc = _run_install_hooks(tmp_path, fault)
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 1, (
+        f"gitleaks 出错了，自检却没失败（{fault}，returncode={proc.returncode}）。\n"
+        "SECURITY.md 说「看到 ✓ 才算装好」，配置坏了照样打 ✓，这句就不成立。\n"
+        f"{shown[-2000:]}"
+    )
+    assert marker in shown, (
+        f"自检失败了，却没把 gitleaks 的原话给装 hook 的人（{fault}）。只看到 ✗，不知道该修什么。\n{shown[-2000:]}"
+    )
+
+
+def test_install_hooks_self_check_passes_with_the_repository_config(tmp_path: Path) -> None:
+    """对照：仓库自己的配置下，自检要拦下伪造凭据，脚本以 0 退出。
+
+    没有这一条，上面那条分不清「看见了 gitleaks 出错」和「自检什么都报失败」。它还守着 `--exit-code`：
+    这个参数被删掉时，gitleaks 抓到伪造凭据也退 1，与出错同码，自检就把好好的配置报成没跑完。
+    """
+    proc = _run_install_hooks(tmp_path)
+    assert proc.returncode == 0, (
+        "仓库自己的配置下，install-hooks.sh 的自检没通过。检查脚本里的 `--exit-code` 还在不在。\n"
+        f"{(proc.stdout + proc.stderr)[-2000:]}"
+    )
+
+
+@pytest.mark.parametrize("fault", list(GITLEAKS_FAULTS))
+def test_scan_refuses_to_read_a_gitleaks_error_as_no_findings(tmp_path: Path, fault: str) -> None:
+    """`_scan` 是这个文件里配置测试的尺子。gitleaks 自己出错时它要炸，不能返回 []。
+
+    判据是 gitleaks 的原话出现在炸出来的消息里，用来确认炸的原因是 gitleaks 出错，而不是别的断言。
+    这条证明不了 `_scan` 自己转发了 stderr：pytest 改写断言时，会把 `proc` 的 repr 连同 stderr
+    一起写进消息（2026-09-29 实测）。
+    """
+    config = tmp_path / ".gitleaks.toml"
+    shutil.copy(CONFIG, config)
+    _break_config(tmp_path, fault)
+    with pytest.raises(AssertionError, match=re.escape(GITLEAKS_FAULTS[fault])):
+        _scan({"ordinary.py": "x = 1\n"}, config)
