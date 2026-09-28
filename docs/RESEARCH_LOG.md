@@ -18611,6 +18611,29 @@ wrote /tmp/ls_timing_btc_only_split.json
 exit 0
 ```
 
+## 2026-09-28 · 补记：重启 #60（R1 `by_vol`）的 T-12 与第一次每日全量重发
+
+只记可观测事实。上一条「重启 #60」把 T-12 与 M-002 列在「还没做的」里，这里补上 T-12，以及上线后第一个 UTC 日的读数。
+
+- **T-12**：操作者 09-28 05:09:38Z 在分交易对杠杆的项目话题里回「对上了」。对照的是话题 09-27 17:03:10Z 贴出的档位表，
+  即 17:00:31Z 那一行的 `leverage_tiers.set`：交易所界面上逐个币的杠杆与它一致。接口读不回杠杆设置，这一步只能人看，
+  这里记的是操作者的陈述。
+- **第一次每日全量重发（S4）**：09-28 00:00:33Z 那一行（处理 09-27T23:00Z 的 bar）`reasserted` true，`sent` 是全部
+  17 个币，档位与 `set` 逐个相同，`refused` 为空。它前后各行 `sent` 都是空的，`reasserted` false。
+- **周期**：17:00Z 到 03:00Z 的 11 根 bar（18:00:27Z 到 04:00:29Z 写出）全是 OK，构造 `2ee491c13971`，
+  `guard_reasons` 为空，没有报错，`refused` 一直为空。
+  - 有单的只有两行：01:00:35Z 那一行 3 张（BNBUSDT、ENAUSDT、TRUMPUSDT），全是 reduce_only；04:00:29Z 那一行
+    1 张 ENAUSDT BUY，不是 reduce_only，是重启以来第一张不带 reduce_only 的单。数量、名义与成交没有读。
+  - 04:07:02Z 的 `ps`：PID 仍是 96836，`state.restarts` 仍是 60。
+  - 04:07:26Z 的 `live status --check`：最近 24 小时的周期失败 0 次，退出码 0。
+  - `live.stderr.log` 在 16:35:54Z 那条 WARNING 之后只多了一行 INFO，就是下面的交易池刷新。
+- **交易池**：01:00:35Z 那一行带着每日刷新（`entered=[]`、`left=['TRUMPUSDT']`），同一行以 reduce_only 平掉 TRUMPUSDT
+  的小额空头。02:00:29Z 起它不在管理集合里，`set` 从这一行起少了它，其余 16 个币的档位不变。它最后的设置是 5x，
+  与 `auto` 相同；移出是交易池的每日刷新，与分档无关。
+- **读数从哪来**：S4、周期与交易池三项来自 Mac 上的只读核对（04:07Z）：读 `cycles.jsonl`、`live.stderr.log`、`ps`
+  与 `live status --check`，没有下单，没有碰循环与 launchd。
+- **还没做的**：M-002 在上线满 30 天之后读（10-27 16:35Z 满）：这 30 天里「所有持仓都是 5 倍、没有区分」这一问题有没有
+  再被提出；每次记下操作者看的是哪里、要的是什么。
 ## 2026-09-28 · 操作者六条裁定：面向生产的重构方案（#201）——生产=B、ratchet 理由外移与 headroom 政策、重开 D-P4、增长率接受、alpha 先剖析；代理节点先不换
 
 `docs/analysis/2026-09-28-production-refactor-deep-analysis.md`（#201，Opus 5.5 审查后 PIVOT）§P1.6 的六问，操作者当日逐条作答，另补一条。答案与后果的全文在该文 §14；这里只记裁定、两项当场跑的零 ledger 测量、与一条流程教训。
