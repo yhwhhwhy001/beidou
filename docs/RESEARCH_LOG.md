@@ -18428,3 +18428,185 @@ LS leaf: 只在赌方向：择时（选币部分 t 0.55，扣掉方向后 0.60�
 wrote /tmp/ls_direction_look.json
 exit 0
 ```
+
+## 2026-09-28 · 择时线索拆开只有 BTC 的那 10 个月：有横截面的那段也在（零 ledger）
+
+起因：上一节拆 LS 叶那 4 个正形状，四个都「只在赌方向：择时」，排第一的 `8a838550a686852d` 择时部分 Sharpe 1.55、
+NW t 3.64。但 `count_long_short_ratio` 只有 BTCUSDT 从 2021-01-01 起有，其余 17 个币最早 2021-12-01，候选头 10 个月
+只能交易 BTC 一个币；t 3.64 里有多少来自那段单币择时，上一节的输出分不出来。`ls-leaf` 的条件把「先拆开这一段」写成
+了写择时预登记的前提。操作者 2026-09-28T04:03:28Z 在「挖掘更多策略和因子」话题的卡片上选了「立项择时」（推荐的是
+「停到 10-03」），卡片写的后果是「先零 ledger 拆开只有 BTC 的那 10 个月，再写择时预登记（对照大盘），花 ledger 前
+再问；过了还要补实盘数据通道」。这是第一步。
+
+读数、判定与后果在看数之前钉在 `3f63229`（#200，`scratchpad/ls_timing_btc_only_split.py`，sha256 `875c348e…`），
+之后一个字没改。它按 sha256 载入上一节钉住的 `ls_direction_look.py`（`e4dd5a59…`），照 `look_at()` 的步骤重建那几条
+逐 bar 收益，只按时段切开：不挑形状、不换窗口、不试新写法。判定线先在三个答案已知的合成世界上试过
+（`scratchpad/ls_timing_btc_only_split_synthetic.py`），12 个全判对；其中 btc_only_edge 是要防的陷阱（只有 BTC 那段
+有、全样本 t 过 2、有横截面那段什么都没有），经过写在两个脚本的 docstring 里。
+
+在操作者 Mac 上 `~/beidou` 之外的独立 worktree 里跑一次，04:29:22Z → 04:29:36Z，退出码 0。跑前（04:28:28Z）跑后
+（04:29:59Z）逐字相同：`~/beidou` 的 HEAD `40cbe17c`，status 只有原来那行 ` M governance/verdicts.jsonl`，
+`trials.jsonl` 22,205 行，环境里没有 `BEIDOU_TRIALS_LEDGER` / `BEIDOU_FEATURE_STORE`；worktree 跑完即删，
+`git worktree list` 与跑前逐字相同。stdout 全文附在本节末尾（sha256 `191bc04c…`，8,909 字节）；读数 JSON 留在 Mac 的
+`/tmp`（sha256 `d00f6e43…`，30,714 字节），不入库。
+
+### 一、复现
+
+四个形状三条都过：重建的流与同一次运行里 `look_at()` 自己算的最大差 0.0e+00（线 1e-9）；与 09-27 相比，候选 Sharpe
+差 +0.000、择时部分 t 差 ±0.00（09-27 打印到这几位，线 0.05）；`look_at()` 对 mine 报告的复现照旧。基准 tsmom Sharpe
++1.7317，报告 +1.7327（Δ −0.001），与 09-27 相同。
+
+### 二、切点
+
+每个形状各切各的，按持仓的那根 bar 数能交易几个币：
+
+- lsr(168) 的两个：切点 2021-12-08 00:00。A 段从 2021-01-31 起 7,464 根，每根都恰好 1 个币（BTC）；B 段到
+  2026-09-08 16:00，41,657 根，最少 10 个币。
+- lsr(72) 的两个：切点 2021-12-04 00:00。A 段 7,368 根，每根 1 个币；B 段 41,753 根，最少 10 个币。
+
+切点比 2021-12-01 晚 7 天和 3 天，是 lsr(w) 要先攒够 w 根 bar。B 段一开始就有 10 个币（BTC 加 2021-12-01 起有多空比的
+9 个），不是只多一两个。A 段约占全样本 bar 的 15%。
+
+### 三、读数
+
+择时部分 T（净，带自己的资金费与按成交分摊的手续费；C 与 T 的分界 n̄ 仍是全样本均值，与上一节相同）：
+
+| 形状 | 全样本 Sharpe（t） | A 段 Sharpe（t） | B 段 Sharpe（t） | 若各段一样该有的 t，A / B | T 净收益的份额 A / B | 按年净收益 A / B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `8a838550` squash(−lsr(168), 1) | 1.55（3.64） | 2.36（2.28） | 1.49（3.23） | 1.42 / 3.35 | 13% / 87% | +33.52% / +38.96% |
+| `49742e60` squash(−lsr(168), 0.5) | 1.68（3.95） | 2.70（2.62） | 1.63（3.52） | 1.54 / 3.63 | 12% / 88% | +33.73% / +43.29% |
+| `2ca33804` squash(−lsr(72), 0.5) | 1.46（3.39） | 2.43（2.32） | 1.40（3.01） | 1.31 / 3.12 | 13% / 87% | +30.77% / +37.09% |
+| `8a87c4ae` squash(−lsr(72), 1) | 1.04（2.45） | 1.29（1.27） | 1.02（2.21） | 0.95 / 2.26 | 13% / 87% | +21.79% / +25.93% |
+
+其余几条，都是「A 段 / B 段」：
+
+| 形状 | 候选 Sharpe | 恒定多 Sharpe | 净方向 D Sharpe | 平均净敞口 | 净敞口与篮子过去 168 根收益的相关 | B 段选币 S 的 t（扣掉方向后） |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `8a838550` | 2.38 / 1.34 | 0.62 / 0.33 | 2.38 / 1.39 | −0.014 / −0.098 | −0.032 / +0.245 | 0.55（0.60） |
+| `49742e60` | 2.64 / 0.94 | 0.62 / 0.33 | 2.64 / 1.60 | −0.004 / −0.033 | −0.130 / +0.152 | −1.95（−1.84） |
+| `2ca33804` | 2.37 / 0.54 | 0.71 / 0.28 | 2.37 / 1.37 | −0.008 / −0.038 | −0.103 / +0.038 | −2.60（−2.50） |
+| `8a87c4ae` | 1.15 / 0.71 | 0.71 / 0.28 | 1.15 / 0.88 | −0.010 / −0.158 | −0.076 / +0.107 | −0.22（−0.11） |
+
+A 段里 S 恒为 0（只有一个币可拿），所以 A 段的候选与净方向 D 是同一条。
+
+### 四、判定（钉住的 `decide()`，原样套）
+
+四个形状 B 段择时部分的 NW t 都 ≥ 2.0（3.23 / 3.52 / 3.01 / 2.21）：四个都是 **「有横截面的那段也在」**，叶的结论看
+`8a838550a686852d`，也是它。与看数之前写下的预期相同。
+
+预期里的两句：「B 段大概不到 3.4，但不至于掉到 2 以下」——3.23，对了；「单币择时那段可能挣得不成比例」——按 t 与
+Sharpe 是（A 段 t 2.28，若各段一样只该有 1.42），按钱不是（下面第 1 条）。
+
+### 五、这说明什么
+
+1. **择时线索不是靠 2021 年单币那段撑起来的。** A 段约占 bar 数的 15%，四个形状的择时部分净收益都只有 12–13% 在
+   A 段。排第一的那个，A 段按年净收益 +33.52%，比 B 段的 +38.96% 还低；A 段 Sharpe 高（2.36 对 1.49）、t 超过「若各段
+   一样」的尺，是因为那段波动小：按年净收益除以 Sharpe 反推，A 段约 14%、B 段约 26%（推算）。B 段自己 t 3.23，只比
+   「若各段一样」的 3.35 低一点。
+2. **A 段本身也是正的。** 四个里三个 A 段 t 过 2（2.28 / 2.62 / 2.32，`8a87c4ae` 是 1.27）。但那是 BTC 一个币 10 个月
+   的择时，只能单列。
+3. **B 段的净敞口有一部分在跟趋势，A 段没有。** 排第一的那个，净敞口与篮子过去 168 根收益的相关 A 段 −0.032、B 段
+   +0.245（上一节全样本 +0.21，主要来自 B 段）；另外三个 B 段 +0.152 / +0.038 / +0.107。择时预登记的对照必须有简单的
+   趋势跟随：多空比择时挣的钱里有多少只是「跟着过去一周的涨跌走」，要分得开。
+4. **选币仍然没有东西。** 排第一的那个 B 段选币部分 t 0.55，扣掉方向后 0.60，与上一节那句推算（「只看有横截面的那段，
+   S 的 t 也不过 0.6 上下」）相符。另外三个 B 段都是负的，没有一个两个 t 都 ≥ 2.0，按钉住的后果不触发重审 `ls-leaf`。
+5. **候选本身在 B 段弱得多。** 候选 Sharpe A 段 2.38 / 2.64 / 2.37 / 1.15，B 段 1.34 / 0.94 / 0.54 / 0.71：A 段没有选币
+   部分，B 段的选币部分四个都在拖 Sharpe（排第一的那个 D 1.39 → 候选 1.34，另外三个拖得更多）。钱在净方向上，不在排
+   币上。
+
+### 六、落地（按钉住的后果）
+
+- 写择时预登记。对照是大盘（恒定持有同一个篮子）与简单趋势跟随（净敞口跟着篮子过去一段的涨跌走）；数据用多空比的
+  全部历史，A 段单列、单独报。预登记入库以后、花 ledger 之前问操作者。
+- 不改 `reopen.yaml`：`ls-leaf` 仍是 REFUTED（作为选币信号）；择时是另一条假设，不是这一叶的重开。
+- 卡片上的最后一句也记在这里：择时那条假设即使过了，实盘现在没有多空比的数据通道，要补。
+- 没花 ledger，没写 `reports/`；registry、live profile、`costs.yaml`、policy 都没碰，实盘不受影响。
+
+### 附：Mac 上的原始输出（逐字，sha256 `191bc04c3ee1a11603ae997afd16a9f1953cda2b630f6afd42baefc26ab9b8ee`）
+
+表里 constant_long、constant_short、direction_constant、selection 那 16 行末尾各有 19 个补齐的空格，是原样。Mac 回报时
+的抄写去掉了它们（另报了去掉后的 sha256 `2b69f8b9…`），这里按原样补回，与原文件的 sha256 对上；删掉就对不上了。
+
+```text
+pinned: ls_direction_look.py sha256 e4dd5a59613c
+panel: 18 symbols x 49841 bars, 2021-01-01 00:00:00+00:00 -> 2026-09-08 16:00:00+00:00
+against the report: {"symbols": true, "first_bar": true, "last_bar": true, "universe_mode": true}
+first long/short bucket per symbol: BTCUSDT 2021-01-01, ETHUSDT 2021-12-01, SOLUSDT 2021-12-01, ZECUSDT 2021-12-01, XRPUSDT 2021-12-01, HYPEUSDT 2025-05-30, DOGEUSDT 2021-12-01, BNBUSDT 2021-12-01, TRUMPUSDT 2025-01-18, ENAUSDT 2024-04-02, TUTUSDT 2025-03-20, 1000PEPEUSDT 2023-05-05, PUMPUSDT 2025-04-12, SUIUSDT 2023-05-03, AKEUSDT 2025-09-26, UNIUSDT 2021-12-01, LINKUSDT 2021-12-01, ADAUSDT 2021-12-01
+baseline tsmom: Sharpe +1.7317 (report +1.7327, Δ -0.001)
+
+== 8a838550a686852d  squash((-1 * lsr(168)), 1)
+reproduction: rebuilt vs look_at() this run, largest gap 0.0e+00 (must be <= 1e-09); vs 09-27: candidate Sharpe Δ +0.000, timing t Δ -0.00; look_at() vs the mine report ok -> ok
+split: 2021-12-08 00:00:00+00:00 (first bar the candidate could hold two names); A 2021-01-31 00:00:00+00:00 -> before the split, 7464 bars, names per bar {'1': 7464}; B -> 2026-09-08 16:00:00+00:00, 41657 bars, fewest names 10
+stream             | all: Sharpe  NW t | A: Sharpe  NW t | B: Sharpe  NW t | share of net: A     B
+candidate          |     +1.37 +3.27 |     +2.38 +2.27 |     +1.34 +2.95 |         +11%  +89%
+constant_long      |     +0.34 +0.79 |     +0.62 +0.59 |     +0.33 +0.71 |                   
+constant_short     |     -0.36 -0.84 |     -0.62 -0.59 |     -0.35 -0.76 |                   
+direction          |     +1.44 +3.39 |     +2.38 +2.27 |     +1.39 +3.03 |         +12%  +88%
+direction_constant |     -0.33 -0.79 |     -0.62 -0.59 |     -0.27 -0.59 |                   
+direction_timing   |     +1.55 +3.64 |     +2.36 +2.28 |     +1.49 +3.23 |         +13%  +87%
+selection          |     +0.23 +0.55 |        always 0 |     +0.25 +0.55 |                   
+(the parts are #199's streams: each with its own funding and the share of the candidate's trading cost its trades asked for; the constant holdings are on the candidate's bars, flat where they did not trade)
+per year, fraction of equity, net: timing A +33.52%, B +38.96%; candidate A +29.17%, B +41.54%; timing t if spread evenly A +1.42, B +3.35
+exposure: mean net A -0.014, B -0.098; corr(net, basket's past 168 bars) A -0.032, B +0.245
+selection in B only: NW t +0.55; beyond direction (betas fitted on B) +4.47% a year, t +0.60
+verdict: 有横截面的那段也在（有横截面那段择时部分 t 3.23，要 ≥ 2.0；只有 BTC 那段 t 2.28）
+
+== 49742e605be41b26  squash((-1 * lsr(168)), 0.5)
+reproduction: rebuilt vs look_at() this run, largest gap 0.0e+00 (must be <= 1e-09); vs 09-27: candidate Sharpe Δ +0.000, timing t Δ -0.00; look_at() vs the mine report ok -> ok
+split: 2021-12-08 00:00:00+00:00 (first bar the candidate could hold two names); A 2021-01-31 00:00:00+00:00 -> before the split, 7464 bars, names per bar {'1': 7464}; B -> 2026-09-08 16:00:00+00:00, 41657 bars, fewest names 10
+stream             | all: Sharpe  NW t | A: Sharpe  NW t | B: Sharpe  NW t | share of net: A     B
+candidate          |     +1.03 +2.43 |     +2.64 +2.55 |     +0.94 +2.05 |         +17%  +83%
+constant_long      |     +0.34 +0.79 |     +0.62 +0.59 |     +0.33 +0.71 |                   
+constant_short     |     -0.36 -0.84 |     -0.62 -0.59 |     -0.35 -0.76 |                   
+direction          |     +1.64 +3.86 |     +2.64 +2.55 |     +1.60 +3.46 |         +12%  +88%
+direction_constant |     -0.33 -0.80 |     -0.62 -0.59 |     -0.27 -0.60 |                   
+direction_timing   |     +1.68 +3.95 |     +2.70 +2.62 |     +1.63 +3.52 |         +12%  +88%
+selection          |     -0.82 -1.95 |        always 0 |     -0.90 -1.95 |                   
+(the parts are #199's streams: each with its own funding and the share of the candidate's trading cost its trades asked for; the constant holdings are on the candidate's bars, flat where they did not trade)
+per year, fraction of equity, net: timing A +33.73%, B +43.29%; candidate A +32.29%, B +28.68%; timing t if spread evenly A +1.54, B +3.63
+exposure: mean net A -0.004, B -0.033; corr(net, basket's past 168 bars) A -0.130, B +0.152
+selection in B only: NW t -1.95; beyond direction (betas fitted on B) -13.33% a year, t -1.84
+verdict: 有横截面的那段也在（有横截面那段择时部分 t 3.52，要 ≥ 2.0；只有 BTC 那段 t 2.62）
+
+== 2ca33804038a5a52  squash((-1 * lsr(72)), 0.5)
+reproduction: rebuilt vs look_at() this run, largest gap 0.0e+00 (must be <= 1e-09); vs 09-27: candidate Sharpe Δ +0.000, timing t Δ -0.00; look_at() vs the mine report ok -> ok
+split: 2021-12-04 00:00:00+00:00 (first bar the candidate could hold two names); A 2021-01-31 00:00:00+00:00 -> before the split, 7368 bars, names per bar {'1': 7368}; B -> 2026-09-08 16:00:00+00:00, 41753 bars, fewest names 10
+stream             | all: Sharpe  NW t | A: Sharpe  NW t | B: Sharpe  NW t | share of net: A     B
+candidate          |     +0.64 +1.50 |     +2.37 +2.23 |     +0.54 +1.17 |         +23%  +77%
+constant_long      |     +0.30 +0.69 |     +0.71 +0.67 |     +0.28 +0.60 |                   
+constant_short     |     -0.31 -0.74 |     -0.71 -0.67 |     -0.30 -0.64 |                   
+direction          |     +1.42 +3.30 |     +2.37 +2.23 |     +1.37 +2.95 |         +12%  +88%
+direction_constant |     -0.33 -0.78 |     -0.71 -0.67 |     -0.24 -0.54 |                   
+direction_timing   |     +1.46 +3.39 |     +2.43 +2.32 |     +1.40 +3.01 |         +13%  +87%
+selection          |     -1.09 -2.60 |        always 0 |     -1.18 -2.60 |                   
+(the parts are #199's streams: each with its own funding and the share of the candidate's trading cost its trades asked for; the constant holdings are on the candidate's bars, flat where they did not trade)
+per year, fraction of equity, net: timing A +30.77%, B +37.09%; candidate A +28.81%, B +16.65%; timing t if spread evenly A +1.31, B +3.12
+exposure: mean net A -0.008, B -0.038; corr(net, basket's past 168 bars) A -0.103, B +0.038
+selection in B only: NW t -2.60; beyond direction (betas fitted on B) -19.06% a year, t -2.50
+verdict: 有横截面的那段也在（有横截面那段择时部分 t 3.01，要 ≥ 2.0；只有 BTC 那段 t 2.32）
+
+== 8a87c4aea11c7a7a  squash((-1 * lsr(72)), 1)
+reproduction: rebuilt vs look_at() this run, largest gap 0.0e+00 (must be <= 1e-09); vs 09-27: candidate Sharpe Δ +0.000, timing t Δ +0.00; look_at() vs the mine report ok -> ok
+split: 2021-12-04 00:00:00+00:00 (first bar the candidate could hold two names); A 2021-01-31 00:00:00+00:00 -> before the split, 7368 bars, names per bar {'1': 7368}; B -> 2026-09-08 16:00:00+00:00, 41753 bars, fewest names 10
+stream             | all: Sharpe  NW t | A: Sharpe  NW t | B: Sharpe  NW t | share of net: A     B
+candidate          |     +0.72 +1.70 |     +1.15 +1.09 |     +0.71 +1.55 |         +10%  +90%
+constant_long      |     +0.30 +0.69 |     +0.71 +0.67 |     +0.28 +0.60 |                   
+constant_short     |     -0.31 -0.74 |     -0.71 -0.67 |     -0.30 -0.64 |                   
+direction          |     +0.88 +2.10 |     +1.15 +1.09 |     +0.88 +1.93 |          +9%  +91%
+direction_constant |     -0.32 -0.78 |     -0.71 -0.67 |     -0.24 -0.54 |                   
+direction_timing   |     +1.04 +2.45 |     +1.29 +1.27 |     +1.02 +2.21 |         +13%  +87%
+selection          |     -0.09 -0.22 |        always 0 |     -0.10 -0.22 |                   
+(the parts are #199's streams: each with its own funding and the share of the candidate's trading cost its trades asked for; the constant holdings are on the candidate's bars, flat where they did not trade)
+per year, fraction of equity, net: timing A +21.79%, B +25.93%; candidate A +13.91%, B +22.01%; timing t if spread evenly A +0.95, B +2.26
+exposure: mean net A -0.010, B -0.158; corr(net, basket's past 168 bars) A -0.076, B +0.107
+selection in B only: NW t -0.22; beyond direction (betas fitted on B) -0.91% a year, t -0.11
+verdict: 有横截面的那段也在（有横截面那段择时部分 t 2.21，要 ≥ 2.0；只有 BTC 那段 t 1.27）
+
+8a838550a686852d  有横截面的那段也在（有横截面那段择时部分 t 3.23，要 ≥ 2.0；只有 BTC 那段 t 2.28）
+49742e605be41b26  有横截面的那段也在（有横截面那段择时部分 t 3.52，要 ≥ 2.0；只有 BTC 那段 t 2.62）
+2ca33804038a5a52  有横截面的那段也在（有横截面那段择时部分 t 3.01，要 ≥ 2.0；只有 BTC 那段 t 2.32）
+8a87c4aea11c7a7a  有横截面的那段也在（有横截面那段择时部分 t 2.21，要 ≥ 2.0；只有 BTC 那段 t 1.27）
+timing lead: 有横截面的那段也在（有横截面那段择时部分 t 3.23，要 ≥ 2.0；只有 BTC 那段 t 2.28）  (governed by 8a838550a686852d; the four agree)
+wrote /tmp/ls_timing_btc_only_split.json
+exit 0
+```
