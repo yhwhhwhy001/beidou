@@ -403,7 +403,7 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             f"M-007 保证金占用对可动用 USDT 为 {_fmt_pct(margin.get('peak_standing_usage_tradable'))}，"
             f"超过 {_fmt_pct(margin.get('budget'))}（margin_cap 是在无抵押品的回测上定的）；"
             f"同一根 bar 对总权益只有 {_fmt_pct(same_bar)}，两把尺子差 {_fmt_num(ratio)} 倍。"
-            "约束侧未改，仍按总权益；reopen 条目 risk-g11-denominator 待重新裁定"
+            "约束侧按可动用 USDT 裁剪（2026-09-28 裁定，risk-g11-denominator）"
         )
     if str(budget.get("status")) == "BLIND":
         # A criterion with no reading is not a breach and cannot be acted on in the next hour - it
@@ -804,7 +804,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "gross 对可动用 USDT 峰值/最近": (
                         f"{_fmt_num((payload.get('margin') or {}).get('peak_gross_over_tradable'))}x / "
                         f"{_fmt_num((payload.get('margin') or {}).get('last_gross_over_tradable'))}x"
-                        "（max_gross 仍按总权益裁剪；reopen 条目 risk-g11-denominator 待重新裁定）"
+                        "（max_gross 按可动用 USDT 裁剪：2026-09-28 裁定，risk-g11-denominator）"
                     ),
                     "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),
                     "rejections_by_code": json_dumps((payload.get("margin") or {}).get("rejections") or {}),

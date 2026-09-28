@@ -85,7 +85,9 @@ EXPECTED_FIELDS = {
         "min_history_bars",
         "sleeve_max_gross",
     },
-    "guards": {"max_gross", "max_weight", "daily_loss_pause", "stale_bars_max"},
+    # v12 (risk-g11-denominator, 2026-09-28): what `max_gross` is a multiple of.  Arrived switched to
+    # `usdt_equity`, so like v9 and v11 there is no alias - `test_the_usdt_cap_moved_only_the_guards_block`.
+    "guards": {"max_gross", "max_weight", "daily_loss_pause", "stale_bars_max", "max_gross_denominator"},
     # v6: what the loop does when a symbol's bars do not arrive.  Not a portfolio parameter and not a
     # guard - it decides whether a position survives an empty REST answer - so it gets its own block
     # rather than being filed under one of theirs.
@@ -188,6 +190,12 @@ SHIPPED_K0175 = "4b2dc74b8f3ce73a3f7b14b513f3999aa9a7372024b317648c0d65381f9bf8c
 #: 24 (digest e6d89cf8) failed T-11 on the Mac's cycles and never ran.
 SHIPPED_BY_VOL = "2ee491c139714bf1dd8e79d2824b93330c65053a6fbc628bddc8918c9a67b16d"
 
+#: v12: `guards.max_gross_denominator: usdt_equity` on top of `SHIPPED_BY_VOL` (risk-g11-denominator, operator
+#: ruling 2026-09-28).  The gross cap moves from 2.0 x equity to 2.0 x the USDT balance.  Since restart #60 the
+#: book's target gross peaked at 0.70 x USDT, so on the record the new cap binds nowhere - a reading, not a
+#: proof, so like the two above it is NOT in `CONSTRUCTION_ALIASES`, and the window restarts with it.
+SHIPPED_USDT_CAP = "e32f3856ac1e359295272aee491bd1def4bdefbf111aaaaa40936dd8df827bcf"
+
 
 def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:
     """The freeze test compares the CANONICAL digest, so a field set that grows must not trip it.
@@ -214,16 +222,18 @@ def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
     seen through a longer field set, and this test was inverted to say so.  2026-09-27: k 0.60 -> 0.175 is
     the next real change, so the shipped digest is `SHIPPED_K0175` and resolves to itself - not to
     `SHIPPED_D3`, not to `FROZEN`.  `by_vol` is the one after that: `SHIPPED_BY_VOL`, resolving to itself and to
-    none of the three before it.  Asserting the inequality rather than deleting the test is what keeps a
-    future alias - which would quietly re-declare two books to be one - from passing unnoticed.
+    none of the three before it.  2026-09-28: the gross cap on the USDT balance is the next, `SHIPPED_USDT_CAP`.
+    Asserting the inequality rather than deleting the test is what keeps a future alias - which would quietly
+    re-declare two books to be one - from passing unnoticed.
     """
     from beidou_live.engine import construction_fingerprint
     from tests.live.helpers_construction import live_config_for_profile
 
     digest = construction_fingerprint(live_config_for_profile())["digest"]
-    assert digest == SHIPPED_BY_VOL, digest
-    assert canonical_construction(digest) == digest, "交易所分档是一次构造变更，不能声明成旧账的别名"
-    assert canonical_construction(digest) not in (SHIPPED_K0175, SHIPPED_D3, FROZEN)
+    assert digest == SHIPPED_USDT_CAP, digest
+    assert canonical_construction(digest) == digest, "gross 上限改按可动用 USDT 是一次构造变更，不能声明成旧账的别名"
+    assert canonical_construction(digest) not in (SHIPPED_BY_VOL, SHIPPED_K0175, SHIPPED_D3, FROZEN)
+    assert canonical_construction(SHIPPED_BY_VOL) == SHIPPED_BY_VOL, "交易所分档是一次构造变更，不能声明成旧账的别名"
     assert canonical_construction(SHIPPED_K0175) == SHIPPED_K0175, (
         "k 0.60 -> 0.175 是真的构造变更，不能声明成旧账的别名"
     )
@@ -247,9 +257,29 @@ def test_by_vol_moved_only_the_leverage_block() -> None:
         key: value for key, value in payload["leverage"].items() if key not in ("sigma_ref", "tiers", "hysteresis")
     }
     payload["leverage"] = {**leverage, "mode": "auto"}
+    # v12's key comes out too: this test is about what v11 moved.
+    payload["guards"] = {key: value for key, value in payload["guards"].items() if key != "max_gross_denominator"}
     rebuilt = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
-    assert out["payload_version"] == 11 and out["leverage"]["mode"] == "by_vol"
+    assert out["payload_version"] == 12 and out["leverage"]["mode"] == "by_vol"
     assert rebuilt == SHIPPED_K0175, "`by_vol` 只该动杠杆那一块；拿掉三个新键、改回 auto 应当逐字节复现 #163 的构造"
+
+
+def test_the_usdt_cap_moved_only_the_guards_block() -> None:
+    """v12: take `guards.max_gross_denominator` out and the hash is `SHIPPED_BY_VOL` exactly.
+
+    So the ruling moved one key and nothing rode along with it - no weight, band, exit or leverage knob.
+    """
+    import hashlib
+    import json
+
+    from beidou_live.engine import construction_fingerprint
+    from tests.live.helpers_construction import live_config_for_profile
+
+    out = construction_fingerprint(live_config_for_profile())
+    payload = {key: value for key, value in out.items() if key not in ("digest", "payload_version")}
+    assert payload["guards"].pop("max_gross_denominator") == "usdt_equity"
+    rebuilt = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    assert rebuilt == SHIPPED_BY_VOL, "约束侧改分母只该动 guards 那一个键；拿掉它应当逐字节复现 by_vol 的构造"
 
 
 # --- the readers.  A canonicaliser nothing calls leaves M-010 reset exactly as before ----------------

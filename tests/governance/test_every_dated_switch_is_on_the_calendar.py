@@ -188,13 +188,16 @@ def test_a_date_in_a_comment_prose_or_a_record_is_not_a_switch(tmp_path: Path) -
     assert _switch_lines(listing) == ([6], ["12 `decided_on:`"])
 
 
-def test_on_october_6_the_calendar_holds_the_two_october_13_reopen_dates() -> None:
-    """Today's file: `risk-g11-denominator` and `drawdown-budget-denominator`.  Rule on them, move this pin."""
+def test_on_october_6_no_reopen_date_is_left_on_october_13() -> None:
+    """The pin moved as its first version asked: "Rule on them, move this pin."
+
+    Until 2026-09-28 it held two rows, `risk-g11-denominator` and `drawdown-budget-denominator`, both
+    `date_after` 10-13.  The operator ruled on both that day and both are `resolved`, so 10-13 carries no
+    reopen date.  With no `date_after` entry left in the list, the row-by-row test below compares two empty
+    lists; `test_a_date_after_written_into_the_list_is_on_the_calendar` keeps the mechanism under test.
+    """
     rows = [row for row in dated_switches(repo=ROOT, now=OCTOBER_6) if row.source.startswith(reopen.LIST)]
-    october_13 = [row for row in rows if row.at == OCTOBER_13]
-    assert len(october_13) == 2, [row.source for row in rows]
-    assert {row.status for row in october_13} == {"pending"}
-    assert {row.reader for row in october_13} == {"beidou governance reopen"}
+    assert [row for row in rows if row.at == OCTOBER_13] == [], [row.source for row in rows]
 
 
 @pytest.mark.parametrize("now", CLOCKS)

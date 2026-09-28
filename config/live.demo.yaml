@@ -42,7 +42,7 @@ portfolio:
   # on cross margin the setting moves neither P&L nor the liquidation price, and a bracket cap or the margin
   # invariant still acts in the same cycle.
   leverage_hysteresis: 168
-  margin_cap: 0.40            # initial margin at the gross cap stays below 40% of equity (was 100% at a fixed 2x)
+  margin_cap: 0.40            # initial margin at the gross cap stays below 40% of max_gross's denominator (USDT since 2026-09-28; was 100% at a fixed 2x)
   max_leverage: 5             # auto's cap, and by_vol's leverage at sigma_ref
   margin_buffer: 0.10         # keep 10% of the available balance free when scaling risk-adding orders (T-S02)
   max_participation: 0.02     # any order but a full close <= 2% of the symbol's average hourly quote volume (T-S03)
@@ -249,7 +249,14 @@ portfolio:
   # `risk_budget:` 与 `beidou_governance/policy.py` 0.3.6。这是构造变更，清零 M-010、M-G06 与 `realised_vol`。
   # 本段之前各段里的「现行」「WHAT IS SHIPPED」都是写它那天的状态，其中的 k 与档位是历史。
   vol_target: 0.175           # annualised portfolio volatility target
-  max_gross: 2.0              # sum |weight| <= 2.0 (x equity)
+  max_gross: 2.0              # gross notional <= 2.0 x the denominator below
+  # 2026-09-28，操作者裁定 risk-g11-denominator：约束侧改按可动用 USDT。`max_gross` 2.0 与 `margin_cap` 0.40
+  # 是在没有抵押品的回测上定的，那里两个分母是同一个数；demo 账户约 43% 的权益是 BTC 抵押品。这一行让守卫把
+  # gross 截在 2.0 × USDT 余额，当天约是 1.14 × 总权益。`margin_cap` 跟着走：D-016 按两者之比定杠杆。
+  # `max_weight` 与日亏暂停不在裁定里，仍按总权益。k 0.175 下重启 #60 以来目标 gross 最多是 USDT 的 0.70 倍，
+  # 这一行当天不截任何仓位。它是构造变更（v12，无别名），清零 M-010、M-G06 与 `realised_vol`。回滚：改回
+  # `equity`，再按纪律重启。
+  max_gross_denominator: usdt_equity
   max_weight: 0.15            # |weight| per symbol
   no_trade_band: 0.005        # skip rebalances smaller than 0.5% of equity
   # 2026-09-04 (operator decision, P10 cell B): widened 0.25 -> 0.40.  Two pre-registered rules disagreed on this

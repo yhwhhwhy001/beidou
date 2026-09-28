@@ -396,14 +396,21 @@ entries:
       说的：拿总权益量它，尺子比它所代表的政策宽 1.9 倍。
       顺周期放大器同日量到：BTC 抵押品跌 20% → 总权益 −1,143 U → 目标 gross −1,109 U，也就是在
       低点被迫减仓；这个联合风险在回测里完全没有，因为回测的 equity 是纯 USDT。
-    check: date_after
-    args:
-      date: '2026-10-13T00:00:00+00:00'
+    check: resolved
     note: >-
-      报告侧已经改完（PR #78：判定走可动用口径，两个读数并排印）。约束侧一行未动，且有一条测试
+      操作者 2026-09-28 重新裁定：约束侧改按可动用 USDT。守卫把 `max_gross` 截在 2.0 × USDT 余额，
+      当天约 1.14 × 总权益；`margin_cap` 经 D-016 的比值跟着走。profile 键是
+      `portfolio.max_gross_denominator: usdt_equity`，构造 v12、没有别名，清零 M-010、M-G06 与
+      `realised_vol`，随下一次按纪律的重启生效。重启 #60 以来目标 gross 最多是 USDT 的 0.70 倍，
+      所以当天不截任何仓位。条目列的资金那条路（把 BTC 抵押品换成 USDT）09-25 已记「抵押品无法置换」。
+      `max_weight` 与日亏暂停不在裁定里，仍按总权益。见 RESEARCH_LOG 同日一节。
+      ——
+      原注：报告侧已经改完（PR #78：判定走可动用口径，两个读数并排印）。约束侧一行未动，且有一条测试
       断言 `clamp_book` 的签名里没有地方传抵押品份额——那条测试就是这条 entry 的机械保险：
       在这次重新裁定之前，任何「顺手统一一下口径」都会撞红。
-    log: 2026-09-19 F4 的结构命题第一次有了测量
+    log: >-
+      2026-09-19 F4 的结构命题第一次有了测量；
+      2026-09-28 操作者裁定：risk-g11-denominator 改按可动用 USDT，drawdown-budget-denominator 结项
   - id: drawdown-budget-denominator
     subject: P13 / R8 回撤预算的分母——70% 是总权益的 70%，而一半总权益开不了仓
     ruled: 2026-09-20
@@ -463,11 +470,15 @@ entries:
       +5.6pp（pit）/ +3.5pp（static）：互补在方向上成立，上面「便宜三成」那句过头了，预算线上约 5–9%。
       触发率两种 base 下逐位相同，上面 100% 与 68.5% 那句不变。
       详见 RESEARCH_LOG「2026-09-23 · k 扫描的更正：梯按实盘的 base 重跑」。
-    check: date_after
-    args:
-      date: '2026-10-13T00:00:00+00:00'
+    check: resolved
     note: >-
-      和 `risk-g11-denominator` 是同一件事的两个仪表，落在同一个冻结上，到期要一起裁。
+      操作者 2026-09-28 裁定结项：本条要答的「k 设在哪」，09-25 的裁定已经答了。那天选「细化」，取
+      k = 0.175：诚实漂移下可动用 USDT 的 q95 是 pit −63.30%、static −65.60%，都在 −70% 以内
+      （`reports/research/k-bisect-0175-20260925.json`）。档位按可动用口径重推（policy 0.3.6），
+      #163 于 09-27 由重启 #59 载入。结项只记录这个事实，不改任何数。与 `risk-g11-denominator`
+      同日一起裁，见 RESEARCH_LOG 同日一节。
+      ——
+      原注：和 `risk-g11-denominator` 是同一件事的两个仪表，落在同一个冻结上，到期要一起裁。
       报告侧已经改完（PR #93）：日报的 P13 段并排印两个口径，`usdt_drawdown_state` 另立 USDT 自己
       的高水位，并把换算后的两档印出来（`rungs_in_this_denominator`：**2026-09-20 读作**
       de-escalate 91% / rollback 130%，那是按当天因子 1.861 算的；09-22 因子 1.769 下是
@@ -486,4 +497,5 @@ entries:
     log: >-
       2026-09-20 回撤按可动用 USDT 重新定价：换分母不制造风险，它把风险显出来；
       2026-09-22 k 扫描：梯和 k 是互补不是替代，而守住 70% 可动用预算要 k ≈ 0.30–0.35；
-      2026-09-23 k 扫描的更正：梯按实盘的 base 重跑，k=0.30 守不住，第一个守得住的是 0.25
+      2026-09-23 k 扫描的更正：梯按实盘的 base 重跑，k=0.30 守不住，第一个守得住的是 0.25；
+      2026-09-28 操作者裁定：risk-g11-denominator 改按可动用 USDT，drawdown-budget-denominator 结项
