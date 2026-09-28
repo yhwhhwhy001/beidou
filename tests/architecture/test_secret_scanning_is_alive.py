@@ -519,3 +519,121 @@ def test_pre_push_fails_closed_when_git_log_fails(clean_repo: _MergeRepo, push: 
         f"pre-push 拦下了，却没把 git 的原话给推送的人（{push}）。只看到拦截，不知道该修什么。\n"
         f"stderr:\n{proc.stderr[-2000:]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# pre-commit 被拦时说的话
+# ---------------------------------------------------------------------------
+#
+# 提交被拦的那一刻，操作者正在想要不要 `--no-verify`。这时 hook 说的话会被照着做，
+# 所以每一句都得是真的。下面两句在 2026-09-29 之前都不是，这组测试守的就是它们：
+#
+#   - 「上面列出了命中的文件与行号」。屏幕上其实什么也没列。gitleaks 不带 `--verbose` 时
+#     只在 stderr 报一句 `leaks found`，而 hook 把 stderr 丢进了 /dev/null。
+#   - 「GitHub 的 push protection 仍然会在 push 时拦住」。对 Binance 密钥这不成立，
+#     理由见上面的 `test_the_docs_record_that_github_cannot_catch_binance_keys`。
+#
+# 在这之前也没有一条测试真跑过 pre-commit，只查了它在不在、能不能执行。
+
+PRE_COMMIT = ROOT / ".githooks" / "pre-commit"
+
+
+def _run_pre_commit(staged: str) -> subprocess.CompletedProcess[str]:
+    """在临时仓库里暂存一个内容为 `staged` 的文件，照 git 的方式跑仓库里那个 pre-commit。
+
+    跑的是 hook 本身，不是测试里抄的命令，理由同 pre-push 那组。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        _git(repo, "init", "-q", "-b", "main")
+        # hook 按仓库根找配置。只拷不暂存，配置本身不在这次要扫的 diff 里。
+        shutil.copy(CONFIG, repo / ".gitleaks.toml")
+        (repo / "leak.py").write_text(staged, encoding="utf-8")
+        _git(repo, "add", "leak.py")
+        return subprocess.run([str(PRE_COMMIT)], cwd=repo, env=_git_env(), capture_output=True, text=True, timeout=120)
+
+
+@pytest.fixture(scope="module")
+def blocked_commit() -> tuple[str, subprocess.CompletedProcess[str]]:
+    """暂存区里有一个假凭据时，pre-commit 的退出码与屏幕输出。"""
+    forged = _forged_binance_credential()
+    return forged, _run_pre_commit(f'BEIDOU_BINANCE_API_KEY = "{forged}"\n')
+
+
+def test_pre_commit_blocks_a_staged_credential_and_lists_it_redacted(
+    blocked_commit: tuple[str, subprocess.CompletedProcess[str]],
+) -> None:
+    """假凭据要拦下，命中的文件要列出来，值要脱敏。
+
+    列出来是被拦时那段提示的前提。它的第 1 步是「先看它是不是真的密钥」，
+    没有列表就无从看起，剩下的只有猜，或者 `--no-verify`。
+    """
+    forged, proc = blocked_commit
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 1, (
+        f"暂存区里的假凭据没被 pre-commit 拦下（returncode={proc.returncode}）：\n{shown[-2000:]}"
+    )
+    assert "leak.py" in shown, (
+        "pre-commit 拦下了，屏幕上却没列出命中的文件。提示说「上面列出了命中的文件与行号」，\n"
+        "照着去看的人看到的是空白。gitleaks 要带 `--verbose` 才把命中打到 stdout。\n"
+        f"屏幕上实际是：\n{shown[-2000:]}"
+    )
+    assert forged not in shown, "pre-commit 把假凭据的原值打到了屏幕上。检查 hook 里的 `--redact` 还在不在。"
+
+
+def test_the_blocked_prompt_says_push_protection_cannot_catch_binance_keys(
+    blocked_commit: tuple[str, subprocess.CompletedProcess[str]],
+) -> None:
+    """被拦时打印的提示，要把「后面没有网」说出来。
+
+    这是操作者想要不要 `--no-verify` 的时刻，而默认假设恰好是反的：「开了 push protection，
+    后面有人兜底」。提示不说破，这个假设就会导出「绕一下没关系」。
+    """
+    _, proc = blocked_commit
+    shown = proc.stdout + proc.stderr
+    assert "partner pattern" in shown, (
+        "pre-commit 被拦时的提示没说 GitHub 的 push protection 认不出 Binance 密钥。\n"
+        f"操作者正要决定用不用 `--no-verify`，这句删不得。屏幕上实际是：\n{shown[-2000:]}"
+    )
+
+
+def test_pre_commit_lets_ordinary_content_through() -> None:
+    """对照：普通内容必须放行。
+
+    没有这一条，上面两条分不清「看见了假凭据」和「hook 什么都拦」。hook 丢掉了 gitleaks 的
+    stderr，而配置找不到时 gitleaks 的退出码也是 1。
+    """
+    proc = _run_pre_commit("x = 1\n")
+    assert proc.returncode == 0, f"普通内容被 pre-commit 拦下了：\n{(proc.stdout + proc.stderr)[-2000:]}"
+
+
+def _paragraphs(text: str) -> list[str]:
+    """按空行切段。注释行先去掉开头的 `#`，头注与打印出来的提示按同一种段落读。"""
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for line in [*text.splitlines(), ""]:
+        stripped = line.strip().lstrip("#").strip()
+        if stripped:
+            current.append(stripped)
+        elif current:
+            paragraphs.append(" ".join(current))
+            current = []
+    return paragraphs
+
+
+@pytest.mark.parametrize("name", ["pre-commit", "pre-push"])
+def test_the_local_hooks_never_offer_push_protection_as_a_backstop(name: str) -> None:
+    """hook 里每一段提到 push protection 的话，都要在同一段里说它认不出 Binance 的密钥。
+
+    头注、缺 gitleaks 时的提示、被拦时的提示都算。pre-commit 在 2026-09-29 之前三处都把
+    push protection 说成后面的兜底。只查整个文件里有没有 `partner pattern` 不够：
+    说明写在头注里，打印出来的那段照样可以说错。
+    """
+    text = (ROOT / ".githooks" / name).read_text(encoding="utf-8")
+    stale = [p for p in _paragraphs(text) if "push protection" in p and "partner pattern" not in p]
+    assert not stale, (
+        f"`.githooks/{name}` 里有段落提到 push protection，却没说它认不出 Binance 密钥：\n\n"
+        + "\n\n".join(stale)
+        + "\n\n对 Binance 密钥，push protection 不是一层网（见 SECURITY.md 第二节）。"
+        "提示里把它说成兜底，读的人就会得出「`--no-verify` 一下没关系」。"
+    )

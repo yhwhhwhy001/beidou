@@ -11,6 +11,9 @@ be decided on its own merits by the operator, not smuggled in as a bug fix.  Wha
 that nobody could SEE the divergence.  So this measures it and the daily report prints it, and the number
 the book trades on is untouched.
 
+2026-09-28: the operator ruled on it (`risk-g11-denominator`).  The gross cap now divides by the USDT balance
+(`tests/live/test_the_gross_cap_reads_the_usdt_balance.py`); the vol sizing and the ladder still do not.
+
 `/fapi/v2/account` already carries the per-asset breakdown in `assets`; it was being thrown away.
 """
 

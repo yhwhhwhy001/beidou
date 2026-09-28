@@ -294,6 +294,10 @@ M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录
   - **上线首日要人看一次（T-12）**：重启后第一个整点周期跑完，在交易所界面上逐个币核对杠杆，与 `tail -1 .beidou/live/cycles.jsonl | python3 -c "import json,sys; print(json.load(sys.stdin)['leverage_tiers']['set'])"` 一致。接口读不回，这一步只能人看。
   - **回滚**：这一行改回 `auto` 再按上面的纪律重启。启动时全量重发 5x，清掉分档的记忆（`leverage_tiered`、`leverage_streaks`）；构造指纹随之变化，监控窗口再清零一次。
 - `portfolio.leverage: auto` —— 每个币的交易所杠杆按 `max_gross / margin_cap` 与档位上限推导（5x，D-016）；写死整数则固定。`by_vol` 之前的出厂值，也是它的回滚值。
+- `portfolio.max_gross_denominator: usdt_equity` —— 守卫把 gross 截在 `max_gross` × USDT 余额（`usdt_equity`，交易所 USDT 的 `marginBalance`），不再是 × 总权益（操作者 2026-09-28 裁定 `risk-g11-denominator`）。账户约 43% 的权益是 BTC 抵押品时，上限约是 1.14 × 总权益。`margin_cap` 不用另改：D-016 按两者之比定杠杆，上限处的保证金自然是 USDT 余额的一个比例。`max_weight` 与日亏暂停仍按总权益。
+  - 读不到 USDT 余额（或它不为正）时守卫只减不加，原因码 `NO_USDT_EQUITY`，边沿触发告警一次。先看账户接口的 `assets` 里有没有 USDT 那一行，不要把这一项改回 `equity` 来「修」。
+  - 回测没有抵押品，这一项对回测和证据门都是空操作：证据摘要不变，启动门不受影响。
+  - **回滚**：改回 `equity`，再按上面的纪律重启。构造指纹随之变化，监控窗口再清零一次。
 - `portfolio.max_participation` —— 除完全平仓外，每一单 ≤ 该比例 × 近 24 根 bar 平均报价成交量。纯减仓单也会被截：`exempt_reductions` 默认关，要开就得与回测的 `ParticipationModel` 一起翻（`beidou_live/rebalancer.py` 的注释）。`margin_buffer` —— 保证金不足时按比例缩小加仓单，保留这部分可用余额。
 - `pool.refresh: daily|never` —— 每日自动重排 universe；被移出的币会被 reduce-only 平掉，`cycles.jsonl` 的 `universe_update` 记录进出。
 - `exits` —— 止损 / 移动止损 / 止盈（单位 = 入场时日波动率），0 关闭；`cooldown_bars` 冷却期。

@@ -7,11 +7,16 @@
 # 目录跟着仓库走，worktree 自动继承。
 #
 # 这一层挡的是**手滑**，不是恶意：`git commit --no-verify` 一个开关就能绕过它，
-# 任何本地 hook 都一样。所以它不是最后一道——最后一道在 GitHub 侧（push protection，
-# 2026-09-19 开启），那个不在本机，绕不过去。两层各自的位置写在 SECURITY.md 里。
+# 任何本地 hook 都一样。它后面还有一道 pre-push，也在本机，也能这样绕过。
+#
+# 再往后没有网接得住 Binance 的密钥。GitHub 的 push protection 认不出它：2026-09-19 核实，
+# Binance 不在 GitHub secret scanning 的 partner pattern 列表里，个人账户的公开仓库也加不了
+# custom pattern。CI 的 Secrets 门是事后的，它红的时候密钥已经公开可读。所以 Binance 密钥
+# 在「进入公开仓库之前」的拦截，只剩本机这两个 hook。四层各自的覆盖范围写在 SECURITY.md 第二节。
 #
 # 只扫**暂存区**，不扫历史：历史每次提交都扫要 6 秒，而 6 秒的 hook 三天之内就会被
-# `--no-verify` 常态化绕过。暂存区扫描是毫秒级的。全历史扫描归 CI 和 `make secrets-audit`。
+# `--no-verify` 常态化绕过。暂存区扫描是毫秒级的。全历史扫描归 CI 的 Secrets 门，
+# 以及 SECURITY.md「手动全量审计」那条命令。
 
 set -uo pipefail
 
@@ -22,7 +27,10 @@ pre-commit: 没找到 gitleaks，提交前的密钥扫描没有跑。
   安装：brew install gitleaks
 
 这不是阻断——本地缺工具就挡住提交只会逼人绕过 hook。但要知道这次提交没有被扫过，
-而 GitHub 侧的 push protection 仍然会在 push 时拦截真密钥。
+而 pre-push 同样靠 gitleaks，push 时也不会扫。后面没有网接得住 Binance 的密钥：
+GitHub 的 push protection 认不出它（不在 partner pattern 列表，
+个人公开仓库也加不了 custom pattern），CI 的 Secrets 门是事后的——
+它红的时候，密钥已经公开可读了。
 MSG
     exit 0
 fi
@@ -30,10 +38,14 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 
 # `git` 子命令用 protect --staged：它只看 `git diff --cached`，即这次真要提交的内容。
+#
+# `--verbose` 把每处命中打到 stdout：文件、行号、规则，值由 `--redact` 脱敏。下面的提示说
+# 「上面列出了」，指的就是它。2026-09-29 之前没带这个参数，gitleaks 只在 stderr 报一句
+# `leaks found`，而 stderr 丢进了 /dev/null，被拦时屏幕上什么也没列。
 if gitleaks protect --staged \
         --source "$repo_root" \
         --config "$repo_root/.gitleaks.toml" \
-        --redact --no-banner 2>/dev/null; then
+        --redact --verbose --no-banner 2>/dev/null; then
     exit 0
 fi
 
@@ -49,17 +61,26 @@ cat >&2 <<'MSG'
      git object id 都是纯 hex，`.gitleaks.toml` 已经放行；还能红说明形态不同。
 
   2. 真的是密钥：
-       - 把值从文件里删掉，改成从环境读
-         （`~/Library/Application Support/beidou/env.sh`，chmod 600）
+       - 把值从文件里删掉，改成从环境读。
        - **去交易所把这个 key 作废重发**。写进过文件的密钥就当已经泄漏，
          哪怕它一次都没被提交——本机可能有备份、编辑器可能有 swap、
          Time Machine 可能已经存了一份。
+       - 新 key 写进凭据**此刻实际所在**的位置，替换旧值：
+         `~/Library/Application Support/beidou/env.sh` 存在就写进它，
+         不存在就改 `~/.zshrc` 里的 `export BEIDOU_*` 行。
+         **不要为了这一步新建 `env.sh`**——文件一存在，`~/.zshrc` 就不再被读，
+         告警 webhook 等其余 `BEIDOU_*` 变量会跟着消失。
+       - 其余步骤（确认损失、重启循环）见 SECURITY.md 第四节。
 
   3. 确认是误报：往 `.gitleaks.toml` 的 allowlist 加一条，**按它是什么写**
      （形态或具体值），不要按目录整片放行，并写一句它为什么不可能是密钥。
 
   4. 只有在 2 和 3 都不适用、而你确知在做什么时才用 `--no-verify`。
-     它绕过的只有本机这一层：GitHub 的 push protection 仍然会在 push 时拦住。
+     它绕过的只有本机这一层，push 时 pre-push 还会再扫一遍。但 pre-push
+     也能被 `--no-verify` 绕过，而再往后没有网接得住 Binance 的密钥：
+     GitHub 的 push protection 认不出它（不在 partner pattern 列表，
+     个人公开仓库也加不了 custom pattern），CI 的 Secrets 门是事后的——
+     它红的时候，密钥已经公开可读了。
 
 MSG
 exit 1

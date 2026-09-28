@@ -113,7 +113,10 @@ class PaperVenue:
         positions = await self.positions()
         unrealized = sum(p.unrealized_pnl for p in positions.values())
         margin = sum(abs(p.notional) / max(self.leverage.get(p.symbol, 1), 1) for p in positions.values())
-        return AccountState(self.balance, self.balance + unrealized - margin, self.balance + unrealized, positions)
+        # A paper account holds nothing but USDT, so all of its equity is the USDT slice.  Left as None it
+        # would read as "unknown", and a gross cap on `usdt_equity` holds a book that cannot read it.
+        equity = self.balance + unrealized
+        return AccountState(self.balance, equity - margin, equity, positions, usdt_equity=equity)
 
     async def positions(self) -> dict[str, Position]:
         return {

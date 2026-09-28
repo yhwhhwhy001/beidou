@@ -142,11 +142,10 @@ def margin_and_rejections(
 
     So ``over_budget_tradable`` is the reading that judges, and ``over_budget`` stays beside it because
     what a corrected ruler was wrong ABOUT is the part a later reader needs - the same rule the entry
-    above follows.  Nothing here changes what the loop DOES: ``max_gross`` clips weights in
-    ``guards.clamp_book`` and ``margin_cap`` derives venue leverage (D-016), both on total equity, and
-    both are inside the construction fingerprint.  Moving those denominators would resize every position
-    and reset M-010, M-G06 and `realised_vol`; it is a construction decision for the operator, held open
-    as `risk-g11-denominator` in `governance/reopen.yaml`, and this instrument puts a number on it first.
+    above follows.  Nothing here changes what the loop DOES.  The loop followed on the operator's ruling of
+    2026-09-28 (`risk-g11-denominator`): the guard clips gross at ``max_gross`` times the USDT balance rather
+    than total equity, and ``margin_cap`` follows through D-016's ratio.  That was a construction change
+    (v12, no alias), which reset M-010, M-G06 and `realised_vol`; this instrument put a number on it first.
     """
     budget = float(margin_cap) if margin_cap else PLAN_MARGIN_BUDGET
     peak = 0.0

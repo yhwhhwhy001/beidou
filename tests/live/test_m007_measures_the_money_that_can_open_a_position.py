@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from beidou_live.reports import daily_alerts, margin_and_rejections
 from beidou_live.state import StateStore
 
@@ -72,8 +74,8 @@ def test_the_disagreement_between_the_two_rulers_is_reported_once(tmp_path: Path
     tradable = [n for n in notices if "可动用 USDT" in n]
     assert len(tradable) == 1
     assert "48" in tradable[0] and "22" in tradable[0], "both readings are in the one notice"
-    assert "约束侧未改" in tradable[0], "and it says the constraint side was not touched"
-    assert "risk-g11-denominator" in tradable[0], "naming the ruling that keeps it there, not a date"
+    assert "约束侧按可动用 USDT" in tradable[0], "and it says which ruler the constraint side divides by"
+    assert "risk-g11-denominator" in tradable[0], "naming the ruling that put it there, not a date"
 
 
 def test_the_notice_reads_both_rulers_on_the_tradable_peaks_own_bar(tmp_path: Path) -> None:
@@ -129,44 +131,55 @@ def test_a_pure_usdt_account_reads_the_same_on_both_rulers(tmp_path: Path) -> No
     assert margin["peak_standing_usage"] == margin["peak_standing_usage_tradable"]
 
 
-def test_the_constraint_side_still_divides_by_total_equity(tmp_path: Path) -> None:
-    """The line this correction must NOT cross, pinned so a later tidy-up cannot cross it quietly.
+def test_the_constraint_side_divides_by_the_usdt_balance_in_the_loop_only(tmp_path: Path) -> None:
+    """The line this test used to pin is crossed now, by a ruling rather than by a tidy-up.
 
-    `max_gross` clips weights in `guards.clamp_book` and `margin_cap` derives venue leverage (D-016),
-    both against total equity, and both sit inside the construction fingerprint.  Changing either
-    denominator resizes every position and resets M-010, M-G06 and `realised_vol` - a construction
-    decision for the operator, held open as `risk-g11-denominator`.  M-007 measuring the tradable line
-    does not make it.
+    Until 2026-09-28 it was `test_the_constraint_side_still_divides_by_total_equity`: `max_gross` and
+    `margin_cap` on total equity, and no quiet unification of the denominators before the operator ruled.
+    The operator ruled for the USDT line (`risk-g11-denominator`).  The ruling lives in the loop's guard,
+    which scales `max_gross` by the USDT share; the shared `clamp_book` still has nowhere to pass one, because
+    the backtest that shares it holds no collateral and its cap already is the USDT one.
     """
     import inspect
 
-    import numpy as np
-
     from beidou_alpha.overlays.exposure import clamp_book
+    from beidou_live.guards import evaluate_guards
+    from tests.live.helpers_construction import live_config_for_profile
 
-    # The invariant is in the signature: weights are fractions of TOTAL equity, and there is nowhere
-    # to pass a collateral share or a USDT balance in.  A future "let's unify the denominators" would
-    # have to add a parameter here, and that is the change that must not happen quietly.
     assert list(inspect.signature(clamp_book).parameters) == ["values", "max_weight", "max_gross"]
 
-    clamped, capped = clamp_book(np.array([1.0, 1.0]), 1.0, 2.0)
+    guards = live_config_for_profile().guards
+    decision = evaluate_guards(
+        {f"S{i}": 0.15 for i in range(10)},  # 1.5 x equity, 3 x a USDT balance of half of it
+        current_weights={},
+        kill_switch=False,
+        equity=10_000.0,
+        day_start_equity=10_000.0,
+        latest_bar_ms=1,
+        expected_bar_ms=1,
+        interval_ms=1,
+        params=guards,
+        usdt_equity=5_000.0,
+    )
 
-    assert capped is False, "gross 2.0 is exactly at the cap and is not clipped"
-    assert clamped.tolist() == [1.0, 1.0]
+    assert guards.max_gross_denominator == "usdt_equity" and decision.reasons == ["GROSS_CAPPED"]
+    assert sum(abs(value) for value in decision.targets.values()) == pytest.approx(guards.max_gross * 0.5)
 
 
-def test_the_ruling_the_report_names_is_still_open() -> None:
-    """The M-007 notice and the gross line of `daily_markdown` both say `risk-g11-denominator` awaits a ruling.
+def test_the_report_says_what_the_ruling_on_file_says() -> None:
+    """The M-007 notice and the gross line of `daily_markdown` both say the constraint side divides by USDT.
 
-    Named rather than dated because the date went stale first: both said the construction was frozen to
-    2026-10-13 after the freeze had ended early on 2026-09-27.  An entry can be resolved by someone who
-    never reads the daily report, so the report's claim is checked against the list itself.
+    First they named a date that went stale (「构造冻结到 2026-10-13」 outlived the freeze by a day), then an
+    open entry (#225).  The operator ruled on 2026-09-28.  Both claims are checked where they live: the entry
+    is resolved, and the shipped profile holds the denominator the two sentences name.  Reopen the entry or
+    roll the profile back, and this goes red until the sentences say so.
     """
     from beidou_governance import reopen
+    from tests.live.helpers_construction import live_config_for_profile
 
     entry = {entry.id: entry for entry in reopen.load(ROOT / reopen.LIST)}["risk-g11-denominator"]
 
-    assert entry.check != "resolved", (
-        "risk-g11-denominator is resolved, but the M-007 notice in `daily_alerts` and the gross line in "
-        "`daily_markdown` still say it awaits a ruling - rewrite both to what was ruled"
+    assert entry.check == "resolved", "the M-007 notice and the gross line say this was ruled; say what changed"
+    assert live_config_for_profile().guards.max_gross_denominator == "usdt_equity", (
+        "the M-007 notice and the gross line in `daily_markdown` say the cap reads the USDT balance"
     )
