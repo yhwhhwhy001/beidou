@@ -33,7 +33,8 @@ fork、克隆、第三方镜像和搜索引擎缓存都不受 `git push --force`
 ```
 
 `deploy/run_live.sh` 从这里读；没有这个文件时回落到 `~/.zshrc` 里的 `export BEIDOU_*`。
-两个位置都在仓库之外。`deploy/*.plist` 里**没有**任何凭据，也不要往里加——launchd 的
+两个位置都在仓库之外。**2026-09-28 本机没有 `env.sh`，走的是回落。** 两者是二选一：文件一存在，
+`~/.zshrc` 就不再被读。所以建 `env.sh` 时要把全部 `BEIDOU_*` 变量一起迁过去，不能只放 Binance 那两个。`deploy/*.plist` 里**没有**任何凭据，也不要往里加——launchd 的
 plist 会被 `launchctl print` 连内容一起打出来。
 
 代码里拿凭据只有一种写法：从环境读，取不到就退出，**不带默认值**。
@@ -142,8 +143,10 @@ ledger 的 `param_key`，9 处是 sha256 文件摘要，2 处是 SSH 公钥指�
    Binance：API Management → 删除该 key。
 2. **确认损失**：`beidou live status` 看仓位，交易所网页看 API 调用记录与提现记录。
    本仓库的 demo key 无提现权限，但这一步要自己核实而不是假设。
-3. 新 key 写进 `~/Library/Application Support/beidou/env.sh`（`chmod 600`），
-   重启循环（窗口与步骤见 `docs/RUNBOOK.md` 与 `CLAUDE.md` 的"重启实盘循环"）。
+3. 新 key 写进凭据**此刻实际所在**的位置，替换旧值：有 `env.sh` 就写进它，没有就改 `~/.zshrc` 里
+   那两行 `export BEIDOU_BINANCE_API_*`。**不要为了这一步新建 `env.sh`**——文件一存在，`~/.zshrc`
+   就不再被读，告警 webhook 等其余 `BEIDOU_*` 变量会跟着消失（见上「凭据正确的存放位置」）。
+   然后重启循环（窗口与步骤见 `docs/RUNBOOK.md` 与 `CLAUDE.md` 的"重启实盘循环"）。
 4. **然后**才考虑清理 git 历史。清理不能替代作废：任何人都可能已经克隆过。
    工具是 `git filter-repo`，会重写全部 commit hash，所有 worktree 与 clone 都要重建。
 5. 把经过记进 `docs/RESEARCH_LOG.md`，只写可观测事实。
