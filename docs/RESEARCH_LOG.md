@@ -18634,3 +18634,47 @@ exit 0
   与 `live status --check`，没有下单，没有碰循环与 launchd。
 - **还没做的**：M-002 在上线满 30 天之后读（10-27 16:35Z 满）：这 30 天里「所有持仓都是 5 倍、没有区分」这一问题有没有
   再被提出；每次记下操作者看的是哪里、要的是什么。
+## 2026-09-28 · 操作者六条裁定：面向生产的重构方案（#201）——生产=B、ratchet 理由外移与 headroom 政策、重开 D-P4、增长率接受、alpha 先剖析；代理节点先不换
+
+`docs/analysis/2026-09-28-production-refactor-deep-analysis.md`（#201，Opus 5.5 审查后 PIVOT）§P1.6 的六问，操作者当日逐条作答，另补一条。答案与后果的全文在该文 §14；这里只记裁定、两项当场跑的零 ledger 测量、与一条流程教训。
+
+### 裁定
+
+| 问 | 答（原话） | 后果 |
+| --- | --- | --- |
+| Q1 「面向生产」指哪一层 | 「目前 B，没问题以后将会是 C」 | 写 mainnet 小额准入的**设计文档**（`docs/MAINNET_READINESS.md`，先原样引 09-05 系统质量分析的解除条件与 KILL-R13）；`beidou_exchange/guard.py` 不动；启用仍不在范围内 |
+| Q2a ratchet 抬顶理由搬到 `docs/SOURCE_BUDGET_LOG.md` | 「是」 | 授权；CLAUDE.md「理由紧挨常量」一段随之改写；由操作者合并 |
+| Q2b headroom 从惯例 40 行改成写死的政策 | 「好」 | 授权；数字见下（提议 max(40, 1% × 顶)），操作者在 PR 上确认 |
+| Q3 是否重开 09-06 的 D-P4（宿主离线残余风险 ACCEPTED） | 「重开」 | 依据两条新事实：本机 `~/.zshrc` 只导出一个 webhook 变量，O-X1 的「第二通道」不存在；接受的文字是「告警 ≤ 2 bar」，而宿主死亡时同机巡检也死，告警是 0。工作包 WP-R1（告警侧，按 09-05 DL-Q8 ①②⑥⑦）先做，WP-R2（远端租约 → 本地 reduce-only，DL-Q8 ③④⑤）后置到 R1 有 14 天干净读数之后再预登记 |
+| Q5 非 alpha 每天几百到上千行的增长率是不是要的 | 「是」 | `tests/architecture/test_source_budget.py` 的 `PLAN_BUDGET` 缺口断言改为只记录（非 alpha 行数、live 行数、alpha 树占比、近 7 天增长率）；理由与改动同一 commit；操作者合并 |
+| Q6 「尤其是 alpha 模块」要的是哪一件 | 「先跑一次 validate 耗时剖析」 | 当场跑完（下节）；「先 M6 后下沉」第二半不开工 |
+| 补充 | 「代理节点先不换」 | 09-15 起丢的 7 根 bar 全来自传输层（6 次代理 503、1 次 venue 错误），换节点是 09-22 判读的唯一便宜解，推迟；仓库侧只剩 GAP-PR10（失败周期在再平衡窗口内重试能救回几根）可量 |
+
+**凭据位置的更正，与所有 WP 都相关**：`~/Library/Application Support/beidou/env.sh` 在本机**不存在**，六个 deploy 脚本的规则是「env.sh 存在就只 source 它，否则 eval `~/.zshrc` 的 `^export BEIDOU_` 行」，所以凭据此刻来自 `~/.zshrc`。CLAUDE.md「凭据只有一个位置：env.sh」是规范句不是现状；任何人新建一个不含 Binance 凭据的 `env.sh` 都会让下一次重启以 78 退出（memory 早已记着这条；审查 KILL-01 抓的正是冻结稿照 CLAUDE.md 写而没 `test -f`）。dead-man 的 URL 要放在凭据实际所在处，不新建 `env.sh`。
+
+### GAP-PR06：一格 validate 的耗时（零 ledger）
+
+不走 `research backtest`——它会 `_record_trial` 写一行 ledger（`beidou_cli/research_backtest_cmd.py:189`）——用库函数复刻同一条流水线（`_entry → _resolve_symbols → _load → _membership → _model → AlphaModel.evaluate → score_book(guards + exits)`），tsmom 的 registry 参数、pit universe、全历史、funding 开，`cProfile` 只包 evaluate 与 score_book；`BEIDOU_FEATURE_STORE` 未设、不写 `reports/`、跑前跑后 `trials.jsonl` sha256 相同。面板 212 币 × 50,297 根 1h bar（2021-01-01 → 2026-09-27 16:00Z）。
+
+| 阶段 | 秒 |
+| --- | ---: |
+| 面板加载（含 funding） | 6.505 |
+| 时点成员表 | 3.267 |
+| `AlphaModel.evaluate` | 4.438 |
+| `score_book`（护栏重放 + exits + 回测 + 成本） | 2.213 |
+
+一格的可变成本约 **6.7 s**，固定成本约 9.8 s（一次 validate 只付一次）。tottime 归属：`beidou_alpha` 51.4%、numpy 23.6%、pandas 12.6%、其它 12.5%。大头是两处按 bar 串行的 Python 循环：`portfolio.py:113 ewma_portfolio_vol` 2.68 s（`np.outer` 50,297 次 = 1.21 s）与 `overlays/exits.py:568 _run_vectorised` 1.33 s；其后 `tsmom.compute` 0.94、`_replay_book_guards` 0.70、`apply_no_trade_band` 0.42。
+
+**读法**：一次 16 格 validate 的可变成本约 110 s，整次约 3–5 分钟，与 09-27 那次零 ledger look 的 4 分钟同量级。研究吞吐不由计算时间决定，等的是预登记、ledger 计费与门。所以「下沉研究逻辑到 alpha」买不到吞吐，不开工。若将来 validate 频率高到计算时间算数（网格 ≥ 64 格、前向板每天重算几十个候选），可做的是两处循环的算法改写（纯函数内，`_bit_for_bit` 逐位不变是唯一验收），重开条件「一次 validate 墙钟 > 15 分钟」。
+
+**一条流程教训**：方案 §10.2 给这次剖析预登记的阈值是「≥ 50% 在 `beidou_alpha` → F-A 重开」，读数 51.4%，按字面触发；但阈值写下时漏了绝对量条款（一格几秒还是几分钟）。看过数据不改阈值，只把漏掉的量摆出来并写明结论为什么不随字面走——下一次给「份额」类阈值预登记时要同时写绝对量。
+
+### headroom 政策的数字（Q2b）
+
+`git show` 逐提交解析 CEILING 字面量：08-28 起 420 次分包抬顶（cli 127、live 131、alpha 81、governance 38、data 28、exchange 11、shared 4），中位抬幅 cli 23、live 48、alpha 55、governance 42、data 80.5、exchange 14、shared 4.5 行。几种政策下不必再抬顶的历史事件占比：max(40, 2% × 顶) 87%（367/420，审查者 R-03c 同数）；**max(40, 1% × 顶) 78%（328/420）**；max(40, 0.5% × 顶) 61%；一律 40 行 50%；一律 80 行 73%。提议 max(40, 1% × 顶)：小包维持 40 行惯例，大包按比例放宽，约 78% 的增长事件不再逐次写理由——这是操作者用「好」接受的损失，写成数字交他在 PR 上确认。防囤积断言 `ceiling − measured ≤ HEADROOM(pkg)`。
+
+### 落地
+
+- 本节与方案 §14 随 PR 入库；不改代码、不改配置、不花 ledger、不重启。
+- 六项卫生项（WP-P4、C6、C7、C8、C9、P3）不改任何控制，按方案 §9 契约开工，CI 绿即合；解锁的治理类项（WP-C1、WP-C2、D-PR03 只记录、WP-R1、WP-P6 文档）由操作者合并。
+- 下一会话的测量：GAP-PR08（ratchet 文件的合并冲突成本）、GAP-PR10（失败周期窗口内重试的收益）。
