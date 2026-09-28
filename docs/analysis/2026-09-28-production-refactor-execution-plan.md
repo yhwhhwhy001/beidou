@@ -339,6 +339,14 @@ push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理�
 | `BinanceRestClient` 的 `guard` 是可选参数，不传就没有 host 检查；今天没有生产调用者不传 | #217 | 写进 mainnet 设计的 §4.2（同一 PR 堵口） |
 | 构造冻结那条测试缺记录时 `return` 而不是 `pytest.skip`，所以在 CI 里读作 passed | #212 | 未改（会改默认门读数） |
 
+**补记：上表「不带时区的日期会抛 TypeError」那一行已修于 #222（修复 `5923dd21`，合入 `72ce6b05`，12:53:36Z）。**
+原行保持原样。`calendar._instant` 下沉进 `reopen.py`，改名 `instant`，`reopen.evaluate` 与 `calendar` 共用它。
+不带时区的日期读成 00:00Z，解析失败仍报 UNREADABLE。新增两条测试：一条在 tmp 副本里写 `date: 2026-11-01`，
+修前红在 TypeError；一条守解析失败，这条路径此前没有测试。`test_each_reopen_row_is_what_governance_reopen_would_say`
+的日期判据改用 `reopen.instant`。它原先自己 `fromisoformat` 一遍：真实列表一写进不带时区的日期，naive 与 aware
+比 `==` 恒为 False，会误红。7 个变异各让至少一条测试变红，读数见 #222 描述。没动：`window_changes.evaluate`
+里同口径的内联解析，`replay`、`scheduler` 各自的 `_instant`。
+
 ### 7.4 操作者待办（更新）
 
 - **合并**：#208（O-1）、#213（D-PR03）、#217（P6）、#218（C1，先读首节的 GAP-PR08 读数）。#213 与 #218 改同一文件，建议先 #213。
