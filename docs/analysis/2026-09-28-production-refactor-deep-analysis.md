@@ -1078,3 +1078,98 @@ In Scope 的共同边界：不动 `beidou_alpha` 一行；不写 `trials.jsonl`�
 ## 13. Final Decision
 
 **PIVOT**。命中 **H2**（审查时存在未处理的强反证：09-06 D-P4 的具名 ACCEPTED、`cycles.jsonl` 的重启与 ERROR 行、CEILING 的逐提交构成——本版已处理，决定词按处理前的事实记）、**H3**（A-PR01「生产的定义」UNKNOWN；C-PR01 吞吐一半 UNKNOWN）、**H5**（六项卫生项以外相对价值 Unproven）；H1 处置后 OPEN P0 = 0；H7 因审查者未复审本修订版保守计入；H8 未命中（凭据边界已知：在 `~/.zshrc`，不在 `env.sh`）。一句话：问题成立——「生产」没有定义与读数、非 alpha 的增长率没有裁定、传输层每两天丢一根 bar 的退出检查没人量、本地专属测试红了三天 CI 看不见；方案改形——六项不改任何控制的卫生项按 Weak GO 的字面含义受控开工，六个改控制的问题带价交操作者且未答不执行，一项操作者动作（换代理节点），三项零 ledger 测量；**alpha 模块不重排，但这一条不再是作者的决定，是交回操作者的 Q6**。
+
+---
+
+## 14. 操作者裁定（2026-09-28）与解锁后的执行契约
+
+**[R2 修订，2026-09-28 13:xx 本地]** 操作者对 §P1.6 六问逐条作答，另补一条「代理节点先不换」。本节记录答案、每条答案解锁或关闭了什么、两项按裁定当场跑的零 ledger 测量，以及解锁项的契约。§0–§13 不改（PIVOT 仍是本文的 Final Decision；本节是裁定之后的执行授权）。
+
+### 14.1 裁定表
+
+| 问 | 操作者答案（原话） | 后果 |
+| --- | --- | --- |
+| Q1 生产层级 | 「目前 B，没问题以后将会是 C」 | D-PR02 定为 **B**：写 mainnet 小额准入的**设计文档**，`guard.py` 不动；文档要含「B → C」的准入门（§14.4 WP-P6）。memory 里「production/mainnet explicitly out of scope for now」自此改写为「设计进 scope，启用仍不在」 |
+| Q2a ratchet 理由外移 | 「是」 | WP-C1 获授权（§14.4） |
+| Q2b headroom 政策 | 「好」（未给数字） | WP-C2 获授权；数字由本节 §14.3 按测量提出，**由操作者在 PR 上确认**（D-PR06） |
+| Q3 重开 D-P4 | 「重开」 | 09-06 的 ACCEPTED 撤销；新工作包 WP-R1（告警侧）与 WP-R2（远端租约 → 本地 reduce-only，后置）按 09-05 DL-Q8 的七项写规格（§14.4）；HC-1/HC-2/HC-7 全部落到操作者 |
+| Q5 非 alpha 增长率 | 「是」 | D-PR03 执行为「`PLAN_BUDGET` 改只记录不断言」，理由与改动同一 commit，操作者合并；M-PR01 只记录不设阈值 |
+| Q6 「尤其是 alpha」 | 「先跑一次 validate 耗时剖析」 | GAP-PR06 当场跑完（§14.2）；结论：计算时间不是吞吐瓶颈，「先 M6 后下沉」第二半**不开工**，F-A 维持「未判」但吞吐一半由 UNKNOWN 改为「已量：不是计算」 |
+| 补充：代理节点 | 「代理节点先不换」 | D-PR07 的操作者动作推迟；M-PR03 的「失败周期」列维持现状（09-15 起 7 根 / 13 天）；仓库侧只剩 GAP-PR10（窗口内重试的收益）可量，它是下一会话的测量项 |
+
+### 14.2 GAP-PR06 读数：一格 validate 的耗时（零 ledger）
+
+**方法**：不走 `research backtest`（它会 `_record_trial` 写一行 ledger，`beidou_cli/research_backtest_cmd.py:189`），用库函数复刻同一条流水线——`_entry → _resolve_symbols → _load → _membership → _model → AlphaModel.evaluate → score_book(guards + exits)`——在主 checkout 上跑一次 tsmom 的 registry 参数、pit universe、全历史、funding 开；`cProfile` 只包住 evaluate 与 score_book；`BEIDOU_FEATURE_STORE` 未设；不写 `reports/`；跑前跑后 `trials.jsonl` 的 sha256 相同。脚本与输出在会话 scratchpad（`gap_pr06_profile.py`、`gap_pr06/`），不入库。
+
+| 阶段 | 秒 |
+| --- | ---: |
+| 面板加载（212 币 × 50,297 根 1h bar，2021-01-01 → 2026-09-27，含 funding） | 6.505 |
+| 时点成员表 | 3.267 |
+| `AlphaModel.evaluate`（信号 + 组合构建） | 4.438 |
+| `score_book`（护栏重放 + exit overlay + 回测 + 成本） | 2.213 |
+| `summary` | 0.052 |
+
+**一格的可变成本约 6.7 s**（evaluate + score_book），固定成本约 9.8 s（加载 + 成员表，一次 validate 只付一次）。按 tottime 归属：**`beidou_alpha` 51.4%**、numpy 23.6%、pandas 12.6%、其它 12.5%。`beidou_alpha` 内两处按 bar 串行的 Python 循环占了大头：`portfolio.py:113 ewma_portfolio_vol`（2.68 s，其中 `np.outer` 每 bar 一次共 50,297 次 = 1.21 s）与 `overlays/exits.py:568 _run_vectorised`（1.33 s，跨币向量化、按 bar 串行）；其次 `tsmom.compute` 0.94 s、`_replay_book_guards` 0.70 s、`apply_no_trade_band` 0.42 s。
+
+**对 §10.2 EXP-PR1 预登记阈值的判读**：阈值写的是「≥ 50% 在 `beidou_alpha` → F-A 重开」，读数 51.4%，**按字面触发**。但这条阈值写下时漏了绝对量条款，看过数据后不改它，只把漏掉的量摆出来：一格 6.7 s，一次 16 格 validate 的可变成本约 110 s 加固定 10 s，再加 `parameter_neighborhood` 对最优格的 ±10% 重评估（每个数值参数两次），整次约 3–5 分钟——与 09-27 那次 8 个写法的零 ledger look 花 4 分钟同量级。**研究吞吐不由计算时间决定**：一次 validate 要等的是预登记、ledger 计费与门，不是这几分钟。所以：
+
+- Q6 的三个选项里，**A（下沉）不因这次读数上调**——它买不到吞吐；C（不动 alpha）成立。
+- 若将来 validate 的频率高到计算时间开始算数（例如网格 ≥ 64 格、或前向板每天重算几十个候选），有两个可以做、且能按 `_bit_for_bit` 验证的性能项：`ewma_portfolio_vol` 的按 bar `np.outer` 递推改为分块矩阵运算；`_run_vectorised` 的按 bar 循环。它们是纯函数内的算法改写，不是结构重排，M-PR04 逐位不变是唯一验收。**今天不做**，记为 Could，重开条件是「一次 validate 的墙钟 > 15 分钟」。
+- C-PR01 的吞吐一半由 UNKNOWN 改为「已量：不是计算」；C-PR01 整体 **PARTIAL → SUPPORTED（Medium）**：耦合一半有 R-18，吞吐一半有本节。F-A 的「接口/可达性」维度仍无直接测量，D-PR00 的重开条件不变。
+
+### 14.3 headroom 政策的数字（Q2b）
+
+按 `git show` 逐提交解析 CEILING 字面量，08-28 起 420 次分包抬顶（cli 127、live 131、alpha 81、governance 38、data 28、exchange 11、shared 4）；中位抬幅 cli 23、live 48、alpha 55、governance 42、data 80.5、exchange 14、shared 4.5 行。几种政策下「不必再抬顶的历史事件」占比：
+
+| 政策 `HEADROOM(pkg)` | live / cli / alpha / governance / data / exchange / shared | 落入比例 |
+| --- | --- | ---: |
+| max(40, 2% × 顶)（审查者 R-03c 的算法） | 307 / 173 / 219 / 88 / 74 / 40 / 40 | 367/420 = 87% |
+| **max(40, 1% × 顶)（本文提议）** | 154 / 87 / 110 / 44 / 40 / 40 / 40 | **328/420 = 78%** |
+| max(40, 0.5% × 顶) | 77 / 43 / 55 / 40 / 40 / 40 / 40 | 256/420 = 61% |
+| 今天的惯例：约 40 行 | 40 ×7 | 210/420 = 50% |
+| 一律 80 行 | 80 ×7 | 305/420 = 73% |
+
+提议 **max(40, 1% × 顶)**：小包维持今天 40 行的惯例；大包按比例放宽；约 78% 的增长事件不再逐次写理由——这是操作者用「好」接受的损失，本文把它写成数字。防囤积断言：`ceiling − measured ≤ HEADROOM(pkg)`（任何一次抬顶最多抬到「实测 + 政策值」，抬幅表随之派生，不再单独写死）。CLAUDE.md「改 ratchet 要带理由」一段改为：理由进 `docs/SOURCE_BUDGET_LOG.md`（Q2a），常量旁留编号引用；抬顶仍只在写理由的那个 commit 里。**数字由操作者在 WP-C2 的 PR 上确认**，PR 由操作者合并（D-PR06）。
+
+### 14.4 解锁项的契约（在 §9 之外追加；六项卫生项的契约不变）
+
+责任模型同 §9.3。共同条款：每项一个 PR；四道门全量；D-PR05 协议；**治理类 PR 由操作者合并**（WP-C1、WP-C2、D-PR03、WP-R1 的凭据位置改动、WP-P6 的文档）。
+
+**WP-C1 ratchet 记录搬迁**（Q2a）· 边界：`tests/architecture/test_source_budget.py`（约 −4,300 行注释）、`docs/SOURCE_BUDGET_LOG.md`（新，+约 4,300，按日期分节、保留原编号与原文）、`tests/architecture/test_every_ceiling_points_at_its_record.py`（新）、CLAUDE.md 一段、RESEARCH_LOG 里引用 `test_source_budget.py:行号` 的地方按对照表改（先 `grep -c`）· 迁移：脚本化——从 git HEAD 提取注释块、写入、再拼回逐字 diff 为空（FM-PR5）· 测试：T-PR-C1a（逐字往返）、T-PR-C1b（删引用即红）、T-PR-C1c（并行抬顶只在 CEILING 行冲突）· 验收：AC-PR-C1a（测试文件 ≤ 300 行、记录文件含全部原文）· 生效：合入即 · 回滚：一次 revert · **操作者合并**。
+
+**WP-C2 headroom 政策**（Q2b）· 边界：`test_source_budget.py` 加 `HEADROOM_POLICY` 与防囤积断言（+约 30）、CLAUDE.md +5 · 数字：§14.3 提议值，PR 上确认 · 测试：T-PR-C2a（抬到超政策即红）· 验收：M-PR01 只记录；`ceiling − measured ≤ HEADROOM(pkg)` 对七个包成立 · **操作者合并**。
+
+**D-PR03 预算改只记录**（Q5）· 边界：`test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined` 改为打印三项比率（非 alpha 行数、live 行数、alpha 树占比）与近 7 天增长率，不断言；理由（操作者 2026-09-28 裁定「是」）进同一 commit；`PLAN_BUDGET` 保留为历史常量并注明「2026-09-28 起只记录」· 测试：改后的测试自身 · **操作者合并**。
+
+**WP-R1 宿主外告警（D-P4 重开，第一半）**（Q3）· 依据：09-05 DL-Q8 的 ①②⑥⑦ 与 09-06 O-X2 的告警半边；不做 ③④⑤（远端可挂起的 kill switch、`flatten --raw`、只读 key 的看门狗主机）——那是 WP-R2 · 规格：
+- ① 循环每个 **OK 周期结束时**主动 POST 一次「OK」到 dead-man 服务（`_finish_cycle` 之后；ERROR 周期不发），负载只有周期 bar 时刻与三个 digest，不含账户数字；巡检 `run_check.sh` 末尾无条件 POST 到**第二个** check（「巡检还活着」）。两个 check 分开，才能把「循环没产出 OK」与「巡检死了」分开读。
+- ② 触发 = 服务端连续 **2 个整点 + 15 分钟**没收到「OK」（约 2 bar，与 09-06 Q3 接受的文字「告警 ≤ 2 bar」一致）；不是心跳文件年龄。ERROR 连续 ≥ 2 个周期由现有 `live status --check` 报，不重复。
+- ⑥ 周期时刻以场地时间为准（D-030），与 `cycles.jsonl` 同字段。
+- ⑦ 维护 sentinel：> 2 小时的有意停机前操作者在服务端「暂停」该 check（或本地放 `MAINT` 文件让循环不发也不算失联）；演练脚本：`launchctl bootout` 循环 → 计时 → 服务端应在 2 个整点 + 15 分钟内推送 → `bootstrap` 回来 → 应推送恢复。两条 falsifier：「循环存活但心跳迟到不得触发」（周期迟到 < 15 分钟不触发）；「巡检死而循环活」只触发第二个 check。
+- 凭据与位置：两个 ping URL 是能压制告警的令牌，与凭据同级；放在凭据实际所在处——今天是 `~/.zshrc` 的 `export BEIDOU_*` 行（E-PR37）；**不新建 `env.sh`**（RISK-PR10）；`.gitleaks.toml` 加规则并配会红的金丝雀（memory 两个静默坑）。
+- 第二告警通道：`BEIDOU_ALERTS_WEBHOOK_URL_2` 在本机未导出（E-PR37）；补上是操作者动作，零代码，RUNBOOK 加一行核对步骤。
+- 边界与行数：`beidou_live/alerts.py` 或 `engine.py` +约 30、`deploy/run_check.sh` +8、`docs/RUNBOOK.md` +25、tests +80、`.gitleaks.toml` +1 · 生效：循环侧要一次按纪律的重启（HC-4），搭下一次；巡检侧主 checkout 快进后的下一个 :10 · 人类确认点：HC-1（凭据位置）、HC-2（建账号、放 URL）、HC-7（本裁定即重开）· 验收：演练一次通过 + 30 天假阳性 ≤ 2 次（AC-PR1a/b）。
+
+**WP-R2 远端租约 → 本地 reduce-only（D-P4 重开，第二半）** · 依据：DL-Q8 ③④⑤、O-X2 · 它改实盘行为（取不到租约即 engage kill switch 进 reduce-only），要一份预登记、两条演练路径（封 venue 出口；两机断网）、`flatten --raw` 与 `guard.py` 对 `/fapi/v1/algoOrder` 的处理（09-05 KILL-R15）· **后置**：WP-R1 有 14 天干净读数之后再写预登记；本文不定价。
+
+**WP-P6 mainnet 准入设计文档**（Q1=B）· 边界：`docs/MAINNET_READINESS.md`（新，约 +250）；**零代码，`guard.py` 一字不动**（HC-3）· 内容：先原样引 09-05 系统质量分析的解除条件（附录 D 的 P0 全部关闭；KILL-Q12 的冲击模型下 `vol_target` 重推；构造冻结后 30 天干净窗口——M-Q08 四项达标、M-Q09 ≥ 30 天、构造不变；上线断言四项——CROSSED / multiAssets 与验证口径一致、全新 `state_dir`、账户空仓空挂单、告警端到端演练）与 KILL-R13「只在操作者显式重开 mainnet 时启动」；再写增量：B → C 的准入门（每项带今天的读数、来源、Owner）、密钥与 kill-switch 分离、`guard.py` 放行的实现形态（签字文件 + 显式旗标，**另一次裁定**才实现）、冲击系数只能在小额真钱上校准这一事实 · 验收：AC-PR6a（每项准入条件带读数/来源/Owner）· **操作者合并**。
+
+### 14.5 裁定后的 MoSCoW（替代 §8.1 的授权状态；Scope Firewall 不变）
+
+| 分类 | 内容 | 谁合并 |
+| --- | --- | --- |
+| Must · 卫生批（已授权，走自动合并） | WP-P4、WP-C6、WP-C7、WP-C8、WP-C9、WP-P3 | agent（CI 绿即合，它们不改控制） |
+| Must · 裁定解锁（本节契约） | WP-C1、WP-C2（数字待 PR 上确认）、D-PR03 只记录、WP-R1、WP-P6 文档 | **操作者** |
+| Must · 操作者动作 | 补第二告警通道变量；建 dead-man 账号并放 URL（HC-2）；HC-8 定 BNX 夹具与归档哪边对 | — |
+| Should · 零 ledger 测量 | GAP-PR08（ratchet 冲突成本）、GAP-PR10（失败周期窗口内重试的收益，代理节点不换后它是唯一杠杆） | 下一会话 |
+| Should | WP-A1 数据族 parity 仪器 | agent |
+| Could | WP-R2（WP-R1 满 14 天后预登记）；`ewma_portfolio_vol` / `_run_vectorised` 的性能改写（重开条件：一次 validate 墙钟 > 15 分钟）；WP-P5 周报排 job；WP-C4 | — |
+| Won't | 「先 M6 后下沉」第二半（Q6 读数不支持）；WP-P2；WP-C3；换代理节点（操作者推迟）；其余 §8.2 各项 | — |
+
+### 14.6 本节对前文状态的更正
+
+- C-PR01：PARTIAL → **SUPPORTED（Medium）**（§14.2）。
+- GAP-PR06：**已关**（读数在 §14.2）。GAP-PR02：**已关**（Q1=B）。GAP-PR01 的后续：D-P4 **重开**（Q3）。
+- M-PR01：Q5=是 → 只记录不设阈值；M-PR03 传输层列：代理节点不换，维持现状并继续记录。
+- §1 的 H3：A-PR01 已由 Q1 回答，C-PR01 吞吐一半已量——H3 不再命中；H5 仍命中（卫生批以外的相对价值仍以裁定与测量为条件）。**Final Decision 仍记 PIVOT**：它描述的是冻结稿到修订版这一步；裁定之后的执行授权见 §14.5。
+- §10.4 校准行不改；本节新增的一条流程教训（EXP-PR1 的阈值漏了绝对量条款、看过数据不改阈值只补量）写进 RESEARCH_LOG 的裁定一节，供下一次校准。
