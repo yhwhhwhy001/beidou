@@ -39,6 +39,7 @@ from beidou_governance import reopen, window_changes
 from beidou_governance.admission import window_start
 from beidou_governance.policy import STANDING_MINE_ROUNDS, Policy
 from beidou_governance.promote import Gate
+from beidou_governance.reopen import instant
 from beidou_shared.config import load_yaml
 
 LAUNCHER = "deploy/run_live.sh"
@@ -100,15 +101,6 @@ def dated_switches(
     return sorted((row for row in rows if until is None or row.at <= until), key=lambda row: (row.at, row.source))
 
 
-def _instant(text: str) -> datetime | None:
-    """A date or an ISO instant; a bare date is 00:00Z, as every reader here treats one."""
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None  # the reader says UNREADABLE and never flips, so neither does the calendar
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
-
-
 def _status(at: datetime, now: datetime, *, settled: bool = False) -> Status:
     """`past` from the instant itself on: every reader here compares with `>=` or its shell equivalent."""
     if at <= now:
@@ -130,7 +122,7 @@ def _dated_constant(repo: Path, relative: str, name: str) -> tuple[datetime, str
     """
     pattern = re.compile(rf'^{re.escape(name)}\s*=\s*"([^"]+)"')
     for number, line in enumerate(_lines(repo, relative), 1):
-        if (match := pattern.match(line)) and (at := _instant(match.group(1))):
+        if (match := pattern.match(line)) and (at := instant(match.group(1))):
             return at, f"{relative}:{number}"
     return None
 
@@ -248,7 +240,7 @@ def _reopen(repo: Path, now: datetime) -> list[DatedSwitch]:
     lines = _lines(repo, reopen.LIST)
     rows: list[DatedSwitch] = []
     for entry in reopen.load(repo / reopen.LIST) if lines else []:
-        at = _instant(str(entry.args.get("date", ""))) if entry.check == "date_after" else None
+        at = instant(str(entry.args.get("date", ""))) if entry.check == "date_after" else None
         if at is not None:
             rows.append(
                 DatedSwitch(
@@ -266,7 +258,7 @@ def _window_changes(repo: Path, now: datetime) -> list[DatedSwitch]:
     lines = _lines(repo, window_changes.LIST)
     rows: list[DatedSwitch] = []
     for change in window_changes.load(repo / window_changes.LIST) if lines else []:
-        at = _instant(change.earliest_window)
+        at = instant(change.earliest_window)
         if at is None:
             continue
         if change.applied:
@@ -296,7 +288,7 @@ def _probe_reviews(repo: Path, registry_path: str, now: datetime) -> list[DatedS
         probe = entry.probe or {}
         if not probe or not (probe.get("stop") or entry.book != MAIN_BOOK):
             continue
-        accepted = _instant(str(probe.get("accepted_on", "") or ""))
+        accepted = instant(str(probe.get("accepted_on", "") or ""))
         if accepted is None:
             continue
         days = int(probe.get("review_after_days", 90))

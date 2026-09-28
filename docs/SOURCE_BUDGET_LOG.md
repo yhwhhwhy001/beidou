@@ -4,8 +4,8 @@ M-003 的 source budget ratchet 给每个包定了行数 ceiling，就是 `tests
 里的 `CEILING`。抬顶只允许发生在写明理由的那个 commit 里。这个文件收的是那些理由。
 
 搬迁之前，理由写在测试文件里，是紧挨着 `CEILING` 的注释。2026-09-28 操作者裁定 Q2a：理由搬到这里，
-测试文件每个条目上方只留一行指针（WP-C1）。搬迁的输入是那个文件的 blob `59541854acf154d9118cd185433b31fca85fc15b`，共 4,503 行，
-其中理由注释 4,429 行。
+测试文件每个条目上方只留一行指针（WP-C1）。搬迁的输入是那个文件的 blob `d06be5a11b2f822a67c2edd090090074d8368cb9`，共 4,637 行，
+其中理由注释 4,554 行。
 
 搬迁由 `scratchpad/source_budget_log_migration.py` 完成，规则如下：
 
@@ -38,10 +38,10 @@ RESEARCH_LOG 里的「理由写在 `test_source_budget.py`」；那些理由现�
 | `docs/analysis/2026-09-28-production-refactor-adversarial-review.md:300` | `:1-13` | `7c29886b` 2026-09-28 05:09Z | 模块 docstring（整条） | 测试文件里的模块 docstring |
 | `docs/analysis/2026-09-28-production-refactor-deep-analysis.md:138` | `:88` | `7c29886b` 2026-09-28 05:09Z | 总述正文。往前 72 小时内，没有哪一版的这几行是完整的语句。同一行提到的 `PLAN_BUDGET` 在第 35 行、`def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined` 在第 4386–4395 行 | [总述（原文）](#总述原文) 从 `so in the cycle after a departing symbol…` 起的 1 行 |
 | `docs/analysis/2026-09-28-production-refactor-deep-analysis.md:138` | `:1-13` | `7c29886b` 2026-09-28 05:09Z | 模块 docstring（整条） | 测试文件里的模块 docstring |
-| `docs/analysis/2026-09-28-production-refactor-deep-analysis.md:138` | `:4374-4383` | `7c29886b` 2026-09-28 05:09Z | `def _lines`、空行、`def test_no_package_grows_past_its_measured_ceiling`。往前 13.9 小时的 `f9e66b5d` 那一版，这几行正好是 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`（整条） | 测试文件里的 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`。按 `7c29886b` 那一版读，则是测试文件里的 `def _lines`、`def test_no_package_grows_past_its_measured_ceiling` |
+| `docs/analysis/2026-09-28-production-refactor-deep-analysis.md:138` | `:4374-4383` | `7c29886b` 2026-09-28 05:09Z | `def _lines`、空行、`def test_no_package_grows_past_its_measured_ceiling`。往前 13.9 小时的 `f9e66b5d` 那一版，这几行正好是 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`（整条） | 测试文件里已经没有 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`。按 `7c29886b` 那一版读，则是测试文件里的 `def _lines`、`def test_no_package_grows_past_its_measured_ceiling` |
 | `docs/analysis/2026-09-28-production-refactor-deep-analysis.md:140` | `:2007` | `7c29886b` 2026-09-28 05:09Z | `beidou_live` 条目之上的理由。往前 72 小时内，没有哪一版的这几行是完整的语句。同一行提到的 `CEILING` 在第 1954–4366 行 | [beidou_live](#beidou_live) 从 `read it - and the 2026-09-09 fix for THA…` 起的 1 行 |
 | `docs/analysis/2026-09-28-production-refactor-deep-analysis.md:239` | `:1-13` | `7c29886b` 2026-09-28 05:09Z | 模块 docstring（整条） | 测试文件里的模块 docstring |
-| `docs/analysis/2026-09-28-production-refactor-execution-plan.md:33` | `:4374-4383` | `26a44d5e` 2026-09-28 07:54Z | `beidou_alpha` 条目之上的理由、`CEILING` 的 `beidou_alpha` 条目。往前 16.6 小时的 `f9e66b5d` 那一版，这几行正好是 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`（整条） | 测试文件里的 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`。按 `26a44d5e` 那一版读，则是测试文件里的 `CEILING` 的 `beidou_alpha` 条目；[beidou_alpha](#beidou_alpha) 从 `是三分之一。为什么方向在市场层面拿着、不…` 起的 9 行 |
+| `docs/analysis/2026-09-28-production-refactor-execution-plan.md:33` | `:4374-4383` | `26a44d5e` 2026-09-28 07:54Z | `beidou_alpha` 条目之上的理由、`CEILING` 的 `beidou_alpha` 条目。往前 16.6 小时的 `f9e66b5d` 那一版，这几行正好是 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`（整条） | 测试文件里已经没有 `def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`。按 `26a44d5e` 那一版读，则是测试文件里的 `CEILING` 的 `beidou_alpha` 条目；[beidou_alpha](#beidou_alpha) 从 `是三分之一。为什么方向在市场层面拿着、不…` 起的 9 行 |
 
 ## 总述（原文）
 
@@ -1969,7 +1969,7 @@ lines say why: `max_loss` is inside `construction_fingerprint`, so changing it c
 
 ## beidou_live
 
-原文：blob 里第 1955–3544 行，`"beidou_live": 15_527,` 之上的注释，共 1,590 行。
+原文：blob 里第 1955–3613 行，`"beidou_live": 15_784,` 之上的注释，共 1,659 行。
 
 ```text
 Merge note, 2026-09-15.  The seven entries below (Twenty-fifth..Thirty-first OF THIS TABLE) are
@@ -3562,11 +3562,80 @@ json）去掉新加的这一节、这个键之后逐字节相同；同一代码�
 改后逐个相同（合并 WP-C6 之后是 61 个；写的时候在 36ee6341 上是 89 个）。
 
 留 37 行（15_490 -> 15_527）：只抬本 PR 的增量，WP-C6 的 +3 没有抬顶，余量从 40 变 37。理由同上，不重述。
+
+2026-09-28（不编号，同上）。+172 beidou_live，15_490 -> 15_662，抬到 15_699。写的时候是 15_443 -> 15_615；
+合入时前面多了上一格 WP-P3 的 +47，数按合入那一刻的 main 重量。
+
+执行手册 §3.12（WP-A1，M-PR06）：日报加一节「数据族 parity」。metrics 与 spot 这些候选数据族，实盘记下了多少
+bars、启动门对它的读者要多少 bars，此前没有日常读数（C-PR06）。现在逐族一行：覆盖 / 需要 = 比值、够或不够、
+谁读它。两个数都取门自己的：覆盖是 `LiveEngine.startup` 调的 `live_coverage_bars`，需要是它交给
+`metrics_refusal` 的 `required_bars`，即 `required_history(模型, market_data.history_bars)`。所以「需要」是
+整个请求窗口（上市天数过滤 720 加模型 warmup），不是读者自己的 lookback：09-28 long/short 叶要 168，门要
+1,442。手册写的是「除以挖掘叶 lookback 与读者 warmup 中较大的那个」，照它算，这一节会说「够」而门拒绝启动；
+所以按门算，读者自己的 lookback 印在「谁读它」里。门按桶数算覆盖、不看列，括号里另印只数本列有值的桶。
+只报告：不告警，不改门。
+
+花在哪（加 176 行、删 4 行）：代码 113 行——读数 `data_family_parity` 与 `_families` 50（门的输入照引擎取：
+去掉停掉的 book、managed symbols、interval、请求窗口；逐族算覆盖、需要、判定），日报一节 23，挖掘叶的
+lookback 10，在跑的读者 8，按列计数的 `_ColumnView` 7，import 9，`reports.py` 挂接 4，`ReplayInputs` 带上
+请求窗口的下限 2；docstring 39 行（读数 22：为什么两个数都取门的、为什么需要的是整个窗口、spot 为什么是 0、
+为什么不抛；`_ColumnView` 8：门按桶数不按列，long/short 列 09-12 才开始记；其余 9）；注释 5 行；空行 15 行。
+手册估 +80，多出的是按列的那个数、停掉的 book 与 docstring。
+
+验收：新测试 10 条绿，其中一条把 `LiveEngine.startup()` 跑起来对答案：门拒绝当且仅当这一节说不够，拒绝
+消息里的两个数就是这一节的两个数。15 个变异（逐条把一处改坏）每个都让至少一条变红。#135：93 个产物（不含
+`_code.txt`）里告警、周报、beta、status 共 41 个逐字节相同，26 份日报的 json 只多 `data_family_parity` 一个
+键、md 只多这一节，删行为 0。三个 digest 与基线逐字相同。09-28 的读数：open interest 290 / 1,442 = 0.20，
+不够；long/short 290（本列有值 205）/ 1,442，不够；spot 0，实盘循环没有 spot 源。
+
+留 37 行（15_662 -> 15_699），理由同上，不重述。
+
+2026-09-28（不编号，同上）。+77 beidou_live，15_662 -> 15_739，抬到 15_776。写的时候是 15_318 -> 15_395；
+它与 WP-C6（+3，用余量）、WP-C9（+87）、WP-P4（+35）、WP-P3（+47）、WP-A1（+172，上一格）同一波，数按合入那一刻的 main 重量（操作者合并，合并前若 main 又动，
+协调者再重量一次）。
+
+D-PR03（执行手册 §3.9；操作者 2026-09-28 裁定 Q5 = 是：非 alpha 的增长率被接受）。`PLAN_BUDGET` 改只记录：
+缺口测试改名 `test_the_plans_budget_is_a_record_not_a_gate`，只钉字面量；缺口本身挪进周报的一节
+「Plan budget gap」（M-PR01）——七包行数、非 alpha 合计、alpha 树占比、近 7 天非 alpha 增长（行/天），
+只印不告警。周报此前没有任何调用者，这次由新的 `deploy/com.beidou.weekly.plist` 每周日 03:00 跑。
+为什么值：那条测试从 09-04 起每天断言「已越界」却推动不了任何决定；裁定之后缺口要有一个记录它的位置，
+否则 M-PR01 只剩一句话。
+
+花在哪：`report_governance.py` +68——代码 46（`SOURCE_PACKAGES` 9，ruff 拆成每行一个；`PLAN_BUDGET` 1；
+`package_lines` 9；`plan_budget_gap` 12；`_plan_budget_lines` 14；import 1），docstring 10（含模块 docstring
+的 1 行与 docstring 里的 1 行空行），注释 4，空行 8。`package_lines` 是本文件 `_lines` 另写的一份：生产代码
+不 import 测试，`tests/live/test_the_weekly_counts_the_tree_the_way_the_ratchet_does.py` 把两者钉在同一棵树的
+同一个数上（仓库这棵，加一棵放了边角的合成树）。`reports.py` +9：挂接 6（import 2、`weekly_payload` 两个
+参数、payload 一个键、markdown 一节），注释 3。
+
+验收：#135 协议，实盘状态快照（09-03 至 09-28T08:00Z）新旧各出一遍，94 个产物里 86 个逐字节相同；4 份周报的 md
+各只多这一节（15 行），json 各只多 `plan_budget` 一个键（20 行），删行 0；新代码自己跑两次逐字节相同，渲染
+前后状态文件的 sha256 不变。三个 digest 逐字相同。16 个变异（逐条把改动改坏）全部有测试变红。
+
+留 37 行（15_739 -> 15_776）：只抬本 PR 的增量，WP-C6 用掉的 3 行余量不补回。理由同上，不重述。
+
+2026-09-28（不编号，同上）。+8 beidou_live，15_739 -> 15_747，抬到 15_784。写的时候是 15_662 -> 15_670；
+合入时前面多了上一格 D-PR03 的 +77，数按合入那一刻的 main 重量。
+
+WP-C8 修法 A（操作者 2026-09-28 裁定「按建议处理」）：`ExitOverlay._reconcile` 的 D-045 条件加
+`state.direction != held`。`exit_step` 的翻转分支不查 cooldown，模型在 cooldown 内先转到另一侧、再翻回被冷却
+的一侧时，回测持有，实盘却把 overlay 自己刚开的仓当成没成交的退出，下一根 bar 平掉——白付一次往返。
+实盘 585 根 bar 里 0 次，潜伏。D-045 本来要接住的两种情形（规则触发后仓位没平；翻走的单也没成交）
+都与 state 不一致，照旧触发。
+
+花在哪：条件本身净 0 行（同一行加一个判断）；docstring +8（为什么只在 overlay 自己不持有那一侧时才算
+没成交的退出，以及 D-045 的两种情形为什么照旧被接住，含 1 行空行）。
+
+验收：原先钉分叉的 strict xfail 在修法下 XPASS（因而变红），改成普通回归测试；主测试的输入加进
+「cooldown 内翻回」（撤掉修法时从第 364 根起分叉 8 根，加上修法后两组参数逐位相同）；D-045 的三条既有
+测试照旧绿；三个 digest 与两条构造测试不变。生效：下一次按纪律的重启（与 WP-C6 同批）。
+
+留 37 行（15_747 -> 15_784），理由同上，不重述。
 ```
 
 ## beidou_cli
 
-原文：blob 里第 3546–3921 行，`"beidou_cli": 8_696,` 之上的注释，共 376 行。
+原文：blob 里第 3615–4030 行，`"beidou_cli": 8_740,` 之上的注释，共 416 行。
 
 ```text
 +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
@@ -3945,11 +4014,51 @@ bridge 的 inert 问的是 `_gate`——`plan`、`apply` 问的那个 startup ga
 bridge 读 pending（startup gate 的 dataset 那一半挡 1 条）；`--data-root` 指向真实归档时读 inert。
 
 留 24 行（8_672 -> 8_696）：合并前 main 的余量就是 24（WP-C7 的 +1 没有抬顶），理由同上，不重述。
+
+2026-09-28（不编号，同上）。+31 beidou_cli，8_672 -> 8_703，抬到 8_727。写的时候是 8_631 -> 8_662、抬到 8_687；
+合入时前面多了 WP-C7 的净 +1 与上一格 WP-P3 的 +40，数按合入那一刻的 main 重量。
+
+D-PR03 的另一半（beidou_live 那格 +77）：`report weekly` 给「Plan budget gap」读工作树与 git 历史。
+`_source_lines_days_before_head` 从 HEAD 自己的提交时刻往回数 7 天、沿 first-parent 取 main 当时的树，
+`git archive` 解到临时目录，用同一个 `package_lines` 数，差的两端是同一个「行」；一周前还不存在的包按 0 行算，
+git 读不出时返回 None，周报印「不可读」而不崩。不按墙钟数：主 checkout 靠手动快进，落后两天的 checkout
+按今天往回数，会把五天的增长记成七天。放在 cli 不放 live：本仓库只有 beidou_cli 起子进程，读 git 的
+`_changed_lines`、`_log_first_mentions` 都在这里；周报的输入从这里注入，渲染脚本才能给它固定值。
+
+花在哪：代码 19（import 4；函数 13；调用处 2），docstring 8（含 1 行空行），空行 4。
+
+验收：`tests/cli/test_the_weekly_job_reads_last_weeks_tree_from_git_and_never_pages.py` 在临时仓库里造一条
+8 天前写、2 天前才合入的分支，钉住 first-parent；日期放在 2020 年，钉住按 HEAD 而不是按墙钟；不是 checkout
+与 PATH 上没有 git 两种情形都出报告；`WebhookAlerts.send` 打桩成一碰就红。5 个 cli 侧变异全部变红。
+
+留 24 行（8_703 -> 8_727）：只抬本 PR 的增量，WP-C7 用掉的 1 行余量不补回。理由同上，不重述。
+
+2026-09-28（不编号，同上）。+13 beidou_cli，8_703 -> 8_716，抬到 8_740。写的时候是 8_672 -> 8_683、抬到 8_707；
+合入时前面多了上一格 D-PR03 的 +31，数按合入那一刻的 main 重量。
+
+#210（WP-C6）描述末尾提议的后续工作包，做法 A。`live_cmd.py` 在模块顶层从报告层取 17 个名字（写的时候是 15 个，
+D-PR03 又加了 `report_governance` 的两个）。现在挪进用它们的函数：四个命令 `live status`、`report daily`、
+`report weekly`、`report beta`，加 `report weekly` 的 helper `_source_lines_days_before_head`。`beidou_cli` 一 import
+就载入 `live_cmd`，armed 循环 `beidou live run` 也走这条路。挪之前，报告层 import 时抛一次异常，循环与全部
+`beidou` 子命令一起起不来；挪之后，倒下的只有这四个命令。干净子进程 `import beidou_cli`：报告层模块 10 -> 0，
+beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`，顶层 import 它的只有 `report_data`。
+
+花在哪（加 32 行、删 19 行）：模块 docstring 从 1 行写成 10 行，+9，写这条规矩与理由。`live status` +6：import、
+空行各 1 行，注释 4 行。注释写报告层坏了时 `--check` 在这里就退出、每小时巡检报 status 失败、循环不受影响。
+三个 report 命令 +15：import 12 行，空行 3 行；`report weekly` 从 `reports` 取的六个名字超了行宽，ruff format
+拆成 8 行。helper +1，一行 import。删掉顶层三句 import，−18。
+
+验收：#135 协议，实盘状态快照（09-03 至 09-28T12:00Z）上 94 个产物逐字节相同。`live status`、`report weekly`、
+`report beta` 经 CLI 新旧各跑一遍，stdout 与写出的文件也逐字节相同。变异检验：给 `report_common` 植入 import
+时异常，改前连 `beidou --help` 都起不来；改后 `live run`、`live verify`、`data pool lag` 照常，`live status`
+先印心跳 JSON 再非零退出。
+
+留 24 行（8_716 -> 8_740）：只抬本 PR 的增量，余量保持 24。理由同上，不重述。
 ```
 
 ## beidou_data
 
-原文：blob 里第 3923–4017 行，`"beidou_data": 3_677,` 之上的注释，共 95 行。
+原文：blob 里第 4032–4126 行，`"beidou_data": 3_677,` 之上的注释，共 95 行。
 
 ```text
 +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
@@ -4051,7 +4160,7 @@ K 线，交给引擎已有的 `_hold_dropped`，不再从 `gather` 里抛出、�
 
 ## beidou_exchange
 
-原文：blob 里第 4019–4035 行，`"beidou_exchange": 747,` 之上的注释，共 17 行。
+原文：blob 里第 4128–4144 行，`"beidou_exchange": 747,` 之上的注释，共 17 行。
 
 ```text
 +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
@@ -4075,11 +4184,11 @@ client id 去查。代理拒绝 CONNECT 的 `ProxyError`（本机最常见的故
 
 ## beidou_shared
 
-原文：`"beidou_shared": 289,`（blob 里第 4037 行）之上没有注释，所以这一节没有代码块。
+原文：`"beidou_shared": 289,`（blob 里第 4146 行）之上没有注释，所以这一节没有代码块。
 
 ## beidou_governance
 
-原文：blob 里第 4038–4149 行，`"beidou_governance": 4_719,` 之上的注释，共 112 行。
+原文：blob 里第 4147–4274 行，`"beidou_governance": 4_725,` 之上的注释，共 128 行。
 
 ```text
 +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
@@ -4194,11 +4303,27 @@ pending；inert 只在问得到读者自己的条件时才报——bridge 问 st
 验收：两个新测试文件 55 条全绿；19 个变异（逐条把一处判定改坏）每一个都让至少一条测试变红。
 
 留 40 行（4_679 -> 4_719），理由同上，不重述。
+
+2026-09-28（不编号，同上）。+6 beidou_governance，4_679 -> 4_685，抬到 4_725。
+
+`reopen.evaluate` 读 `args.date` 用的是自己那份 `datetime.fromisoformat`。裸日期（`date: 2026-11-01`）读出来是
+naive，减带时区的 `now` 抛 TypeError，`beidou governance reopen` 整条命令崩。`calendar._instant` 把同一个日期
+读成 00:00Z，两处口径不一。真实列表的日期都带 `+00:00`，所以没触发过。`_instant` 下沉进 `reopen.py`，改名
+`instant`，`evaluate` 与 `calendar` 都调它。放 `reopen` 不放 `calendar`：`calendar` 在顶层 import `reopen`，
+反过来会成环。
+
+花在哪：`reopen.py` +14。函数 6 行，docstring 7 行（为什么放这里、之前怎么崩），空行 2 行；`evaluate` 的
+try/except 换成判 None，省 1 行。`calendar.py` -8：删掉原函数连空行 9 行，加 import 1 行。
+
+验收：裸日期那条新测试修前红（TypeError），修后绿。7 个变异各让至少一条测试变红。退回原 bug 只有这条新测试
+抓得到；解析失败报 NOT MET、解析失败当作永不到期，只有新补的 UNREADABLE 那条抓得到。
+
+留 40 行（4_685 -> 4_725），理由同上，不重述。
 ```
 
 ## beidou_alpha
 
-原文：blob 里第 4151–4472 行，`"beidou_alpha": 11_110,` 之上的注释，共 322 行。
+原文：blob 里第 4276–4597 行，`"beidou_alpha": 11_110,` 之上的注释，共 322 行。
 
 ```text
 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which

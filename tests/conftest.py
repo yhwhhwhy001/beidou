@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -93,3 +94,31 @@ def feature_store_off(monkeypatch: pytest.MonkeyPatch) -> None:
     directory the shell names.  A test that wants the store sets the variable itself.
     """
     monkeypatch.delenv("BEIDOU_FEATURE_STORE", raising=False)
+
+
+#: Environment variables that reach a real channel: the webhooks the loop pages on, and the dead-man ping
+#: URLs WP-R1 will add.  By prefix, so a channel added later is covered without editing this line.
+REAL_CHANNEL_PREFIXES = ("BEIDOU_ALERTS_", "BEIDOU_DEADMAN_")
+
+
+def strip_real_channels(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Delete every variable that names a real channel from this test's environment; return the names."""
+    names = sorted(name for name in os.environ if name.startswith(REAL_CHANNEL_PREFIXES))
+    for name in names:
+        monkeypatch.delenv(name)
+    return names
+
+
+@pytest.fixture(autouse=True)
+def no_real_alert_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test can page a real channel, however it builds a child process's environment.
+
+    The URLs the loop pages on are exported by `~/.zshrc`, so they are in the environment of any suite run
+    from the operator's interactive shell, and of the nightly data job, which evals those export lines
+    before `pytest -m archive` (WP-P4).  A test that copies `os.environ` into a subprocess and overrides
+    only the first URL still hands the child the real second one.  `test_the_membership_page_is_once_a_day.py`
+    did exactly that until 2026-09-28; it was harmless only because the second channel was not exported
+    yet, and O-2 of the production-refactor execution plan exports it.  Deleting by prefix here covers
+    the next such test too.  A test that wants a channel sets the variable itself, to a local server.
+    """
+    strip_real_channels(monkeypatch)

@@ -38,9 +38,9 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 2026-09-28 操作者裁定 Q2a）。以后抬顶，理由写进那个文件对应包的一节；这里每个条目上方只留一行指向那一节。
 CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_live
-    "beidou_live": 15_527,
+    "beidou_live": 15_784,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_cli
-    "beidou_cli": 8_696,
+    "beidou_cli": 8_740,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_data
     "beidou_data": 3_677,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_exchange
@@ -48,7 +48,7 @@ CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_shared
     "beidou_shared": 289,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_governance
-    "beidou_governance": 4_719,
+    "beidou_governance": 4_725,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_alpha
     "beidou_alpha": 11_110,
 }
@@ -71,13 +71,22 @@ def test_no_package_grows_past_its_measured_ceiling() -> None:
     )
 
 
-def test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined() -> None:
-    """A failing budget the operator has seen is honest; a budget nobody measures is not."""
-    measured = {package: _lines(package) for package in PACKAGES}
-    non_alpha = sum(count for name, count in measured.items() if name != "beidou_alpha")
-    alpha_share = measured["beidou_alpha"] / max(1, sum(measured.values()))
-    # These are the facts the operator is deciding about.  If a future change happens to bring the tree
-    # back inside the plan, this test starts failing and the decision can simply be closed.
-    assert non_alpha > PLAN_BUDGET["non_alpha_total"], "non-alpha is back inside the plan; close the decision"
-    assert measured["beidou_live"] > PLAN_BUDGET["beidou_live"], "beidou_live is back inside the plan"
-    assert alpha_share < PLAN_BUDGET["alpha_share_tree"], "alpha share recovered; close the decision"
+def test_the_plans_budget_is_a_record_not_a_gate() -> None:
+    """2026-09-28 操作者裁定 Q5=是：非 alpha 的增长率被接受，缺口不再断言。
+
+    这条测试原名 `test_the_plans_budget_is_recorded_as_breached_rather_than_quietly_redefined`，从
+    2026-09-04 起每天断言「非 alpha 超 6,000、beidou_live 超 2,000、alpha 占比低于 60%」仍然成立。它每天
+    都绿，却推动不了任何决定——缺口一直在长，而「越界」这件事本身已经没有新信息。裁定之后 `PLAN_BUDGET`
+    是历史记录：这里只钉它的字面量，改它等于改写 2026-09-04 定下的预算，要另一次裁定。缺口本身挪进
+    周报的「Plan budget gap」一节（`beidou_live/report_governance.py` 的 `plan_budget_gap`，M-PR01），
+    只印不告警，周日由 `deploy/com.beidou.weekly.plist` 跑。
+
+    出处：`docs/analysis/2026-09-28-production-refactor-execution-plan.md` §3.9；裁定原文在
+    `docs/analysis/2026-09-28-production-refactor-deep-analysis.md` §14（14.1 裁定表的 Q5 行）。
+    """
+    assert PLAN_BUDGET == {
+        "beidou_live": 2_000,
+        "non_alpha_total": 6_000,
+        "alpha_share_tree": 0.60,
+        "alpha_share_effort": 0.90,
+    }, "PLAN_BUDGET 是 2026-09-04 的预算原文；重定价是一次裁定，不是一次编辑"

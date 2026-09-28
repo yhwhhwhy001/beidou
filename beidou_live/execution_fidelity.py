@@ -88,6 +88,9 @@ class ReplayInputs:
     data_root: str
     registry_on_disk: str | None
     problem: str | None = None
+    # `LiveConfig.history_bars`, the floor `required_history` puts under the model's own need.  Read as
+    # `live_config` reads it, for the one reading here that is not the backtest's: WP-A1's startup gate.
+    history_bars: int = 0
 
     @classmethod
     def from_profile(cls, profile: Mapping[str, Any], registry: Registry, data_root: str | Path) -> ReplayInputs:
@@ -107,7 +110,8 @@ class ReplayInputs:
             exits = None if blocks["exits"] is None else ExitParams.from_mapping(blocks["exits"])
             model = build_model(registry, profile)
             cost = cost_model(load_yaml(str(profile.get("costs", "config/costs.yaml"))))
-            return cls(model, cost, guards, exits, str(data_root), registry_digest(model))
+            floor = int((profile.get("market_data", {}) or {}).get("history_bars", 400))
+            return cls(model, cost, guards, exits, str(data_root), registry_digest(model), history_bars=floor)
         except Exception as error:
             return cls(None, CostModel(), None, None, str(data_root), None, f"{type(error).__name__}: {error}")
 
