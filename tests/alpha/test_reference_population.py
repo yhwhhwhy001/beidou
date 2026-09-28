@@ -197,13 +197,22 @@ def test_mining_cross_sectional_node_uses_the_reference() -> None:
 def test_every_signal_still_causal_under_a_reference(signal_id: str) -> None:
     """The reference must not become a channel for future information."""
     spec = get_signal(signal_id)
-    panel = _synthetic_panel(seed=15, n_symbols=6, n_bars=900)
+    # A signal that reads the metrics archive (`lsr_timing`) gets one, and has it shuffled at the cutoff too:
+    # for that signal the archive, not the close, is where the future would come in.
+    with_metrics = bool(spec.needs_metrics and spec.needs_metrics(spec.default_params))
+    panel = _synthetic_panel(seed=15, n_symbols=6, n_bars=900, with_metrics=with_metrics)
     members = panel.symbols[:4]
     cutoff = 700
     scores = spec.compute(_with_reference(panel, members), spec.default_params)
 
-    shuffled = _synthetic_panel(seed=99, n_symbols=6, n_bars=900)
+    shuffled = _synthetic_panel(seed=99, n_symbols=6, n_bars=900, with_metrics=with_metrics)
     mixed_close = pd.concat([panel.close.iloc[:cutoff], shuffled.close.iloc[cutoff:]])
+    mixed_metrics = None
+    if panel.metrics is not None and shuffled.metrics is not None:
+        mixed_metrics = {
+            name: pd.concat([frame.iloc[:cutoff], shuffled.metrics[name].iloc[cutoff:]])
+            for name, frame in panel.metrics.items()
+        }
     mixed = _with_reference(panel, members)
     later = spec.compute(
         Panel(
@@ -219,6 +228,7 @@ def test_every_signal_still_causal_under_a_reference(signal_id: str) -> None:
             taker_buy_quote=mixed.taker_buy_quote,
             funding=mixed.funding,
             reference=mixed.reference,
+            metrics=mixed_metrics,
         ),
         spec.default_params,
     )

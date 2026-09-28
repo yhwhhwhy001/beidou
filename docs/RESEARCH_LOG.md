@@ -18678,3 +18678,247 @@ exit 0
 - 本节与方案 §14 随 PR 入库；不改代码、不改配置、不花 ledger、不重启。
 - 六项卫生项（WP-P4、C6、C7、C8、C9、P3）不改任何控制，按方案 §9 契约开工，CI 绿即合；解锁的治理类项（WP-C1、WP-C2、D-PR03 只记录、WP-R1、WP-P6 文档）由操作者合并。
 - 下一会话的测量：GAP-PR08（ratchet 文件的合并冲突成本）、GAP-PR10（失败周期窗口内重试的收益）。
+
+## 2026-09-28 · 预登记：全市场多空比择时 lsr_timing（`ls-leaf` 之外的另一条假设，入库后花 ledger 前先问）
+
+**写在跑之前。** 操作者 2026-09-28T04:03:28Z 在「挖掘更多策略和因子」话题的卡片「多空比择时另立一条假设,还是
+挖掘先停到 10-03?」上选了「立项择时」（推荐的是「停到 10-03」），卡片写的后果是「先零 ledger 拆开只有 BTC 的那
+10 个月,再写择时预登记(对照大盘),花 ledger 前再问;过了还要补实盘数据通道」。第一步是上一节（#200）：有横截面
+的那段也在。本节是第二步，照上一节钉住的后果写：对照是大盘（恒定持有同一个篮子）与简单趋势跟随（净敞口跟着
+篮子过去一段的涨跌走）；数据用多空比的全部历史，A 段单列、单独报。`governance/reopen.yaml` 的 `ls-leaf` 把这件事
+写成「另一条假设：要它自己的预登记、自己的对照（大盘，不是 tsmom）、照付 ledger，不是这一叶的重开」。本节就是
+那份预登记，`reopen.yaml` 这次不改。
+
+**本节不授权任何一次运行。** 入库以后、花 ledger 之前问操作者（第 4 项）。
+
+代码与本节在同一个 PR 里：`beidou_alpha/signals/lsr_timing.py`（信号）、`beidou_cli/research_grids.py` 里的一行网格、
+`scratchpad/lsr_timing_criteria.py`（第 6 项里报告不直接给的两条判据怎么读）、`scratchpad/lsr_timing_criteria_synthetic.py`
+（判定脚本在三个答案已知的合成世界上的试跑），测试 `tests/alpha/test_the_market_long_short_timing_holds_the_basket.py`。
+实盘路径不变：registry 不动；实盘自己记下的多空比不够信号要的历史时，`metrics_refusal`（`beidou_live/engine.py`）
+不让循环启动。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务：G-B（同收益下更小回撤）为主，G-A（更高样本外 Sharpe）为次。G-B 缺的是一本与 tsmom 低相关的书：现行的书
+自 09-17 起权重全部 ≥ 0、净多约 1.0 倍（#146 的回测审计）。这本书按人群的偏离整篮做多或做空，它的净方向是不是只
+在跟趋势，正是第 6 项要验的。
+
+### 1. 假设
+
+在时点成员里，把每个有账户多空比（`count_long_short_ratio`）的币读成它对自己过去 w 根均值的偏离，在当时的
+population 上等权平均成全市场的偏离 M；反着人群整篮持有（账户比平时更偏多就做空整个篮子，更偏空就做多），只在
+强读数上翻面。扣掉手续费、滑点与实际结算的资金费之后，这本书同时满足：validate 判 PASS 或 WEAK_PASS，且样本外
+Sharpe 高于门（门由报告按自己量的方差算，借 tsmom 的方差估是 N=662 时 1.6466）；在有横截面的那段（B 段），它超出
+大盘与十条简单趋势跟随的部分 Newey-West t 高于 2.0；与 tsmom 的日净收益相关低于 0.50。
+
+为什么：账户多空比数的是账户，不是仓位，偏多的是人数。#199 拆开 09-10 那一轮 LS 叶的 4 个正形状，钱全在净方向上；
+#200 拆开只有 BTC 的那段，有横截面的那段择时部分仍有 t 3.23。「人群一边倒时反着走」是这两节读数的一种解释，
+不是验证过的机制。
+
+若不成立会看到：样本外 Sharpe 过不了门；或 B 段超出对照的 t 不到 2.0（钱只是大盘或趋势跟随换了个写法）；或钱只在
+A 段（BTC 一个币的 2021 年）。
+
+### 2. 这是「新信息」还是「新网格」
+
+**写法是新的，按新桶计；搜索的代价照带。** 两种读法：一是新机制，整篮择时北斗没测过，LS 叶作为选币信号已经收口
+（`ls-leaf`），这本书不排币；二是 09-10 那一轮 mine 的第一名换了个写法。桶按前一种（新桶 `lsr_timing`），
+`--prior-trials` 按后一种（658，第 4 项）：这条假设是从那一轮的第一名来的，挑它的那次选择是在 658 个上做的。
+
+先声明的污染，全部发生在写本节之前：
+
+1. **09-10 那一轮 mine**（`reports/research/mine-shortlist-20260909T172541Z.json`）：658 个表达式，18 个标的 ×
+   49,841 根 bar（到 2026-09-08 16:00Z），按对 tsmom 的边际 Sharpe 排序。LS 叶 36 个形状，4 个为正，全是 `squash`
+   臂。第一名 `squash((-1 * lsr(168)), 1)` 边际 +0.449、全样本 Sharpe 1.376，排在全部 658 个的**第一位**，第二位
+   （+0.285）也是 lsr。
+2. **#199（09-27）**：把那 4 个拆成净方向与选币。钱全在净方向：排第一的那个择时部分全样本 Sharpe 1.55、t 3.64；
+   选币部分 t 0.55。
+3. **#200（09-28）**：按「只有 BTC 有多空比」切成 A、B 两段。排第一的那个 B 段择时部分 t 3.23、A 段 2.28；B 段
+   净敞口与篮子过去 168 根收益相关 +0.245。对照里要有趋势跟随，就是从这一条来的。
+4. **网格就是那 4 个形状**：w ∈ {72, 168}、scale ∈ {0.5, 1}，入场线 0.2，一格不多。它不是一次新搜索，但继承了那次
+   选择。
+5. **写法是看过 2、3 之后定的**：整篮、同一方向、方向在市场层面拿着。没有在真实数据上试过任何一种写法。
+6. **判定脚本与信号各改过一处**，都在读真实数据之前，都因为合成试跑（本节末「合成数据试跑」）：趋势对照从一条
+   加到十条；第一个强读数之前从「还没决定」改成「空仓」。
+
+**没看过的**：这本书在真实数据上的任何回测；真实数据上 M 的分布、强读数多久来一次；pit 上有多少币有多空比
+（#200 只数了实盘面板的 18 个标的：BTC 从 2021-01-01 起，其余最早 2021-12-01，HYPE 2025-05-30）。
+
+### 3. 协议
+
+```bash
+# 在 Mac 上、~/beidou 之外的独立 worktree 里，检出本节的 commit（主 checkout 不切分支、不留改动）
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy lsr_timing --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"window": [72, 168], "scale": [0.5, 1.0]}' \
+  --charge 4 --prior-trials 658 --prereg <本节的 commit>
+```
+
+- 其余参数全用默认值：`--folds 5`、`--min-train 4000`、`--purge 50`、`--embargo`（跟随 purge）、`--cpcv-groups 6`、
+  `--guards`、`--exits`、`--funding`、`--costs config/costs.yaml`、`--capital 0.0`、`--execution open_to_close`、
+  `--min-tenure 0`、`--holdout-months 0`、`--profile config/live.demo.yaml`（从中读 `min_history_bars` 720、护栏与
+  退出层）。入场线 0.2 是信号的默认值，不在网格里。`--from`、`--to` 不钉，判定脚本按报告记下的末根 bar 复现。
+- **信号**（`beidou_alpha/signals/lsr_timing.py`）。每根 bar，population（当时的成员，且满 720 根历史）里每个有
+  多空比的币取 `lsr(w)`，即多空比 ÷ 自己过去 w 根均值 − 1，与挖掘叶的定义逐位相同；M 是它们的等权平均。原始分数
+  tanh(−M / scale)，绝对值 ≥ 0.2 才换方向，其余时候拿着上一个方向。population 里每个币都拿这个方向，包括自己
+  没有多空比的币；两次强读数之间才进 population 的币当即拿到。第一个强读数之前是空仓，但从 M 第一次有值起就算在
+  做决定，所以四格从同一根 bar 起算。
+- **定仓**。模型照常：入场线 0.2 与 hold、离开成员即平仓、vol targeting、两道上限、再平衡带，护栏与退出层照放。
+  同一个分数落在每个币上，大小在 vol targeting 里被除掉，穿过定仓的只有方向。
+- **数据**。多空比来自日档。书从 population 里第一次有 `lsr(w)` 读数的那根起做决定；tsmom 的 pit 报告从
+  2021-01-31 01:00 起，推断这里相近。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随结果入库。ledger 是共享的 append-only 文件，入库时按行
+  并集合并，不整份覆盖（2026-09-17 那次差点抹掉别人的四行）。
+- 开跑前：确认没有别的会话在写 `.beidou/data`；避开 17:20Z 的数据任务；环境里没有 `BEIDOU_TRIALS_LEDGER` 与
+  `BEIDOU_FEATURE_STORE`。
+- 跑完之后，在同一个 worktree、同一份数据上跑判定脚本（零 ledger）：
+  `PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python scratchpad/lsr_timing_criteria.py --report <报告> --root /Users/maguannan/beidou/.beidou/data`。
+  它先按报告复现最优格，对不上就停；再用对照走的那条路径喂书自己的分数，权重要与书逐位相同，不同就停。书与
+  十一个对照各过一遍模型与定价，比 validate 的一格慢十来倍。
+
+### 4. 计费与桶
+
+4 笔，进新桶 `lsr_timing`。今天 `trials.jsonl` 里 lsr_timing 0 行（全文件 22,205 行，sha256 前 16 位
+`4444538aebac3f91`），`git log -S lsr_timing origin/main` 零命中。
+
+- **`--prior-trials 658`**：09-10 那一轮 mine 的 `evaluated`。推进挖掘候选时带那一轮的 evaluated 是惯例，理由写在
+  2026-09-04 的 P14：「`parse_ledger` 按 strategy 过滤，把候选挂在新 id 下会让整场搜索对 DSR 分母隐身」；P19（238）
+  与 P20（574）照此办过。这本书不是那 658 个里的任何一个，但这条假设是从那一轮的第一名来的。只数 LS 叶的 36 个，
+  会把「第一名是从 658 个里挑出来的」这件事藏起来。#199 与 #200 在同一段样本上看过择时部分，那不是试验、不进 N，
+  但它让 658 仍然偏宽（第 2 项）。
+- 今天的 N：0 + 658 = 658。跑完的 N：662。
+- R1：`governance next --wanted 4` 读数，本窗口（09-03 起 30 天）已记 20,085 / 1,700 行，其中 19,772 行是 09-17
+  `pairs_search` 的 census。`research validate` 不读 R1（`mine` 与调度器读），09-25 tsmom 的 2 行与 09-27
+  carry_hedged 的 4 行也是在这之后记的。这 4 行照样记进本窗口；新窗口 10-03 开。
+- 不动 tsmom、flow、mined 与其它各桶的门。
+
+### 5. 功效读数
+
+同族没有报告，方差借自 tsmom 最近的一份（`tsmom-validation-20260925T143836Z`：同为 pit、同一段样本、同样按整本书
+定仓）。云端只读跑，前后 `trials.jsonl` 的 sha256 前 16 位都是 `4444538aebac3f91`：
+
+```
+evidence: reports/research/tsmom-validation-20260925T143836Z.json sha256=d06162dd803e42c897ff85311cb7b413dbde2c098a797827894179978405f0a5
+  interval=1h bars_per_year=8760 n_obs=45525 variance=2.16266e-05 (这份报告自己量的样本外方差)
+  N 由 --trials 指定为 658，证据报告自己的是 341
+
+## N=658
+    standard error of the OOS Sharpe (annual): 0.4353
+    gate (max of the two halves): 1.6459  [selection binds]
+      D-028 selection threshold: 1.6459 at N=658, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 6.9%
+    P(clear | true annual Sharpe = 1.2): 15.3%
+    P(clear | true annual Sharpe = 1.5): 36.9%
+    P(clear | true annual Sharpe = 2.0): 79.2%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+## N=662（这次跑完的 N）
+    standard error of the OOS Sharpe (annual): 0.4353
+    gate (max of the two halves): 1.6466  [selection binds]
+      D-028 selection threshold: 1.6466 at N=662, alpha=0.05
+      D-020 pass line: 1.0000
+    P(clear | true annual Sharpe = 1.0): 6.9%
+    P(clear | true annual Sharpe = 1.2): 15.2%
+    P(clear | true annual Sharpe = 1.5): 36.8%
+    P(clear | true annual Sharpe = 2.0): 79.2%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2 (so the true joint power is LOWER)
+
+```
+
+只数 LS 叶（`--trials 36`）时跑完的 N 是 40：门 1.3126，真 Sharpe 1.0 / 1.2 / 1.5 / 2.0 过门的概率 23.6% / 39.8% /
+66.7% / 94.3%。本节不用它，理由在第 4 项；列在这里，是让「按惯例算要付多少功效」有个数：真 Sharpe 1.5 时从 66.7%
+掉到 36.8%。
+
+方差是借来的，它是样本外序列长度与矩的函数。这本书整篮翻面，收益的偏度与峰度会与 tsmom 不同，所以这是估计，
+不是读数；本节末的合成世界里，同一个 N 按那几个世界自己的方差算出来的门是 1.79，真实的门也可能高于 1.6466。
+这张表是上界：不含 CPCV 负路径、PBO、fold 一致性、成本 ×2。功效低不是放宽门的理由，它能改变的是要不要
+跑，这一问留给操作者。
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| 判据 | 要求 | 容差 |
+| --- | --- | --- |
+| verdict | `PASS` 或 `WEAK_PASS`（读报告的 `verdict`，不手算） | — |
+| 样本外 Sharpe 对门 | 报告 `oos_selection.oos_sharpe_annual` 高于 max(`oos_selection.threshold_annual`, 1.0) | 相差不到 1e-9 读作未过 |
+| B 段超出对照 | 判定脚本 `criteria.alpha_beyond_controls_b_t` > 2.0：书在 B 段的逐 bar 净收益，对大盘与十条趋势跟随在 B 段的逐 bar 毛收益回归（β 只在 B 段上拟合），截距的 Newey-West t | 相差不到 1e-9 读作未过；B 段不到 30 根读不出，按未过 |
+| 与 tsmom 的相关 | 判定脚本 `criteria.correlation_with_tsmom` < 0.50（`research correlate` 的协议，只取书第一次持仓那天起的日子） | 恰好 0.50 算挡住；读不出按未过 |
+| 复现 | 判定脚本重算最优格，全样本 Sharpe 与报告相差不超过 1e-9；对照的路径喂书自己的分数时权重与书逐位相同。任一不成立脚本就停，上面两条读不出，按未过处理 | 1e-9；逐位 |
+
+- 趋势跟随的十条：「涨跌」（篮子过去 w 根收益之和的符号）与「均线」（篮子的累计收益在自己过去 w 根均值之上取
+  +1、之下取 −1）两种写法，w ∈ {24, 72, 168, 336, 720}。十一个对照都与书走同一台机器：同一个模型、同一个
+  population、同样的成本、资金费、护栏与退出层，只把分数换掉。因子取毛收益，不把对照自己付的成本记到书的账上，
+  只会让截距变小。
+- 因 D-043（全样本尾巴）封顶成 WEAK_PASS 的，按上线口径算过。
+- A 段只报告，不进判定。判定脚本照样给出 A 段的同一套读数（β 在 A 段上拟合）与 A 段占全样本净收益的份额。
+- **判负**：择时这条假设 REFUTED。不重跑、不换网格、不换对照、不申诉门、不换 `--prior-trials`、不补数据重跑。
+  `governance/reopen.yaml` 新加一条 `lsr-timing`：REFUTED；重开要新信息（例如实盘自己攒下的多空比、另一家交易所的
+  多空比），不是同一份日档上的又一个写法或网格。`ls-leaf` 不动。
+- **判过**：不上线，registry 不动。离上线还有三件事，每件先问操作者：
+  (a) 实盘多空比通道。循环的设计是每个周期把 REST 窗口里的多空比记进自己的 store（DL-Q6，
+  `beidou_data/metrics_snapshot.py`），Mac 上这份记录现在有多长没核过；要攒够信号要的历史，`metrics_refusal` 才
+  放行，还要在同一段时间上把这份记录与日档逐 bar 对齐比较（第 9 项 #1）。
+  (b) 书一级的验收（`research book`，D-018 的 2.5pp 与其它几项），要它自己的预登记与 ledger。
+  (c) 探针预算：flow 占着整个 1/3，10-02 复审之后才可能有位置。
+
+### 7. 预期
+
+最可能挂在第二条（样本外对门）。N=662 时门 1.6466，真 Sharpe 1.5 过门的概率 36.8%（上界）。#200 里择时部分全样本
+Sharpe 1.55、B 段 1.49，那是挖掘候选的净方向，四个形状两段的平均净敞口都在 −0.004 到 −0.158 之间；这本书换了
+写法（整篮、同一方向、书一级定仓），样本外还要再打折扣。我估计样本外 Sharpe 在 1.0 到 1.5 之间，四条全过的机会
+不到三成（推测）。
+
+其次是第三条（B 段超出对照）。#200 的 B 段择时部分 t 3.23，净敞口与篮子过去 168 根收益相关 +0.245，十条趋势对照会
+拿走一部分，我估计剩 2 到 3（推测）。第四条大概率过：09-10 那一轮第一名与在跑的书相关 +0.03（推测这本书也低）。
+
+两种结果各值多少：
+
+- **判负**：LS 这条线在北斗里收口，选币（#199）与择时都判过，不再为它建实盘多空比通道。省下的是一条数据通道和一本
+  书的上线工作。
+- **判过**：得到第一本不押趋势、与 tsmom 低相关的候选书（G-B），但离上线还有三步（第 6 项），最早也要等 10-02 flow
+  复审放出探针预算。
+
+两头都值这 4 行。
+
+### 9. 实盘失效方式（How this fails）
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若实盘记下的多空比与研究用的日档不是同一个数（两种时间戳口径、5 分钟的桶取哪一个、代理断线时漏掉的桶），则实盘的 M 与回测的 M 不同，书在回测不会翻面的时刻翻面 | 没有仪器：`metrics_refusal` 只看覆盖长度，不比数值 | 在同一段时间上逐 bar 比较实盘记录与日档的 `count_long_short_ratio`，对齐后相差超过 1e-6 的 bar 数大于 0 就不上线 | 上线前抓：比较写进建通道的那个 PR |
+| 2 | 若人群的分布变了（交易所改口径、账户构成变了），M 长期够不到强读数，书就一直拿着上一个方向，变成一条恒定多头或空头的大盘仓位 | 没有仪器：日报不印 M。间接的是日报「Market beta (D-045, reported only)」，只印不告警 | 距上一次强读数的天数超过判定脚本读出的 B 段 `longest_quiet_days` 的 1.5 倍 | 亏了才看得见，除非上线时给 M 与这个天数加一行日报读数，由巡检读 |
+| 3 | 若涨势里账户偏空（书做多）而 tsmom 也做多，急跌时两本书一起亏：G-B 要的低相关只在平时成立 | 日报「Probe correlation (M-014)」（作为 probe 上线时），只印不告警 | 30 天滚动日收益相关 > 0.50，与第 6 项同一条线 | M-014 不告警，要人读：上线时写进每周读数，由操作者或巡检读 |
+
+读数最早哪天读得出：#1 在建通道时就读得出；#2 要等过了 1.5 倍的最长间隔，读不出的这段靠 #1 兜底；#3 要 30 天。
+
+### 合成数据试跑（判定脚本在三个答案已知的世界上）
+
+`scratchpad/lsr_timing_criteria_synthetic.py` 造三个世界：13 个币、2021-01-01 起五年 1h K 线、资金费每 8 小时一次、
+按天刷新的时点成员表（S11 中途离开，S12 晚上市、晚进池）；多空比只有 BTC 从头就有，其余从 2021-12-01 起，与真实
+数据同一天。每个世界按第 3 项的协议跑 validate（`--prior-trials 658`，ledger 写进世界自己的目录），再跑判定脚本。
+跑完核过仓库 `trials.jsonl` 的 sha256 没变。
+
+| 世界 | 构造 | 应当 | verdict | 样本外 / 门 | B 段超出对照 t | 与 tsmom 相关 | 四条全过 |
+| --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| timing | 人群是一条外生的慢 AR(1)；大盘每根 bar 的漂移是上一根人群偏离的反方向 | 全过 | WEAK_PASS（D-043） | 2.70 / 1.79 | 5.18 | 0.107 | 是 |
+| trend_only | 大盘有动量，漂移跟着过去 168 根的涨跌走；人群反着价格水平走，−M 就是一条趋势 | 挡在 B 段超出对照 | WEAK_PASS（D-043） | 3.12 / 1.79 | 1.19 | 0.488 | 否 |
+| btc_era | timing 的机制只在只有 BTC 有多空比的那 11 个月里有，之后大盘没有漂移 | 挡住 | FAIL | 0.91 / 1.79 | 0.60 | 0.042 | 否 |
+
+三个世界的最优格都是 w 168、scale 0.5，validate 的区间都从 2021-01-31 起（43,104 根）。btc_era 就是 A 段单列要防的
+那种书：全样本 Sharpe 1.66，A 段超出对照的 t 5.15、占全样本净收益的 83%，B 段 0.60。trend_only 的 validate 是过的，
+挡住它的只有 B 段超出对照那一条：书在 B 段自己的 t 5.74，扣掉大盘与十条趋势之后 1.19。
+
+经过，三处改动都在读任何真实读数之前：
+
+1. 第一次试跑用的是两年的世界（A 段五个月）、`--prior-trials 36`、趋势对照只有最优格窗口的一条「涨跌」，三个读对
+   两个：trend_only 的 B 段超出对照 t 3.19，过了线。那个世界里书选中了 72 根的窗口，钱在 168 根的动量上：书的净
+   收益与 168 根「涨跌」相关 0.68，与 336 根「均线」相关 0.71。在同一份数据上比了五组对照（探索脚本没入库，这组
+   读数只是改判定的理由，不是证据）：加同窗口的「均线」3.10；五个窗口的「涨跌」1.01；五个窗口的「均线」0.91；十条
+   一起 0.81；timing 世界在五组下都在 2.91 到 3.17 之间。取十条：两种写法都是「净敞口跟着篮子过去一段的涨跌走」，
+   一天到一个月是常见的范围，多几个回归量对 timing 世界几乎没有代价。
+2. 同一次试跑里，timing 世界的 validate 区间从 2022-04-05 起，不是 2021-01-31：validate 只在网格各格共同的区间上
+   打分，scale 1 的格子第一个强读数来得晚，之前全是 NaN，被读成 warmup。信号改成第一个强读数之前空仓（分数是原始
+   读数，在入场线之下），四格从同一根 bar 起算。
+3. 世界的生成方式没改，只拉长到五年、A 段挪到 2021-12-01，并按第 4 项改成 `--prior-trials 658`。两年的世界里
+   validate 的门在 2.64 到 4.95 之间（区间被截短的那个最高），validate 那两条测不到东西。
+
+跑出上表的三个文件就是入库的这一版：`beidou_alpha/signals/lsr_timing.py` `535827d270eaa158`，`scratchpad/lsr_timing_criteria.py`
+`edb2aa2dd58c8c8f`，`scratchpad/lsr_timing_criteria_synthetic.py` `0023dad957c6cd99`（sha256 前 16 位）。

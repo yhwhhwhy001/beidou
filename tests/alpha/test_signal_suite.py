@@ -23,6 +23,7 @@ def _synthetic_panel(
     with_funding: bool = True,
     correlated: bool = False,
     with_spot: bool = False,
+    with_metrics: bool = False,
 ) -> Panel:
     """``correlated`` gives two symbols a common factor, and it defaults OFF on purpose.
 
@@ -38,6 +39,10 @@ def _synthetic_panel(
     after every other draw so a panel without it is bit for bit the one it always was.  `carry_hedged`
     refuses to enter without a spot price, so without it that signal is NaN everywhere and the
     emptiness assertion below reads it as broken.
+
+    ``with_metrics`` is the same kind of flag for the metrics archive: an account long/short ratio near
+    2 with a swing every symbol shares and a little noise of each name's own, drawn after the spot leg.
+    `lsr_timing` reads nothing else, and on a panel without it the leaf raises rather than score.
     """
     rng = np.random.default_rng(seed)
     index = pd.date_range("2024-01-01", periods=n_bars, freq="h", tz="UTC")
@@ -77,7 +82,12 @@ def _synthetic_panel(
             close * (1.0 + rng.normal(0.0, 0.0005, size=close.shape)), index=index, columns=symbols
         )
         spot = {"open": spot_close.shift(1).fillna(spot_close), "close": spot_close}
-    return Panel.from_frames(frames, "1h", funding=funding, spot=spot)
+    metrics = None
+    if with_metrics:
+        swing = 0.4 * np.sin(np.arange(n_bars) * 2.0 * np.pi / 240.0)
+        ratio = 2.0 * np.exp(swing[:, None] + rng.normal(0.0, 0.05, size=(n_bars, n_symbols)))
+        metrics = {"count_long_short_ratio": pd.DataFrame(ratio, index=index, columns=symbols)}
+    return Panel.from_frames(frames, "1h", funding=funding, metrics=metrics, spot=spot)
 
 
 def _live_params() -> list[tuple[str, dict]]:
@@ -122,7 +132,8 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
     params = {**spec.default_params, **overrides}
     warmup = spec.warmup_for(params)
     with_spot = bool(spec.needs_spot and spec.needs_spot(params))
-    panel = _synthetic_panel(n_bars=warmup + 600, correlated=True, with_spot=with_spot)
+    with_metrics = bool(spec.needs_metrics and spec.needs_metrics(params))
+    panel = _synthetic_panel(n_bars=warmup + 600, correlated=True, with_spot=with_spot, with_metrics=with_metrics)
     scores = spec.compute(panel, params)
     assert scores.shape == panel.close.shape
     assert ((scores.abs() <= 1.0) | scores.isna()).all().all()
@@ -133,7 +144,9 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
         "causality comparison below would be NaN against NaN - the exact way this test was vacuous "
         "before KILL-AR-15"
     )
-    shuffled = _synthetic_panel(seed=99, n_bars=len(panel.index), correlated=True, with_spot=with_spot)
+    shuffled = _synthetic_panel(
+        seed=99, n_bars=len(panel.index), correlated=True, with_spot=with_spot, with_metrics=with_metrics
+    )
     mixed_frames = {}
     for symbol in panel.symbols:
         mixed_frames[symbol] = pd.DataFrame(
@@ -167,7 +180,13 @@ def test_signals_are_causal_and_bounded(signal_id: str, overrides: dict, label: 
             name: pd.concat([frame.iloc[:cutoff], shuffled.spot[name].iloc[cutoff:]])
             for name, frame in panel.spot.items()
         }
-    mixed = Panel.from_frames(mixed_frames, "1h", funding=funding, spot=spot)
+    metrics = None
+    if panel.metrics is not None and shuffled.metrics is not None:
+        metrics = {
+            name: pd.concat([frame.iloc[:cutoff], shuffled.metrics[name].iloc[cutoff:]])
+            for name, frame in panel.metrics.items()
+        }
+    mixed = Panel.from_frames(mixed_frames, "1h", funding=funding, metrics=metrics, spot=spot)
     later = spec.compute(mixed, params)
     _bit_for_bit(scores.iloc[:cutoff], later.iloc[:cutoff])
 
