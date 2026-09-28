@@ -156,6 +156,7 @@ def margin_and_rejections(
     tradable: list[float] = []
     peak_tradable = 0.0
     peak_tradable_bar: int | None = None
+    standing_at_tradable_peak: float | None = None
     gross_tradable: list[float] = []
     for row in _cycles(store):
         bar_ms = int(row.get("bar_open_ms") or 0)
@@ -174,7 +175,7 @@ def margin_and_rejections(
             rescaled = float(held) * float(equity) / float(usdt)
             tradable.append(rescaled)
             if rescaled > peak_tradable:
-                peak_tradable, peak_tradable_bar = rescaled, bar_ms
+                peak_tradable, peak_tradable_bar, standing_at_tradable_peak = rescaled, bar_ms, float(held)
             gross = row.get("gross_before")
             if isinstance(gross, int | float):
                 gross_tradable.append(float(gross) / float(usdt))
@@ -210,6 +211,9 @@ def margin_and_rejections(
         "peak_standing_usage_tradable": peak_tradable if tradable else None,
         "last_standing_usage_tradable": tradable[-1] if tradable else None,
         "peak_tradable_at_bar_ms": peak_tradable_bar,
+        # The equity reading on that same bar.  The window's equity peak can sit on another bar (09-13T22:00Z
+        # against 09-14T02:00Z), and dividing two peaks from two bars is not the rulers' ratio at any bar.
+        "standing_usage_at_tradable_peak": standing_at_tradable_peak,
         "last_gross_over_tradable": gross_tradable[-1] if gross_tradable else None,
         "peak_gross_over_tradable": max(gross_tradable) if gross_tradable else None,
         "over_budget_tradable": (peak_tradable > budget) if tradable else None,

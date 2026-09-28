@@ -395,11 +395,15 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         # wording as the line above would read as a second breach rather than the same one measured
         # against the money that can open a position.  The constraint side names the ruling that holds it
         # rather than a date: the freeze this once cited ended on 2026-09-27 and the sentence outlived it.
+        # The ratio is the two readings on the tradable peak's own bar.  It was a fixed "约 1.9 倍" written on
+        # 2026-09-19, which read 2.15 over the window from 09-13 and 1.74 under k 0.175.
+        same_bar = margin.get("standing_usage_at_tradable_peak")
+        ratio = float(margin["peak_standing_usage_tradable"]) / float(same_bar) if same_bar else None
         notices.append(
             f"M-007 保证金占用对可动用 USDT 为 {_fmt_pct(margin.get('peak_standing_usage_tradable'))}，"
             f"超过 {_fmt_pct(margin.get('budget'))}（margin_cap 是在无抵押品的回测上定的）；"
-            f"同一根 bar 对总权益只有 {_fmt_pct(margin.get('peak_standing_usage'))}，"
-            "两把尺子差约 1.9 倍。约束侧未改，仍按总权益；reopen 条目 risk-g11-denominator 待重新裁定"
+            f"同一根 bar 对总权益只有 {_fmt_pct(same_bar)}，两把尺子差 {_fmt_num(ratio)} 倍。"
+            "约束侧未改，仍按总权益；reopen 条目 risk-g11-denominator 待重新裁定"
         )
     if str(budget.get("status")) == "BLIND":
         # A criterion with no reading is not a breach and cannot be acted on in the next hour - it

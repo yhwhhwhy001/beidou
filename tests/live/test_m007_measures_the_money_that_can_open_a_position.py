@@ -76,6 +76,26 @@ def test_the_disagreement_between_the_two_rulers_is_reported_once(tmp_path: Path
     assert "risk-g11-denominator" in tradable[0], "naming the ruling that keeps it there, not a date"
 
 
+def test_the_notice_reads_both_rulers_on_the_tradable_peaks_own_bar(tmp_path: Path) -> None:
+    """The two peaks can sit on different bars: 09-13T22:00Z and 09-14T02:00Z on the live record.
+
+    The notice used to set the window's equity peak beside the tradable one under the words "同一根 bar",
+    with a fixed "约 1.9 倍" after them that was neither ratio.  Both now come from the tradable peak's bar.
+    """
+    rows = [
+        _cycle(0, usage=0.25, equity=10_000.0, usdt=8_000.0),  # the equity peak, 31.25% tradable
+        _cycle(1, usage=0.22, equity=11_000.0, usdt=5_000.0),  # the tradable peak, 48.40%
+    ]
+    margin = margin_and_rejections(_store(tmp_path, rows), since_ms=None, margin_cap=0.40)
+
+    _, notices = daily_alerts({"margin": margin, "risk_budget": {}, "drift": {}, "restarts": {}})
+
+    (notice,) = [n for n in notices if "可动用 USDT" in n]
+    assert margin["peak_standing_usage"] == 0.25 and margin["standing_usage_at_tradable_peak"] == 0.22
+    assert "22.00%" in notice and "25.00%" not in notice, "the equity reading of the same bar, not the window's peak"
+    assert "2.20 倍" in notice, "11,000 / 5,000 on that bar"
+
+
 def test_a_breach_on_both_rulers_does_not_produce_two_notices(tmp_path: Path) -> None:
     store = _store(tmp_path, [_cycle(0, usage=0.55, equity=10_000.0, usdt=5_000.0)])
     margin = margin_and_rejections(store, since_ms=None, margin_cap=0.40)
