@@ -107,6 +107,7 @@ def test_a_disabled_strategy_is_not_checked(tmp_path: Path) -> None:
     assert not check.blocking and not check.advisory
 
 
+@pytest.mark.archive
 @pytest.mark.skipif(not (ROOT / ".beidou" / "data").exists(), reason="live data root is not in this checkout")
 def test_the_shipped_registry_is_not_blocked_on_the_machine_that_runs_the_loop() -> None:
     """The operator-facing guard: adding this gate must not stop what is already running.

@@ -19,7 +19,7 @@
 | 核对实盘输出可复现（M-011） | `beidou live verify --check`（用公共数据 + `state.json` 离线重算上一周期的 contributions；差异必须为 0） |
 | 检查唤醒时刻与 bar 边界的对齐 | `beidou live status --check`（对齐误差 > 60s 非零退出；整数个 bar 的偏移不算问题，D-025） |
 | 因子挖掘（每轮记 514 行 ledger，先看 R1 预算） | `beidou research mine --strategy tsmom --universe pit --baseline tsmom`；只测量不计费：`--measure` |
-| 定时刷新研究数据（每日 01:20，klines + 资金费率 + **现货** + **metrics 归档** + 池刷新） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
+| 定时刷新研究数据（每日 01:20，klines + 资金费率 + **现货** + **metrics 归档** + 池刷新，最后跑归档专属测试） | `cp deploy/com.beidou.data.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.data.plist` |
 | 定时跑上面两项（每小时 :10） | `cp deploy/com.beidou.check.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.beidou.check.plist` |
 | 一键平仓 | `beidou live flatten --yes` |
 | 停止加仓（可逆） | `beidou live kill-switch --engage` / `--release` |
@@ -211,6 +211,30 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 4. OHLC 矛盾：拿交易所网页上同一根 bar 比对。
 5. 这条告警不拦 bar，也不改目标。要不要对这个标的动手，由操作者定。
 
+## 归档专属测试告警（2026-09-28 起）
+
+七个测试读 `.beidou/` 本身：从归档切出来的夹具、实盘记录 `cycles.jsonl`、数据集门。归档不在就跳过，
+所以 CI 与 worktree 里它们从来不跑。它们带 `archive` marker，由每晚的 data job 在最后跑一次
+`pytest -m archive`（`deploy/run_data.sh`）。
+
+**含义。** 推送正文「北斗归档专属测试失败：……」列出失败或被跳过的用例，末尾是 pytest 的汇总行。来源有三种：
+
+- 有用例失败：归档或实盘记录与测试钉住的内容不一致了。
+- 有用例被跳过：归档不在测试找的位置。这也算失败，没跑的检查不能报通过。
+- pytest 没跑起来：`.venv` 坏了或导入失败，正文是它最后一行输出。
+
+**什么时候会出现。** 主 checkout 快进之后，每晚 01:20 那次 job 跑完时，直到修好为止。去重用共享的
+`alert-dedup.json` 与小时窗口，所以一夜推一次，一小时内手动重跑不再推。完整的失败尾部在 data job 的日志
+（`data.stdout.log`）。日报「归档专属测试（夜间 data job，只报告）」一节印最后一次结果和它的时间，只印不告警。
+
+**收到告警怎么办。**
+
+1. 先看是哪一条。`test_the_fixtures_are_the_archive_verbatim[BNXUSDT_2023-02-22.json]` 自 2026-09-25 起就是红的：
+   夹具 48 行，归档 552 行。那天的 `data repair` 给 2023-02 重新计价接缝前的缺口补进了 504 根 bar。哪边对由操作者定，
+   定下来之前每晚都会推这一条。
+2. 不要为了变绿去改夹具或归档。这条测试说的是「归档在夹具之后变了」，先判断哪一边对。
+3. 在主 checkout 上复现：`.venv/bin/python -m pytest -m archive -rfEs`，约 4 秒。
+
 ## D-041 bridge 到期（2026-10-13）
 
 **切换之后（2026-09-27 的切换 PR，分支 `live/k0175-switch-after-1013`）**：k 改为 0.175，tsmom 指向 k = 0.175 上的
@@ -311,5 +335,5 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
 - 当前实测：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
-- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data metrics` + `data pool refresh`（`data spot` 2026-09-09 加入，`data metrics` 2026-09-27 加入；每日 01:20，`com.beidou.data.plist`）。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。`data metrics` 不带参数：取快照 store 里的全部币，截到昨天，每个币从自己的水位续传。M-011 每小时拿这份归档和快照比；此前归档只在 09-09 手动灌过一次，停在 09-07，见 RESEARCH_LOG「M-011 读了十九天的 09-07」一节。
+- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data metrics` + `data pool refresh`（`data spot` 2026-09-09 加入，`data metrics` 2026-09-27 加入；每日 01:20，`com.beidou.data.plist`）。2026-09-28 起最后再跑 `pytest -m archive`，失败推送，见「归档专属测试告警」一节。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。`data metrics` 不带参数：取快照 store 里的全部币，截到昨天，每个币从自己的水位续传。M-011 每小时拿这份归档和快照比；此前归档只在 09-09 手动灌过一次，停在 09-07，见 RESEARCH_LOG「M-011 读了十九天的 09-07」一节。
 - **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check`、`report daily --check` 与 `data pool lag --check`（成员表落后，见上文「成员表落后告警」），失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。

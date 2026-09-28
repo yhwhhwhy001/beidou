@@ -30,6 +30,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from beidou_live.composition import load_registry
 from beidou_live.config import live_config, load_profile
 from beidou_live.construction import canonical_construction
@@ -111,6 +113,7 @@ def test_the_universe_list_is_not_what_this_pins() -> None:
     assert construction_fingerprint(full)["digest"] == construction_fingerprint(single)["digest"]
 
 
+@pytest.mark.archive
 def test_the_frozen_digest_is_the_one_the_live_loop_recorded() -> None:
     """钉的是循环真正持有过的那套，不是从配置里推出来的一个数。
 
