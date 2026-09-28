@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from beidou_alpha.signals import breakout, carry, carry_hedged, chanlun, flow, meanrev, pairs, residual, tsmom, xsmom
+from beidou_alpha.signals import (
+    breakout,
+    carry,
+    carry_hedged,
+    chanlun,
+    flow,
+    lsr_timing,
+    meanrev,
+    pairs,
+    residual,
+    tsmom,
+    xsmom,
+)
 from beidou_alpha.signals.base import SignalSpec, scores_to_targets
 from beidou_alpha.validation.ledger import PAIR_SEARCH_STRATEGY
 
@@ -77,6 +89,17 @@ SIGNALS: dict[str, SignalSpec] = {
         uses_funding=lambda params: True,
         needs_spot=lambda params: True,
         hedged=True,
+    ),
+    # The LS leaf's timing, written as a book of its own after #199 / #200; pre-registered 2026-09-28.
+    "lsr_timing": SignalSpec(
+        "lsr_timing",
+        lsr_timing.compute,
+        asdict(lsr_timing.LsrTimingParams()),
+        "market-wide long/short timing: the whole basket long or short against the crowd's positioning",
+        lsr_timing.LsrTimingParams().warmup_bars,
+        warmup=lambda params: lsr_timing.LsrTimingParams.from_mapping(params).warmup_bars,
+        canonical=lambda params: asdict(lsr_timing.LsrTimingParams.from_mapping(params)),
+        needs_metrics=lambda params: True,
     ),
     "meanrev": SignalSpec(
         "meanrev",
