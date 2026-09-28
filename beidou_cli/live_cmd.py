@@ -1,4 +1,13 @@
-"""``beidou live ...`` and ``beidou report ...`` commands."""
+"""``beidou live ...`` and ``beidou report ...`` commands.
+
+报告层（`beidou_live.reports` 与 `beidou_live.report_*`）不在模块顶层 import。只有四个命令用它：
+`live status`、`report daily`、`report weekly`、`report beta`，各自在函数里 import。`report weekly` 的 helper
+`_source_lines_days_before_head` 也在函数里 import。
+
+原因是 armed 循环。`beidou live run` 从 `beidou_cli` 起，而 `beidou_cli` 一 import 就载入本模块。
+报告层若在顶层，它 import 时一抛异常，循环和全部 `beidou` 子命令就一起起不来。
+`tests/live/test_the_armed_process_does_not_import_the_report_layer.py` 在干净子进程里钉住这一点。
+"""
 
 from __future__ import annotations
 
@@ -65,24 +74,6 @@ from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_
 from beidou_live.paper import PaperVenue
 from beidou_live.ports import Venue
 from beidou_live.probe import probes_from_registry
-from beidou_live.report_beta import factor_markdown
-from beidou_live.report_governance import SOURCE_PACKAGES, package_lines
-from beidou_live.reports import (
-    PREREGISTRATION_EFFECTIVE_FROM,
-    _store_closes,
-    beta_markdown,
-    daily_alerts,
-    daily_markdown,
-    daily_payload,
-    expectations_from_evidence,
-    latest_risk_adaptation,
-    plain_leverage_lines,
-    preregistration_problems,
-    preregistration_skipped,
-    risk_adaptation_headline,
-    weekly_markdown,
-    weekly_payload,
-)
 from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.scheduler import SystemClock
 from beidou_live.staleness import RULES, rules_binding
@@ -514,6 +505,12 @@ def live_status(
     heartbeat = store.read_heartbeat()
     state = store.load()
     click.echo(json.dumps({"heartbeat": heartbeat, "state": state.to_dict()}, indent=2, sort_keys=True, default=str))
+    # 报告层在这里才 import（为什么不放模块顶层，见模块 docstring）。放在 dump 之后，报告层坏了时
+    # `live status | jq` 仍拿得到心跳与状态，命令随后非零退出。`--check` 在这一行就退出，下面的时钟、
+    # 两个 digest、心跳与成功率检查一项都没跑。每小时巡检（`deploy/run_check.sh`）于是报 status 失败，
+    # `report daily --check` 那一格也失败。循环不 import 报告层，照常交易。
+    from beidou_live.reports import latest_risk_adaptation, plain_leverage_lines, risk_adaptation_headline
+
     # Beside the dump rather than inside it: the dump is what `live status | jq` reads, and the number
     # this line explains - `state.leverage_set`, eighteen identical 5s - is in there.  Unconditional,
     # above the `--check` return, because the reader who needs it is the one running this by hand.
@@ -862,6 +859,8 @@ def _evidence_reports(registry: Registry) -> dict[str, Any]:
 @click.option("--data-root", default=".beidou/data", show_default=True)
 def report_daily(profile: str, paper: bool, day: str | None, out: str | None, check: bool, data_root: str) -> None:
     """Render the daily attribution report (with drift vs validation expectations) from the live state files."""
+    from beidou_live.reports import daily_alerts, daily_markdown, daily_payload, expectations_from_evidence
+
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
@@ -948,6 +947,7 @@ def _source_lines_days_before_head(days: int) -> dict[str, int] | None:
     the difference share one definition of a line.  A package that did not exist yet counts as 0 lines;
     `git archive` refuses a path it cannot find, which would have read as "git cannot say".
     """
+    from beidou_live.report_governance import SOURCE_PACKAGES, package_lines
 
     def git(*args: str) -> bytes:
         return subprocess.run(["git", *args], capture_output=True, check=True).stdout
@@ -1042,6 +1042,16 @@ def report_weekly(
     profile: str, paper: bool, day: str | None, out: str | None, commits: int, data_root: str, research_dir: str
 ) -> None:
     """The plan's weekly research report: the week's decisions next to the week's evidence."""
+    from beidou_live.report_governance import package_lines
+    from beidou_live.reports import (
+        PREREGISTRATION_EFFECTIVE_FROM,
+        expectations_from_evidence,
+        preregistration_problems,
+        preregistration_skipped,
+        weekly_markdown,
+        weekly_payload,
+    )
+
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     chosen = day or datetime.now(UTC).strftime("%Y-%m-%d")
@@ -1089,6 +1099,9 @@ def report_weekly(
 @click.option("--out", default=None, help="write the markdown/json here (default: stdout only)")
 def report_beta(profile: str, paper: bool, strategy: str, data_root: str, out: str | None) -> None:
     """D-045: how much of the live book's return was the market's, and how much was the signal's."""
+    from beidou_live.report_beta import factor_markdown
+    from beidou_live.reports import _store_closes, beta_markdown
+
     payload = load_profile(profile)
     store = _store_for(payload, paper)
     # The daily report's `beta` block is this same call, so the page and the block cannot disagree.

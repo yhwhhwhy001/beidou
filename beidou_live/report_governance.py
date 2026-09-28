@@ -35,8 +35,8 @@ def dated_switch_block(day: str, *, gate: Callable[[Path], Sequence[str]] | None
     switch that might bite gets.  Reported only, never an alert: nothing about a date can be done inside
     the hour, and the construction-cadence count showed what a standing fact on the paging path costs.
     """
-    # Here, not at the top: `beidou live run` loads this module through `live_cmd` -> `reports`, and a top-level
-    # import would add the calendar and both YAML readers to the armed process, which never calls it.
+    # Here, not at the top: until 2026-09-28 `beidou live run` loaded this module through `live_cmd` -> `reports`.
+    # It loads no report module now; this just keeps the calendar out of commands that never print this section.
     from beidou_governance.calendar import dated_switches
 
     start = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC)

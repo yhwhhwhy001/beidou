@@ -4006,7 +4006,29 @@ CEILING = {
     # 与 PATH 上没有 git 两种情形都出报告；`WebhookAlerts.send` 打桩成一碰就红。5 个 cli 侧变异全部变红。
     #
     # 留 24 行（8_703 -> 8_727）：只抬本 PR 的增量，WP-C7 用掉的 1 行余量不补回。理由同上，不重述。
-    "beidou_cli": 8_727,
+    #
+    # 2026-09-28（不编号，同上）。+13 beidou_cli，8_703 -> 8_716，抬到 8_740。写的时候是 8_672 -> 8_683、抬到 8_707；
+    # 合入时前面多了上一格 D-PR03 的 +31，数按合入那一刻的 main 重量。
+    #
+    # #210（WP-C6）描述末尾提议的后续工作包，做法 A。`live_cmd.py` 在模块顶层从报告层取 17 个名字（写的时候是 15 个，
+    # D-PR03 又加了 `report_governance` 的两个）。现在挪进用它们的函数：四个命令 `live status`、`report daily`、
+    # `report weekly`、`report beta`，加 `report weekly` 的 helper `_source_lines_days_before_head`。`beidou_cli` 一 import
+    # 就载入 `live_cmd`，armed 循环 `beidou live run` 也走这条路。挪之前，报告层 import 时抛一次异常，循环与全部
+    # `beidou` 子命令一起起不来；挪之后，倒下的只有这四个命令。干净子进程 `import beidou_cli`：报告层模块 10 -> 0，
+    # beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`，顶层 import 它的只有 `report_data`。
+    #
+    # 花在哪（加 32 行、删 19 行）：模块 docstring 从 1 行写成 10 行，+9，写这条规矩与理由。`live status` +6：import、
+    # 空行各 1 行，注释 4 行。注释写报告层坏了时 `--check` 在这里就退出、每小时巡检报 status 失败、循环不受影响。
+    # 三个 report 命令 +15：import 12 行，空行 3 行；`report weekly` 从 `reports` 取的六个名字超了行宽，ruff format
+    # 拆成 8 行。helper +1，一行 import。删掉顶层三句 import，−18。
+    #
+    # 验收：#135 协议，实盘状态快照（09-03 至 09-28T12:00Z）上 94 个产物逐字节相同。`live status`、`report weekly`、
+    # `report beta` 经 CLI 新旧各跑一遍，stdout 与写出的文件也逐字节相同。变异检验：给 `report_common` 植入 import
+    # 时异常，改前连 `beidou --help` 都起不来；改后 `live run`、`live verify`、`data pool lag` 照常，`live status`
+    # 先印心跳 JSON 再非零退出。
+    #
+    # 留 24 行（8_716 -> 8_740）：只抬本 PR 的增量，余量保持 24。理由同上，不重述。
+    "beidou_cli": 8_740,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
