@@ -227,6 +227,9 @@ strategies:
     # 09-23 的 G4 在 k = 0.60 与 0.30 上重放过同一组窗口（RESEARCH_LOG「G4：崩盘窗口在 k=0.60 下重跑」）：
     # FTX 仍是唯一为负的窗口，0.60 下 -8.54%、0.30 下 -3.78%；窗口回撤 0.60 是 0.30 的 1.91 到 2.72 倍，
     # 收益不按 k 等比放大。k = 0.175 上没有重放过，所以这里不给 0.175 的数。
+    # 2026-09-29 补：0.175 上重放了（`scratchpad/g4_stress_windows_and_var_at_k0175.py`，RESEARCH_LOG 同日「G4 在
+    # k=0.175 上重放」）。FTX 仍是唯一为负的窗口，0.175 下 -1.10%；补上的 2025-10 窗口 +5.04%；最差 UTC 日 -3.85%。
+    # 七个窗口里市场最差的那一小时，书在 0.175 与 0.60 上都是净空头。上一句「没有重放过」是写它那天的状态。
     # 2026-09-06 P1-01/DL-Q1: re-validated under the corrected CROSS-SECTIONAL REFERENCE POPULATION.
     # The crowding modifier ranks trailing funding across symbols, and until now "across symbols" meant
     # whichever columns the caller had loaded: research ranked a name against the whole point-in-time

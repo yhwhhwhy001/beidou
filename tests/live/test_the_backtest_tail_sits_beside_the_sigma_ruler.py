@@ -1,15 +1,17 @@
 """G4: the backtest's one-day VaR / ES reach the daily report in USDT, and live days are counted against them.
 
 `beidou_live.reports.tail_readings` converts four constants measured by
-`scratchpad/g4_stress_windows_and_var_at_k060.py` and counts live UTC days past the VaR.  These tests pin the
-conversion (which equity, which constant), the live day (which steps, which days) and the one refusal (the
-constants belong to one vol_target).  One of them drives the equity with the August 2026 Binance closes,
+`scratchpad/g4_stress_windows_and_var_at_k0175.py` (k = 0.175; the 09-23 set came from `..._k060.py`) and counts
+live UTC days past the VaR.  These tests pin the conversion (which equity, which constant), the live day (which
+steps, which days), the one refusal (the constants belong to one vol_target), and that the one vol_target is
+the profile's: the constants must be re-measured in the change that moves k.  One of them drives the equity with the August 2026 Binance closes,
 because the day bucketing is where a real record differs from a hand-made one: real bars straddle UTC
 midnight at the venue's hour, and a count that is right on round numbers can still be off by a day there.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -26,7 +28,11 @@ from beidou_live.reports import (
     tail_readings,
 )
 from beidou_live.state import StateStore
+from beidou_shared.config import load_yaml
 
+ROOT = Path(__file__).resolve().parents[2]
+#: The measurement the constants were copied from; a re-measure writes a new directory and moves this line.
+TAIL_SOURCE = ROOT / "reports" / "research" / "g4-k0175-20260929" / "g4-tail-readings.json"
 HOUR = 3_600_000
 DAY = 24 * HOUR
 MIDNIGHT = 1_788_048_000_000  # 2026-08-30T00:00Z
@@ -56,6 +62,27 @@ def test_the_constants_are_ordered_the_way_a_tail_is() -> None:
         assert 0.0 < BACKTEST_DAILY_VAR[level] <= BACKTEST_DAILY_ES[level] < 1.0
     assert BACKTEST_DAILY_VAR[0.95] < BACKTEST_DAILY_VAR[0.99]
     assert BACKTEST_DAILY_ES[0.95] < BACKTEST_DAILY_ES[0.99]
+
+
+def test_the_constants_were_measured_at_the_k_that_ships() -> None:
+    """The section printed n/a for two days after the 09-27 switch (0.60 -> 0.175) and nothing went red.
+
+    `tail_readings` refuses to convert across vol_targets, which is right, but a refusal that nobody reads is a
+    dark instrument (backtest-guard 2026-09-29).  Moving `portfolio.vol_target` now has to re-run the G4 script
+    in the same change, or say in this test why it does not.
+    """
+    profile = load_yaml(ROOT / "config" / "live.demo.yaml")
+    assert math.isclose(TAIL_VOL_TARGET, float(profile["portfolio"]["vol_target"]), rel_tol=0.0, abs_tol=1e-12)
+
+
+def test_the_constants_are_the_archived_measurement_rounded() -> None:
+    """Six decimals of the archived run at the same k: a hand-typed or transposed digit fails here."""
+    rows = json.loads(TAIL_SOURCE.read_text(encoding="utf-8"))
+    (tail,) = [row for row in rows if row.get("kind") == "tail" and math.isclose(row["k"], TAIL_VOL_TARGET)]
+    for level in (0.95, 0.99):
+        measured = tail["levels"][f"{level:.2f}"]
+        assert BACKTEST_DAILY_VAR[level] == round(measured["var"], 6)
+        assert BACKTEST_DAILY_ES[level] == round(measured["es"], 6)
 
 
 def test_var_and_es_are_converted_at_the_days_last_equity(tmp_path: Path) -> None:
