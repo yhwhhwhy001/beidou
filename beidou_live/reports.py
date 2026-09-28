@@ -393,12 +393,13 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
     if margin.get("over_budget_tradable") and not margin.get("over_budget"):
         # Only when the two rulers disagree: that gap IS the finding, and printing it under the same
         # wording as the line above would read as a second breach rather than the same one measured
-        # against the money that can open a position.
+        # against the money that can open a position.  The constraint side names the ruling that holds it
+        # rather than a date: the freeze this once cited ended on 2026-09-27 and the sentence outlived it.
         notices.append(
             f"M-007 保证金占用对可动用 USDT 为 {_fmt_pct(margin.get('peak_standing_usage_tradable'))}，"
             f"超过 {_fmt_pct(margin.get('budget'))}（margin_cap 是在无抵押品的回测上定的）；"
             f"同一根 bar 对总权益只有 {_fmt_pct(margin.get('peak_standing_usage'))}，"
-            "两把尺子差约 1.9 倍。约束侧未改（构造冻结到 2026-10-13）"
+            "两把尺子差约 1.9 倍。约束侧未改，仍按总权益；reopen 条目 risk-g11-denominator 待重新裁定"
         )
     if str(budget.get("status")) == "BLIND":
         # A criterion with no reading is not a breach and cannot be acted on in the next hour - it
@@ -799,7 +800,7 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "gross 对可动用 USDT 峰值/最近": (
                         f"{_fmt_num((payload.get('margin') or {}).get('peak_gross_over_tradable'))}x / "
                         f"{_fmt_num((payload.get('margin') or {}).get('last_gross_over_tradable'))}x"
-                        "（max_gross 仍按总权益裁剪，构造冻结中）"
+                        "（max_gross 仍按总权益裁剪；reopen 条目 risk-g11-denominator 待重新裁定）"
                     ),
                     "insufficient_margin_rejections": (payload.get("margin") or {}).get("insufficient_margin"),
                     "rejections_by_code": json_dumps((payload.get("margin") or {}).get("rejections") or {}),
