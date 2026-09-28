@@ -454,7 +454,9 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
     summary every time.  This command reopens nothing; reopening is a named ruling, and a command that
     could do it on its own would be the thing R10 forbids.
     """
-    from beidou_governance.reopen import LIST, load, render, survey
+    from beidou_governance.reopen import LIST, load, render, short_legs, survey
+    from beidou_live.report_common import _cycles, evidence_window
+    from beidou_live.state import StateStore
 
     checkout = Path(root).resolve()
     entries = load(checkout / LIST)
@@ -500,7 +502,14 @@ def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> Non
         if (store / probe).is_dir() and any((store / probe).iterdir())
     }
 
-    click.echo(render(survey(entries, {"equity": equity, "columns": columns, "now": datetime.now(UTC)}), hidden))
+    # G11 (net-exposure-cap-g11): through `_cycles`, the daily report's row entry, so a SKIPPED row never
+    # stands in for the bar it skipped; and from `evidence_window`, the running construction's first bar.
+    # `StateStore` creates its directory, so it is only built over a record that exists: this command reads.
+    record = checkout / state_dir / "cycles.jsonl"
+    live = StateStore(record.parent) if record.exists() else None
+    legs = short_legs(_cycles(live), evidence_window(live).get("since_ms")) if live else None
+    facts = {"equity": equity, "columns": columns, "now": datetime.now(UTC), "short_legs": legs}
+    click.echo(render(survey(entries, facts), hidden))
 
 
 @governance.command("window")
