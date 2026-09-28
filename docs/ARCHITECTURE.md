@@ -90,6 +90,7 @@ beta 报告的读数全在里面，09-23 那批并行合并的冲突也集中在
 | `test_import_rules.py` | 依赖方向 + import 时无副作用（原本的那一条） |
 | `test_every_module_is_reachable_from_an_entry_point.py` | 每个生产模块都能从某个 CLI 入口按 import 走到；豁免具名不计数 |
 | `test_source_budget.py` | M-003 source budget ratchet：每个包不得超过上次量到的 ceiling，抬表须在同一提交写理由 |
+| `test_every_ceiling_points_at_its_record.py` | 抬顶理由在 `docs/SOURCE_BUDGET_LOG.md`（WP-C1）：每个 `CEILING` 条目上方一行指向它，表里没有别的注释，记录不少于 4,000 行 |
 | `test_suite_duration.py` + `suite_duration.py` | M-003 的第二道阈值：测试套件墙钟时间 ratchet |
 | `test_every_launchd_plist_is_valid_xml.py` | 仓库里的 plist 必须是良构 XML（launchd 比 expat 宽容，曾放过一个不良构的文件） |
 | `test_alerts_are_chinese.py` | 告警文案是操作者读得懂的语言 |
