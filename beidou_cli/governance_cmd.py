@@ -525,6 +525,43 @@ def window_cmd(root: str) -> None:
     click.echo(render_window(survey_window(changes, datetime.now(UTC))))
 
 
+@governance.command("calendar")
+@click.option("--days", default=60, show_default=True, help="List what flips within this many days from now.")
+@click.option("--json", "as_json", is_flag=True, help="The same rows as JSON, for a script rather than a person.")
+@click.option("--root", default=".", help="Checkout to read the switches from.  Run from it, as `plan` is.")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True, help="What the armed loop starts on.")
+@click.option("--data-root", default=".beidou/data", show_default=True, help="The data `live run` checks against.")
+def calendar_cmd(days: int, as_json: bool, root: str, profile: str, data_root: str) -> None:
+    """Every dated switch in the checkout, soonest first: when, which line, who reads it, what it does.
+
+    E-PR16: on 2026-09-25 three switches flipping in the same instant on 10-13 took a 63 KB analysis to
+    find, because they lived in four kinds of file and nothing listed them together.  This lists them
+    and does nothing else - no switch is moved, armed or fired here - and remembers nothing: each row is
+    read off its line on every run (`beidou_governance.calendar`).
+
+    The bridge asks `_gate`, the startup gate `plan` and `apply` ask, whether its expiry would bite: that
+    is the gate's answer, not the registry's verdict line.  Past rows are counted, not listed.
+    """
+    from beidou_governance.calendar import dated_switches
+
+    now = datetime.now(UTC)
+    rows = dated_switches(repo=Path(root).resolve(), now=now, gate=_gate(profile, data_root))
+    shown = [row for row in rows if now < row.at <= now + timedelta(days=days)]
+    if as_json:
+        click.echo(json.dumps([row.as_dict() for row in shown], indent=2, ensure_ascii=False))
+        return
+    click.echo("date | source | reader | consequence | status")
+    for row in shown:
+        click.echo(
+            f"{row.at.astimezone(UTC):%Y-%m-%d %H:%MZ} | {row.source} | {row.reader} | {row.consequence} | {row.status}"
+        )
+    past = sum(row.at <= now for row in rows)
+    click.echo(
+        f"{len(shown)} 条在 {days} 天内（pending {sum(r.status == 'pending' for r in shown)}）；另有 {past} 条已过、"
+        f"{len(rows) - past - len(shown)} 条在 {days} 天之后。只读：本命令不动任何开关。"
+    )
+
+
 @governance.command("gate")
 @click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
 @click.option("--root", default=".", help="Checkout to read the trials ledger and reports from.")

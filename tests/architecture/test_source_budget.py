@@ -3485,7 +3485,27 @@ CEILING = {
     # 另证拿掉三个新键、改回 `auto` 逐字节复现 #163 的构造。
     #
     # 留 40 行（15_318 -> 15_358），理由与上面几格逐字相同，不重述。
-    "beidou_live": 15_358,
+    #
+    # 2026-09-28（不编号，同上）。+47 beidou_live，15_318 -> 15_365，抬到 15_405。
+    #
+    # 执行手册 §3.6（WP-P3，E-PR16）：日报加一节「未来 7 天日期翻转」。09-25 要一份 63 KB 的分析才看清 10-13 有三个
+    # 开关同时翻转；现在每个 dated switch 在它翻转前的 7 份日报里各出现一次，最后一份是前一天的。行从
+    # `beidou_governance.calendar` 读，与 `beidou governance calendar` 印的是同一份；只报，不进 `daily_alerts`。从报告
+    # 那一天的 00:00Z 起算而不是从墙钟起算，所以同一天的报告在同一批文件上逐字节可复现。
+    #
+    # 花在哪（加 51 行、删 4 行）：`report_governance.py` 的 `dated_switch_block` 与 `_dated_switch_lines`——代码 16 行、
+    # docstring 14 行（为什么从当天 00:00Z 起算、为什么不告警）、注释 4 行、空行 9 行，模块 docstring 与一行 import
+    # 改写 3 行。4 行注释里有 2 行写 `calendar` 为什么在函数里 import：`engine.py` 仍经 `reports` 导入整个报告层（WP-C6
+    # 去掉它），放在顶层会把七个治理模块带进 armed 进程的 import 闭包。`reports.py`：`daily_payload` 加 `gate` 参数与
+    # 一个键、`daily_markdown` 加一节，代码 5 行、注释 2 行，模块 docstring 改写 1 行。
+    #
+    # 验收：#135 协议，实盘状态快照（09-03 至 09-28）上 93 个产物，41 个逐字节相同，其余 52 个（26 份日报的 md 与
+    # json）去掉新加的这一节、这个键之后逐字节相同；同一代码渲染两次逐字节相同。09-03 至 09-19 印「无」，09-27 的两行
+    # 各在它前面 7 份日报里出现，10-03 的六行从 09-26 起出现。`import beidou_live.engine` 带进的 `beidou_*` 模块改前
+    # 改后都是 89 个，逐个相同。
+    #
+    # 留 40 行（15_365 -> 15_405），理由同上，不重述。
+    "beidou_live": 15_405,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
@@ -3846,7 +3866,22 @@ CEILING = {
     # `research_grids.py` +1，预登记的 4 格。
     #
     # 留 40 行（8_616 -> 8_656），理由同上，不重述。
-    "beidou_cli": 8_656,
+    #
+    # 2026-09-28（不编号，同上）。+40 beidou_cli，8_631 -> 8_671，抬到 8_696。
+    #
+    # 执行手册 §3.6（WP-P3，E-PR16）：`beidou governance calendar [--days 60] [--json]`，按日期升序打印每个 dated
+    # switch 的 date | source | reader | consequence | status，已过的与 `--days` 之外的只计数。只读，不动任何开关。
+    # bridge 的 inert 问的是 `_gate`——`plan`、`apply` 问的那个 startup gate——而不是 registry 里 verdict 那一行；
+    # `report daily` 把同一个 `_gate` 交给日报那一节，两处对 bridge 的回答不会分叉。
+    #
+    # 花在哪：`governance_cmd.py` +37，命令的代码 24 行、docstring 8 行、空行 5 行；`live_cmd.py` +3，import 1 行、
+    # `gate=` 1 行、注释 1 行。
+    #
+    # 验收：在 worktree 里跑出 60 天内 9 行（10-03 六行、10-13 三行），另有 2 行已过。worktree 没有 `.beidou/data`，
+    # bridge 读 pending（startup gate 的 dataset 那一半挡 1 条）；`--data-root` 指向真实归档时读 inert。
+    #
+    # 留 25 行（8_671 -> 8_696），理由同上，不重述。
+    "beidou_cli": 8_696,
     # +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
     # file was missing, applied to 4.1 GB of archive), and `membership_summary`'s optional dead-slot
     # count.  The measurement it exists for: 109 of 35,899 member-slots (0.30%) had no bar behind them,
@@ -4057,7 +4092,24 @@ CEILING = {
     # `owes_parity`, `_sleeve_params`, the split in `assemble`, and `_knobs` lifted out of
     # `reconstruct_space` so both replay one set of knobs - 11 docstring, 3 comment, 10 blank.  Four
     # mutations each turned a test red.  The 47 over were not golfed.  40 above again.
-    "beidou_governance": 4_397,
+    #
+    # 2026-09-28（不编号，同上）。+322 beidou_governance，4_357 -> 4_679，抬到 4_719。
+    #
+    # 执行手册 §3.6（WP-P3，E-PR16）：`beidou_governance/calendar.py`（新）。dated switch 散在 `deploy/run_live.sh`、
+    # `policy.py`、`admission.py`、`governance/reopen.yaml`、`governance/window_changes.yaml`、registry 与一条测试里，
+    # 这里列成一张表：每一行在每次调用时从它所在的那一行重读，不记任何日期，也不碰任何开关。三种状态 past、inert、
+    # pending；inert 只在问得到读者自己的条件时才报——bridge 问 startup gate（由调用方注入，本包 import 不到
+    # `beidou_live`），单窗口开放问那条测试断言的等式，window change 看 `applied`——问不到就报 pending。手册之外多一行：
+    # `WINDOW_ANCHOR` 的批次窗口翻页，全仓 grep 赋值位置的日期时找到。
+    #
+    # 花在哪（新文件 322 行）：代码 210 行（七个来源各一段读法、按 `- id:` 找行号、`_instant`、`_status`）、docstring
+    # 64 行（为什么读文本不 import、为什么 bridge 不按 verdict 判、probe 的过滤条件与 90 天默认值为什么抄了一份、哪条
+    # 测试钉住这份抄本）、注释 1 行、空行 47 行。
+    #
+    # 验收：两个新测试文件 55 条全绿；19 个变异（逐条把一处判定改坏）每一个都让至少一条测试变红。
+    #
+    # 留 40 行（4_679 -> 4_719），理由同上，不重述。
+    "beidou_governance": 4_719,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three
