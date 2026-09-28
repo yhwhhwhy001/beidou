@@ -204,7 +204,7 @@ def test_each_reopen_row_is_what_governance_reopen_would_say(now: datetime) -> N
     assert len(rows) == len(entries)
     for entry in entries:
         (row,) = [row for row in rows if row.consequence.startswith(f"{entry.id} ")]
-        assert row.at == datetime.fromisoformat(str(entry.args["date"]))
+        assert row.at == reopen.instant(str(entry.args["date"]))  # the reader's parse: naive == aware is False
         assert (row.status == "past") is (reopen.evaluate(entry, {"now": now}).state == reopen.MET)
 
 
