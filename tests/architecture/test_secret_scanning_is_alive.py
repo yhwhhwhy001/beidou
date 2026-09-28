@@ -6,7 +6,7 @@
 `env.sh` / `~/.zshrc` 读，代码与 plist 里都没有值）。
 
 于是这个文件的职责不是「找密钥」——CI 的 Secrets 门每次跑都在找。它守的是**扫描本身
-还有没有用**，因为这道门有两种坏法，而且都不会自己喊出来：
+还有没有用**，因为这道门有三种坏法，而且都不会自己喊出来：
 
   1. **配置崩了，扫描根本没跑。**  建这道门的当天就撞上了：`.gitleaks.toml` 第一版用
      `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 用 Go 的 RE2，**不支持
@@ -19,27 +19,40 @@
      就开始无视它。但每压一条，抓真密钥的能力就少一点。下面 `test_a_forged_credential_is_caught`
      就是这件事的刹车：allowlist 再怎么加，一个伪造的 Binance 形态必须还能被抓出来。
 
+  3. **扫描跑了，却看不见 merge 提交。**  2026-09-28 实测：gitleaks 的 git 模式跑的是
+     `git log -p`，而 `git log -p` 默认不给 merge 提交出 diff。解冲突时写进 merge 提交的
+     假凭据，pre-push 与 CI 的 Secrets 门都报 `no leaks found`。上面那次「1,637 个 commit
+     零命中」也不含 merge 的 diff。文件末尾那组测试守这一条：造一个只活在 merge 提交里的
+     假凭据，拿 hook 本身、ci.yml 与 SECURITY.md 里现写的命令去扫。命令不在测试里另抄一份。
+     抄一份的话，门上的写法改坏了，测试照绿，真门照哑。
+
 测试用的「密钥」全部是当场随机生成的假值，不落在仓库里，也从未对应任何账户。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import random
+import re
+import shlex
 import shutil
 import string
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / ".gitleaks.toml"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("gitleaks") is None,
-    reason="本地没装 gitleaks（brew install gitleaks）；CI 的 Secrets 门有独立的一份",
+    reason="没装 gitleaks（本机：brew install gitleaks；CI 上由 Secrets 那一步放进 PATH）",
 )
 
 
@@ -199,3 +212,256 @@ def test_ci_scans_full_history_not_a_shallow_checkout() -> None:
         "CI 的 checkout 没有 `fetch-depth: 0`。浅检出上的历史扫描会空跑通过，"
         "这是最难发现的一种失败：它长得和平安一模一样。"
     )
+
+
+# ---------------------------------------------------------------------------
+# 第三种坏法：merge 提交的 diff 不在扫描里
+# ---------------------------------------------------------------------------
+
+HOOK = ROOT / ".githooks" / "pre-push"
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+SECURITY = ROOT / "SECURITY.md"
+Z40 = "0" * 40
+
+# 两种 git 配置下都要抓到。第二种是修这道门时撞上的：`-m` 只说「给 merge 出 diff」，
+# 格式听 `log.diffMerges` 的。它设成 `dense-combined`（或 `combined`）时，`git log -p -m`
+# 出的是合并格式的 diff，gitleaks 解析不了，照样报 `no leaks found`。所以门上写
+# `--diff-merges=separate`：每个 parent 各出一份普通 diff，不看这个配置。
+GIT_CONFIGS: dict[str, str | None] = {
+    "default-config": None,
+    "log.diffMerges=dense-combined": "dense-combined",
+}
+PUSHES = ("existing-branch", "new-branch")
+
+
+def _git_env(diff_merges: str | None = None) -> dict[str, str]:
+    """临时仓库里一切 git 调用的环境，包括 hook 与 gitleaks 自己拉起的 `git log`。
+
+    不读 `~/.gitconfig` 与系统配置，也不继承外层的 `GIT_*`。在 hook 里跑 pytest 时，
+    `GIT_DIR` 这类变量指向外层仓库，不清掉的话命令会落到那里去。
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env |= {
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "scan-test",
+        "GIT_AUTHOR_EMAIL": "scan-test@example.invalid",
+        "GIT_COMMITTER_NAME": "scan-test",
+        "GIT_COMMITTER_EMAIL": "scan-test@example.invalid",
+    }
+    if diff_merges is not None:
+        env |= {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "log.diffMerges", "GIT_CONFIG_VALUE_0": diff_merges}
+    return env
+
+
+def _git(repo: Path, *args: str, expect: int = 0) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), *args], env=_git_env(), capture_output=True, text=True, timeout=60)
+    assert proc.returncode == expect, f"git {' '.join(args)} 返回 {proc.returncode}，预期 {expect}：\n{proc.stderr}"
+    return proc.stdout.strip()
+
+
+@dataclass(frozen=True)
+class _MergeRepo:
+    """一个临时仓库，里面有一个解冲突时写进指定值的 merge 提交。"""
+
+    path: Path
+    remote_tip: str  # 推送前远端 main 的位置，即 merge 之前 main 的 tip
+    merge: str  # 那个 merge 提交
+    head: str  # merge 之后的提交，把那一行又改掉了
+
+
+def _build_merge_repo(path: Path, resolution: str) -> _MergeRepo:
+    """base → side 与 main 改同一行 → merge 冲突 → 解冲突写进 `resolution` → 再提交一次改掉它。
+
+    最后那次提交是有意的，它让值**只**活在 merge 提交的 diff 里。工作树里已经没有它，
+    `--no-git` 的目录扫描抓不到。gitleaks 只扫新增行，那次删除也不会被扫到。
+    能抓到它的，只剩真去看 merge diff 的扫描。
+
+    建完把 HEAD 放回 base，也是有意的。全历史扫描要扫全部 ref，不只是 HEAD 走得到的那些。
+    命令传了 `--log-opts` 却忘了写回 `--all` 时，git 只扫 HEAD，这里就看不见那个 merge。
+    """
+    path.mkdir()
+    _git(path, "init", "-q", "-b", "main")
+    settings = path / "settings.py"
+
+    def commit(value: str, message: str) -> str:
+        settings.write_text(f'note = "{value}"\n', encoding="utf-8")
+        _git(path, "add", "settings.py")
+        _git(path, "commit", "-q", "-m", message)
+        return _git(path, "rev-parse", "HEAD")
+
+    base = commit("base", "base")
+    _git(path, "checkout", "-q", "-b", "side")
+    commit("side", "side")
+    _git(path, "checkout", "-q", "main")
+    remote_tip = commit("main", "main")
+    _git(path, "merge", "-q", "side", expect=1)  # 两边改了同一行：冲突
+    merge = commit(resolution, "merge side")
+    assert len(_git(path, "rev-list", "--parents", "-n", "1", merge).split()) == 3, "解完冲突的提交应当有两个 parent"
+    head = commit("cleanup", "cleanup")
+    _git(path, "checkout", "-q", "--detach", base)
+    # 远端「已经有」的 main。hook 对新分支扫 `local --not --remotes`，没有它就成了扫整个历史。
+    _git(path, "update-ref", "refs/remotes/origin/main", remote_tip)
+    # hook 与 ci.yml 都按仓库根的相对位置找配置。不提交它，扫 git 历史时它不在视野里。
+    shutil.copy(CONFIG, path / ".gitleaks.toml")
+    return _MergeRepo(path=path, remote_tip=remote_tip, merge=merge, head=head)
+
+
+@pytest.fixture(scope="module")
+def leaky_repo() -> Iterator[_MergeRepo]:
+    with tempfile.TemporaryDirectory() as tmp:
+        yield _build_merge_repo(Path(tmp) / "leaky", _forged_binance_credential())
+
+
+@pytest.fixture(scope="module")
+def clean_repo() -> Iterator[_MergeRepo]:
+    with tempfile.TemporaryDirectory() as tmp:
+        yield _build_merge_repo(Path(tmp) / "clean", "resolved")
+
+
+def _run_pre_push(repo: _MergeRepo, push: str, diff_merges: str | None = None) -> subprocess.CompletedProcess[str]:
+    """照 git 的方式调用仓库里那个 hook：参数是远端名与 URL，stdin 每行一个要推送的 ref。
+
+    两种推送走 hook 里两个不同的分支：已有分支扫 `remote..local`，新分支扫
+    `local --not --remotes`。range 在两处分别拼。哪天有人把 `--diff-merges` 挪进其中
+    一处，另一半推送就又看不见 merge。
+    """
+    if push == "existing-branch":
+        line = f"refs/heads/main {repo.head} refs/heads/main {repo.remote_tip}\n"
+    else:
+        line = f"refs/heads/topic {repo.head} refs/heads/topic {Z40}\n"
+    return subprocess.run(
+        [str(HOOK), "origin", "https://example.invalid/beidou.git"],
+        input=line,
+        cwd=repo.path,
+        env=_git_env(diff_merges),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize("diff_merges", list(GIT_CONFIGS.values()), ids=list(GIT_CONFIGS))
+@pytest.mark.parametrize("push", PUSHES)
+def test_pre_push_blocks_a_credential_that_only_lives_in_a_merge_commit(
+    leaky_repo: _MergeRepo, push: str, diff_merges: str | None
+) -> None:
+    """解冲突时写进 merge 提交的假凭据，pre-push 必须拦下。
+
+    跑的是 `.githooks/pre-push` 本身，不是测试里抄的命令：hook 改了写法，这里跟着变。
+    这个场景 pre-commit 本来也能抓——`git commit` 结束 merge 时它扫暂存区。pre-push
+    要接住的是 pre-commit 没跑的那些：`--no-verify`，或者提交时 hook 还没装。
+    """
+    proc = _run_pre_push(leaky_repo, push, diff_merges)
+    assert proc.returncode == 1, (
+        f"只活在 merge 提交里的假凭据被 pre-push 放过去了（{push}，returncode={proc.returncode}）。\n"
+        "gitleaks 的 git 模式跑 `git log -p`，它默认不给 merge 提交出 diff。hook 的 `--log-opts`\n"
+        "要带 `--diff-merges=separate`；换成 `-m` 的话，log.diffMerges 一设成合并格式就又哑了。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+
+
+@pytest.mark.parametrize("push", PUSHES)
+def test_pre_push_lets_the_same_merge_through_without_a_credential(clean_repo: _MergeRepo, push: str) -> None:
+    """对照：同样的 merge，解冲突写的是普通值，hook 必须放行。
+
+    没有这一条，上面那条分不清「看见了 merge 里的假凭据」和「hook 什么都拦」。后者真会
+    发生：hook 把 gitleaks 的 stderr 丢进 /dev/null，而 gitleaks 找不到配置时退出码也是 1。
+    """
+    proc = _run_pre_push(clean_repo, push)
+    assert proc.returncode == 0, f"干净的 merge 被 pre-push 拦下了（{push}）：\n{proc.stdout}{proc.stderr[-2000:]}"
+
+
+def _history_scans(script: str) -> list[list[str]]:
+    """从一段 shell 里挑出「用 gitleaks 扫 git 历史」的命令，切成 argv。
+
+    `--no-git`（扫目录）与 `protect`（扫暂存区）不算，它们本来就不看历史。
+    """
+    scans = []
+    for line in script.replace("\\\n", " ").splitlines():
+        if "gitleaks" not in line:
+            continue
+        argv = shlex.split(line, comments=True)
+        runs_gitleaks = len(argv) >= 2 and Path(argv[0]).name == "gitleaks"
+        if runs_gitleaks and argv[1] in {"detect", "git"} and "--no-git" not in argv:
+            scans.append(argv)
+    return scans
+
+
+def _ci_history_scans() -> list[list[str]]:
+    """ci.yml 里 Secrets 门真正执行的那条命令。"""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    return [
+        argv
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        for argv in _history_scans(step.get("run", ""))
+    ]
+
+
+def _documented_audit_scans() -> list[list[str]]:
+    """SECURITY.md「手动全量审计」给出的命令。「基线是零」就是拿它量的。"""
+    text = SECURITY.read_text(encoding="utf-8")
+    blocks = re.findall(r"^```[a-z]*\n(.*?)^```", text, flags=re.MULTILINE | re.DOTALL)
+    return [argv for block in blocks for argv in _history_scans(block)]
+
+
+HISTORY_SCANS = {"ci.yml": _ci_history_scans, "SECURITY.md": _documented_audit_scans}
+
+
+def _run_history_scan(
+    argv: list[str], repo: _MergeRepo, diff_merges: str | None = None
+) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
+    """在临时仓库根目录原样执行那条命令，只换掉可执行文件的路径、追加一份 JSON 报告。
+
+    CI 里是 `/tmp/gitleaks`，这里用 PATH 上那个。命令里的 `--source .` 与
+    `--config .gitleaks.toml` 是相对路径，cwd 设在临时仓库，它们就指向临时仓库。
+    """
+    gitleaks = shutil.which("gitleaks")
+    assert gitleaks is not None
+    with tempfile.TemporaryDirectory() as out:
+        report = Path(out) / "report.json"
+        proc = subprocess.run(
+            [gitleaks, *argv[1:], "--report-format", "json", "--report-path", str(report)],
+            cwd=repo.path,
+            env=_git_env(diff_merges),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        findings = json.loads(report.read_text(encoding="utf-8") or "[]") if report.exists() else []
+    return proc, findings
+
+
+@pytest.mark.parametrize("diff_merges", list(GIT_CONFIGS.values()), ids=list(GIT_CONFIGS))
+@pytest.mark.parametrize("source", list(HISTORY_SCANS))
+def test_full_history_scans_see_a_credential_that_only_lives_in_a_merge_commit(
+    leaky_repo: _MergeRepo, source: str, diff_merges: str | None
+) -> None:
+    """CI 的 Secrets 门与文档里的手动审计命令，都得看见只活在 merge 提交里的假凭据。
+
+    CI 这一层要接住的，正是本机两个 hook 都没跑的情况。最典型的是在 GitHub 网页上
+    解冲突：merge 提交直接生在远端，本机一个 hook 都不经过。
+    """
+    scans = HISTORY_SCANS[source]()
+    assert scans, f"{source} 里找不到用 gitleaks 扫 git 历史的命令。是门被删了，还是换了写法？"
+    for argv in scans:
+        proc, findings = _run_history_scan(argv, leaky_repo, diff_merges)
+        assert {(f["Commit"], f["File"]) for f in findings} == {(leaky_repo.merge, "settings.py")}, (
+            f"{source} 的 `{shlex.join(argv)}` 没看见 merge 提交里的假凭据"
+            f"（returncode={proc.returncode}，{len(findings)} 处命中）。\n"
+            "传了 `--log-opts` 就整个替换掉 gitleaks 默认的 `--full-history --all`，要把它们写回来，\n"
+            "再加 `--diff-merges=separate`。换成 `-m` 的话，log.diffMerges 一设成合并格式就又哑了。\n"
+            f"stderr:\n{proc.stderr[-2000:]}"
+        )
+        assert proc.returncode != 0, f"{source} 的命令看见了命中却返回 0，CI 那一步不会变红"
+
+
+@pytest.mark.parametrize("source", list(HISTORY_SCANS))
+def test_full_history_scans_pass_the_same_merge_without_a_credential(clean_repo: _MergeRepo, source: str) -> None:
+    """对照：同样的 merge 换成普通值，扫描必须干净。上面那条的命中来自假凭据，不来自别的。"""
+    for argv in HISTORY_SCANS[source]():
+        proc, findings = _run_history_scan(argv, clean_repo)
+        assert (proc.returncode, findings) == (0, []), (
+            f"干净的 merge 在 {source} 的 `{shlex.join(argv)}` 下不干净：\n{findings}\n{proc.stderr[-2000:]}"
+        )

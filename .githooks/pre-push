@@ -18,6 +18,15 @@
 # commit**。两者不重复——用 `--no-verify` 提交过、或者从别处 cherry-pick 进来的东西，
 # pre-commit 没见过，这里是最后一次机会。
 #
+# 「全部 commit」包括 merge 提交，而这要显式要求（2026-09-28 补）。gitleaks 的 git 模式跑的是
+# `git log -p`，它默认不给 merge 提交出 diff。于是解冲突时写进 merge 提交的东西，此前这里
+# 一直看不见：临时仓库里在冲突解法里写一个伪造的 Binance 形态，这里报 `no leaks found`。
+# 下面 range 前面的 `--diff-merges=separate` 让每个 parent 各出一份 diff。
+#
+# 不写成 `-m`：`-m` 只说「给 merge 出 diff」，格式听 git 配置 `log.diffMerges` 的。它设成
+# `combined` 或 `dense-combined` 时，出来的是 gitleaks 解析不了的合并格式，照样静默漏扫。
+# `tests/architecture/test_secret_scanning_is_alive.py` 直接跑这个 hook，两种配置都要拦下。
+#
 # 这一层同样能被 `git push --no-verify` 绕过。没有办法让它不能——本机的东西都归使用者管。
 # 它挡的是手滑。
 
@@ -47,10 +56,15 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
 
     # 这个范围可能是空的（例如重推一个已经在远端的 commit）。空范围下 gitleaks
     # 会正常返回 0，不需要特别处理。
+    #
+    # gitleaks 按单个空格切 `--log-opts`，再原样交给 `git log -p -U0`。拼坏了它不报错：
+    # 多一个空格、选项拼错，git 都会 fatal，而 gitleaks 8.30.1 记一条 ERR 就返回 0
+    # （2026-09-28 实测）。stderr 又被下面丢进 /dev/null，看起来和「扫描通过」一样。
+    # 所以改这一行之后要跑上面说的那个测试，别只看推送有没有被拦。
     if ! gitleaks detect \
             --source "$repo_root" \
             --config "$repo_root/.gitleaks.toml" \
-            --log-opts "$range" \
+            --log-opts "--diff-merges=separate $range" \
             --redact --no-banner 2>/dev/null; then
         failed=1
     fi

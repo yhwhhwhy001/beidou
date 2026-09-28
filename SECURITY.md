@@ -54,9 +54,9 @@ protection 认不出 Binance 的密钥。**
 | 层 | 位置 | 什么时候响 | 对 Binance 密钥 | 怎么被绕过 |
 |---|---|---|---|---|
 | 1. pre-commit | 本机 | `git commit` 扫暂存区 | ✅ 有效 | `commit --no-verify` |
-| 2. pre-push | 本机 | `git push` 扫将要推送的全部 commit | ✅ 有效 | `push --no-verify` |
+| 2. pre-push | 本机 | `git push` 扫将要推送的全部 commit，含 merge 提交的 diff | ✅ 有效 | `push --no-verify` |
 | 3. GitHub push protection | 服务端 | `git push` 时 | ❌ **无效** | 绕不过，但也拦不住它 |
-| 4. CI 的 Secrets 门 | Actions | PR 与 main push，扫**全历史** | ⚠️ **事后** | 改 workflow |
+| 4. CI 的 Secrets 门 | Actions | PR 与 main push，扫**全历史**，含 merge 提交的 diff | ⚠️ **事后** | 改 workflow |
 
 ### 第 3 层为什么对 Binance 无效
 
@@ -93,6 +93,27 @@ gh api repos/yhwhhwhy001/beidou --jq '.security_and_analysis'
 第 4 层扫全历史而不是只扫这次改动，因为**密钥进了历史，把文件删掉不会让它消失**。
 只扫工作树的检查会对着一个仍然公开可读的密钥报平安。
 
+**「全部 commit」「全历史」都包括 merge 提交，这一点 2026-09-28 才补上。** gitleaks 的
+git 模式跑的是 `git log -p`，而它默认不给 merge 提交出 diff。解冲突时写进 merge 提交的
+东西，第 2 层与第 4 层此前都看不见。当天在临时仓库里实测：冲突解法里写一个伪造的
+Binance 形态，两层都报 `no leaks found`。现在两处的 `--log-opts` 都带
+`--diff-merges=separate`，让每个 parent 各出一份 diff。
+
+这个场景里各层的位置：
+
+- 第 1 层在 `git commit` 结束 merge 时扫暂存区，一直抓得到。
+- 第 1 层没跑的时候（`--no-verify`、hook 没装），轮到第 2 层。
+- 在 GitHub 网页上解冲突，merge 提交直接生在远端，本机一个 hook 都不跑。只剩事后的第 4 层。
+
+写 `--diff-merges=separate` 而不是更短的 `-m`：`-m` 只说「给 merge 出 diff」，格式听 git
+配置 `log.diffMerges` 的。它设成 `combined` 或 `dense-combined` 时，出来的是 gitleaks 解析
+不了的合并格式，扫描照样静默漏掉。
+
+还有一条要知道：**`--log-opts` 拼坏了不会报错。** 多一个空格、选项拼错，git 都会 fatal，
+而 gitleaks 8.30.1 记一条 ERR 就返回 0，输出里照样是 `no leaks found`。所以
+`tests/architecture/test_secret_scanning_is_alive.py` 不另抄命令。它直接跑 pre-push hook，
+并原样执行 ci.yml 与下面「手动全量审计」里的命令，看它们抓不抓得到只活在 merge 提交里的假凭据。
+
 ### 新 clone 的第一件事
 
 ```bash
@@ -107,10 +128,13 @@ brew install gitleaks && bash deploy/install-hooks.sh
 ### 手动全量审计
 
 ```bash
-gitleaks detect --source . --config .gitleaks.toml --redact
+gitleaks detect --source . --config .gitleaks.toml --log-opts "--full-history --all --diff-merges=separate" --redact
 ```
 
-约 6 秒扫完全部历史。**基线是零**——看到任何命中都要当真。
+约 10 秒扫完全部历史。**基线是零**——看到任何命中都要当真。
+
+`--log-opts` 那一段不能省。省掉它，gitleaks 用默认的 `--full-history --all`，看不见 merge
+提交的 diff——2026-09-19 那次「全历史零泄漏」就是这样量的。也别换成 `-m`，理由见上文。
 
 ---
 
@@ -164,6 +188,11 @@ ledger 的 `param_key`，9 处是 sha256 文件摘要，2 处是 SSH 公钥指�
 
 **凭据：零泄漏。** Binance key/secret 形态、AWS、GitHub token、Slack、OpenAI、私钥、
 Telegram、Google、GitLab——所有形态零命中。两套独立扫描（手写 + gitleaks）结论一致。
+
+**2026-09-28 更正：上面「1,637 个 commit、72 MB」那次 gitleaks 扫描不含 merge 提交的
+diff**（原因见第二节）。手写那套的方法没有留下记录，这里不替它下结论。当天带
+`--diff-merges=separate` 对 `--remotes=origin` 重扫：2,311 个 commit、159.4 MB，
+仓库里的 436 个 merge 全部进了扫描，**仍然零泄漏**。基线仍是零，现在它覆盖 merge 了。
 
 **以下是公开的，是权衡后接受的，不是疏漏：**
 
