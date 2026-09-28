@@ -19689,46 +19689,22 @@ k 0.175 下，新上限在这段记录上一根 bar 都截不到。k 0.60 时它
 - render：实盘状态快照（12:30:53Z 在两次周期之间复制）上，基线 `4e0f3be3` 与本分支各出一遍。94 个产物里 68 个逐字节
   相同；26 份日报 md 各差一行，只差 Margin 段那个括号。notice 在快照上不触发，另用 09-13 起的窗口出一遍，只差最后一句。
 
-## 2026-09-28 · 重启 #62：载入约束侧改按可动用 USDT（#237，构造 v12）
+## 2026-09-28 · 补记：重启 #62 的执行人、重启前的构造测试与第一个真周期的守卫读数
 
-只记可观测事实。
+上面「重启 #62：载入构造 v12（#237，`e32f3856ac1e`）——补记可观测事实，执行人不归因」一节，执行人没有归因，重启前的
+构造测试写着「没有可观测的记录」。执行的是会话 e205d359，这里按它的命令输出补三件事。
 
-- **谁、为什么**：操作者 16:28Z 之前在本会话的决定卡片上选「现在合并并重启」，指 #237（见「操作者裁定：约束侧改按可动用 USDT」一节）。
-  合并、快进、构造测试与 kickstart 都由本会话执行。
-- **合并**：#237 于 16:28:31Z 合入 main，merge commit `77aaf2f0`。
-- **命令与窗口**：
-  - 16:28:45Z 快进主 checkout（reflog：`merge 77aaf2f0192ab7b72ea77354117777d0220604af: Fast-forward`），从 `cd4579d9` 起。
-    `cd4579d9` 是 15:26:07Z 快进过来的，不是本会话做的，这里不归因。
-  - 16:28:54Z 在主 checkout 跑两个构造测试：18 passed，退出码 0。磁盘上的构造摘要是 `e32f3856ac1e`。
-  - 16:29:03Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，16:29:33Z 返回 0。
-  - 这几个时刻都在整点后 5 分到整点前 10 分的窗口里，也早于 17:20Z 的数据任务。
-- **重启前**：
-  - 主 checkout 工作树里只有 ` M governance/verdicts.jsonl`，快进碰不到它，没动。
-  - `launchctl print` 确认 `com.beidou.live` 管的是 PID 35503（14:06:50Z 启动，重启 #61）。
-  - 16:00:29Z 那一行 OK，构造 `2ee491c13971`。
-- **进程**：PID 35503 → 62671（16:29:33Z 启动）。`state.restarts` 61 → 62，`restarted_at` 2026-09-28T16:29:33Z。
-- **源文件 mtime 对新进程的启动时刻**：`beidou_live/guards.py`、`engine.py`、`construction.py`、`config.py`、`paper.py`、
-  `config/live.demo.yaml` 都是 16:28:45Z，即快进那一刻；`deploy/run_live.sh` 是 09-25T05:33:06Z。全部早于 16:29:33Z，
-  新进程跑的是 `77aaf2f0` 的代码。
-- **摘要**（heartbeat 16:29:41Z）：construction `2ee491c13971` → `e32f3856ac1e`，即 #237 钉住的 `SHIPPED_USDT_CAP`；
-  registry `7f8adb754962`、governance `9cc96461276f` 不变。
-- **启动日志**：
-  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13 - armed on evidence that does not clear its gate`。这是 bridge
-    生效时的固定文案；#237 合并前在新 profile 上预演，证据门与数据集门都没有拦截项。
-  - 交易所时钟偏差 +2.4s。
-  - `restart was 1781.6s after the bar close (window 87.9s); reconciled but did not rebalance`，为 15:00Z 那根 bar
-    写了一行 SKIPPED（`this bar was already rebalanced`）。那根 bar 旧进程已在 16:00:29Z 跑完，没有漏掉退出检查。
-- **`live status --check`（16:30:01Z）**：退出码 0。construction `e32f3856ac1e`、registry、治理规则都与在跑的循环一致；
-  最近 24 小时 25 个周期，完成 100%。
-- **第一个真周期**：17:00:37Z 写出，处理 16:00Z 的 bar。
-  - 构造 `e32f3856ac1e`，心跳 phase OK。
+- **执行人。** 操作者在这个会话的决定卡片上选「现在合并并重启」，指 #237。这个会话随后执行：
+  - 16:28:31Z 合并 #237（`77aaf2f0`）；
+  - 16:28:45Z 一步快进主 checkout，从 `cd4579d9` 起；
+  - 16:29:03Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，16:29:33Z 返回 0。执行前用 `launchctl print`
+    确认 `com.beidou.live` 管的是 PID 35503。
+- **重启前的构造测试。** 16:28:54Z，在快进后的主 checkout（`77aaf2f0`）上跑两个构造测试：18 passed，退出码 0。
+  磁盘上的构造摘要是 `e32f3856ac1e`。
+- **第一个真周期的守卫读数**（17:00:37Z，16:00Z 的 bar）：
   - `guard_reasons` 为空：没有 `NO_USDT_EQUITY`，也没有 `GROSS_CAPPED`。
-  - 权益 13,336.55 U，可动用 USDT 7,596.52 U，比 1.756。新上限折成总权益是 1.139 倍；目标 gross 是总权益的 0.298 倍，
-    可动用的 0.522 倍。
+  - 权益 13,336.55 U，可动用 USDT 7,596.52 U，比 1.756；新上限折成总权益是 1.139 倍。目标 gross 是总权益的 0.298 倍、
+    可动用的 0.522 倍，门 2.0。
   - 0 单。`skipped` 里 12 条 `NO_TRADE_BAND`、4 条 `BAND_BLOCKS_ENTRY`，与重启前 16:00:29Z 那一行的计数相同。
-  - 没有退出事件、隔离或杠杆下发；`live.stderr.log` 在 16:29:41Z 之后没有新行。
-- **没动**：paper-l3（PID 811）与 shadow（PID 26020）。它们各自下次重启时载入 v12；paper-l3 靠纸面账户报 `usdt_equity`
-  那处修正，不会停在「只减不加」。
-
-构造变了（v12，没有别名）。按 #237 的裁定，M-010 的 30 天窗口、`realised_vol` 的单构造条件、L3 的 7 天条件，从这次
-重启起算。两个构造测试是绿的，因为它们钉的是新摘要：这次重启本身就是那次构造变更，依据是同日的裁定一节。
+  - `live.stderr.log` 在 16:29:41Z 之后没有新行。
+- 原段不改。
