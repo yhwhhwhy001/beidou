@@ -4,8 +4,9 @@ The loop's standing checks ask whether data is THERE and FRESH: a stale feed ski
 (`guards.py`), an archive month is checksummed (`beidou_data/archive.py`).  None of them looks at the
 price.  A contract redenominated under the same symbol keeps its history, so every one of those
 checks passes while the model reads a move that never traded: BNXUSDT came back on 2023-02-22 14:00
-at 1/55 of its last close after a 518-bar halt, and tsmom's horizons and the inverse-vol divisor
-would both read that as a market move for as long as it sat in their windows.
+at 1/77 of its last close, after 260 zero-volume flat bars and a 14-bar hole (a 518-bar hole at 1/55
+until the 2026-09-25 repair recovered the old contract's own bars), and tsmom's horizons and the
+inverse-vol divisor would both read that as a market move for as long as it sat in their windows.
 
 Three checks, one question each:
 
@@ -40,6 +41,10 @@ archive (878 files, 15,127,202 bars, 866,126 of them on PIT-member days):
   member days it flags 15 bars on 9 days, all real: about 2.6 a year at the live universe's size.
   ln 3 would drop CVX and keep 25 real hours; ln 1.5 would add three reopenings (CTK x0.51, TLM
   x0.57, AIA x1.63) and 311 more real hours.
+
+  These counts are the 2026-09-23 scan and were not re-run.  The 09-25 `data repair` filled BNX's old
+  contract back in (RESEARCH_LOG, "O-5"), so BNX now reads x1/77 across a 14-bar hole plus a 260-bar
+  frozen run from 2023-02-11 04:00 - both still flagged.
 
 A real hour flagged is not a false alarm - a halving inside one hour in a name the book holds is worth
 reading - but since the operator's ruling of 2026-09-23 it is a notice, not a page (`sanity_findings`):
