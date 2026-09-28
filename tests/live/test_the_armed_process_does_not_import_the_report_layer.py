@@ -38,13 +38,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 #: 报告层以外、import 报告层的全部位置：（文件，所在的顶层定义）。点名而不是计数，与
 #: `tests/architecture/test_every_module_is_reachable_from_an_entry_point.py` 的 EXEMPT 同一个理由：
-#: 计数会让下一个悄悄进来。今天只有 `live_cmd` 的五个函数，`live run` 一个都不调。
+#: 计数会让下一个悄悄进来。今天是 `live_cmd` 的五个函数，加 `governance reopen`（2026-09-29：G11 的重开条件
+#: 读实盘记录，取行与构造窗口走日报的 `_cycles` 与 `evidence_window`）。`live run` 一个都不调。
 REPORT_LAYER_IMPORTERS = {
     ("beidou_cli/live_cmd.py", "live_status"),
     ("beidou_cli/live_cmd.py", "report_daily"),
     ("beidou_cli/live_cmd.py", "report_weekly"),
     ("beidou_cli/live_cmd.py", "report_beta"),
     ("beidou_cli/live_cmd.py", "_source_lines_days_before_head"),
+    ("beidou_cli/governance_cmd.py", "reopen_cmd"),
 }
 
 

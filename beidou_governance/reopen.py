@@ -40,7 +40,7 @@ RESOLVED = "RESOLVED"
 UNREADABLE = "UNREADABLE"
 
 #: Checks a machine can answer.  Anything not here is a judgement, and `operator` says so out loud.
-MACHINE_CHECKS = ("equity_at_least", "data_columns", "date_after")
+MACHINE_CHECKS = ("equity_at_least", "data_columns", "date_after", "short_leg")
 
 
 @dataclass(frozen=True)
@@ -147,6 +147,19 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
             + (f"; missing {', '.join(missing)}" if missing else ""),
         )
 
+    if entry.check == "short_leg":
+        leg, want_share = float(entry.args.get("leg", 0.0)), float(entry.args.get("share", 1.0))
+        want_bars, legs = int(entry.args.get("bars", 0)), facts.get("short_legs")
+        if not isinstance(legs, Sequence) or not legs:
+            return Status(entry, UNREADABLE, "no traded bar since the running construction began")
+        held = sum(1 for share in legs if share >= leg)
+        return Status(
+            entry,
+            MET if len(legs) >= want_bars and held / len(legs) >= want_share else NOT_MET,
+            f"{held}/{len(legs)} bars since the construction began held a short leg >= {leg:.0%} of gross "
+            f"({held / len(legs):.1%}; needs >= {want_share:.0%} over >= {want_bars} bars)",
+        )
+
     when = str(entry.args.get("date", ""))
     now = facts.get("now")
     if not isinstance(now, datetime):
@@ -158,6 +171,27 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
     return Status(
         entry, MET if now >= due else NOT_MET, f"{when[:10]}" + (f", {days:.1f} days away" if days > 0 else "")
     )
+
+
+def short_legs(rows: Iterable[Mapping[str, Any]], since_ms: int | None) -> list[float] | None:
+    """G11's reopen fact: per traded bar since the running construction began, the short leg's share of gross.
+
+    From the construction's start, because the daily "Market beta" share accumulates from 2026-09-07 and its
+    short bars of 09-07..09-17 would satisfy any threshold forever (review K-01, 2026-09-29).  A share, not
+    "any weight below zero": flow_short's sleeve alone puts -0.2% to -0.5% on BNBUSDT under a 0.30x book, and
+    a net cap only parts from a k-cut once the book is two-sided.  One row per bar, the last one written.
+    """
+    if since_ms is None:
+        return None
+    held = {
+        int(r.get("bar_open_ms") or 0): r.get("targets") for r in rows if int(r.get("bar_open_ms") or 0) >= since_ms
+    }
+    legs: list[float] = []
+    for targets in (t for t in held.values() if isinstance(t, Mapping)):
+        weights = [float(w) for w in targets.values()]
+        gross = sum(abs(w) for w in weights)
+        legs.append(sum(-w for w in weights if w < 0) / gross if gross > 0 else 0.0)
+    return legs
 
 
 def survey(entries: Iterable[Entry], facts: Mapping[str, Any]) -> list[Status]:

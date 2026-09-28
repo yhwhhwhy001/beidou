@@ -19883,3 +19883,103 @@ backtest-guard 2026-09-29 体检第一遍的 🔵：「研究按桶在 bar 收�
 - 新测试 `tests/live/test_the_metrics_poll_says_how_late_its_newest_bucket_was.py`，5 条。三处变异（不记最新桶、改取
   最快的币、读全部记录而不是最近一天）各让它变红，按字节还原。
 - 状态快照上新旧代码各渲染一次数据族一节：只多一行「还没有读数」，其余逐字相同。
+
+## 2026-09-29 · 10-13 裁定表 #8：`governance advance --commit` 执行一次，tsmom 在治理记录里降回 probe
+
+操作者 2026-09-29「修复发现的所有问题」。`docs/analysis/2026-09-29-research-analyst-prompt-vs-beidou.md` 的「顺带发现」
+记着一行：`governance/governance_state.json` 停在 09-09，`advance --commit` 不在任何定时任务里，10-13 准备文档
+裁定表 #8（「跑，或不跑」）一直悬着。本节执行它。
+
+**怎么跑的。** 先在主 checkout 干跑一次（默认 `--dry-run`），state 文件的 sha256 前后都是 `395828548f2b46d1…`。
+再在 origin/main `22ce4873` 的独立 worktree 里带 `--commit` 跑一次，`--cycles` 只读指向主 checkout 的
+`.beidou/live/cycles.jsonl`。两次输出逐行相同：
+
+```text
+window   window 0, 0/1 used
+gate     PASS       tsmom                OOS 1.8329 vs 1.5739 at N=343 (adopted against 1.5733 at N=341)
+gate     UNREADABLE flow                 the report carries no `oos_selection` block
+flow_short       -> flow             probe      folded through (never)
+main             -> tsmom            main       folded through (never)
+    2026-09-19T18:30:06.089745+00:00  family_gate_failed -> probe  R0: the quantile gate no longer passes on recomputation, back to probe
+    2026-09-25T18:30:05.089580+00:00  family_gate_failed x  probe  R0: already probe, and this reading already blocks probe -> main
+```
+
+**改了什么。** 只有 `governance/governance_state.json`：tsmom 由 main 改记 probe，`folded_through` 记到 09-25 那条
+refuse 的时刻。两个 candidate 各多出两个 09-09 之后才加进 schema 的空字段（`folded_through`、`queued_at`）。
+
+**没改什么。**
+
+- registry 与循环在交易什么都没动。`advance` 不写 registry，它的 docstring 写明降回 probe 的 main「keeps trading
+  as it did」。
+- 没有定时任务读这个文件。读它的只有 `governance status|tenure|plan|next|advance` 五个命令。
+- `advance` 仍不排进定时任务。它写的是入库的文件，排进 job 会让主 checkout 每天多一个脏文件，与
+  `governance/verdicts.jsonl` 今天的样子一样。
+
+**这是按 09-23 的裁定照字面折叠。** 那条裁定是：family gate 失败的 main 降回 probe；之后再 PASS 不升回，要按 §3
+走满九个窗口，第三个条件就是同一道门。两条 refuse 判的是 k=0.60 的旧证据（样本外 1.2306）。09-27 起 tsmom 引的是
+k=0.175 的新证据，每日读数 PASS。规则没有区分「证据换过」这种情况。本节照字面执行，不替规则补口径；要补，是一次
+新的裁定。
+
+**后果。** R3 的 probe 上限是 2 个（`beidou_governance/policy.py:203`），现在 tsmom 与 flow 各占一个。低波一族
+（G12）即便过了阶段 1，晋级也要等一个位子空出来。
+
+**撤回。** 这个文件只有 `advance --commit` 一个写者。revert 本节所在的提交，就回到 09-09 的状态。
+
+## 2026-09-29 · 新闻流不接入信号与数据源（N6）
+
+操作者 2026-09-29「批 A 全做」，N6 是其中一项：把一个一直没写下的决定写下来。09-29 对照外部「研究分析师」
+模板时，`news`、`新闻` 在 `beidou_*`、`config/`、`governance/`、`docs/` 零命中：既没有接入，也没有写过不做。
+
+**决定。** 信号与数据源不接入新闻流：新闻 API、公告抓取、社交转述都不接。
+
+**理由。**
+
+- 时点核不了。新闻源大多只有一个会被改写的版本，没有 as-of 查询。#30 社交情绪判「不可得」用的是同一条判据
+  （reopen 条目 `social-30`）。
+- 没有读者。09-16 撤出链上、宏观、指数价三条数据源，教训是先写读者再谈数据。今天没有一条预登记点名要读新闻列。
+
+**不在这个决定里的。** 写分析的人查官方公告与文档照旧：09-26 的杠杆分析按 URL 引币安 FAQ，RUNBOOK 处理断档时写
+「看币安公告」。那是查资料，不是系统的数据源。事件风险（#157）读循环自己的记录与现货归档，也不读新闻。
+
+重开条件：一条预登记点名要读的新闻列，并给出一个带 as-of 版本、能核时点的来源。
+
+## 2026-09-29 · G11 净敞口上限缓做：重开条件读现行构造窗口里的空头腿份额（N10）
+
+操作者 2026-09-29：「N10 写重开条件」。G11 的预登记草稿在 `docs/analysis/2026-09-25-october-13-readiness.md` §4。
+它的假设是：在同一条 q95(USDT) = −70% 的预算线上，「k 高一点加净敞口上限」比「k 低一点、无上限」的 CAGR 中位
+多至少 2pp。
+
+**为什么缓做。** 净敞口上限只在书两边都有仓时比降 k 便宜；书一旦单边，两者就是一回事。09-17 起的构造，书一直是
+单边多头。草稿自己也预期挂在阶段 1。现在付 16 笔申报加 2 笔重出，多半只买到一句「k 就是那根杠杆」。
+
+重开条件：自最近一次构造变更起，实盘周期的目标权重里空头腿占毛敞口 ≥ 10% 的 bar，占这段窗口的 ≥ 20%，且窗口 ≥ 720 根。
+
+三个数的来历：
+
+- **腿 10%**：空头腿占毛敞口 10% 时，净/毛 = 0.8。从这里起，净敞口上限比按比例降 k 多放出 25% 的毛敞口，两者开始
+  分得开。
+- **bar 20%**：上限要在一段时间里真的咬到，零星几根空头不算。
+- **720 根**：30 天，与 M-010 的窗口同长。构造一换，窗口从头数。
+
+**为什么不照方案文档写「含空头的 bar」。** 方案文档（审查 K-01 之后）写的是「现行构造窗口内含空头的 bar 占比
+≥ 20%」。写读者时读了一次实盘记录：现行构造 `e32f3856ac1e` 自 09-28T16:00Z 起的 2 根 bar 都含负权重，全部来自
+flow_short 在 BNBUSDT 上的 −0.24% 到 −0.54%，毛敞口约 0.30x 里空头腿不到 2%。flow_short 是只做空的 probe
+sleeve，「任一负权重」会被它常态满足，所以改读空头腿的份额。10% 这条线是在看下表之前按净/毛 = 0.8 定的，看之前
+只见过这 2 根 bar。
+
+**读者。** `beidou governance reopen` 的新判据 `short_leg`（`beidou_governance/reopen.py`），机器能答。取行走日报的
+入口 `report_common._cycles`，所以 SKIPPED 行不会顶替被跳过的 bar；起点取 `evidence_window` 给的现行构造第一根
+bar；每根 bar 只留最后写的那一行。今天读 0/2，NOT MET。
+
+背景，定线之后读的，不参与定线。按构造分段，空头腿 ≥ 10% 的 bar 数：
+
+| 构造 | k | 起点 | bar | 腿 ≥ 10% | 腿的中位 |
+| --- | ---: | --- | ---: | ---: | ---: |
+| `0dcd044d0158` | 0.30 | 09-04T14:00Z | 222 | 197 | 0.132 |
+| `46b8d731530a` | 0.60 | 09-13T18:00Z | 89 | 51 | 0.110 |
+| `0c555e1c837e` | 0.60 | 09-17T16:00Z | 233 | 0 | 0.000 |
+| `2ee491c13971` | 0.175 | 09-27T16:00Z | 24 | 0 | 0.008 |
+| `e32f3856ac1e` | 0.175 | 09-28T16:00Z | 2 | 0 | 0.018 |
+
+满足之后，重开的是「批不批 G11 的预登记」，不是直接跑。草稿的单位一节要按 #237（gross 改按可动用 USDT）重写，
+阶段 1 的 16 笔申报记进 tsmom 的桶。
