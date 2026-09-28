@@ -514,9 +514,9 @@ def weekly_payload(
         "promotion_budget": 1,
         "evidence_window": window,
         "income": income,
-        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly-only was a choice - the rule is
-        # about the live period, not one day - but no job runs this report, so since 2026-09-23 the
-        # daily report makes this same call and the hourly check pages on its REVIEW (G1).
+        # The adopted decay rule (report 4.2 Ⅰ, ruling 12.9).  Weekly-only was a choice, but no job ran this
+        # report until 2026-09-28 (deploy/com.beidou.weekly.plist, Sundays 03:00 local), so since 2026-09-23
+        # the daily report makes this same call and the hourly check is what pages on its REVIEW (G1).
         "decay": decay,
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),

@@ -519,7 +519,7 @@ risk_budget:                  # P13 monitoring (M-001..M-004).  Pre-registered b
   min_liq_distance: 10.0
   guard_window_days: 90       # DAILY_LOSS_PAUSE / GROSS_CAPPED counts; reported, not enforced (M-003)
 guards:
-  daily_loss_pause: -0.05     # stop adding risk for the rest of the UTC day below -5%
+  daily_loss_pause: -0.05     # no added risk while equity sits below -5% of the UTC day's start; re-judged every cycle
   stale_bars_max: 2           # skip the cycle if the newest closed bar is older than 2 intervals
   # D-025: the host clock is the reference (operator decision).  A constant offset is accepted; what is guarded
   # is how far the wake-up sits from a real bar boundary, and any jump between cycles.

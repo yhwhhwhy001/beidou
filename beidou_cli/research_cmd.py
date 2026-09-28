@@ -1,9 +1,9 @@
-"""``beidou research ...``：九个子命令的注册处，以及它们的名字对外的那个地址。
+"""``beidou research ...``：十一个子命令的注册处，以及它们的名字对外的那个地址。
 
-拆成九个模块之后这里只剩两件事，两件都不能省：
+拆成各自的模块之后（M6 拆出九个，power 与 forward 后来各加一个）这里只剩两件事，两件都不能省：
 
-**一、导入即注册。** 九个命令靠 `@research.command(...)` 在**导入时**挂到 click group 上，而
-`beidou_cli/__init__.py` 导入的是本模块。所以本模块必须导入那九个模块，否则 `beidou research --help`
+**一、导入即注册。** 十一个命令靠 `@research.command(...)` 在**导入时**挂到 click group 上，而
+`beidou_cli/__init__.py` 导入的是本模块。所以本模块必须导入那十一个模块，否则 `beidou research --help`
 会少命令——这条由 `tests/cli/test_each_research_command_has_its_own_module.py` 守着。
 
 **二、地址不变。** `scratchpad/` 下 29 个复现脚本与二十余处测试写的是
