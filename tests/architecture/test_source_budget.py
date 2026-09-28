@@ -4174,7 +4174,23 @@ CEILING = {
     # 验收：两个新测试文件 55 条全绿；19 个变异（逐条把一处判定改坏）每一个都让至少一条测试变红。
     #
     # 留 40 行（4_679 -> 4_719），理由同上，不重述。
-    "beidou_governance": 4_719,
+    #
+    # 2026-09-28（不编号，同上）。+6 beidou_governance，4_679 -> 4_685，抬到 4_725。
+    #
+    # `reopen.evaluate` 读 `args.date` 用的是自己那份 `datetime.fromisoformat`。裸日期（`date: 2026-11-01`）读出来是
+    # naive，减带时区的 `now` 抛 TypeError，`beidou governance reopen` 整条命令崩。`calendar._instant` 把同一个日期
+    # 读成 00:00Z，两处口径不一。真实列表的日期都带 `+00:00`，所以没触发过。`_instant` 下沉进 `reopen.py`，改名
+    # `instant`，`evaluate` 与 `calendar` 都调它。放 `reopen` 不放 `calendar`：`calendar` 在顶层 import `reopen`，
+    # 反过来会成环。
+    #
+    # 花在哪：`reopen.py` +14。函数 6 行，docstring 7 行（为什么放这里、之前怎么崩），空行 2 行；`evaluate` 的
+    # try/except 换成判 None，省 1 行。`calendar.py` -8：删掉原函数连空行 9 行，加 import 1 行。
+    #
+    # 验收：裸日期那条新测试修前红（TypeError），修后绿。7 个变异各让至少一条测试变红。退回原 bug 只有这条新测试
+    # 抓得到；解析失败报 NOT MET、解析失败当作永不到期，只有新补的 UNREADABLE 那条抓得到。
+    #
+    # 留 40 行（4_685 -> 4_725），理由同上，不重述。
+    "beidou_governance": 4_725,
     # 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
     # round 1 asked for on 2026-09-03 (`docs/RESEARCH_LOG.md:12, :23, :60`) and which nobody had built
     # fourteen days later - a grep for max_hold / hold_bars / time_stop / TimeExit across the three

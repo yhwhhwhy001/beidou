@@ -98,6 +98,21 @@ def load(path: Path) -> list[Entry]:
     return out
 
 
+def instant(text: str) -> datetime | None:
+    """A date or an ISO instant, aware; a bare date is 00:00Z.  `calendar` reads each of its dates with it too.
+
+    So `evaluate` flips a `date_after` entry at the instant the calendar lists it.  Until 2026-09-28 each read
+    the date for itself: a bare `date: 2026-11-01` was 00:00Z on the calendar and a TypeError here - naive
+    minus an aware `now` - which took all of `beidou governance reopen` down over one entry.  It lives here
+    rather than in `calendar` because `calendar` imports this module.
+    """
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None  # the reader says UNREADABLE and never flips, so neither does the calendar
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
     """One entry against today's facts.  Absent facts make a check UNREADABLE, never MET."""
     if entry.check == "resolved":
@@ -136,9 +151,8 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
     now = facts.get("now")
     if not isinstance(now, datetime):
         now = datetime.now(UTC)
-    try:
-        due = datetime.fromisoformat(when)
-    except ValueError:
+    due = instant(when)
+    if due is None:
         return Status(entry, UNREADABLE, f"unreadable date {when!r}")
     days = (due - now).total_seconds() / 86_400.0
     return Status(

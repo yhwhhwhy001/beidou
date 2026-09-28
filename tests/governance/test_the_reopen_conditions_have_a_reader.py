@@ -172,6 +172,12 @@ def test_a_date_that_has_passed_is_met() -> None:
     assert status.state == MET
 
 
+def test_a_date_that_will_not_parse_is_unreadable_rather_than_met() -> None:
+    """Absent or not a date: the direction a missing fact fails in, and never a crash."""
+    for date in ("", "the first of november"):
+        assert evaluate(_entry("date_after", date=date), {"now": NOW}).state == UNREADABLE
+
+
 def test_an_unknown_check_is_unreadable_rather_than_quietly_skipped() -> None:
     assert evaluate(_entry("whatever_i_invented"), {}).state == UNREADABLE
 
