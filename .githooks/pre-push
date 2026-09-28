@@ -40,7 +40,10 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 z40="0000000000000000000000000000000000000000"
 failed=0   # 扫到了疑似密钥
-broken=0   # 扫描没有跑完：gitleaks 调 git log 时 git 失败了
+broken=0   # 扫描没有跑完：gitleaks 调 git log 时 git 失败了，或者 gitleaks 自己出错
+# 有命中时让 gitleaks 用这个码退出（`--exit-code`）。gitleaks 自己出错时退 1、2 或 126，
+# 取一个离它们都远的值。为什么要分开，见循环里那条命令上面的注释。
+leaks_rc=42
 
 # gitleaks 的 stdout 照旧给终端。循环里只截它的 stderr，见下面 fail-closed 那段。
 exec 3>&1
@@ -82,12 +85,33 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
     # 那几行，被拦时屏幕上只剩拦截框。`--verbose` 不改 stderr，干净的扫描也不多打一行
     # （2026-09-29 实测）。`--no-color` 让命中清单与转出去的 `[git]` 行都不带色码。
     #
+    # `--exit-code`（2026-09-29 补）把「有命中」与「gitleaks 自己出错」分开。gitleaks 有命中时
+    # 默认退 1，可它自己出错时也退 1：配置读不了、扫描中途失败。规则里有 RE2 不支持的正则时
+    # 它 panic，退 2。以上是 8.30.1 实测，并对过源码的 `findingSummaryAndExit`。此前这里只看
+    # 退出码非 0，配置坏了也出「有疑似密钥」的框。框里叫人去作废重发 key，gitleaks 的原话
+    # 却被吞掉。现在有命中时退 `$leaks_rc`。别的非 0 都当扫描没跑完，stderr 整段转出去。
+    #
     # 改这条命令之后要跑上面说的那个测试，别只看推送有没有被拦。
     scan_err="$(gitleaks detect \
             --source "$repo_root" \
             --config "$repo_root/.gitleaks.toml" \
             --log-opts "--diff-merges=separate $range" \
-            --redact --verbose --no-banner --no-color 2>&1 >&3)" || failed=1
+            --exit-code "$leaks_rc" \
+            --redact --verbose --no-banner --no-color 2>&1 >&3)"
+    rc=$?
+    case "$rc" in
+        0) ;;
+        "$leaks_rc") failed=1 ;;
+        *)
+            # 可能一行都没扫。原话整段转出去；其中若有 `[git]` 行，也已经在里面了。
+            # `${rc}` 的花括号不能省：UTF-8 locale 下 macOS 的 bash 3.2 会把紧跟的全角括号
+            # 的首字节读进变量名，`set -u` 下 hook 当场崩掉（2026-09-29 实测）。
+            echo "pre-push: gitleaks 没有扫完就退出了（退出码 ${rc}），它的原话：" >&2
+            printf '%s\n' "$scan_err" >&2
+            broken=1
+            continue
+            ;;
+    esac
     if git_err="$(printf '%s\n' "$scan_err" | grep -F '[git]')"; then
         printf '%s\n' "$git_err" >&2
         broken=1
@@ -103,12 +127,15 @@ if [ "$broken" -ne 0 ]; then
 ║  推送被拦下：密钥扫描没有跑完                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-上面带 `[git]` 的几行是 git 的原话：gitleaks 调 `git log` 时，git 失败了。
-gitleaks 这时照样输出 `no leaks found`、返回 0。可要推的 commit 没有扫完，
-所以这里当失败处理，不当成「扫描通过」。
+要推的 commit 没有扫完，所以拦下。它既不算「扫描通过」，也不算「有疑似密钥」。
 
-  1. 按 git 的原话修。常见的是本地缺对象或 ref 坏了（`git fsck` 看得出来），
-     或者刚改过这个 hook 的 `--log-opts`。
+  1. 按上面的原话修。原话有两种：
+       - 带 `[git]` 的几行是 git 的：gitleaks 调 `git log` 时 git 失败了。gitleaks
+         照样输出 `no leaks found`、返回 0。常见的是本地缺对象或 ref 坏了
+         （`git fsck` 看得出来），或者刚改过这个 hook 的 `--log-opts`。
+       - 「gitleaks 没有扫完就退出了」下面是 gitleaks 自己的，这时它一行都没扫。
+         常见的是 `.gitleaks.toml` 不在或写坏了。规则里写了 RE2 不支持的正则
+         也会这样，例如 lookahead `(?=`，gitleaks 会直接 panic。
   2. 修好之后重推，hook 会重新扫。
   3. `git push --no-verify` 能绕过这里，但后面没有网了：GitHub 的 push protection
      认不出 Binance 的密钥（不在 partner pattern 列表），CI 的 Secrets 门是事后的。
