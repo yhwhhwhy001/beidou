@@ -36,17 +36,52 @@ MSG
 fi
 
 repo_root="$(git rev-parse --show-toplevel)"
+# 有命中时让 gitleaks 用这个码退出（`--exit-code`）。gitleaks 自己出错时退 1、2 或 126，
+# 取一个离它们都远的值。为什么要分开，见下面那条命令上面的注释。
+leaks_rc=42
 
 # `git` 子命令用 protect --staged：它只看 `git diff --cached`，即这次真要提交的内容。
 #
 # `--verbose` 把每处命中打到 stdout：文件、行号、规则，值由 `--redact` 脱敏。下面的提示说
 # 「上面列出了」，指的就是它。2026-09-29 之前没带这个参数，gitleaks 只在 stderr 报一句
 # `leaks found`，而 stderr 丢进了 /dev/null，被拦时屏幕上什么也没列。
-if gitleaks protect --staged \
+#
+# `--exit-code`（2026-09-29 补）把「有命中」与「gitleaks 自己出错」分开，理由同 pre-push。
+# gitleaks 有命中时默认退 1，可配置读不了时它也退 1。规则里有 RE2 不支持的正则时它 panic，
+# 退 2。此前这里只看退出码非 0，配置坏了也出「有疑似密钥」的框。stderr 又进了 /dev/null，
+# 原话看不到。现在只截 stderr，出错时把原话转出去；stdout 上的命中清单经 fd 3 照旧给终端。
+# `--no-color` 让转出去的几行不带色码。gitleaks 的 FTL 那一行不听它，照样带色码。
+exec 3>&1
+scan_err="$(gitleaks protect --staged \
         --source "$repo_root" \
         --config "$repo_root/.gitleaks.toml" \
-        --redact --verbose --no-banner 2>/dev/null; then
-    exit 0
+        --exit-code "$leaks_rc" \
+        --redact --verbose --no-banner --no-color 2>&1 >&3)"
+rc=$?
+[ "$rc" -eq 0 ] && exit 0
+
+if [ "$rc" -ne "$leaks_rc" ]; then
+    # `${rc}` 的花括号不能省，理由见 pre-push 同一行。
+    echo "pre-commit: gitleaks 没有扫完就退出了（退出码 ${rc}），它的原话：" >&2
+    printf '%s\n' "$scan_err" >&2
+    cat >&2 <<'MSG'
+
+╔══════════════════════════════════════════════════════════════════════╗
+║  提交被拦下：密钥扫描没有跑完                                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+暂存区没有扫完，所以拦下。它既不算「扫描通过」，也不算「有疑似密钥」。
+
+  1. 按上面的原话修。常见的有两种，都是一行没扫：`.gitleaks.toml` 不在或写坏了；
+     规则里写了 RE2 不支持的正则，例如 lookahead `(?=`，gitleaks 会直接 panic。
+  2. 修好之后重新提交，hook 会重新扫。
+  3. `--no-verify` 能绕过这里。可 push 时 pre-push 读的是同一份 `.gitleaks.toml`，
+     多半同样扫不完。再往后没有网接得住 Binance 的密钥：GitHub 的 push protection
+     认不出它（不在 partner pattern 列表，个人公开仓库也加不了 custom pattern），
+     CI 的 Secrets 门是事后的——它红的时候，密钥已经公开可读了。
+
+MSG
+    exit 1
 fi
 
 cat >&2 <<'MSG'

@@ -10,8 +10,8 @@
 
   1. **配置崩了，扫描根本没跑。**  建这道门的当天就撞上了：`.gitleaks.toml` 第一版用
      `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 用 Go 的 RE2，**不支持
-     lookahead**。它不是报一个配置错误，是带栈回溯地 panic。在 CI 里这会红，能看见；
-     但在 pre-commit hook 里 `2>/dev/null` 一挡，就成了「扫描通过」。
+     lookahead**。它不是报一个配置错误，是带栈回溯地 panic。在 CI 里这会红，能看见。
+     本机两个 hook 此前把它报成「有疑似密钥」，panic 的原话被吞掉（2026-09-29 改，见文件末尾那组）。
 
   2. **allowlist 被放宽到什么都抓不住。**  这道门上线时压掉了 117 处误报（全部核实过：
      100 处是 trial ledger 的 `param_key`、9 处是 sha256 文件摘要、2 处是 SSH 公钥指纹、
@@ -542,16 +542,19 @@ def test_pre_push_fails_closed_when_git_log_fails(clean_repo: _MergeRepo, push: 
 PRE_COMMIT = ROOT / ".githooks" / "pre-commit"
 
 
-def _run_pre_commit(staged: str) -> subprocess.CompletedProcess[str]:
+def _run_pre_commit(staged: str, fault: str | None = None) -> subprocess.CompletedProcess[str]:
     """在临时仓库里暂存一个内容为 `staged` 的文件，照 git 的方式跑仓库里那个 pre-commit。
 
-    跑的是 hook 本身，不是测试里抄的命令，理由同 pre-push 那组。
+    跑的是 hook 本身，不是测试里抄的命令，理由同 pre-push 那组。给了 `fault` 就照
+    `_break_config` 弄坏配置，让 gitleaks 自己出错，见文件末尾那组。
     """
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
         _git(repo, "init", "-q", "-b", "main")
         # hook 按仓库根找配置。只拷不暂存，配置本身不在这次要扫的 diff 里。
         shutil.copy(CONFIG, repo / ".gitleaks.toml")
+        if fault is not None:
+            _break_config(repo, fault)
         (repo / "leak.py").write_text(staged, encoding="utf-8")
         _git(repo, "add", "leak.py")
         return subprocess.run([str(PRE_COMMIT)], cwd=repo, env=_git_env(), capture_output=True, text=True, timeout=120)
@@ -604,8 +607,8 @@ def test_the_blocked_prompt_says_push_protection_cannot_catch_binance_keys(
 def test_pre_commit_lets_ordinary_content_through() -> None:
     """对照：普通内容必须放行。
 
-    没有这一条，上面两条分不清「看见了假凭据」和「hook 什么都拦」。hook 丢掉了 gitleaks 的
-    stderr，而配置找不到时 gitleaks 的退出码也是 1。
+    没有这一条，上面两条分不清「看见了假凭据」和「hook 什么都拦」。配置找不到时 gitleaks
+    的退出码也是 1，hook 照样拦下，只是报的是「扫描没有跑完」。
     """
     proc = _run_pre_commit("x = 1\n")
     assert proc.returncode == 0, f"普通内容被 pre-commit 拦下了：\n{(proc.stdout + proc.stderr)[-2000:]}"
@@ -669,4 +672,124 @@ def test_pre_push_lists_the_blocked_commit_and_file_redacted(leaky_repo: _MergeR
     )
     assert leaky_repo.resolution not in shown, (
         "pre-push 把假凭据的原值打到了屏幕上。检查 hook 里的 `--redact` 还在不在。"
+    )
+
+
+# ---------------------------------------------------------------------------
+# gitleaks 自己出错时说的话
+# ---------------------------------------------------------------------------
+#
+# 配置读不了、规则里有 RE2 不支持的正则，gitleaks 都是一行没扫就退出，退出码不是 0。
+# 2026-09-29 之前两个 hook 只看退出码非 0，于是都出「有疑似密钥」的框。框里叫人先去
+# 交易所把 key 作废重发。gitleaks 的原话却被吞了：pre-push 只转 `[git]` 行，pre-commit
+# 的 stderr 进了 /dev/null。方向是 fail-closed，不漏密钥，但指示是错的。照着做的人会去
+# 作废重发 key、重启实盘循环，真正的原因（配置坏了）却看不到。
+#
+# 现在两个 hook 给 gitleaks 传 `--exit-code`，有命中时退一个它出错时不用的码。别的非 0
+# 都当「扫描没有跑完」，gitleaks 的 stderr 原样转给人看。
+
+# 09-19 第一版配置想用 lookahead 表达「大小写混排」。RE2 不支持它，gitleaks 加载配置时 panic。
+LOOKAHEAD_REGEX = "(?=.*[A-Z])[A-Za-z0-9]{64}"
+
+# 让 gitleaks 自己出错的两种办法，2026-09-29 实测 8.30.1。值是只有 gitleaks 会说的话，
+# 原话转没转出来，只能拿它判断。
+GITLEAKS_FAULTS = {
+    # 配置文件不在：FTL，退出 1。这与「有命中」的默认退出码相同，只看退出码分不开。
+    "config-missing": "unable to load gitleaks config",
+    # 规则里有 lookahead：panic，退出 2。判据是那条正则本身，panic 的原话里原样带着它。
+    # 不用 Go 的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
+    # CI 用的官方发行版说 `bad perl operator`。措辞跟着编译它的 Go 版本走，钉住 gitleaks 版本也钉不住。
+    "config-lookahead": LOOKAHEAD_REGEX,
+}
+
+# 每个 hook 有两个拦截框。测试按框的标题判断 hook 走了哪一支。
+PUSH_LEAK_BOX = "推送被拦下：将要进入远端的 commit 里有疑似密钥"
+PUSH_UNFINISHED_BOX = "推送被拦下：密钥扫描没有跑完"
+COMMIT_LEAK_BOX = "提交被拦下：暂存区里有疑似密钥"
+COMMIT_UNFINISHED_BOX = "提交被拦下：密钥扫描没有跑完"
+
+
+def _break_config(repo: Path, fault: str) -> None:
+    """照 `GITLEAKS_FAULTS` 里的一种办法，弄坏临时仓库根上的 `.gitleaks.toml`。"""
+    config = repo / ".gitleaks.toml"
+    if fault == "config-missing":
+        config.unlink()
+    else:
+        assert fault == "config-lookahead", fault
+        config.write_text(f"[[rules]]\nid = \"mixed-case\"\nregex = '''{LOOKAHEAD_REGEX}'''\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("fault", list(GITLEAKS_FAULTS))
+def test_pre_push_reports_a_gitleaks_error_as_an_unfinished_scan(tmp_path: Path, fault: str) -> None:
+    """gitleaks 自己出错时，pre-push 照样拦下，但要说扫描没有跑完，并转出 gitleaks 的原话。
+
+    用干净的仓库，理由同 git log 失败那条：拦下只剩一个原因。只跑一种推送。配置在扫任何
+    commit 之前就加载失败，三种推送走到的是同一个出错分支。
+    """
+    marker = GITLEAKS_FAULTS[fault]
+    # 判据要是也写在 hook 自己的文字里，删掉转发照样绿。09-29 `[git]` 那条断言就是这样空掉的。
+    assert marker not in HOOK.read_text(encoding="utf-8"), f"`{marker}` 写进了 pre-push 自己的文字，它证明不了转发"
+    repo = _build_merge_repo(tmp_path / "repo", "resolved")
+    _break_config(repo.path, fault)
+    proc = _run_pre_push(repo, "existing-branch")
+    assert proc.returncode == 1, (
+        f"gitleaks 出错了，pre-push 却放行（{fault}，returncode={proc.returncode}）。扫描没跑完不能当成通过。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+    assert PUSH_LEAK_BOX not in proc.stderr, (
+        f"gitleaks 出错（{fault}），pre-push 却报「有疑似密钥」，叫人去交易所作废重发 key。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+    assert PUSH_UNFINISHED_BOX in proc.stderr, f"pre-push 没说扫描没有跑完（{fault}）：\n{proc.stderr[-2000:]}"
+    assert marker in proc.stderr, (
+        f"pre-push 没把 gitleaks 的原话转给推送的人（{fault}）。只看到拦截，不知道该修什么。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+
+
+@pytest.mark.parametrize("fault", list(GITLEAKS_FAULTS))
+def test_pre_commit_reports_a_gitleaks_error_as_an_unfinished_scan(fault: str) -> None:
+    """同上，pre-commit 这一侧。暂存的是普通内容，拦下只剩一个原因。"""
+    marker = GITLEAKS_FAULTS[fault]
+    assert marker not in PRE_COMMIT.read_text(encoding="utf-8"), (
+        f"`{marker}` 写进了 pre-commit 自己的文字，它证明不了转发"
+    )
+    proc = _run_pre_commit("x = 1\n", fault)
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 1, (
+        f"gitleaks 出错了，pre-commit 却放行（{fault}，returncode={proc.returncode}）。扫描没跑完不能当成通过。\n"
+        f"{shown[-2000:]}"
+    )
+    assert COMMIT_LEAK_BOX not in shown, (
+        f"gitleaks 出错（{fault}），pre-commit 却报「有疑似密钥」，叫人去交易所作废重发 key。\n{shown[-2000:]}"
+    )
+    assert COMMIT_UNFINISHED_BOX in shown, f"pre-commit 没说扫描没有跑完（{fault}）：\n{shown[-2000:]}"
+    assert marker in shown, (
+        f"pre-commit 没把 gitleaks 的原话转给提交的人（{fault}）。只看到拦截，不知道该修什么。\n{shown[-2000:]}"
+    )
+
+
+def test_pre_push_still_reports_a_finding_as_a_finding(leaky_repo: _MergeRepo) -> None:
+    """反方向：真有命中时，要出「有疑似密钥」的框，不能出「扫描没有跑完」。
+
+    hook 靠 `--exit-code` 分开这两种情况。这个参数哪天被删了，有命中时 gitleaks 退回默认的 1，
+    与出错同码。真命中于是被报成「扫描没有跑完」：推送照样拦下，人却被引去修配置。
+    """
+    proc = _run_pre_push(leaky_repo, "existing-branch")
+    assert proc.returncode == 1, f"假凭据没被 pre-push 拦下（returncode={proc.returncode}）：\n{proc.stderr[-2000:]}"
+    assert PUSH_LEAK_BOX in proc.stderr and PUSH_UNFINISHED_BOX not in proc.stderr, (
+        "真有命中，pre-push 却没报「有疑似密钥」，或者报成了扫描没跑完。检查 hook 里的 `--exit-code` 还在不在。\n"
+        f"stderr:\n{proc.stderr[-2000:]}"
+    )
+
+
+def test_pre_commit_still_reports_a_finding_as_a_finding(
+    blocked_commit: tuple[str, subprocess.CompletedProcess[str]],
+) -> None:
+    """同上，pre-commit 这一侧。"""
+    _, proc = blocked_commit
+    shown = proc.stdout + proc.stderr
+    assert COMMIT_LEAK_BOX in shown and COMMIT_UNFINISHED_BOX not in shown, (
+        "真有命中，pre-commit 却没报「有疑似密钥」，或者报成了扫描没跑完。检查 hook 里的 `--exit-code` 还在不在。\n"
+        f"{shown[-2000:]}"
     )
