@@ -19688,3 +19688,33 @@ k 0.175 下，新上限在这段记录上一根 bar 都截不到。k 0.60 时它
 - 启动门预演（新 profile）：证据门、数据集门都没有拦截项。
 - render：实盘状态快照（12:30:53Z 在两次周期之间复制）上，基线 `4e0f3be3` 与本分支各出一遍。94 个产物里 68 个逐字节
   相同；26 份日报 md 各差一行，只差 Margin 段那个括号。notice 在快照上不触发，另用 09-13 起的窗口出一遍，只差最后一句。
+
+## 2026-09-28 · 重启 #62：载入构造 v12（#237，`e32f3856ac1e`）——补记可观测事实，执行人不归因
+
+CLAUDE.md「重启实盘循环」第 3 条要求：重启之后，把「谁、为什么」记进本文件。这次重启在 RESEARCH_LOG 里只有 #237 那一节，写的是构造指纹 v12 的说明，没有重启记录。下面是会话 ce8d8edb 在执行手册收尾核对时补的记录。只写可观测事实；执行人不按时间相关性归因。
+
+**为什么重启。**
+- #237（「约束侧改按可动用 USDT」，risk-g11-denominator 裁定，构造 v12）于 16:28:31Z 合入，merge commit 77aaf2f0。
+- 它要重启才生效。
+
+**主 checkout。**
+- `main` 的 reflog 记着：16:28:45Z 快进到 77aaf2f0。
+- `beidou_live/guards.py`、`engine.py`、`config.py` 与 `config/live.demo.yaml` 的 mtime 都是 16:28:45Z。
+
+**重启。**
+- `state.restarts` 61 → 62，`restarted_at` 为 2026-09-28T16:29:33+00:00。
+- 新进程 PID 62671，启动于 16:29:33Z。命令是 `live run --profile config/live.demo.yaml --armed --allow-unvalidated`，其中 `--allow-unvalidated` 是 10-13 之前的 bridge。
+- 重启落在整点后 29 分钟，在安全窗口内。
+
+**之后。**
+- 16:29:41Z 首行 `SKIPPED`，原因是「restart outside the rebalance window; this bar was already rebalanced」。15:00 那根 bar 旧进程已在 16:00:29Z 处理过，所以不算丢 bar。
+- 17:00:37Z 的周期 OK，处理 16:00 那根，construction `e32f3856ac1e`。这是第一条带 v12 的周期行。
+- registry `7f8adb754962`、治理规则 `9cc96461276f` 都不变，`live status --check` 退出码 0。
+
+**构造测试。**
+- 重启前有没有跑两条构造测试：没有可观测的记录。
+- 重启后在主 checkout（9de77787，含 #237）上跑：18 passed。
+
+**连带的两件事。**
+- 构造变了，M-010 的 30 天干净窗口从 17:00Z 那一行重新起算，约在 2026-10-28 17:00Z 满。
+- 所以重构方案的 30 天回填定时任务 `beidou-production-refactor-30-day-backfill` 已顺延到 10-29 本机 10:15。
