@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Weekly report, Sundays at 03:00 local (operator ruling 2026-09-28, Q5; execution plan 3.9).  It is
+      the recorder for M-PR01, the report's "Plan budget gap" section, and the first caller the weekly
+      report has had: nothing in deploy/ ran it, so no weekly report was produced after 2026-09-16.
+
+      It never pages and never touches the venue: the weekly report builds no WebhookAlerts, and it
+      writes reports/weekly/ and nothing else.  The launcher names yesterday (UTC) as the week's last
+      day rather than taking the command's default of today; its header says why.
+
+      Started by the calendar and deliberately WITHOUT KeepAlive.  This job runs to completion, and a
+      job that ends under KeepAlive is relaunched on its exit code (com.beidou.shadow.plist records
+      what that cost).
+
+      Install (operator action):
+        cp deploy/com.beidou.weekly.plist ~/Library/LaunchAgents/
+        launchctl load -w ~/Library/LaunchAgents/com.beidou.weekly.plist
+    -->
+    <key>Label</key>
+    <string>com.beidou.weekly</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/maguannan/beidou/deploy/run_weekly.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/maguannan/beidou</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/weekly.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/weekly.stderr.log</string>
+</dict>
+</plist>

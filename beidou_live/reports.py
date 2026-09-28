@@ -12,7 +12,7 @@ answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
     report_data        #9 data (bar sanity is bar_sanity.py)
     report_events      #8.10 event risk: the stablecoin peg, venue incidents and extreme moves, reported only
     report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
-    report_governance  the weekly's effort share and pre-registration order
+    report_governance  the weekly's effort share, plan budget gap and pre-registration order
     report_common      what all of them read the state files with
 
 What stays here is the assembly - `daily_payload`, `daily_alerts`, `daily_markdown`,
@@ -104,7 +104,9 @@ from beidou_live.report_exits import (
 from beidou_live.report_governance import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     ALPHA_EFFORT_TARGET,
     PREREGISTRATION_EFFECTIVE_FROM,
+    _plan_budget_lines,
     effort_share,
+    plan_budget_gap,
     preregistration_problems,
     preregistration_skipped,
 )
@@ -461,6 +463,8 @@ def weekly_payload(
     expectations: dict[str, Any] | None = None,
     changed_lines: Mapping[str, int] | None = None,
     dataset: Mapping[str, Any] | None = None,
+    source_lines: Mapping[str, int] | None = None,
+    source_lines_week_ago: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """The plan's weekly research report, which was listed as a deliverable and never built.
 
@@ -496,6 +500,9 @@ def weekly_payload(
         "legs": leg_split(store, since_ms=since_ms, equity=equities[-1] if equities else None),
         "margin": margin_and_rejections(store, since_ms=since_ms),
         "effort": effort_share(changed_lines) if changed_lines is not None else None,
+        # M-PR01.  Like `changed_lines`, the tree and its git history come in from the caller, so a
+        # re-render on a state snapshot can pin them and measure the code rather than the checkout.
+        "plan_budget": plan_budget_gap(source_lines, source_lines_week_ago) if source_lines is not None else None,
         "dataset": _dataset_block(dataset),
     }
 
@@ -580,6 +587,8 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
                 if payload.get("effort")
                 else {"none": 0},
             ),
+            # Operator ruling 2026-09-28 (Q5): the growth is accepted, so this is a record - no gate, no alert.
+            ("Plan budget gap (M-PR01, record only)", _plan_budget_lines(payload.get("plan_budget"))),
             (
                 "Margin (M-007)",
                 {
