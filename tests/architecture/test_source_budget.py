@@ -3569,7 +3569,24 @@ CEILING = {
     # 不够；long/short 290（本列有值 205）/ 1,442，不够；spot 0，实盘循环没有 spot 源。
     #
     # 留 37 行（15_662 -> 15_699），理由同上，不重述。
-    "beidou_live": 15_699,
+    #
+    # 2026-09-28（不编号，同上）。+8 beidou_live，15_662 -> 15_670，抬到 15_707。
+    #
+    # WP-C8 修法 A（操作者 2026-09-28 裁定「按建议处理」）：`ExitOverlay._reconcile` 的 D-045 条件加
+    # `state.direction != held`。`exit_step` 的翻转分支不查 cooldown，模型在 cooldown 内先转到另一侧、再翻回被冷却
+    # 的一侧时，回测持有，实盘却把 overlay 自己刚开的仓当成没成交的退出，下一根 bar 平掉——白付一次往返。
+    # 实盘 585 根 bar 里 0 次，潜伏。D-045 本来要接住的两种情形（规则触发后仓位没平；翻走的单也没成交）
+    # 都与 state 不一致，照旧触发。
+    #
+    # 花在哪：条件本身净 0 行（同一行加一个判断）；docstring +8（为什么只在 overlay 自己不持有那一侧时才算
+    # 没成交的退出，以及 D-045 的两种情形为什么照旧被接住，含 1 行空行）。
+    #
+    # 验收：原先钉分叉的 strict xfail 在修法下 XPASS（因而变红），改成普通回归测试；主测试的输入加进
+    # 「cooldown 内翻回」（撤掉修法时从第 364 根起分叉 8 根，加上修法后两组参数逐位相同）；D-045 的三条既有
+    # 测试照旧绿；三个 digest 与两条构造测试不变。生效：下一次按纪律的重启（与 WP-C6 同批）。
+    #
+    # 留 37 行（15_670 -> 15_707），理由同上，不重述。
+    "beidou_live": 15_707,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.
