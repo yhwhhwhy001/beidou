@@ -12,7 +12,7 @@ answer in `docs/analysis/2026-09-23-external-prompt-checklist-vs-beidou.md`:
     report_data        #9 data (bar sanity is bar_sanity.py)
     report_events      #8.10 event risk: the stablecoin peg, venue incidents and extreme moves, reported only
     report_beta        #6.4 / #6.9 attribution: market beta (D-045) and factor loadings (factor_loadings.py)
-    report_governance  the weekly's effort share and pre-registration order
+    report_governance  the daily's dated switches (E-PR16), the weekly's effort share and pre-registration order
     report_common      what all of them read the state files with
 
 What stays here is the assembly - `daily_payload`, `daily_alerts`, `daily_markdown`,
@@ -66,6 +66,7 @@ from beidou_live.report_common import (  # noqa: F401  (re-exported at its histo
 )
 from beidou_live.report_data import (
     _dataset_block,
+    archive_tests_status,
     data_coverage,
     metrics_parity_status,
 )
@@ -104,6 +105,8 @@ from beidou_live.report_exits import (
 from beidou_live.report_governance import (  # noqa: F401  (re-exported at its historical address; see the module docstring)
     ALPHA_EFFORT_TARGET,
     PREREGISTRATION_EFFECTIVE_FROM,
+    _dated_switch_lines,
+    dated_switch_block,
     effort_share,
     preregistration_problems,
     preregistration_skipped,
@@ -156,6 +159,7 @@ def daily_payload(
     exits: ExitParams | None = None,
     fidelity: ReplayInputs | None = None,
     now: datetime | None = None,
+    gate: Callable[[Path], Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     cycles = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
     trades = [row for row in store.read_jsonl(store.trades_path) if _day_of(row) == day]
@@ -298,11 +302,15 @@ def daily_payload(
         "data_coverage": data_coverage(store, root=data_root),
         # G6: bars the loop fed its model that did not look like prices, split into first-seen-today and not.
         "bar_sanity": sanity_status(store.read_jsonl(store.cycles_path), day, day_of=_day_of),
+        # WP-P4: the nightly data job's last verdict on the tests that read `.beidou/`.  It pages; this prints.
+        "archive_tests": archive_tests_status(),
         "margin": margin_and_rejections(store, since_ms=window["since_ms"], margin_cap=margin_cap),
         # 3.9, reported only: a full close is one market order, so what it costs is impact, not bars.
         "liquidity_to_close": liquidity_to_close(store, day, root=data_root),
         "risk_adaptation": risk_adaptation(store, day),
         "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
+        # E-PR16: the week's date flips, off the checkout's files.  `gate` lets the bridge read `inert`.
+        "dated_switches": dated_switch_block(day, gate=gate),
         "dataset": _dataset_block(dataset),
     }
 
@@ -603,6 +611,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
                 },
             ),
+            # Second, because a date is the one finding here that has a deadline (E-PR16).
+            ("未来 7 天日期翻转", _dated_switch_lines(payload.get("dated_switches") or {})),
             (
                 # L1-10: the ladder and the vol sizing divide by the line above, and on multi-assets
                 # margin that line carries BTC.  Printing the split is what lets a reader tell a
@@ -750,6 +760,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
             ),
             # G6, beside the archive's coverage: whether the bars the LOOP read looked like prices at all.
             ("Bar sanity (G6, alert only)", sanity_lines(payload.get("bar_sanity") or {})),
+            # WP-P4, beside both: whether the tests that read that archive and the loop's record passed last night.
+            ("归档专属测试（夜间 data job，只报告）", payload.get("archive_tests") or {"none": 0}),
             (
                 "Margin and rejections (M-007)",
                 {
@@ -860,10 +872,10 @@ def daily_markdown(payload: dict[str, Any]) -> str:
     )
 
 
-# What production code imports from this address: the assembly, and nine names `live_cmd` (and, for
-# `collateral_share`, the engine) take from the area modules through here.  mypy's strict mode does
-# not follow an implicit re-export, so these are declared; tests and scratchpad reach the rest of
-# the contract through the imports at the top.
+# What production code imports from this address: the assembly, and nine names `live_cmd` takes from
+# the area modules through here.  mypy's strict mode does not follow an implicit re-export, so these
+# are declared; tests and scratchpad reach the rest of the contract through the imports at the top.
+# `collateral_share` was the engine's too, until WP-C6 (2026-09-28) moved it to `risk_budget`.
 __all__ = [
     "PREREGISTRATION_EFFECTIVE_FROM",
     "_store_closes",

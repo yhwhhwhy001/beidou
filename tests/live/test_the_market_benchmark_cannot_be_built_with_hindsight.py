@@ -246,6 +246,7 @@ def test_excluded_bars_leave_the_regression_rather_than_being_zeroed() -> None:
     assert without["constant"]["alpha_bps_per_hour"] < with_it["constant"]["alpha_bps_per_hour"]
 
 
+@pytest.mark.archive
 @pytest.mark.skipif(
     not (ROOT / ".beidou" / "live" / "cycles.jsonl").exists(),
     reason="live state is not in this checkout (CI and worktrees)",

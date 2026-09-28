@@ -24,6 +24,7 @@ from beidou_alpha.panel import interval_seconds
 from beidou_alpha.registry import Registry
 from beidou_alpha.validation.ledger import MINED_SEARCH_STRATEGY, parse_ledger, resolve_ledger_path
 from beidou_cli import live, report
+from beidou_cli.governance_cmd import _gate as startup_gate
 from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore, interval_ms
@@ -59,6 +60,7 @@ from beidou_live.health import STUCK_IN_ERROR_STREAK, cycle_health
 from beidou_live.inputs import required_history
 from beidou_live.lock import APP_SUPPORT, LockBusy, SingleInstanceLock, account_lock_path
 from beidou_live.paper import PaperVenue
+from beidou_live.ports import Venue
 from beidou_live.probe import probes_from_registry
 from beidou_live.report_beta import factor_markdown
 from beidou_live.reports import (
@@ -323,7 +325,7 @@ def live_run(
     config = live_config(payload, universe, registry, dry_run=dry_run)
     store = StateStore(_paper_state_dir(payload, state_dir)) if paper else build_store(payload, dry_run=dry_run)
     market = build_market_data(payload)
-    venue: Any
+    venue: Venue
     if paper:
         venue = _paper_venue(market.base_url, paper_balance, store.directory / "paper_venue.json")
     else:
@@ -874,6 +876,8 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
         data_root=data_root,
         exits=ExitParams.from_mapping(payload.get("exits", {}) or {}),
         fidelity=ReplayInputs.from_profile(payload, registry, data_root),
+        # The startup gate `governance plan`/`apply` ask, so the week's bridge row says whether it bites.
+        gate=startup_gate(profile, data_root),
     )
     markdown = daily_markdown(data)
     directory = Path(out or Path((payload.get("paths", {}) or {}).get("reports_dir", "reports")) / "daily")

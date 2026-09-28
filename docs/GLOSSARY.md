@@ -24,6 +24,7 @@
 | headroom | 余量 | `headroom` |
 | exit overlay | 退出层、退出叠加层 | `overlay` |
 | overlay | 叠加层 | `overlay` |
+| cooldown | 冷却、冷却期 | `cooldown_bars`、`cooldown_until`、`COOLDOWN`（2026-09-28 起；旧文不改） |
 | sleeve | 分仓、袖子 | `sleeve` |
 | universe | 标的池、宇宙 | `universe` |
 | throttle | 节流阀 | `drawdown_throttle` |
@@ -41,6 +42,7 @@
 | probe | 探针、探针书 | `probe`、`PROBE_VERDICT`、`max_concurrent_probes`（2026-09-25 起） |
 | bridge（D-041 bridge） | 桥 | `deploy/run_live.sh` 的 `BRIDGE_UNTIL`（2026-09-25 起） |
 | exemption（`tests/shipped_evidence.py` 那一条） | 豁免（指这条机制时） | `EXEMPTED`、`EXEMPT_UNTIL`（2026-09-25 起；2026-09-27 随切换删除，只在历史记录里出现） |
+| dated switch | 日期开关（执行手册 2026-09-28 §3.6 的写法，旧文不改） | `beidou_governance/calendar.py` 的 `DatedSwitch`、`dated_switches`；三种状态照写 `pending`、`inert`、`past`（2026-09-28 起） |
 | confirmed gap | 已确认缺口、真缺口 | `confirmed_gaps.json`、`beidou_data/repair.py`（2026-09-25 起） |
 | feature store | 特征库、特征存储、特征缓存 | `beidou_cli/research_feature_store.py`、`BEIDOU_FEATURE_STORE`（2026-09-25 起） |
 

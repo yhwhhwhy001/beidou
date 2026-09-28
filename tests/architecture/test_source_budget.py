@@ -38,9 +38,9 @@ PLAN_BUDGET = {"beidou_live": 2_000, "non_alpha_total": 6_000, "alpha_share_tree
 # 2026-09-28 操作者裁定 Q2a）。以后抬顶，理由写进那个文件对应包的一节；这里每个条目上方只留一行指向那一节。
 CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_live
-    "beidou_live": 15_358,
+    "beidou_live": 15_527,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_cli
-    "beidou_cli": 8_656,
+    "beidou_cli": 8_696,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_data
     "beidou_data": 3_677,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_exchange
@@ -48,7 +48,7 @@ CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_shared
     "beidou_shared": 289,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_governance
-    "beidou_governance": 4_397,
+    "beidou_governance": 4_719,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_alpha
     "beidou_alpha": 11_110,
 }

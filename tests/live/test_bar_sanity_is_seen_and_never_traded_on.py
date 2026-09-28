@@ -109,6 +109,7 @@ def test_a_panel_shaped_frame_reads_the_same_as_a_feed_shaped_one(august_panel: 
     assert check_bars({symbol: feed})["flags"] == check_bars({symbol: panel_shaped})["flags"]
 
 
+@pytest.mark.archive
 @pytest.mark.skipif(
     not (ROOT / ".beidou" / "data" / "klines").exists(), reason="the archive is not in this checkout (CI and worktrees)"
 )

@@ -4,8 +4,8 @@ M-003 的 source budget ratchet 给每个包定了行数 ceiling，就是 `tests
 里的 `CEILING`。抬顶只允许发生在写明理由的那个 commit 里。这个文件收的是那些理由。
 
 搬迁之前，理由写在测试文件里，是紧挨着 `CEILING` 的注释。2026-09-28 操作者裁定 Q2a：理由搬到这里，
-测试文件每个条目上方只留一行指针（WP-C1）。搬迁的输入是那个文件的 blob `7d388bb8a65e6b7803e23631109853f4dcd19f3e`，共 4,413 行，
-其中理由注释 4,339 行。
+测试文件每个条目上方只留一行指针（WP-C1）。搬迁的输入是那个文件的 blob `59541854acf154d9118cd185433b31fca85fc15b`，共 4,503 行，
+其中理由注释 4,429 行。
 
 搬迁由 `scratchpad/source_budget_log_migration.py` 完成，规则如下：
 
@@ -1969,7 +1969,7 @@ lines say why: `max_loss` is inside `construction_fingerprint`, so changing it c
 
 ## beidou_live
 
-原文：blob 里第 1955–3487 行，`"beidou_live": 15_358,` 之上的注释，共 1,533 行。
+原文：blob 里第 1955–3544 行，`"beidou_live": 15_527,` 之上的注释，共 1,590 行。
 
 ```text
 Merge note, 2026-09-15.  The seven entries below (Twenty-fifth..Thirty-first OF THIS TABLE) are
@@ -3505,11 +3505,68 @@ R8 的尺子不再把平仓的已实现盈亏算两次（操作者 09-25 裁定�
 另证拿掉三个新键、改回 `auto` 逐字节复现 #163 的构造。
 
 留 40 行（15_318 -> 15_358），理由与上面几格逐字相同，不重述。
+
+2026-09-28（不编号，同上）。+87 beidou_live，15_318 -> 15_405，抬到 15_445。
+
+WP-C9（E-PR35）：`beidou_live/config.py` 顶部三张表，登记 shipped profile 每个键的读者。`risk_budget` 块 15 个键里
+有 14 个只有 `report daily` 读；循环的 R8 尺子用 `RiskBudgetParams()` 的默认值，所以改这 14 个键不改循环。
+digest 那条测试变异的是 registry，也看不到。表放在装载 profile 的模块里，加键的人第一眼就能看到；
+`tests/live/test_every_profile_key_has_a_reader.py` 逐键核读者源码，再核三张表与文件互相覆盖。
+
+花在哪（加 87 行、删 0 行）：代码 71 行，全是数据。`PROFILE_KEY_READERS` 50 个键一行一个（52 行），
+`REPORT_ONLY_KEYS` 14 个（18 行），`UNREAD_KEYS` 1 行。注释 15 行：E-PR35 为什么要这张表、读者名指什么、
+`profile: demo` 为什么没人读。空行 1 行。一行一键，是为了能 grep 到 `portfolio.max_weight` 这样的全名。
+
+验收：新测试 15 条绿。手工变异 9 个，全部变红：把读者换成不读它的模块 4 个，把键挪错表 2 个，让日报不读、
+或让循环的装配代码读只供日报的键 3 个。三个 digest 与基线逐字相同。任何键的值与 `LiveConfig` 都没改。
+
+留 40 行（15_405 -> 15_445），理由同上，不重述。
+
+2026-09-28（不编号，同上）。+35 beidou_live，15_408 -> 15_443，抬到 15_480。写的时候是 15_318 -> 15_353；
+它与 WP-C6（+3，用余量）、WP-C9（+87，上一格）同一波，数按合入那一刻的 main 重量。
+
+归档专属测试归位（执行手册 §3.5 WP-P4）。七个读 `.beidou/` 本身的测试在 CI 与 worktree 里跳过，只在主
+checkout 上跑，而四道门从不在那里跑：BNX 夹具那条 2026-09-25 起在那里是红的，没人看见。它们现在带
+`archive` marker，`deploy/run_data.sh` 每晚跑 `pytest -m archive`、FAIL 时推送（脚本不计入本表）。这里
+花的是日报那一节：`report_data.archive_tests_status` 读 data job 日志里最后一行结果，印「通过 / 失败 /
+未跑」，只印不告警。日志在 `lock.APP_SUPPORT` 下，调用那一刻才去取，测试的重定向才够得着它。
+
+花在哪（加 37 行、删 2 行）：代码 18 行（读数 11、文件名与结果行正则两个常量 2、两个 import 2、
+`reports.py` 挂接 3）；docstring 9 行（函数 8：为什么这些测试要有执行位置、为什么只印不推、为什么
+结果要带时间；模块说明净 +1）；注释 4 行；空行 4 行。
+
+验收：实盘状态快照上新旧各出一遍（#135 协议），94 个产物里告警、周报、beta、status 共 41 个逐字节
+相同；26 份日报的 json 只多 `archive_tests` 一个键，md 只多这一节，删行为 0。对着归档真跑
+`pytest -m archive`：11 条，1 failed（BNX）、10 passed，约 4 秒。
+
+留 37 行（15_443 -> 15_480）：只抬本 PR 的增量，WP-C6 用掉的 3 行余量不补回。理由同上，不重述。
+
+2026-09-28（不编号，同上）。+47 beidou_live，15_443 -> 15_490，抬到 15_527。写的时候是 15_318 -> 15_365；
+合并 origin/main 时前面多了 WP-C6 的净 +3、WP-C9 的 +87 与上一格 WP-P4 的 +35，数按合并后的树重量。
+
+执行手册 §3.6（WP-P3，E-PR16）：日报加一节「未来 7 天日期翻转」。09-25 要一份 63 KB 的分析才看清 10-13 有三个
+开关同时翻转；现在每个 dated switch 在它翻转前的 7 份日报里各出现一次，最后一份是前一天的。行从
+`beidou_governance.calendar` 读，与 `beidou governance calendar` 印的是同一份；只报，不进 `daily_alerts`。从报告
+那一天的 00:00Z 起算而不是从墙钟起算，所以同一天的报告在同一批文件上逐字节可复现。
+
+花在哪（加 51 行、删 4 行）：`report_governance.py` 的 `dated_switch_block` 与 `_dated_switch_lines`——代码 16 行、
+docstring 14 行（为什么从当天 00:00Z 起算、为什么不告警）、注释 4 行、空行 9 行，模块 docstring 与一行 import
+改写 3 行。4 行注释里有 2 行写 `calendar` 为什么在函数里 import：`beidou live run` 经 `live_cmd` -> `reports`
+载入这个模块，放在顶层会把 `calendar`、`reopen`、`window_changes` 三个治理模块带进 armed 进程（WP-C6 之后
+`import beidou_live.engine` 本身已不含报告层）。`reports.py`：`daily_payload` 加 `gate` 参数与一个键、
+`daily_markdown` 加一节，代码 5 行、注释 2 行，模块 docstring 改写 1 行。
+
+验收：#135 协议，实盘状态快照（09-03 至 09-28）上 93 个产物，41 个逐字节相同，其余 52 个（26 份日报的 md 与
+json）去掉新加的这一节、这个键之后逐字节相同；同一代码渲染两次逐字节相同。09-03 至 09-19 印「无」，09-27 的两行
+各在它前面 7 份日报里出现，10-03 的六行从 09-26 起出现。`import beidou_live.engine` 带进的 `beidou_*` 模块改前
+改后逐个相同（合并 WP-C6 之后是 61 个；写的时候在 36ee6341 上是 89 个）。
+
+留 37 行（15_490 -> 15_527）：只抬本 PR 的增量，WP-C6 的 +3 没有抬顶，余量从 40 变 37。理由同上，不重述。
 ```
 
 ## beidou_cli
 
-原文：blob 里第 3489–3848 行，`"beidou_cli": 8_656,` 之上的注释，共 360 行。
+原文：blob 里第 3546–3921 行，`"beidou_cli": 8_696,` 之上的注释，共 376 行。
 
 ```text
 +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
@@ -3872,11 +3929,27 @@ import +1。`research_validate_cmd.py` +10：对冲时拒绝退出层（它会�
 `research_grids.py` +1，预登记的 4 格。
 
 留 40 行（8_616 -> 8_656），理由同上，不重述。
+
+2026-09-28（不编号，同上）。+40 beidou_cli，8_632 -> 8_672，抬到 8_696。写的时候是 8_631 -> 8_671；合并 origin/main
+（bf5290bf）时前面多了 WP-C7 的净 +1，数按合并后的树重量，顶的数没变。
+
+执行手册 §3.6（WP-P3，E-PR16）：`beidou governance calendar [--days 60] [--json]`，按日期升序打印每个 dated
+switch 的 date | source | reader | consequence | status，已过的与 `--days` 之外的只计数。只读，不动任何开关。
+bridge 的 inert 问的是 `_gate`——`plan`、`apply` 问的那个 startup gate——而不是 registry 里 verdict 那一行；
+`report daily` 把同一个 `_gate` 交给日报那一节，两处对 bridge 的回答不会分叉。
+
+花在哪：`governance_cmd.py` +37，命令的代码 24 行、docstring 8 行、空行 5 行；`live_cmd.py` +3，import 1 行、
+`gate=` 1 行、注释 1 行。
+
+验收：在 worktree 里跑出 60 天内 9 行（10-03 六行、10-13 三行），另有 2 行已过。worktree 没有 `.beidou/data`，
+bridge 读 pending（startup gate 的 dataset 那一半挡 1 条）；`--data-root` 指向真实归档时读 inert。
+
+留 24 行（8_672 -> 8_696）：合并前 main 的余量就是 24（WP-C7 的 +1 没有抬顶），理由同上，不重述。
 ```
 
 ## beidou_data
 
-原文：blob 里第 3850–3944 行，`"beidou_data": 3_677,` 之上的注释，共 95 行。
+原文：blob 里第 3923–4017 行，`"beidou_data": 3_677,` 之上的注释，共 95 行。
 
 ```text
 +67 beidou_data: `write_parquet_atomically` for the three stores (the same fsync the live state
@@ -3978,7 +4051,7 @@ K 线，交给引擎已有的 `_hold_dropped`，不再从 `gather` 里抛出、�
 
 ## beidou_exchange
 
-原文：blob 里第 3946–3962 行，`"beidou_exchange": 747,` 之上的注释，共 17 行。
+原文：blob 里第 4019–4035 行，`"beidou_exchange": 747,` 之上的注释，共 17 行。
 
 ```text
 +103 beidou_exchange, on a 611-line package: `_paged` stepped to `last + 1` after a full page, so
@@ -4002,11 +4075,11 @@ client id 去查。代理拒绝 CONNECT 的 `ProxyError`（本机最常见的故
 
 ## beidou_shared
 
-原文：`"beidou_shared": 289,`（blob 里第 3964 行）之上没有注释，所以这一节没有代码块。
+原文：`"beidou_shared": 289,`（blob 里第 4037 行）之上没有注释，所以这一节没有代码块。
 
 ## beidou_governance
 
-原文：blob 里第 3965–4059 行，`"beidou_governance": 4_397,` 之上的注释，共 95 行。
+原文：blob 里第 4038–4149 行，`"beidou_governance": 4_719,` 之上的注释，共 112 行。
 
 ```text
 +14 beidou_governance: `read_gate`'s four numeric fields narrowed one at a time instead of through
@@ -4104,11 +4177,28 @@ name candidates the state carries at probe and main.  Of the 62 lines: 38 code -
 `owes_parity`, `_sleeve_params`, the split in `assemble`, and `_knobs` lifted out of
 `reconstruct_space` so both replay one set of knobs - 11 docstring, 3 comment, 10 blank.  Four
 mutations each turned a test red.  The 47 over were not golfed.  40 above again.
+
+2026-09-28（不编号，同上）。+322 beidou_governance，4_357 -> 4_679，抬到 4_719。
+
+执行手册 §3.6（WP-P3，E-PR16）：`beidou_governance/calendar.py`（新）。dated switch 散在 `deploy/run_live.sh`、
+`policy.py`、`admission.py`、`governance/reopen.yaml`、`governance/window_changes.yaml`、registry 与一条测试里，
+这里列成一张表：每一行在每次调用时从它所在的那一行重读，不记任何日期，也不碰任何开关。三种状态 past、inert、
+pending；inert 只在问得到读者自己的条件时才报——bridge 问 startup gate（由调用方注入，本包 import 不到
+`beidou_live`），单窗口开放问那条测试断言的等式，window change 看 `applied`——问不到就报 pending。手册之外多一行：
+`WINDOW_ANCHOR` 的批次窗口翻页，全仓 grep 赋值位置的日期时找到。
+
+花在哪（新文件 322 行）：代码 210 行（七个来源各一段读法、按 `- id:` 找行号、`_instant`、`_status`）、docstring
+64 行（为什么读文本不 import、为什么 bridge 不按 verdict 判、probe 的过滤条件与 90 天默认值为什么抄了一份、哪条
+测试钉住这份抄本）、注释 1 行、空行 47 行。
+
+验收：两个新测试文件 55 条全绿；19 个变异（逐条把一处判定改坏）每一个都让至少一条测试变红。
+
+留 40 行（4_679 -> 4_719），理由同上，不重述。
 ```
 
 ## beidou_alpha
 
-原文：blob 里第 4061–4382 行，`"beidou_alpha": 11_110,` 之上的注释，共 322 行。
+原文：blob 里第 4151–4472 行，`"beidou_alpha": 11_110,` 之上的注释，共 322 行。
 
 ```text
 2026-09-17, +72 in beidou_alpha, with the sentence the rule requires: meanrev's time stop, which
