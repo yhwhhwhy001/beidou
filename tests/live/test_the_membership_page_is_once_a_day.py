@@ -145,6 +145,8 @@ def _run_notify(tmp_path: Path, url: str, calls: list[str], *, fresh: bool = Tru
     env = {
         key: value for key, value in os.environ.items() if key.lower() not in {"http_proxy", "https_proxy", "all_proxy"}
     }
+    # Both channels, not only the one this test overrides: the second is the operator's real one once exported.
+    env = {key: value for key, value in env.items() if not key.startswith("BEIDOU_ALERTS_WEBHOOK_URL")}
     env.update(
         REPO=str(repo),
         SUPPORT=str(support),

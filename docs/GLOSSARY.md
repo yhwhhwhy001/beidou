@@ -45,6 +45,9 @@
 | dated switch | 日期开关（执行手册 2026-09-28 §3.6 的写法，旧文不改） | `beidou_governance/calendar.py` 的 `DatedSwitch`、`dated_switches`；三种状态照写 `pending`、`inert`、`past`（2026-09-28 起） |
 | confirmed gap | 已确认缺口、真缺口 | `confirmed_gaps.json`、`beidou_data/repair.py`（2026-09-25 起） |
 | feature store | 特征库、特征存储、特征缓存 | `beidou_cli/research_feature_store.py`、`BEIDOU_FEATURE_STORE`（2026-09-25 起） |
+| kill switch | 急停、急停开关 | `kill_switch_path`、`beidou live kill-switch`（2026-09-28 起，`docs/MAINNET_READINESS.md`；旧文不改） |
+| flatten | 清仓、一键平仓（指这条命令时） | `beidou live flatten`、`LiveEngine.flatten`（2026-09-28 起；泛指的「平仓」照写中文；旧文不改） |
+| mainnet | 主网（TCA 一节的固定说法「主网与 demo 的价格差」照旧） | `beidou_exchange/guard.py` 今天拒绝签名请求的场地 `fapi.binance.com`，它不在 `ALLOWED_HOSTS` 里（2026-09-28 起） |
 
 ## 保留中文的近形词
 

@@ -3543,8 +3543,35 @@ CEILING = {
     #
     # 留 37 行（15_490 -> 15_527）：只抬本 PR 的增量，WP-C6 的 +3 没有抬顶，余量从 40 变 37。理由同上，不重述。
     #
-    # 2026-09-28（不编号，同上）。+77 beidou_live，15_490 -> 15_567，抬到 15_604。写的时候是 15_318 -> 15_395；
-    # 它与 WP-C6（+3，用余量）、WP-C9（+87）、WP-P4（+35）、WP-P3（+47，上一格）同一波，数按合入那一刻的 main 重量（操作者合并，合并前若 main 又动，
+    # 2026-09-28（不编号，同上）。+172 beidou_live，15_490 -> 15_662，抬到 15_699。写的时候是 15_443 -> 15_615；
+    # 合入时前面多了上一格 WP-P3 的 +47，数按合入那一刻的 main 重量。
+    #
+    # 执行手册 §3.12（WP-A1，M-PR06）：日报加一节「数据族 parity」。metrics 与 spot 这些候选数据族，实盘记下了多少
+    # bars、启动门对它的读者要多少 bars，此前没有日常读数（C-PR06）。现在逐族一行：覆盖 / 需要 = 比值、够或不够、
+    # 谁读它。两个数都取门自己的：覆盖是 `LiveEngine.startup` 调的 `live_coverage_bars`，需要是它交给
+    # `metrics_refusal` 的 `required_bars`，即 `required_history(模型, market_data.history_bars)`。所以「需要」是
+    # 整个请求窗口（上市天数过滤 720 加模型 warmup），不是读者自己的 lookback：09-28 long/short 叶要 168，门要
+    # 1,442。手册写的是「除以挖掘叶 lookback 与读者 warmup 中较大的那个」，照它算，这一节会说「够」而门拒绝启动；
+    # 所以按门算，读者自己的 lookback 印在「谁读它」里。门按桶数算覆盖、不看列，括号里另印只数本列有值的桶。
+    # 只报告：不告警，不改门。
+    #
+    # 花在哪（加 176 行、删 4 行）：代码 113 行——读数 `data_family_parity` 与 `_families` 50（门的输入照引擎取：
+    # 去掉停掉的 book、managed symbols、interval、请求窗口；逐族算覆盖、需要、判定），日报一节 23，挖掘叶的
+    # lookback 10，在跑的读者 8，按列计数的 `_ColumnView` 7，import 9，`reports.py` 挂接 4，`ReplayInputs` 带上
+    # 请求窗口的下限 2；docstring 39 行（读数 22：为什么两个数都取门的、为什么需要的是整个窗口、spot 为什么是 0、
+    # 为什么不抛；`_ColumnView` 8：门按桶数不按列，long/short 列 09-12 才开始记；其余 9）；注释 5 行；空行 15 行。
+    # 手册估 +80，多出的是按列的那个数、停掉的 book 与 docstring。
+    #
+    # 验收：新测试 10 条绿，其中一条把 `LiveEngine.startup()` 跑起来对答案：门拒绝当且仅当这一节说不够，拒绝
+    # 消息里的两个数就是这一节的两个数。15 个变异（逐条把一处改坏）每个都让至少一条变红。#135：93 个产物（不含
+    # `_code.txt`）里告警、周报、beta、status 共 41 个逐字节相同，26 份日报的 json 只多 `data_family_parity` 一个
+    # 键、md 只多这一节，删行为 0。三个 digest 与基线逐字相同。09-28 的读数：open interest 290 / 1,442 = 0.20，
+    # 不够；long/short 290（本列有值 205）/ 1,442，不够；spot 0，实盘循环没有 spot 源。
+    #
+    # 留 37 行（15_662 -> 15_699），理由同上，不重述。
+    #
+    # 2026-09-28（不编号，同上）。+77 beidou_live，15_662 -> 15_739，抬到 15_776。写的时候是 15_318 -> 15_395；
+    # 它与 WP-C6（+3，用余量）、WP-C9（+87）、WP-P4（+35）、WP-P3（+47）、WP-A1（+172，上一格）同一波，数按合入那一刻的 main 重量（操作者合并，合并前若 main 又动，
     # 协调者再重量一次）。
     #
     # D-PR03（执行手册 §3.9；操作者 2026-09-28 裁定 Q5 = 是：非 alpha 的增长率被接受）。`PLAN_BUDGET` 改只记录：
@@ -3565,8 +3592,8 @@ CEILING = {
     # 各只多这一节（15 行），json 各只多 `plan_budget` 一个键（20 行），删行 0；新代码自己跑两次逐字节相同，渲染
     # 前后状态文件的 sha256 不变。三个 digest 逐字相同。16 个变异（逐条把改动改坏）全部有测试变红。
     #
-    # 留 37 行（15_567 -> 15_604）：只抬本 PR 的增量，WP-C6 用掉的 3 行余量不补回。理由同上，不重述。
-    "beidou_live": 15_604,
+    # 留 37 行（15_739 -> 15_776）：只抬本 PR 的增量，WP-C6 用掉的 3 行余量不补回。理由同上，不重述。
+    "beidou_live": 15_776,
     # +61 beidou_cli: `--embargo` as a knob of its own on `validate` and `book`, the fallback that keeps
     # it bit-identical while unset, and the report field - absence has to read as "embargo == purge",
     # which is a sentence a later reader needs and a schema cannot carry.

@@ -20,8 +20,15 @@
 的密钥就当已经泄漏——Time Machine 有备份，编辑器有 swap，shell 有 history。值离开密码
 管理器就该去交易所作废重发。
 
-凭据只有一个位置：`~/Library/Application Support/beidou/env.sh`（`chmod 600`），
-由 `deploy/run_live.sh` 读。代码里取凭据只有一种写法——从环境读，缺了就炸，**不带默认值**。
+凭据由 `deploy/` 下的 launcher 读，范本是 `deploy/run_live.sh:11-22`：
+`~/Library/Application Support/beidou/env.sh` 存在就只 source 它，否则 eval `~/.zshrc` 里的
+`export BEIDOU_*` 行。**今天走的是后者**——本机没有 `env.sh`（2026-09-28 `test -f` 核过）。
+`env.sh`（`chmod 600`）是 mainnet 的前置项（09-05 系统质量分析附录 D）。建它之前，必须先把全部
+`BEIDOU_*` 变量迁过去：文件一存在，`~/.zshrc` 就不再被读。只放了一部分变量，下一次重启要么以 78 退出，
+要么循环照跑而告警变量静默丢失。代码里取凭据只有一种写法——从环境读，缺了就炸，**不带默认值**。
+
+2026-09-28 更正：这里原写「凭据只有一个位置：`env.sh`」。那是规范，不是现状；照它去建文件会停掉实盘循环
+（重构方案审查 KILL-01、RISK-PR10）。
 
 机械上有四层，但**对 Binance 密钥真正管用的只有本机那两个 hook**（pre-commit / pre-push），
 而它们都能被 `--no-verify` 绕过：
