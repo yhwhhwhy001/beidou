@@ -268,3 +268,84 @@
 - 演练：`bootout` 循环 2 个整点 + 15 分钟内收到宿主外推送（AC-PR1a）。
 - 30 天后回填分析 §10.3：M-PR02 = 0；M-PR03 两列；M-PR01 只记录；M-PR07 演练读数。
 - 两项测量的读数进 RESEARCH_LOG，各自的阈值判断写明。
+
+## 7. 执行记录（2026-09-28，会话 ce8d8edb）
+
+操作者当日下令「开工，使用多 agent 并行执行」。十个子代理各在独立 worktree 里做一个工作包，只在本地提交；
+push、开 PR、`set_monitor`、auto-merge 与冲突都由协调者统一处理。下面只写可观测事实，读数以各 PR 描述为准。
+
+### 7.1 工作包状态（截至 12:30Z）
+
+| # | 工作包 | PR | 状态 | 生效条件 |
+| --- | --- | --- | --- | --- |
+| 3.1 | WP-C7 接线点类型 | #209 | 已合入 | 合入即（mypy 门） |
+| 3.2 | WP-C6 引擎不 import 报告层 | #210 | 已合入 | 下一次按纪律的重启 |
+| 3.3 | WP-C9 profile 键读者表 | #211 | 已合入 | 合入即 |
+| 3.4 | WP-C8 exits 同输入测试 | #214 | 已合入 | 合入即；查出一处分叉，修法待裁定（7.3） |
+| 3.5 | WP-P4 归档专属测试归位 | #212 | 已合入 | 主 checkout 快进后的下一个 01:20（本机） |
+| 3.6 | WP-P3 日期开关登记表 | #216 | 已合入 | 命令合入即；日报在快进后 |
+| 3.7 | WP-C1 ratchet 记录搬迁 | #218 | **待操作者合并** | 合入即；合并前协调者按那一刻的 main 重跑脚本 |
+| 3.8 | WP-C2 headroom 政策 | 未开 | 等 3.7 的去留与 O-4 | — |
+| 3.9 | D-PR03 预算只记录 + 周报 job | #213 | **待操作者合并** | 装载 plist（O-8）后每周日 |
+| 3.10 | WP-R1 宿主外告警 | 未开 | 等 O-3（选服务、URL 进 `~/.zshrc`） | — |
+| 3.11 | WP-P6 mainnet 准入设计 | #217 | **待操作者合并** | 合入即 |
+| 3.12 | WP-A1 数据族 parity | #220 | CI 中（auto-merge） | 快进后的日报 |
+| 3.13 | GAP-PR08 / GAP-PR10 | #215 | 已合入 | — |
+| O-1 | CLAUDE.md 凭据句（含 SECURITY.md 两处） | #208 | **待操作者合并** | 合入即 |
+| — | 测试够不着真实告警通道（新增） | #219 | 已合入 | 合入即；**O-2 须在它之后做，现已满足** |
+
+主 checkout 在 2026-09-28 12:21:42Z 被快进到 870ec80f（`git reflog show main`）。所以 O-7 在这一刻已发生。
+快进后 `live status --check` 退出码 0：construction `2ee491c13971`；磁盘上的 registry `7f8adb754962` 与治理规则 `9cc96461276f`
+都与正在运行的循环一致。实盘进程仍是重启 #60 的那个，C6 要到下一次重启才生效。
+
+### 7.2 执行中查出的本手册错误（按事实更正）
+
+1. §2「第一波互不触碰同一文件」不成立。3.3、3.5、3.6 共用 beidou_live 的余量（合计约 +70，余量 40），抬顶也都改
+   `test_source_budget.py`。`verify` 是 `strict=false`，各 PR 在余量内 CI 都绿，合在一起 main 才红。
+   执行时改为：净增 > 5 行的 PR 在同一提交里抬本 PR 的增量，把语义溢出变成文本冲突，由协调者按合入那一刻的 main 重量。
+   当日按此解冲突 6 次，main 没红过。
+2. §3.2 的「目标」说过头。`beidou_cli/live_cmd.py` 在模块顶层 import 报告层，armed 进程经它仍载入全部 10 个 report 模块。
+   C6 收窄的是引擎模块的依赖方向。后半的定价在 #210 描述里，已开成后续任务卡片。
+3. §3.3：`profile: demo` 没有任何代码读（另立 `UNREAD_KEYS`）；`costs` 的读者是 `execution_fidelity`，不是 `composition`。
+4. §3.5 第 5 条：把「收集用例数」写成常量，任何新测试都会让它变红。改成不变式：addopts 与 `ci.yml` 都不排除 `archive`。
+5. §3.6：bridge 的 inert 判定改为问启动门本身（`governance_cmd._gate`），不看 registry 的 verdict 一行。
+   另找到一个手册没列的开关：`beidou_governance/admission.py` 的 `WINDOW_ANCHOR`（每 30 天翻一次批次窗口）。
+6. §3.7：GitHub 的 anchor 保留下划线，是 `#beidou_live`，不是 `#beidou-live`。带行号的旧引用在 `docs/analysis/`，
+   `docs/RESEARCH_LOG.md` 里没有。
+7. §3.11 与分析文档：M-010 的 30 天窗口从重启 **#60** 起算（#59 之后又换过一次构造），最早 2026-10-27。
+8. §3.12：「叶的 lookback 与读者 warmup 取大」和「与 `metrics_refusal` 同口径」两条会给出相反判定。
+   执行按启动门算（今天要 1,442 bars），叶自己的 lookback 印在「谁读它」一栏。
+9. §3.13 GAP-PR08：`test_source_budget.py` 冲突约 9.83 次/周，按字面过了阈值。但 45 个冲突块全含 CEILING 数值行，
+   WP-C1 一次也消不掉，它的收益只剩可读性。这条读数写进了 #218 的描述首节。
+10. O-1 的范围：SECURITY.md 泄漏处置第 3 步写着「新 key 写进 `env.sh`」，照做会在事故中途静默关掉告警，一并改进 #208。
+11. 协调者派工时写「agent 的 shell 会读 `~/.zshrc`」，不成立：Claude 的 Bash 工具是非交互 zsh，环境里没有任何 `BEIDOU_*`。
+    带着真实变量跑的只有操作者的交互 shell 与 `deploy/run_*.sh`。
+
+### 7.3 顺带发现（逐个 PR 描述扫出，本轮未改）
+
+| 发现 | 出处 | 去向 |
+| --- | --- | --- |
+| 实盘 exit overlay 在 cooldown 内「反向→翻回」会被 D-045 分支平掉，回测继续持有。潜伏，实盘 0 次 | #214；RESEARCH_LOG 同日一节；strict xfail 钉住 | **待操作者裁定修法 A**（`beidou_live/exits.py:129` 加一个条件，搭下一次重启） |
+| 报告层 import 时异常会让所有 `beidou` 子命令起不来（含 armed 的 `live run`） | #210 | 后续任务卡片 |
+| 日报文字还写着「构造冻结到 2026-10-13」「冻结中」，冻结已于 09-27 结束 | #216（`reports.py:395`、`:787`） | 后续任务卡片 |
+| `governance reopen` 遇到不带时区的日期会抛 TypeError | #216（`reopen.py` 约 :140） | 后续任务卡片 |
+| 归档日报每天可能不含 23:00 那根 bar | #215 | 后续任务卡片（先核实） |
+| `report weekly` 自 09-16 起没有调用者，一份周报都没产出 | #213 | #213 排了 job |
+| M-PR01 的「整周 alpha 投入占比」实际按最近 40 个提交算，不是按周 | #213 | 未改 |
+| 循环读、shipped profile 没写、走默认值的 4 个键：`portfolio.exempt_reductions`、`portfolio.max_order_notional`、`pool.dropped_after`、`alerts.dedup_window_seconds` | #211 | 未改 |
+| 启动门按桶数算 metrics 覆盖，不按列：long/short 列比 open interest 晚五天开始记录 | #220 | 改门是另一次裁定 |
+| metrics 读者要等快照攒满 1,442 bars，其中 720 是上市天数过滤，与 metrics 无关（约 11 月中） | #220 | 未改 |
+| `live_cmd` 在 import 时按值绑定 `APP_SUPPORT`（`ALERT_DEDUP_STATE`、`verify-failures.jsonl`），conftest 的重定向够不着。只读核过，目前测试没有写进真实目录 | #212、#219 | 未改 |
+| `BinanceRestClient` 的 `guard` 是可选参数，不传就没有 host 检查；今天没有生产调用者不传 | #217 | 写进 mainnet 设计的 §4.2（同一 PR 堵口） |
+| 构造冻结那条测试缺记录时 `return` 而不是 `pytest.skip`，所以在 CI 里读作 passed | #212 | 未改（会改默认门读数） |
+
+### 7.4 操作者待办（更新）
+
+- **合并**：#208（O-1）、#213（D-PR03）、#217（P6）、#218（C1，先读首节的 GAP-PR08 读数）。#213 与 #218 改同一文件，建议先 #213。
+- **O-2**：#219 已合入，现在可以导出 `BEIDOU_ALERTS_WEBHOOK_URL_2`。
+- **O-3**：选 dead-man 服务、建两个 check、URL 进 `~/.zshrc`（不建 `env.sh`），3.10 随后开工。
+- **O-4**：确认 headroom 数字（提议 max(40, 1% × 顶)），3.8 随后开工。
+- **O-5**：BNX 夹具与归档哪边对。快进已发生，从今晚本机 01:20 起夜间 data job 每晚推送一次 FAIL，直到定下来。
+- **O-6**：一次按纪律的重启，载入 C6（与 R1 同批；若裁定修法 A，也同批）。
+- **O-8**：#213 合入且主 checkout 再快进后，装载 `com.beidou.weekly.plist`。
+- **裁定**：WP-C8 的修法 A。
