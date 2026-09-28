@@ -34,6 +34,7 @@ from beidou_live.report_common import (
     _store_closes,
     evidence_window,
     json_dumps,
+    newest_day,
     readable_state,
 )
 from beidou_live.risk_budget import books_by_symbol
@@ -1168,7 +1169,7 @@ def latest_risk_adaptation(store: StateStore) -> dict[str, Any]:
     would make it answer for a day that may have no cycles yet - at 00:30Z, every day.  The day comes
     from `_day_of`, the same ruler `risk_adaptation` buckets by, rather than from the host clock.
     """
-    day = next((found for found in map(_day_of, reversed(store.read_jsonl(store.cycles_path))) if found), None)
+    day = newest_day(store)
     if day is None:
         leverage = dict(readable_state(store)[0].leverage_set)
         return {
