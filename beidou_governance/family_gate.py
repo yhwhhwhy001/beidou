@@ -11,6 +11,18 @@ event was still produced by nothing - the 09-19 refusal of tsmom sat in the verd
 consequence - so `refusals` now derives it from the `refuse` rows `governance gate` writes, and
 `governance advance` folds them.
 
+**2026-09-29: a refusal counts against the evidence it judged.**  The operator ruled that refusals are
+counted per evidence.  The two that sent tsmom back to probe (#255, folded 09-28) both judged
+`tsmom-validation-20260919T081914Z` - OOS 1.2306, adopted against 1.5129 at N=167, k = 0.60 - which the
+registry stopped citing when #163 merged on 09-27, and the report it cites instead has passed every
+reading since.  So a ruling on a report nobody cites any more demoted the book it used to describe.
+`refusals` now returns only the rulings on the evidence the registry cites today, and `set_aside` the
+rest, which `advance` prints rather than loses.  The evidence is named by the three numbers the
+recomputation holds fixed - the OOS Sharpe, and the threshold and N it was adopted against - because
+every reason `read_gate` has written carries them (`judged`), back to the first row on 09-09; a path
+would have needed a field no existing row has.  Two reports that agree on all three are, to this gate,
+the same claim.  Evidence that cannot be read names nothing, so nothing folds against it.
+
 **What "recompute" means, and why it is not a re-run.**  The D-028 gate is `max_sharpe_quantile(N,
 variance, alpha)` - the 95th percentile of the best of N draws from a null with the candidate's own
 sampling variance.  Everything in it except N is a property of the evidence and does not change after
@@ -38,6 +50,7 @@ which is a different operator action from FAIL and is reported as such.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -55,6 +68,14 @@ PASS = "PASS"
 FAIL = "FAIL"
 UNREADABLE = "UNREADABLE"
 VERDICT_KIND = "family_gate"  # the `kind` `governance gate` records its rulings under, and `refusals` reads
+
+#: Which evidence a reading is about: OOS Sharpe and adoption threshold as the reason spells them, adoption N.
+Evidence = tuple[str, str, int]
+#: A PASS/FAIL reason as `read_gate` writes it.  The middle - today's threshold and N - is what moves.
+_REASON = re.compile(
+    r"^OOS (?P<sharpe>-?\d+\.\d{4}) vs -?\d+\.\d{4} at N=\d+ "
+    r"\(adopted against (?P<threshold>-?\d+\.\d{4}) at N=(?P<n>\d+)\)$"
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +100,26 @@ class GateReading:
         if self.oos_sharpe is None or self.threshold_today is None:
             return None
         return self.oos_sharpe - self.threshold_today
+
+    @property
+    def evidence(self) -> Evidence | None:
+        """The evidence this reading is about, spelled as its reason spells it; None when it read none."""
+        if self.oos_sharpe is None or self.threshold_at_adoption is None or self.n_at_adoption is None:
+            return None
+        return (f"{self.oos_sharpe:.4f}", f"{self.threshold_at_adoption:.4f}", self.n_at_adoption)
+
+
+def judged(reason: str) -> Evidence | None:
+    """Which evidence a recorded reason ruled on; None for a reason `read_gate` did not write."""
+    match = _REASON.match(reason)
+    return (match["sharpe"], match["threshold"], int(match["n"])) if match else None
+
+
+def spelled(evidence: Evidence | None) -> str:
+    if evidence is None:
+        return "no evidence this can name"
+    sharpe, threshold, n = evidence
+    return f"OOS {sharpe}, adopted against {threshold} at N={n}"
 
 
 def _selection(report: Mapping[str, Any]) -> Mapping[str, Any] | None:
@@ -253,15 +294,33 @@ def failures(readings: Sequence[GateReading]) -> tuple[GateReading, ...]:
     return tuple(reading for reading in readings if reading.status == FAIL)
 
 
-def refusals(verdicts: Iterable[Verdict], strategy: str) -> tuple[Derived, ...]:
-    """One strategy's `refuse` rulings in the verdict ledger, oldest first, as events `advance` folds.
+def _refused(verdicts: Iterable[Verdict], strategy: str) -> list[tuple[Verdict, Evidence | None]]:
+    rows = [v for v in verdicts if v.kind == VERDICT_KIND and v.subject == strategy and v.ruling == REFUSE]
+    return [
+        (v, next((key for key in map(judged, v.reasons) if key is not None), None))
+        for v in sorted(rows, key=lambda v: datetime.fromisoformat(v.at))
+    ]
+
+
+def refusals(verdicts: Iterable[Verdict], strategy: str, *, evidence: Evidence | None) -> tuple[Derived, ...]:
+    """One strategy's `refuse` rulings on the evidence it cites today, oldest first, as events `advance` folds.
 
     Read from the ledger rather than from a fresh `recheck` for the reason `tenure` reads `cycles.jsonl`:
     a ruling has an instant and an id, so the watermark folds it once and every demotion names its row.
     ALLOW rows produce nothing - passing again does not promote; the nine windows do.
+
+    `evidence` has no default for the reason `unique_trials`' granularity has none: a caller that left it
+    out would get the pre-ruling rule and believe it had the new one.
     """
-    rows = [v for v in verdicts if v.kind == VERDICT_KIND and v.subject == strategy and v.ruling == REFUSE]
     return tuple(
         Derived(at=v.at, event=Event.FAMILY_GATE_FAILED, why=f"R0: verdict {v.id} refused: {'; '.join(v.reasons)}")
-        for v in sorted(rows, key=lambda v: datetime.fromisoformat(v.at))
+        for v, about in _refused(verdicts, strategy)
+        if evidence is not None and about == evidence
     )
+
+
+def set_aside(
+    verdicts: Iterable[Verdict], strategy: str, *, evidence: Evidence | None
+) -> tuple[tuple[Verdict, Evidence | None], ...]:
+    """The `refuse` rulings `refusals` leaves out, each with the evidence it judged (None: not nameable)."""
+    return tuple((v, about) for v, about in _refused(verdicts, strategy) if evidence is None or about != evidence)

@@ -4357,6 +4357,21 @@ try/except 换成判 None，省 1 行。`calendar.py` -8：删掉原函数连空
 
 实测 4_685，余量 40 -> 47（= `headroom_policy(4_732)`）。理由不在这里重述，见文末「2026-09-28 headroom 政策（WP-C2）」一节。
 
+### 2026-09-29 · 顶 4_732 -> 4_826（family gate 的 refuse 按证据分开算）
+
+操作者 2026-09-29 裁定：family gate 的失败读数按证据分开算。tsmom 在 09-28 被降回 probe（#255），依据是两条 refuse。
+两条判的都是 09-19 那份 k = 0.60 的报告，而 09-27 #163 合入后，registry 引用的已经是另一份。全部增量在
+`family_gate.py`，共 +59：
+
+- +12 docstring：裁定、tsmom 这件事的来由，以及为什么用三个数认证据、不用路径。
+- +29 证据身份：`import re`、`Evidence` 别名与理由串的正则（+9）；`GateReading.evidence`、`judged`、`spelled`（+20）。
+  理由串里本来就写着样本外 Sharpe、采纳时的门与 N，09-09 的第一行起都有。按它认证据，历史行不必补字段。
+- +18 `refusals` 拆成 `_refused`、`refusals`、`set_aside`。`evidence` 不给默认值：调用方漏传时，拿到的会是旧规则，
+  而它以为是新的。`set_aside` 把不计入的行交给 `advance` 印出来，没发生的降级和发生了的一样看得见。
+
+抬顶前实测 4_719，余量 13，装不下。实测 4_778，顶抬到「实测 + 政策」：4_826，余量 48（= `headroom_policy(4_826)`）。
+同一改动在 `beidou_cli` 是 +10（`advance` 印不计入的行），落在余量内，不抬。
+
 ## beidou_alpha
 
 原文：blob 里第 4276–4597 行，`"beidou_alpha": 11_110,` 之上的注释，共 322 行。

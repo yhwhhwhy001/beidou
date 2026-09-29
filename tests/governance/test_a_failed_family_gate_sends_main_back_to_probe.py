@@ -6,6 +6,10 @@ tsmom - OOS 1.2306 against 1.5238 - sitting in `governance/verdicts.jsonl` with 
 operator ruled the consequence is demotion, not retirement.  These tests pin the three halves: what the
 rule does, where the event comes from, and that `advance` folds it in time order.  The last one is the
 easy one to get wrong: a refusal folded after a later window sits behind the watermark and never counts.
+
+Operator ruling 2026-09-29: a refusal counts only against the evidence it judged.  The tests at the end
+pin that half, including the case that prompted it - tsmom demoted on refusals of a report the registry
+had stopped citing.
 """
 
 from __future__ import annotations
@@ -18,19 +22,35 @@ from typing import Any
 import yaml
 from click.testing import CliRunner
 
+from beidou_alpha.validation.multiple_testing import SELECTION_GATE
 from beidou_cli.governance_cmd import governance
-from beidou_governance.family_gate import VERDICT_KIND, refusals
+from beidou_governance.family_gate import VERDICT_KIND, judged, read_gate, refusals, set_aside
 from beidou_governance.lifecycle import Book, Candidate, Event, Facts, State, apply
 from beidou_governance.policy import Policy
 from beidou_governance.state import read as read_state
 from beidou_governance.state import write as write_state
 from beidou_governance.verdicts import ALLOW, REFUSE, Verdict, record
+from beidou_governance.verdicts import read as read_verdicts
 
 POLICY = Policy()
 #: Far enough back that every window below has closed against the real clock `tenure` reads.
 ANCHOR = "2024-01-01T00:00:00+00:00"
 CLEAN: dict[str, Any] = {"by_type": {}, "rebaselined": False, "rows": 0, "total": 0.0}
 REASON = ("OOS 1.2306 vs 1.5238 at N=183 (adopted against 1.5129 at N=167)",)
+#: The report REASON ruled on: the 09-19 k = 0.60 pointer.  The registry cited it until #163 merged on 09-27.
+JUDGED = (1.2306, 1.5129, 167)
+#: The report #163 pointed at instead, which passed every reading from 09-27 on.
+SUCCESSOR = (1.8329, 1.5733, 341)
+
+
+def _report(sharpe: float, threshold: float, n: int) -> dict[str, Any]:
+    """Only the blocks `read_gate` reads; the explicit `gate` label spares it the annualisation check."""
+    selection = {"oos_sharpe_annual": sharpe, "threshold_annual": threshold, "n_trials": n, "variance": 2.2e-05}
+    return {"oos_selection": {"gate": SELECTION_GATE, "alpha": 0.05, **selection}, "ledger": {"ledger_trials": 0}}
+
+
+def _spelled(evidence: tuple[float, float, int]) -> tuple[str, str, int]:
+    return (f"{evidence[0]:.4f}", f"{evidence[1]:.4f}", evidence[2])
 
 
 def _main_book(**fields: Any) -> Book:
@@ -86,7 +106,7 @@ def test_only_this_strategys_family_gate_refusals_become_events_oldest_first() -
         _verdict("2026-09-20T02:30:00+00:00", subject="flow"),
         _verdict("2026-09-20T03:00:00+00:00", kind="admission"),
     ]
-    events = refusals(rows, "tsmom")
+    events = refusals(rows, "tsmom", evidence=_spelled(JUDGED))
     assert [event.at for event in events] == ["2026-09-19T18:30:06+00:00", "2026-09-21T02:30:00+00:00"]
     assert {event.event for event in events} == {Event.FAMILY_GATE_FAILED}
     assert all(event.why.startswith("R0") for event in events)
@@ -104,17 +124,24 @@ def _cycle(day: float) -> dict[str, Any]:
     }
 
 
-def _checkout(tmp_path: Path, *, refused_on_day: float | None) -> Path:
-    """Four windows with a cycle in each; optionally one refusal written the way `governance gate` writes it."""
+def _checkout(tmp_path: Path, *, refused_on_day: float | None, cites: tuple[float, float, int] | None = JUDGED) -> Path:
+    """Four windows with a cycle in each; optionally one refusal written the way `governance gate` writes it.
+
+    `cites` is the evidence the registry points at, None for an entry that cites none.
+    """
     root = tmp_path / "checkout"
     (root / "governance").mkdir(parents=True)
     write_state(root / "governance" / "governance_state.json", _main_book())
     rows = [_cycle(index * POLICY.window_days + 1) for index in range(4)]
     (root / "cycles.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    entry: dict[str, Any] = {"id": "tsmom", "enabled": True, "weight": 1.0}
+    if cites is not None:
+        (root / "evidence.json").write_text(json.dumps(_report(*cites)), encoding="utf-8")
+        entry["evidence"] = {"report": "evidence.json"}
     registry = {
         "version": 1,
         "ensemble": {"method": "mean", "turnover_penalty": 0.0},
-        "strategies": [{"id": "tsmom", "enabled": True, "weight": 1.0}],
+        "strategies": [entry],
     }
     (root / "registry.yaml").write_text(yaml.safe_dump(registry), encoding="utf-8")
     if refused_on_day is not None:
@@ -180,3 +207,50 @@ def test_without_a_refusal_in_the_ledger_the_main_stays_main(tmp_path: Path) -> 
     result = _run(root, "--commit")
     assert result.exit_code == 0, result.output
     assert _held(root).state is State.MAIN, result.output
+
+
+# --- operator ruling 2026-09-29: a refusal counts against the evidence it judged ---------------
+
+
+def test_a_refusal_of_a_report_the_registry_no_longer_cites_demotes_nothing(tmp_path: Path) -> None:
+    """tsmom's own case: both refusals judged the 09-19 report, and from 09-27 the registry cited #163's."""
+    root = _checkout(tmp_path, refused_on_day=45, cites=SUCCESSOR)
+    result = _run(root, "--commit")
+    assert result.exit_code == 0, result.output
+    assert _held(root).state is State.MAIN, result.output
+    assert "family_gate_failed" not in result.output
+    assert (
+        "judged OOS 1.2306, adopted against 1.5129 at N=167; the registry cites OOS 1.8329, adopted against "
+        "1.5733 at N=341" in result.output
+    ), "a demotion that did not happen is printed, not dropped"
+
+
+def test_evidence_that_cannot_be_read_has_no_refusal_counted_against_it(tmp_path: Path) -> None:
+    root = _checkout(tmp_path, refused_on_day=45, cites=None)
+    result = _run(root, "--commit")
+    assert result.exit_code == 0, result.output
+    assert _held(root).state is State.MAIN, result.output
+    assert "the registry cites no evidence this can name" in result.output
+
+
+def test_a_reason_the_gate_did_not_write_is_set_aside_rather_than_counted() -> None:
+    typed = Verdict(
+        id="typed", at="2026-09-20T00:00:00+00:00", kind=VERDICT_KIND, subject="tsmom", ruling=REFUSE, reasons=("x",)
+    )
+    assert refusals([typed], "tsmom", evidence=_spelled(JUDGED)) == ()
+    assert set_aside([typed], "tsmom", evidence=_spelled(JUDGED)) == ((typed, None),)
+
+
+def test_every_reason_the_gate_writes_names_the_evidence_it_read() -> None:
+    """`judged` parses what `read_gate` writes; drift in either spelling would quietly count nothing."""
+    for evidence in (JUDGED, SUCCESSOR, (-0.25, 1.6, 12)):
+        reading = read_gate("tsmom", _report(*evidence), [], range_end_granularity_days=7)
+        assert reading.status in {"PASS", "FAIL"}, reading
+        assert judged(reading.why) == reading.evidence == _spelled(evidence), reading.why
+
+
+def test_every_family_gate_row_in_the_shipped_ledger_names_its_evidence() -> None:
+    """The rule reads the history without a schema change only if every row the gate ever wrote parses."""
+    rows = [v for v in read_verdicts(Path("governance/verdicts.jsonl")) if v.kind == VERDICT_KIND]
+    assert rows, "the shipped ledger has carried family_gate rows since 2026-09-09"
+    assert not [v.id for v in rows if not any(judged(reason) for reason in v.reasons)]

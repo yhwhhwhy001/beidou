@@ -38,7 +38,7 @@ from beidou_governance.assemble import assemble, conclude
 from beidou_governance.budget import window_spend
 from beidou_governance.canary import attempted, remaining, rounds
 from beidou_governance.canary import evaluate as evaluate_canary
-from beidou_governance.family_gate import VERDICT_KIND, refusals
+from beidou_governance.family_gate import VERDICT_KIND, refusals, set_aside, spelled
 from beidou_governance.family_gate import failures as gate_failures
 from beidou_governance.family_gate import recheck as recheck_gate
 from beidou_governance.lifecycle import Book, Facts, State
@@ -1001,7 +1001,9 @@ def advance_cmd(
 
     `FAMILY_GATE_FAILED` is the one event not read off `cycles.jsonl`: `governance gate` writes a
     `refuse` row, `family_gate.refusals` turns it into an event at the ruling's instant, and it folds
-    in time order with the tenure's own events (operator ruling 2026-09-23: main -> probe).
+    in time order with the tenure's own events (operator ruling 2026-09-23: main -> probe).  Only the
+    rows that judged the evidence the registry cites today become events (operator ruling 2026-09-29);
+    the rest are printed as not counted.
     """
     checkout = Path(root).resolve()
     policy = Policy()
@@ -1058,7 +1060,15 @@ def advance_cmd(
             if strategy not in book.candidates:
                 break
             if pending is None:
-                pending = list(refusals(verdicts, strategy))
+                cites = readings[strategy].evidence if strategy in readings else None
+                pending = list(refusals(verdicts, strategy, evidence=cites))
+                # Operator ruling 2026-09-29: a refusal counts against the evidence it judged.  Printed, not
+                # dropped, so a demotion that did not happen is as visible as one that did.
+                for verdict, about in set_aside(verdicts, strategy, evidence=cites):
+                    click.echo(
+                        f"    {verdict.at}  {'(not counted)':15s} R0: verdict {verdict.id} judged "
+                        f"{spelled(about)}; the registry cites {spelled(cites)}"
+                    )
             # A refusal folds in the tenure whose span holds its instant, sorted in among that tenure's
             # events: folded after a later window instead, the watermark would already be past it.
             end = datetime.fromisoformat(result.stopped_at) if result.stopped_at else None

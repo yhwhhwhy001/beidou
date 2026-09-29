@@ -30,6 +30,10 @@ def test_the_shipped_state_holds_the_two_sleeves_the_plan_grandfathered() -> Non
     folded the 2026-09-19 family-gate refusal (10-13 ruling table #8) and tsmom went main -> probe under the
     operator's 2026-09-23 rule; the loop trades as it did.  What the seed exists for is that neither sleeve
     reads as headroom, and a demoted main is still a running sleeve holding one of R3's two slots.
+
+    Later the same day the operator ruled that refusals count per evidence.  Both refusals had judged a
+    report the registry stopped citing on 09-27, so the state went back to main.  PROBE stays allowed:
+    a refusal of the evidence the registry cites today still demotes it.
     """
     book = read_state(STATE)
     assert set(book.candidates) >= {"tsmom", "flow"}, "the running sleeves are not in the governance state"

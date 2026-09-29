@@ -20218,3 +20218,64 @@ bar；每根 bar 只留最后写的那一行。今天读 0/2，NOT MET。
 
 **没动。** paper-l3（PID 811）与 shadow（PID 26020）。它们也跑主 checkout 的代码，要各自重启才载入新代码。共享的
 metrics 快照记录只由 armed 循环写（`LiveEngine._snapshot_metrics` 的 `record_metrics`），所以这两个进程不影响新读数。
+
+## 2026-09-29 · 裁定：family gate 的 refuse 按证据分开算；tsmom 在治理记录里回到 main
+
+**裁定。** 本会话收尾时问操作者：「family gate 的失败读数要不要按证据分开算。这次降级依据的是两条失败读数，
+都出自 k=0.60 的旧证据。09-27 换成新证据后，每天都是 PASS。现行规则不区分这种情况，要区分就得重新裁定。」
+操作者答：「按证据分开算」。
+
+**事实。**
+
+- 两条 refuse 是 `63fd0f558a46`（09-19 18:30Z）与 `f4119bc4a8ee`（09-25 18:30Z）。理由里写的证据都是
+  「OOS 1.2306，采纳时的门 1.5129，N=167」。
+- 那两次 gate 跑的时候，main 引用的是 `tsmom-validation-20260919T081914Z.json`（k 0.60，16 格，verdict FAIL）。
+  核法：用 `git rev-list -1 --first-parent --before=<时刻> origin/main` 取当时的 main，读它的 `config/alpha_registry.yaml`。
+- #163 于 09-27T08:16:08Z 合入，registry 改引 `tsmom-validation-20260925T143836Z.json`（k 0.175，WEAK_PASS）。
+  此后的读数是 allow（`b8baf6b52aa7`：OOS 1.8329 对 1.5739，N=343）。
+- #255 在 09-28 按 09-23 的规则照字面折叠，tsmom 降回 probe。那一节写明规则不区分「证据换过」，要补就是新的裁定。
+
+**改了什么。**
+
+- `family_gate.refusals` 只返回判的是 registry 当前证据的 refuse。其余由新函数 `set_aside` 返回，
+  `governance advance` 逐条印成 `(not counted)`。
+- 证据按三个数认：样本外 Sharpe、采纳时的门、采纳时的 N。gate 写下的每条理由都带这三个数，09-09 的第一行起就有，
+  所以历史行不用补字段。两份报告三个数都相同，对这道门就是同一个主张。
+- registry 的证据读不出来时，不把任何 refuse 算在它头上。
+- `governance/governance_state.json` 回到 #255 之前的内容，sha256 `395828548f2b46d1…`，与 #255 那节记下的读数相同。
+  这用的是那一节写好的撤回办法：revert 它的提交，就回到 09-09 的状态。
+
+**怎么核的。** 在本分支的 worktree 里用新代码干跑一次 `governance advance`，`--cycles` 只读指向主 checkout 的
+`.beidou/live/cycles.jsonl`：
+
+```text
+window   window 0, 0/1 used
+gate     PASS       tsmom                OOS 1.8329 vs 1.5739 at N=343 (adopted against 1.5733 at N=341)
+gate     UNREADABLE flow                 the report carries no `oos_selection` block
+flow_short       -> flow             probe      folded through (never)
+main             -> tsmom            main       folded through (never)
+    2026-09-19T18:30:06.089745+00:00  (not counted)   R0: verdict 63fd0f558a46 judged OOS 1.2306, adopted against 1.5129 at N=167; the registry cites OOS 1.8329, adopted against 1.5733 at N=341
+    2026-09-25T18:30:05.089580+00:00  (not counted)   R0: verdict f4119bc4a8ee judged OOS 1.2306, adopted against 1.5129 at N=167; the registry cites OOS 1.8329, adopted against 1.5733 at N=341
+the state already matches the record; nothing to write
+```
+
+最后一行说明：按新规则从 09-09 的种子重算，结果就是这个文件。所以不用 `--commit`，文件也不是手改的。
+
+**这不是 ALLOW 升回。** 09-23 的规则「降回之后再 PASS 不升回」没动。按新裁定，那两条 refuse 不算在 tsmom
+现行证据头上，这次降级本来就没有依据。
+
+**后果。**
+
+- R3 的 probe 位：tsmom 回到 main 后，probe 只剩 flow 一个，空出一个位子。
+- registry 与循环在交易什么都没动，理由同 #255 那一节。
+- tsmom 换证据之后（包括本日决定 3 的重出），新证据从零计 refuse。
+
+**测试。** 新增 5 条：
+
+- 判旧证据的 refuse 不降级，这正是 tsmom 这件事；
+- 证据读不出来时一条也不算；
+- 不是 gate 写的理由不计入；
+- gate 写的理由能读回它判的证据；
+- 入库账本里每一行 family_gate 都认得出证据。
+
+变异验证：把过滤改成「全算」，3 条变红。
