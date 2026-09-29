@@ -732,7 +732,7 @@ def research_validate(
             (
                 "Walk-forward (out of sample)",
                 {
-                    **{k: v for k, v in wf_summary.items() if k != "chosen_params"},
+                    **{k: v for k, v in report["walk_forward"].items() if k != "chosen_params"},
                     "best_key_oos_sharpe": report["best_key_oos_sharpe"],
                     "selection_exercised": _full_sample_tail_note(wf_summary.get("oos_is_full_sample_tail")),
                 },

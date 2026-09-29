@@ -41,6 +41,14 @@ UNREADABLE = "UNREADABLE"
 
 #: Checks a machine can answer.  Anything not here is a judgement, and `operator` says so out loud.
 MACHINE_CHECKS = ("equity_at_least", "data_columns", "date_after", "short_leg")
+#: The args each check reads.  A missing one is UNREADABLE: the defaults once turned a typo into MET
+#: (`short_leg` with no args read "needs >= 100% over >= 0 bars" and passed; review 2026-09-29).
+REQUIRED_ARGS = {
+    "equity_at_least": ("usdt",),
+    "data_columns": ("columns",),
+    "date_after": ("date",),
+    "short_leg": ("leg", "share", "bars"),
+}
 
 
 @dataclass(frozen=True)
@@ -121,12 +129,14 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
         return Status(entry, NEEDS_A_PERSON, "a named ruling, a purchase, or research nobody has done")
     if entry.check not in MACHINE_CHECKS:
         return Status(entry, UNREADABLE, f"unknown check {entry.check!r}")
+    if missing := [name for name in REQUIRED_ARGS[entry.check] if name not in entry.args]:
+        return Status(entry, UNREADABLE, f"the entry's args lack {', '.join(missing)}")
 
     # Each branch names its own locals.  They used to share `want` and `have`, which costs nothing at
     # runtime - the branches are exclusive and each returns - but reads to a type checker as one variable
     # that is a float here and a list of columns ten lines down.  Names only, no behaviour.
     if entry.check == "equity_at_least":
-        want_usdt = float(entry.args.get("usdt", 0.0))
+        want_usdt = float(entry.args["usdt"])
         have_equity = facts.get("equity")
         if not isinstance(have_equity, int | float):
             return Status(entry, UNREADABLE, "no equity in the live record")
@@ -137,7 +147,7 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
         )
 
     if entry.check == "data_columns":
-        want_columns = [str(c) for c in entry.args.get("columns", ())]
+        want_columns = [str(c) for c in entry.args["columns"]]
         have_columns = {str(c) for c in facts.get("columns", ())}
         missing = [c for c in want_columns if c not in have_columns]
         return Status(
@@ -148,9 +158,11 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
         )
 
     if entry.check == "short_leg":
-        leg, want_share = float(entry.args.get("leg", 0.0)), float(entry.args.get("share", 1.0))
-        want_bars, legs = int(entry.args.get("bars", 0)), facts.get("short_legs")
-        if not isinstance(legs, Sequence) or not legs:
+        leg, want_share = float(entry.args["leg"]), float(entry.args["share"])
+        want_bars, legs = int(entry.args["bars"]), facts.get("short_legs")
+        if not isinstance(legs, Sequence):
+            return Status(entry, UNREADABLE, "the live record was not read, or it names no running construction")
+        if not legs:
             return Status(entry, UNREADABLE, "no traded bar since the running construction began")
         held = sum(1 for share in legs if share >= leg)
         return Status(
@@ -160,7 +172,7 @@ def evaluate(entry: Entry, facts: Mapping[str, Any]) -> Status:
             f"({held / len(legs):.1%}; needs >= {want_share:.0%} over >= {want_bars} bars)",
         )
 
-    when = str(entry.args.get("date", ""))
+    when = str(entry.args["date"])
     now = facts.get("now")
     if not isinstance(now, datetime):
         now = datetime.now(UTC)

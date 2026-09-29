@@ -243,6 +243,8 @@ def _concentration_rows(block: Mapping[str, Any]) -> dict[str, str]:
         "out of sample": shares(oos),
         "OOS Sharpe without its most important name": (
             f"{_fmt(oos['leave_one_out_min_sharpe'])} without {oos['leave_one_out_min_without']} (book {_fmt(oos['sharpe'])})"
+            if oos["leave_one_out_min_without"] is not None
+            else f"n/a: no name to leave out (book {_fmt(oos['sharpe'])})"
         ),
         **{f"basis: {key}": str(value) for key, value in block["basis"].items()},
     }

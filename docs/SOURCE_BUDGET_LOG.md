@@ -4066,14 +4066,14 @@ beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`�
 
 ### 2026-09-29 · 顶 8_804 -> 8_994（validate 接上 N2–N5，与两个把读数印成扁平行的 helper）
 
-- +63 `research_validate_cmd.py`：`_neighbourhood_keys`（N4：邻域扰动默认网格与本次真搜过的维度）；经 `stitched_oos` 取样本外帧；
-  对冲书的对篮子写 n/a（审查 M2）；报告 dict 的新键（`cagr_full_sample`、`calmar_full_sample`、`payoff_ratio_bar`、`cagr_caliber`、
+- +64 `research_validate_cmd.py`（09-29 复查更正：原写 +63，净增是 +71/−7）：`_neighbourhood_keys`（N4：邻域扰动默认网格与本次真搜过的维度）；经 `stitched_oos` 取样本外帧；
+  对冲书的 `against_basket` 写 n/a（审查 M2）；报告 dict 的新键（`cagr_full_sample`、`calmar_full_sample`、`payoff_ratio_bar`、`cagr_caliber`、
   `oos_cagr`、`oos_calmar`、`against_basket`、`concentration`、邻域的 `not_perturbed`）；两个 markdown 节。两行超宽的 import
   由 ruff format 拆成每名一行。
 - +61 `research_report.py`：`_leg_row`、`_fit_row`、`_basket_rows`、`_concentration_rows`。`render_markdown` 把嵌套 dict 印成一格，
   所以读数与它们的口径（basis）拆成扁平行，同 `_regime_rows` 的理由。
 
-实测 8_904，已含同日先合入的 #255 的 13 行（`governance reopen` 读实盘记录）。顶抬到「实测 + 政策」：8_994，余量 90
+实测 8_904，已含同日先合入的 #255 的 9 行（09-29 复查更正：原写 13，那是 diffstat 的加删合计 +11/−2）（`governance reopen` 读实盘记录）。顶抬到「实测 + 政策」：8_994，余量 90
 （= `headroom_policy(8_994)`）。
 
 ## beidou_data
@@ -4705,7 +4705,7 @@ beidou_cli 那一半是 `research_grids.py` 的一行网格，落在它自己的
 
 实测 11_067，余量 43 -> 112（= `headroom_policy(11_179)`）。理由不在这里重述，见文末「2026-09-28 headroom 政策（WP-C2）」一节。
 
-### 2026-09-29 · 顶 11_179 -> 11_499（validate 证据文件的对篮子、集中度与增长读数：09-29 清单 N2、N3、N5，与 N4 的拼接）
+### 2026-09-29 · 顶 11_179 -> 11_499（validate 证据文件的 `against_basket`、集中度与增长读数：09-29 清单 N2、N3、N5 与 N4，以及 stitched OOS）
 
 - +131 `validation/basket.py`（新）：样本外的书对它自己的篮子。D-045 的规矩照得上的照做，照不上的写进随块印出的 `BASIS`。
   研究侧不能 import live，所以 `nw_ols` 重写了实盘的估计量；一条测试把两边钉在同一组数与同一组常量上，包括带宽被夹紧的时候。
@@ -4713,7 +4713,7 @@ beidou_cli 那一半是 `research_grids.py` 的一行网格，落在它自己的
 - +30 `validation/metrics.py`：`payoff_ratio`、`cagr`（经对数，float 装不下时给 None）、`calmar`。
 - +16 `validation/walk_forward.py`：`stitched_oos`，把每折被选配置的持仓与逐币净收益拼起来，行和逐位等于 `oos_returns`。
   09-29 的全新上下文审查（M4）指出拼接写在命令里时没有测试，所以拆出来单测。
-- 另有 +69 是 #256 的 `signals/xs_lowvol.py` 与登记，当时落在余量里。
+- 另有 +79 是 #256 的 `signals/xs_lowvol.py`（67）与登记（12），当时落在余量里。09-29 复查更正：原写 +69，逐项加起来差 10 行。
 
 实测 11_384，顶抬到「实测 + 政策」：11_499，余量 115（= `headroom_policy(11_499)`）。
 这一格算进 alpha 投入：它写的是证据文件本身，读者是引这份证据的人。
