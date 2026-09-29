@@ -26,6 +26,8 @@
 #
 # **它改不了任何 book。** 这里只交读数：它写下的 `refuse` 行由 `governance advance` 经
 # `family_gate.refusals` 折进状态机（main 降回 probe）。`advance` 没有排进任何 job，要人跑 `--commit`。
+# 2026-09-29 操作者裁定按证据分开算：只有判的是 registry 当前引用那份证据的 `refuse` 行才折，
+# 判旧证据的行由 `advance` 印成 not counted。
 #
 # 排在 forward-board（02:00）之后：两个都读 `reports/research/`，错开好让日志分得清是谁。
 #

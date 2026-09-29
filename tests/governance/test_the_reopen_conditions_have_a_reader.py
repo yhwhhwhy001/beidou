@@ -19,6 +19,7 @@ list that reported "0 MET" over nine unaskable conditions would read as an all-c
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -260,3 +261,41 @@ def test_short_legs_counts_from_the_construction_and_keeps_the_last_row_of_a_bar
     ]
     assert short_legs(rows, None) is None
     assert short_legs(rows, 2) == [0.0, 0.25, 0.0]
+
+
+# --- 2026-09-29 review: a typo is not MET, and the wiring CI never ran --------------------------------
+
+
+def test_a_machine_check_missing_an_arg_is_unreadable_rather_than_met() -> None:
+    """The defaults once made a typo MET: `short_leg` with no args read "needs >= 100% over >= 0 bars"."""
+    legs = {"short_legs": [0.5, 0.5, 0.5]}
+    for args in ({}, {"legs": 0.10, "share": 0.20, "bar": 720}):
+        status = evaluate(_entry("short_leg", **args), legs)
+        assert status.state == UNREADABLE and "args lack" in status.why, status.why
+    assert evaluate(_entry("equity_at_least"), {"equity": 1e9}).state == UNREADABLE
+    assert evaluate(_entry("data_columns"), {"columns": set()}).state == UNREADABLE
+
+
+def test_the_command_reads_g11_off_the_live_record_it_is_pointed_at(tmp_path: Path) -> None:
+    """`reopen` reads `cycles.jsonl` under `--state-dir`, from the running construction's first traded bar."""
+    (tmp_path / "governance").mkdir()
+    (tmp_path / LIST).write_text(
+        "entries:\n  - id: g11\n    check: short_leg\n    args: {leg: 0.10, share: 0.50, bars: 2}\n", encoding="utf-8"
+    )
+    live = tmp_path / ".beidou" / "live"
+    live.mkdir(parents=True)
+    rows = [
+        {"bar_open_ms": 1, "equity": 1.0, "construction": "old", "targets": {"A": -1.0}},  # before it: not counted
+        {"bar_open_ms": 2, "equity": 1.0, "construction": "new", "targets": {"A": 0.3, "B": -0.1}},  # leg 25%
+        {"bar_open_ms": 3, "equity": None, "construction": "new", "targets": {"A": -1.0}},  # failed: no bar
+        {"bar_open_ms": 4, "equity": 1.0, "construction": "new", "targets": {"A": 0.3}},  # long only
+    ]
+    (live / "cycles.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    result = CliRunner().invoke(governance, ["reopen", "--root", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "1/2 bars since the construction began" in result.output and "MET 1, NOT MET 0" in result.output
+
+    (live / "cycles.jsonl").unlink()
+    result = CliRunner().invoke(governance, ["reopen", "--root", str(tmp_path)])
+    assert "the live record was not read" in result.output, result.output

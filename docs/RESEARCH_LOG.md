@@ -20219,6 +20219,136 @@ bar；每根 bar 只留最后写的那一行。今天读 0/2，NOT MET。
 **没动。** paper-l3（PID 811）与 shadow（PID 26020）。它们也跑主 checkout 的代码，要各自重启才载入新代码。共享的
 metrics 快照记录只由 armed 循环写（`LiveEngine._snapshot_metrics` 的 `record_metrics`），所以这两个进程不影响新读数。
 
+## 2026-09-29 · 裁定：family gate 的 refuse 按证据分开算；tsmom 在治理记录里回到 main
+
+**裁定。** 本会话收尾时问操作者：「family gate 的失败读数要不要按证据分开算。这次降级依据的是两条失败读数，
+都出自 k=0.60 的旧证据。09-27 换成新证据后，每天都是 PASS。现行规则不区分这种情况，要区分就得重新裁定。」
+操作者答：「按证据分开算」。
+
+**事实。**
+
+- 两条 refuse 是 `63fd0f558a46`（09-19 18:30Z）与 `f4119bc4a8ee`（09-25 18:30Z）。理由里写的证据都是
+  「OOS 1.2306，采纳时的门 1.5129，N=167」。
+- 那两次 gate 跑的时候，main 引用的是 `tsmom-validation-20260919T081914Z.json`（k 0.60，16 格，verdict FAIL）。
+  核法：用 `git rev-list -1 --first-parent --before=<时刻> origin/main` 取当时的 main，读它的 `config/alpha_registry.yaml`。
+- #163 于 09-27T08:16:08Z 合入，registry 改引 `tsmom-validation-20260925T143836Z.json`（k 0.175，WEAK_PASS）。
+  此后的读数是 allow（`b8baf6b52aa7`：OOS 1.8329 对 1.5739，N=343）。
+- #255 在 09-28 按 09-23 的规则照字面折叠，tsmom 降回 probe。那一节写明规则不区分「证据换过」，要补就是新的裁定。
+
+**改了什么。**
+
+- `family_gate.refusals` 只返回判的是 registry 当前证据的 refuse。其余由新函数 `set_aside` 返回，
+  `governance advance` 逐条印成 `(not counted)`。
+- 证据按三个数认：样本外 Sharpe、采纳时的门、采纳时的 N。gate 写下的每条理由都带这三个数，09-09 的第一行起就有，
+  所以历史行不用补字段。两份报告三个数都相同，对这道门就是同一个主张。
+- registry 的证据读不出来时，不把任何 refuse 算在它头上。
+- `governance/governance_state.json` 回到 #255 之前的内容，sha256 `395828548f2b46d1…`，与 #255 那节记下的读数相同。
+  这用的是那一节写好的撤回办法：revert 它的提交，就回到 09-09 的状态。
+
+**怎么核的。** 在本分支的 worktree 里用新代码干跑一次 `governance advance`，`--cycles` 只读指向主 checkout 的
+`.beidou/live/cycles.jsonl`：
+
+```text
+window   window 0, 0/1 used
+gate     PASS       tsmom                OOS 1.8329 vs 1.5739 at N=343 (adopted against 1.5733 at N=341)
+gate     UNREADABLE flow                 the report carries no `oos_selection` block
+flow_short       -> flow             probe      folded through (never)
+main             -> tsmom            main       folded through (never)
+    2026-09-19T18:30:06.089745+00:00  (not counted)   R0: verdict 63fd0f558a46 judged OOS 1.2306, adopted against 1.5129 at N=167; the registry cites OOS 1.8329, adopted against 1.5733 at N=341
+    2026-09-25T18:30:05.089580+00:00  (not counted)   R0: verdict f4119bc4a8ee judged OOS 1.2306, adopted against 1.5129 at N=167; the registry cites OOS 1.8329, adopted against 1.5733 at N=341
+the state already matches the record; nothing to write
+```
+
+最后一行说明：按新规则从 09-09 的种子重算，结果就是这个文件。所以不用 `--commit`，文件也不是手改的。
+
+**这不是 ALLOW 升回。** 09-23 的规则「降回之后再 PASS 不升回」没动。按新裁定，那两条 refuse 不算在 tsmom
+现行证据头上，这次降级本来就没有依据。
+
+**后果。**
+
+- R3 的 probe 位：tsmom 回到 main 后，probe 只剩 flow 一个，空出一个位子。
+- registry 与循环在交易什么都没动，理由同 #255 那一节。
+- tsmom 换证据之后（包括本日决定 3 的重出），新证据从零计 refuse。
+
+**测试。** 新增 5 条：
+
+- 判旧证据的 refuse 不降级，这正是 tsmom 这件事；
+- 证据读不出来时一条也不算；
+- 不是 gate 写的理由不计入；
+- gate 写的理由能读回它判的证据；
+- 入库账本里每一行 family_gate 都认得出证据。
+
+变异验证：把过滤改成「全算」，3 条变红。
+
+## 2026-09-29 · 本轮复查：两个全新上下文审查的发现与处置
+
+起因：操作者 09-29「检查本次重构是否还有其他遗漏或者异常」。本会话把「本次」读作本会话合入的 #245、#254–#257、#259，
+外加当天执行的三条决定。派了两个 Opus 5.5 子代理，全新上下文、只读：一个查代码与调用方，另一个查记录、数字与运行态。
+前者在 `9ae020ee` 上跑完四道门：3,042 passed、10 skipped。两份报告都没有 P0。
+
+运行态读数：
+
+- main 最近 10 次 CI 全绿。
+- 09-28T18:00Z 之后各日志没有 ERROR、Traceback 或告警发送失败。
+- 实盘循环 PID 17557，restarts 63。快进后的第一个周期（09-29T02:00:27Z）OK，三个 digest 都没变。
+
+### 已处置
+
+| 来源 | 发现 | 处置 |
+| --- | --- | --- |
+| 代码 P2-2 | `short_leg`、`equity_at_least`、`data_columns` 缺参数或参数名拼错时判 MET | `reopen.REQUIRED_ARGS`：缺哪个参数，就报 UNREADABLE 并写明 |
+| 代码 P2-1 | 「没读到实盘记录」与「构造开始后没有成交的 bar」共用一句理由 | 分成两句；RUNBOOK 写明 reopen 读 `cycles.jsonl` |
+| 代码 P2-3 | reopen 的 G11 接线在 CI 上一行都不执行 | 新测试在 tmp 里放一份 `cycles.jsonl`，走 CLI 读出 MET；删掉记录后读出 UNREADABLE |
+| 代码 P2-4 | Markdown 漏印 `oos_cagr`、`oos_calmar`，新节没有测试 | Markdown 改从报告的 `walk_forward` 块取值；离线端到端测试断言两节标题、这两个字段与 `not_perturbed` |
+| 代码 P2-5 | 留一算不出来时，报告印成「n/a without None」 | 改印「n/a: no name to leave out」 |
+| 代码 P2-6 | reopen 的帮助文本还写着「the thirteen」 | 去掉数字，写明 G11 读实盘记录 |
+| 代码 P2-8 | 新概念没进 GLOSSARY；方案文档里「持仓形状」与「signal state」并存 | GLOSSARY 加三行英文、一段中文；方案文档与 SOURCE_BUDGET_LOG 里当名词用的「对篮子」改成 `against_basket` |
+| 代码 P2-12 | `nw_ols` 遇 NaN 抛 LinAlgError；`cagr` 与 `max_drawdown` 的 NaN 口径看起来不一致 | `nw_ols` 返回 None；`cagr` 写明 NaN bar 不计时间。回撤路径在两种口径下相同，Calmar 的分母不受影响，由测试钉住 |
+| 代码「未证实」 | #259 的验收没做同一快照上的新旧逐字节比对 | 补做，见下一小节 |
+| 记录 P1-2 | 阶段 1 的 4 笔没有按方案先问；执行记录的差异清单漏列这一处 | 补成第五处差异，要操作者追认 |
+| 记录 P2-1 | SOURCE_BUDGET_LOG 三处逐项数字不对 | 更正为 +79、+64、+9 |
+| 记录 P2-2、P2-4 | 执行记录里的「先入库」、「一次」验收跑、「生效还差一步」的清单，以及批 C 与操作者表 #7 的去向 | 逐条补记或更正 |
+| 记录 P2-5 | 校准表两行 | G12 那行更正「当时就能零 ledger 读到」；分析那行补上「N1 在途时定稿」 |
+| 记录 P2-7 | reopen `xs-lowvol-g12` 的 log 指针，第二段按字面搜不到 | 改成标题的字面前缀 |
+| 记录 P2-8 | 10-13 文档的裁定表 #8、#12 没有同步 | 在文首「后续」补一段 |
+| 记录 P2-9 | N2–N5 审查的原文不在仓库 | 从会话记录取回，逐字入库（`docs/analysis/2026-09-29-research-analyst-prompt-vs-beidou-n2n5-review.md`） |
+
+记录审查的 P1-1 是「裁定表 #8 本是操作者的决定，#255 却把它当成修复执行了」。当天操作者裁定按证据分开算，#261 已撤回那次折叠。
+
+### 补做的验收：#259 前后逐字节比对
+
+在同一份数据上、同一时刻，`130d9c37`（#259 之前）与 `9ae020ee`（#259）各跑一次 tsmom 的 validate。两次都把
+`BEIDOU_TRIALS_LEDGER` 指向共享 ledger 的副本，命令相同：
+`--universe pit --grid '{"crowding_window": [0, 72]}' --prior-trials 172 --charge 2 --to 2026-09-28`。
+共享 ledger 的 sha256 前 16 位前后都是 `350b3105aa28adbe`。
+
+- 共有的键逐位相同，只有 `generated_at` 不同。
+- 新代码多出的键正好是 #259 加的：`against_basket`、`concentration`、`full_sample` 的四个增长读数、
+  `walk_forward.oos_cagr` 与 `oos_calmar`、邻域里的 `crowding_window` 一维与 `not_perturbed`。
+- 两份都是 WEAK_PASS，样本外 1.833295823358498，N = 341。N 与 09-25 那份相同，印证了重出预登记第 4 项的计费推断：
+  同一个 7 天桶里，本次的两格与 09-25 那两行是同一个 fold key。
+
+### 更正（原段不改）
+
+- 「10-13 裁定表 #8」一节写读状态文件的「只有 `governance status|tenure|plan|next|advance` 五个命令」。
+  `governance apply` 也读：它经 `_admission` 读这个文件。
+- 同一节的「后果」只写了 R3 占满，漏了一条。记录里降回 probe 的 main，它的 P&L stop 会被 `advance` 按 probe 的 stop
+  折叠：记录里变成 queued，R5 计数加一，而这本书照常在交易。代码审查用改过最后一行的实盘记录副本干跑，复现了这一点。
+  #261 之后 tsmom 回到 main，这条路径要等它再次因现行证据被降级才会走到。要不要让降级的 main 保留 main 的 stop 语义，
+  是规则层面的决定，交操作者。
+- 「G11 净敞口上限缓做」一节的背景表有两处数字不对，门槛不受影响（该表注明不参与定线）：
+  - `0dcd044d0158` 那行按读者的口径（每根 bar 只留最后一行）是 218 根、194 根达标。表里的 222、197 没有去重。
+  - `2ee491c13971` 的中位数是 0.0064，不是 0.008。
+- G12 预登记引 `alpha_registry.yaml:479-481`，那几行现在在 `:482-484`（#251 在第 227 行插了 3 行）。预登记原文不改。
+- `1c8387e0` 的标题说「稳定性一节印出没被扰动的被搜维度」，但那行代码其实在 `e909b17a` 里。提交历史不改，记在这里。
+
+### 没修，交操作者
+
+- **G11 没有定时读者。** reopen 的机读条目只在有人跑 `governance reopen` 时才被读，G11 满足那天没人会知道。
+  一个办法：每晚的 governance-gate 任务顺带跑一次 reopen，把 MET 的条目印进日志，不接告警通道。约十几行，infrastructure。
+- **N3 读不到 flow。** flow 的证据是 book 报告，集中度只由 `research validate` 产出。方案只写了 validate，这是范围问题。
+- **降级的 main 的 stop 语义**，见上。
+
 ## 2026-09-29 · 预登记：tsmom 证据重出，带上 #259 的只报告读数（写在跑之前）
 
 起因：本会话收尾时问操作者「tsmom 什么时候重出一次证据」，建议等下次构造变更一起做，操作者答「现在」。

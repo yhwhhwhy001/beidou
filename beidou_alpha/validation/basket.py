@@ -46,14 +46,17 @@ BASIS = {
 
 
 def nw_ols(y: np.ndarray, x: np.ndarray, lags: int = NW_LAGS) -> dict[str, Any] | None:
-    """``y ~ 1 + x`` with Newey-West (Bartlett) t-statistics; None under `MIN_BARS` or on a degenerate design.
+    """``y ~ 1 + x`` with Newey-West (Bartlett) t-statistics; None under `MIN_BARS`, on NaN, or on a degenerate design.
 
     `beidou_live.benchmark.nw_covariance`'s operations in its order, restated here because the research
     package may not import the live one; a test holds the two to the same numbers and the same constants.
+    NaN was promised None and raised instead: the rank check's SVD does not converge on it (review 2026-09-29).
     """
     design = np.column_stack([np.ones(len(x)), np.asarray(x, dtype=float)])
     observed = np.asarray(y, dtype=float)
     n, width = design.shape
+    if not (np.isfinite(design).all() and np.isfinite(observed).all()):
+        return None
     if n < MIN_BARS or n <= width or np.linalg.matrix_rank(design) < width:
         return None
     coefficients, *_ = np.linalg.lstsq(design, observed, rcond=None)

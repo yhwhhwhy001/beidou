@@ -23,6 +23,7 @@ from beidou_alpha.validation.metrics import cagr, calmar, max_drawdown, payoff_r
 from beidou_alpha.validation.verdict import decide
 from beidou_alpha.validation.walk_forward import param_key, stitched_oos, walk_forward_evaluate, walk_forward_folds
 from beidou_cli.research_grids import DEFAULT_GRIDS
+from beidou_cli.research_report import _concentration_rows
 from beidou_cli.research_validate_cmd import _neighbourhood_keys
 
 BPY = 8760.0
@@ -160,3 +161,27 @@ def test_the_verdict_reads_none_of_them() -> None:
     assert decide(hostile) == before
     source = Path("beidou_alpha/validation/verdict.py").read_text(encoding="utf-8")
     assert not [key for key in NEW_KEYS if key in source], "decide must not read the reported-only readings"
+
+
+# --- 2026-09-29 review: the edges the validate path does not reach today -----------------------------
+
+
+def test_a_hole_in_the_design_is_the_none_nw_ols_promised_not_an_svd_error() -> None:
+    x = np.linspace(-0.01, 0.01, 200)
+    x[10] = np.nan
+    assert nw_ols(0.5 * np.nan_to_num(x), x) is None
+    assert nw_ols(np.where(np.arange(200) == 5, np.nan, 0.5 * np.nan_to_num(x)), np.nan_to_num(x)) is None
+
+
+def test_a_bar_with_no_reading_adds_no_time_to_growth_and_no_depth_to_the_drawdown() -> None:
+    with_hole = np.array([0.001, np.nan, np.nan, 0.001, -0.002])
+    without = np.array([0.001, 0.001, -0.002])
+    assert cagr(with_hole, 4.0) == cagr(without, 4.0)
+    assert max_drawdown(with_hole) == max_drawdown(without)
+    assert calmar(with_hole, 4.0) == calmar(without, 4.0)
+
+
+def test_a_book_with_no_name_to_leave_out_prints_n_a_rather_than_none() -> None:
+    frame = pd.DataFrame({"BTCUSDT": np.full(200, 0.001)}, index=_hours(200))
+    row = _concentration_rows(concentration(frame, frame, BPY))["OOS Sharpe without its most important name"]
+    assert row.startswith("n/a: no name to leave out") and "None" not in row, row

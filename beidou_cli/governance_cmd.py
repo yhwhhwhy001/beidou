@@ -38,7 +38,7 @@ from beidou_governance.assemble import assemble, conclude
 from beidou_governance.budget import window_spend
 from beidou_governance.canary import attempted, remaining, rounds
 from beidou_governance.canary import evaluate as evaluate_canary
-from beidou_governance.family_gate import VERDICT_KIND, refusals
+from beidou_governance.family_gate import VERDICT_KIND, refusals, set_aside, spelled
 from beidou_governance.family_gate import failures as gate_failures
 from beidou_governance.family_gate import recheck as recheck_gate
 from beidou_governance.lifecycle import Book, Facts, State
@@ -444,15 +444,17 @@ def plan_cmd(
 @click.option("--data-root", default=".beidou/data", show_default=True, help="Data store, for the columns.")
 @click.option("--all", "show_all", is_flag=True, help="Include RESOLVED entries.")
 def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> None:
-    """Which closed hypotheses could be looked at again - the thirteen 「重开条件」 with a reader.
+    """Which closed hypotheses could be looked at again - the 「重开条件」 in `governance/reopen.yaml`, with a reader.
 
     They were written carefully and read by nothing: a full-tree grep for `REFUTED` and `reopen` across
     the governance package returned zero before 2026-09-10.  So a hypothesis whose reopen condition had
     come true stayed closed by neglect rather than by evidence.
 
-    Nine of the thirteen cannot be asked of a machine and are reported as NEEDS A PERSON, counted in the
-    summary every time.  This command reopens nothing; reopening is a named ruling, and a command that
-    could do it on its own would be the thing R10 forbids.
+    The ones a machine cannot ask are reported as NEEDS A PERSON, counted in the summary every time.  This
+    command reopens nothing; reopening is a named ruling, and a command that could do it on its own would be
+    the thing R10 forbids.  G11's `short_leg` reads `cycles.jsonl` under `--state-dir` from the running
+    construction's first bar; without that record it is UNREADABLE.  (Until 2026-09-29 this said "the
+    thirteen"; the list had reached 26.)
     """
     from beidou_governance.reopen import LIST, load, render, short_legs, survey
     from beidou_live.report_common import _cycles, evidence_window
@@ -1001,7 +1003,9 @@ def advance_cmd(
 
     `FAMILY_GATE_FAILED` is the one event not read off `cycles.jsonl`: `governance gate` writes a
     `refuse` row, `family_gate.refusals` turns it into an event at the ruling's instant, and it folds
-    in time order with the tenure's own events (operator ruling 2026-09-23: main -> probe).
+    in time order with the tenure's own events (operator ruling 2026-09-23: main -> probe).  Only the
+    rows that judged the evidence the registry cites today become events (operator ruling 2026-09-29);
+    the rest are printed as not counted.
     """
     checkout = Path(root).resolve()
     policy = Policy()
@@ -1058,7 +1062,15 @@ def advance_cmd(
             if strategy not in book.candidates:
                 break
             if pending is None:
-                pending = list(refusals(verdicts, strategy))
+                cites = readings[strategy].evidence if strategy in readings else None
+                pending = list(refusals(verdicts, strategy, evidence=cites))
+                # Operator ruling 2026-09-29: a refusal counts against the evidence it judged.  Printed, not
+                # dropped, so a demotion that did not happen is as visible as one that did.
+                for verdict, about in set_aside(verdicts, strategy, evidence=cites):
+                    click.echo(
+                        f"    {verdict.at}  {'(not counted)':15s} R0: verdict {verdict.id} judged "
+                        f"{spelled(about)}; the registry cites {spelled(cites)}"
+                    )
             # A refusal folds in the tenure whose span holds its instant, sorted in among that tenure's
             # events: folded after a later window instead, the watermark would already be past it.
             end = datetime.fromisoformat(result.stopped_at) if result.stopped_at else None
