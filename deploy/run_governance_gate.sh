@@ -69,6 +69,29 @@ sys.exit(0 if asyncio.run(alerts.send(sys.argv[1], key=sys.argv[2])) else 1)
   fi
 }
 
+# **重开条件的读者（2026-09-29 起，操作者裁定「2 做」）。** `governance/reopen.yaml` 里有几条机器能答的重开条件，
+# 其中 G11（`net-exposure-cap-g11`）随实盘记录翻转，却只在有人手敲 `beidou governance reopen` 时才被读：
+# 它满足那天没人会知道。这个 job 每晚本来就在这个 checkout 里跑，所以顺带读一次，把 MET 的条目印进日志。
+# 只报告，不告警：重开是一次具名裁定，不是这个 job 的动作；操作者 09-28 也裁过不另建告警通道。
+# reopen 自己出错同样只记日志，不改这个 job 的退出码，因为退出码答的是 family gate。
+# 放在 gate 之前：gate FAIL 时下面会提前退出，G11 的读数不该跟着 family gate 的结果走。
+reopen_output="$("$REPO/.venv/bin/beidou" governance reopen 2>&1)"
+reopen_rc=$?
+if [ "$reopen_rc" -ne 0 ]; then
+  echo "[$(stamp)] reopen 没跑完（退出码 ${reopen_rc}），只记日志、不告警。输出尾部："
+  echo "$reopen_output" | grep -v '^[[:space:]]*$' | tail -n 3 | sed "s/^/           /"
+else
+  # 汇总行按内容找，不按位置：它后面还跟着一行「N 条机器答不了」。模式只用 ASCII，与 locale 无关。
+  summary="$(echo "$reopen_output" | grep -E 'MET [0-9]+, NOT MET [0-9]+' | tail -n 1)"
+  [ -n "$summary" ] || summary="没找到汇总行，输出末行：$(echo "$reopen_output" | grep -v '^[[:space:]]*$' | tail -n 1)"
+  echo "[$(stamp)] reopen ${summary}"
+  met="$(echo "$reopen_output" | grep '^MET ')"
+  if [ -n "$met" ]; then
+    echo "[$(stamp)] 有重开条件已满足（只报告；重开要操作者裁定，全文跑 beidou governance reopen）："
+    echo "$met" | sed "s/^/           /"
+  fi
+fi
+
 # `--check` 只在 FAIL 时非零；UNREADABLE 不进它的判据，理由见下。
 output="$("$REPO/.venv/bin/beidou" governance gate --check 2>&1)"
 rc=$?

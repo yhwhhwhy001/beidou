@@ -20473,3 +20473,20 @@ family gate 的 N 不动。
   - tsmom 原来那条「数据集自证据产生后有变化」的 advisory 消失了，因为新证据的 manifest 就是今天的数据。
 - `registry_digest`：换之前、换之后与 candidate 三者都是 `7f8adb754962`，与实盘循环记录的相同。构造指纹不含 evidence，
   两个构造测试前后都绿。所以不用重启，M-010 与 `realised_vol` 的窗口也不重置。
+
+## 2026-09-29 · 本轮复查的三条待定：操作者答复与执行
+
+操作者 09-29 答：「1 追认，2 做，3 先不动」。
+
+1. **G12 阶段 1 的 4 笔：追认。** 方案操作者表 #3 写「阶段 1 随结果再问」，我用「批 B 全做」推出了授权。
+   这 4 笔现在有了操作者的追认。它们只在 `xs_lowvol` 桶里，G12 的 REFUTED 不变。
+2. **G11 的定时读者：做。** `deploy/run_governance_gate.sh` 在 gate 之前先跑一次 `beidou governance reopen`，
+   往 `governance-gate.stdout.log` 印汇总行，并照抄 MET 的条目。
+   - 只报告、不告警：操作者 09-28 裁过不另建告警通道。reopen 出错也只记日志，退出码仍只答 family gate。
+   - 放在 gate 之前：gate FAIL 时脚本会提前退出，G11 的读数不该跟着 family gate 的结果走。
+   - 第一版按最后一行取汇总，但真实输出在汇总后面还有一行「N 条机器答不了」。在 worktree 里用真 CLI 端到端跑了一次，
+     才发现取错了行；桩测试没抓到，因为桩的输出是我照想象手写的。改成按内容找汇总行；测试的桩改用
+     `reopen.render` 渲染 shipped 的清单。把取法退回旧版，4 条测试变红。
+   - 生效要等主 checkout 快进：launchd 跑的是主 checkout 的脚本。
+3. **降级的 main 按 probe 的 stop 折叠：先不动。** 今天 tsmom 是 main，这条路径要等 tsmom 再次因现行证据被降级才会走到。
+   到那时再议。
