@@ -36,9 +36,15 @@
 | 层 | 对 Binance 密钥 |
 |---|---|
 | pre-commit（本机，扫暂存区） | ✅ |
-| pre-push（本机，扫将要推送的全部 commit） | ✅ |
+| pre-push（本机，扫将要推送的全部 commit，含 merge 提交的 diff） | ✅ |
 | GitHub push protection（服务端） | ❌ **无效** |
-| CI 的 Secrets 门（扫全历史） | ⚠️ **事后**，红的时候密钥已经公开可读 |
+| CI 的 Secrets 门（扫全历史，含 merge 提交的 diff） | ⚠️ **事后**，红的时候密钥已经公开可读 |
+
+2026-09-28 更正：这张表原写 pre-push「扫将要推送的全部 commit」，对 merge 提交不成立。
+gitleaks 的 git 模式跑 `git log -p`，它默认不给 merge 提交出 diff。解冲突时写进 merge 提交的
+东西，pre-push 与 CI 此前都看不见，临时仓库里实测两处都报 `no leaks found`。#235 起两处都带
+`--diff-merges=separate`。不用 `-m`：它的格式听 git 配置 `log.diffMerges` 的，设成合并格式时
+照样漏扫。在 GitHub 网页上解冲突时本机 hook 一个都不跑，只剩事后的 CI。详见 SECURITY.md 第二节。
 
 第三层为什么无效，2026-09-19 核实过：**Binance 不在 GitHub secret scanning 的 partner
 pattern 列表里**，而能自己加模式的 custom patterns 要求仓库属于**组织**并启用付费的
@@ -56,6 +62,11 @@ brew install gitleaks && bash deploy/install-hooks.sh
 
 2026-09-19 的全历史扫描结论：1,637 个 commit、72 MB，**凭据零泄漏**，基线是零。
 看到任何命中都要当真，别当噪声。
+
+2026-09-28 更正：09-19 那次不含 merge 提交的 diff。当天带 `--diff-merges=separate` 对
+`--remotes=origin` 重扫：2,311 个 commit、159.4 MB，436 个 merge 全部在内，**仍然零泄漏**。
+基线仍是零，现在它覆盖 merge 了。全历史审计用 SECURITY.md「手动全量审计」那条命令，
+别省掉它的 `--log-opts`。
 
 ## PR 流程
 
