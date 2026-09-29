@@ -706,11 +706,18 @@ def test_pre_push_lists_the_blocked_commit_and_file_redacted(leaky_repo: _MergeR
 # 09-19 第一版配置想用 lookahead 表达「大小写混排」。RE2 不支持它，gitleaks 加载配置时 panic。
 LOOKAHEAD_REGEX = "(?=.*[A-Z])[A-Za-z0-9]{64}"
 
-# 让 gitleaks 自己出错的两种办法，2026-09-29 实测 8.30.1。值是只有 gitleaks 会说的话，
+# 往 allowlist 加一条时漏了收尾的 `]`。`.gitleaks.toml` 的日常改动就是加 allowlist（SECURITY.md
+# 第三节），手滑写坏 TOML 多半是这个样子。补上 `]` 它就能加载（2026-09-29 实测），坏的只有这一处。
+UNCLOSED_ALLOWLIST = "\n[[rules.allowlists]]\nregexes = ['''^[0-9a-f]{8}$'''\n"
+
+# 让 gitleaks 自己出错的三种办法，2026-09-29 实测 8.30.1。值是只有 gitleaks 会说的话，
 # 原话转没转出来，只能拿它判断。
 GITLEAKS_FAULTS = {
     # 配置文件不在：FTL，退出 1。这与「有命中」的默认退出码相同，只看退出码分不开。
     "config-missing": "unable to load gitleaks config",
+    # 文件在，TOML 写坏了：同一句 FTL，退出 1，也不写报告。判据与上一格相同。冒号后面那半句
+    # `While parsing config: toml: ...` 是 viper 与 go-toml 的措辞，不拿来当判据，理由同下一格。
+    "config-bad-toml": "unable to load gitleaks config",
     # 规则里有 lookahead：panic，退出 2。判据是那条正则本身，panic 的原话里原样带着它。
     # 不用正则引擎的报错措辞：同是 8.30.1，本机 Homebrew 版说 `invalid or unsupported Perl syntax`，
     # CI 用的官方发行版说 `bad perl operator`。两者走的是两个引擎：发行版带构建标签 `gore2regex`，
@@ -730,6 +737,10 @@ def _break_config(repo: Path, fault: str) -> None:
     config = repo / ".gitleaks.toml"
     if fault == "config-missing":
         config.unlink()
+    elif fault == "config-bad-toml":
+        # 调用方都先拷了仓库的配置。在它末尾追加，其余部分原样是好的。
+        with config.open("a", encoding="utf-8") as f:
+            f.write(UNCLOSED_ALLOWLIST)
     else:
         assert fault == "config-lookahead", fault
         config.write_text(f"[[rules]]\nid = \"mixed-case\"\nregex = '''{LOOKAHEAD_REGEX}'''\n", encoding="utf-8")
