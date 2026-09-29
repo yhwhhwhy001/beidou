@@ -20348,3 +20348,128 @@ the state already matches the record; nothing to write
   一个办法：每晚的 governance-gate 任务顺带跑一次 reopen，把 MET 的条目印进日志，不接告警通道。约十几行，infrastructure。
 - **N3 读不到 flow。** flow 的证据是 book 报告，集中度只由 `research validate` 产出。方案只写了 validate，这是范围问题。
 - **降级的 main 的 stop 语义**，见上。
+
+## 2026-09-29 · 预登记：tsmom 证据重出，带上 #259 的只报告读数（写在跑之前）
+
+起因：本会话收尾时问操作者「tsmom 什么时候重出一次证据」，建议等下次构造变更一起做，操作者答「现在」。
+#259 给 validate 报告加了四样只报告、不进判定的读数：对篮子、集中度、邻域里没扰动的维度、标明口径的 CAGR。
+registry 引用的 `tsmom-validation-20260925T143836Z.json` 写在 #259 之前，没有这些块。
+
+### 8. 本次服务四个目标里的哪一个
+
+都不直接服务，它不产出新 alpha。它让 registry 引用的那份证据带上 N2–N5 的读数，读证据的人不用另跑。
+
+### 1. 假设
+
+判定与 09-25 那份相同：WEAK_PASS，理由是 `oos_is_full_sample_tail`（两折同选一格，D-043 封顶）；样本外 Sharpe 高于
+family gate。若不成立，报告会读出 FAIL，或样本外低于门。
+
+### 2. 这是「新信息」还是「新网格」
+
+都不是。配置、网格、构造与 09-25 相同，差别只有数据窗口：照 09-25 的协议 `--to` 不钉，窗口延到今天。
+
+选择污染先声明：
+
+1. 09-28 本会话在 #259 合入前做过两次零 ledger 验收跑（`BEIDOU_TRIALS_LEDGER` 指向空文件），看过这两格在截到
+   09-28 16:00Z 的数据上的读数：样本外 1.8257，verdict WEAK_PASS，理由与 09-25 相同。没有据此挑任何东西，
+   配置与网格 09-25 就定了。
+2. 09-25 之后 RESEARCH_LOG 记下的零 ledger 运行，没有一次看 tsmom 的别的配置。它们属于别的族（新数据族、
+   多空比择时、对冲 carry），或是同一配置的耗时剖析与回撤门复核。所以申报维持 172。
+
+### 3. 协议（照抄 09-25 那一份，config 一个字不改）
+
+```bash
+# 在 worktree 里；config/live.demo.yaml 的 vol_target 已是 0.175，不改
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 172 --charge 2 --prereg <本节的 commit>
+```
+
+- 其余参数全部用默认值，与 09-25 相同。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+- 开跑前确认没有别的 `beidou data` 或 `research` 进程，避开 17:20Z 的数据任务，环境里不设 `BEIDOU_TRIALS_LEDGER`。
+
+### 4. 计费与桶
+
+2 行，进 `tsmom` 桶。今天桶里 212 行、去重后 169，`trials.jsonl` 的 sha256 前 16 位是 `350b3105aa28adbe`。
+
+- 按 7 天分桶，09-25 那次的 range_end 落在桶 2960（09-24 至 09-30）。今天跑，range_end 也在 2960。
+- 其余指纹也与 09-25 那两行相同：construction `0f903fb27452`、overlay `3eb03166f268`、symbol set `3cf25156a7fc`、
+  212 个币、起点 2021-01-31 01:00。
+- 所以新两行与 09-25 两行同一个 fold key。报告应读 replayed 2、N = 167 + 172 + 2 = 341；桶去重后仍是 169，
+  family gate 的 N 不动。实际花费是 2 行、0 个新 trial。
+- 10-01 00:00Z 以后再跑，range_end 进桶 2961，这两行才算新 trial。
+- 若报告的 N 不是 341，说明有指纹变了。那是另一件事，要查明原因记下来。
+
+### 5. 功效读数
+
+沿用 09-25 那份：N = 341 时门 1.5733。这次不做选择，功效只作参考，不另算。
+
+### 7. 预期与两种结果
+
+预期 WEAK_PASS，样本外约 1.83（验收跑读 1.8257），门约 1.57。
+
+- WEAK_PASS 或 PASS：armed 与 candidate 两份 registry 一起换指针，RESEARCH_LOG 记读数。
+- FAIL：不换指针。FAIL 会挡 armed 启动（`registry.evidence_problems`）。记下读数交操作者，按 D-020 定。
+  只多三天数据就翻成 FAIL，本身就是要报告的新情况。
+
+### 9. 实盘失效方式（How this fails）
+
+换指针不改构造：evidence 块不进 registry digest，也不进构造指纹。合入前跑两个构造测试核对。
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若启动证据门对新报告读出问题，则下一次 armed 重启被挡 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
+
+## 2026-09-29 · tsmom 证据重出：WEAK_PASS，样本外 1.83，门 1.57，N 341 没动
+
+按「预登记：tsmom 证据重出」一节的协议，一字不改地跑。
+
+- 预登记提交 `5ea74803`，提交时刻 2026-09-29T02:04:22Z，开跑前已推上远端。报告写于 02:36:19Z。
+- 用时 91 秒：02:34:49Z 到 02:36:20Z。config 没改，`BEIDOU_TRIALS_LEDGER` 没设。
+- 开跑前的进程检查命中的是 Bash 工具自己的 zsh 进程，没有别的 `research` 或 `data` 进程。
+- 代码是 main `6ce2a0d1` 加 #262 的提交 `08cffca5`（validate 的 Markdown 印出样本外 CAGR）。判定与 JSON 不受这个提交影响。
+- 报告：`reports/research/tsmom-validation-20260929T023619Z.json`，sha256 `b8f6890d4223a25acffce853399cc431834663bad3f39f8a9f7ed891b4ca67d8`。
+- `trials.jsonl`：22,213 行变成 22,215 行，sha256 前 16 位从 `350b3105aa28adbe` 变成 `001d643cae5d48d4`。
+
+### 读数
+
+| 项 | 值 |
+| --- | --- |
+| verdict | **WEAK_PASS**，理由是 `oos_is_full_sample_tail`，与 09-25 相同 |
+| 窗口 | 2021-01-31T01:00Z 到 2026-09-28T16:00Z，49,600 根（09-25 那份到 09-25T13:00Z） |
+| 样本外 Sharpe | 1.8257（09-25：1.8329） |
+| family gate | 1.5720，N = 341，余量 +0.2537 |
+| N 的构成 | ledger 167 + 申报 172 + 本次 2 = 341；报告记 `replayed_rows` 2 |
+| tsmom 桶 | 214 行，去重后仍是 169 |
+| CPCV / 成本 x2 / DSR p / PBO | 负路径 0.00 / 1.70 / 0.24 / 0.02 |
+
+计费与预登记第 4 项的推断一致：新两行与 09-25 两行同在 7 天桶 2960，同一个 fold key。这次写了 2 行，没有新 trial，
+family gate 的 N 不动。
+
+### 新块（只报告，不进判定）
+
+| 读数 | 值 |
+| --- | --- |
+| 书，样本外 | CAGR 34.2%，Sharpe 1.83，最大回撤 −10.4%，Calmar 3.30 |
+| 时点等权篮子（每根 bar 再平衡） | Sharpe −0.08，复利 −89.8% |
+| BTC 买入持有 | CAGR 20.2%，Sharpe 0.61 |
+| 常数拟合 | beta −0.02（t −3.6），alpha 0.35 bps/bar（t 4.1） |
+| 条件拟合 | beta 0.73（t 56），alpha 0.24 bps/bar（t 4.5）；这里的 beta 含信号自己的择时 |
+| signal state | 两边都有仓 78.9%，全多头 12.1%，全空头 8.9% |
+| 集中度 | 样本外前一名 BTCUSDT 10.7%，前三名 24.3%；去掉 APEUSDT 的贡献后 Sharpe 1.83 → 1.74 |
+| 邻域 | 扰动了 `crowding_window`、`entry_threshold`、`return_scale`、`vol_window`；`horizons` 是列表，列为没扰动 |
+| 全样本 | CAGR 35.7%，Calmar 3.44，逐 bar 盈亏比 1.02 |
+
+这些数与 09-28 的零 ledger 验收跑逐位相同：窗口一样，截到 09-28T16:00Z。
+
+### 换指针
+
+- armed 与 candidate 两份 registry 一起换。candidate 照旧按「头注 + armed」重新生成，顺带补上 #251 往 armed 加、
+  却没同步过来的三行注释。
+- 离线跑启动门（`live run` 的两道：`registry_evidence_problems` 与 `registry_dataset_problems`）：
+  - evidence problems 与 dataset blocking 都为空。
+  - tsmom 原来那条「数据集自证据产生后有变化」的 advisory 消失了，因为新证据的 manifest 就是今天的数据。
+- `registry_digest`：换之前、换之后与 candidate 三者都是 `7f8adb754962`，与实盘循环记录的相同。构造指纹不含 evidence，
+  两个构造测试前后都绿。所以不用重启，M-010 与 `realised_vol` 的窗口也不重置。
