@@ -67,6 +67,10 @@
 # `vol_target` 在同一个 PR 里从 0.60 改成 0.175。上一段说的那条 `evidence verdict FAIL` 因此没了，
 # `tests/shipped_evidence.py` 的 exemption 也在这个 PR 里删掉。这个 POSITIVE CONTROL 回到第一段的
 # 字面意思：一份应当干净通过的 registry，不再「在一条被明示豁免的问题之下」通过。
+#
+# 2026-09-29，随 tsmom 重出再同步一次。整份照旧按「头注 + armed」重新生成：tsmom 指针换到
+# `tsmom-validation-20260929T023619Z.json`（同一协议重出，verdict 仍是 WEAK_PASS）。#251 往 armed 里加的三行
+# G4 注释当时没同步过来，这次一并补上；那三行是注释，`test_the_candidate_does_not_lie_about_what_it_is` 看不见它们。
 # Strategies the live loop is allowed to run.  A strategy may only be enabled
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
@@ -296,6 +300,9 @@ strategies:
     # 09-23 的 G4 在 k = 0.60 与 0.30 上重放过同一组窗口（RESEARCH_LOG「G4：崩盘窗口在 k=0.60 下重跑」）：
     # FTX 仍是唯一为负的窗口，0.60 下 -8.54%、0.30 下 -3.78%；窗口回撤 0.60 是 0.30 的 1.91 到 2.72 倍，
     # 收益不按 k 等比放大。k = 0.175 上没有重放过，所以这里不给 0.175 的数。
+    # 2026-09-29 补：0.175 上重放了（`scratchpad/g4_stress_windows_and_var_at_k0175.py`，RESEARCH_LOG 同日「G4 在
+    # k=0.175 上重放」）。FTX 仍是唯一为负的窗口，0.175 下 -1.10%；补上的 2025-10 窗口 +5.04%；最差 UTC 日 -3.85%。
+    # 七个窗口里市场最差的那一小时，书在 0.175 与 0.60 上都是净空头。上一句「没有重放过」是写它那天的状态。
     # 2026-09-06 P1-01/DL-Q1: re-validated under the corrected CROSS-SECTIONAL REFERENCE POPULATION.
     # The crowding modifier ranks trailing funding across symbols, and until now "across symbols" meant
     # whichever columns the caller had loaded: research ranked a name against the whole point-in-time
@@ -435,9 +442,19 @@ strategies:
     #   * dataset：报告记下的 `membership` 是 09-25 重建后的那张表，`registry_dataset_problems` 的 blocking 为空。
     #     到切换为止不重建成员表；重建了，这个指针会被数据集门挡住。
     # 构造变了：M-010、M-G06 与 `realised_vol` 的窗口从切换后的那次重启重新起算。
+    #
+    # **2026-09-29：同一协议重出，为的是带上 #259 的只报告读数。** 操作者 09-29 答「现在」。
+    #   * 协议：预登记 `5ea74803`（RESEARCH_LOG 2026-09-29「预登记：tsmom 证据重出」），命令与 09-25 那份相同，
+    #     config 一个字没改；`--to` 不钉，窗口延到 09-28T16:00Z。
+    #   * 读数：WEAK_PASS，理由同上。样本外 1.8257，门 1.5720，headroom +0.2537。N = 341 没动：本次两格与 09-25
+    #     那两行落在同一个 7 天桶，fold key 相同，报告记 replayed 2。CPCV 负路径 0；成本 x2 1.70；PBO 0.02。
+    #   * 新块只报告、不进判定：条件 beta 0.73（t 56），常数 beta −0.02；样本外前一名 BTCUSDT 10.7%；
+    #     样本外 CAGR 34.2%。
+    #   * 上一份：`tsmom-validation-20260925T143836Z.json`，sha256 `d06162dd…`。
+    # 构造没变：`evidence` 块既不进 `registry_digest`，也不进构造指纹。
     evidence:
-      report: reports/research/tsmom-validation-20260925T143836Z.json
-      sha256: d06162dd803e42c897ff85311cb7b413dbde2c098a797827894179978405f0a5
+      report: reports/research/tsmom-validation-20260929T023619Z.json
+      sha256: b8f6890d4223a25acffce853399cc431834663bad3f39f8a9f7ed891b4ca67d8
       verdict: WEAK_PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，

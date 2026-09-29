@@ -470,3 +470,15 @@ sha256 不变），样本外 45,600 根：
 
 复查更正：这里还漏了 #252（别的会话）与 #256。新增的 reopen 条目是三个：news-flow、net-exposure-cap-g11、xs-lowvol-g12。
 「都不在 `live run` 的路径上」不准确：`live run` 会读到 `live.demo.yaml` 那行注释与 xs_lowvol 的信号登记，只是行为不变。
+
+### 操作者 09-29 的三条决定
+
+收尾时把三件事交给操作者，答复是：「快进」「按证据分开算」「现在」。
+
+| 事项 | 答复 | 执行 |
+| --- | --- | --- |
+| 主 checkout 快进 | 快进 | 01:43Z 从 `d10b5e30` 快进到 `9ae020ee`；#261 合入后再快进到 `6ce2a0d1`。每次先核起点与工作树干净，快进后两个构造测试 18 条全过 |
+| family gate 的失败读数按证据分开算 | 按证据分开算 | #261：只有判的是 registry 当前证据的 refuse 才折进 `advance`。tsmom 的状态文件回到 #255 之前，新规则下干跑读「nothing to write」，tsmom 回到 main |
+| tsmom 重出证据 | 现在 | 本节所在的 PR：预登记 `5ea74803` 先入库，协议照抄 09-25。WEAK_PASS，样本外 1.8257 对门 1.5720。与 09-25 同一个 7 天桶，N 仍是 341：写了 2 行，没有新 trial。armed 与 candidate 两份 registry 换指针，启动门为空，`registry_digest` 不变 |
+
+同日的复查（#262）补记了本节以上几处差异与更正，审查原文与处置在 `docs/RESEARCH_LOG.md`「本轮复查」一节。

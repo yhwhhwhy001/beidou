@@ -92,6 +92,11 @@ ADOPTIONS = {
     # moves to the k = 0.175 re-issue, WEAK_PASS under D-043's cap (`oos_is_full_sample_tail` only).  Its
     # one D-020 difference is `EXCEPTIONS_BY_ID["D-043"]`'s (#177).
     "reports/research/tsmom-validation-20260925T143836Z.json": "2026-09-27",
+    # 2026-09-29 (the operator's 「现在」): the same protocol re-issued so the cited evidence carries #259's
+    # reported-only blocks.  Same WEAK_PASS under the same D-043 cap; N stayed 341, because both cells fold
+    # onto the 09-25 rows (one 7-day range_end bucket).  Missed on the first pass and caught by the test
+    # below - the fourth time this list would have gone stale, and the first one the test was there for.
+    "reports/research/tsmom-validation-20260929T023619Z.json": "2026-09-29",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 

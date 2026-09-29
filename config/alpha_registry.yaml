@@ -369,9 +369,19 @@ strategies:
     #   * dataset：报告记下的 `membership` 是 09-25 重建后的那张表，`registry_dataset_problems` 的 blocking 为空。
     #     到切换为止不重建成员表；重建了，这个指针会被数据集门挡住。
     # 构造变了：M-010、M-G06 与 `realised_vol` 的窗口从切换后的那次重启重新起算。
+    #
+    # **2026-09-29：同一协议重出，为的是带上 #259 的只报告读数。** 操作者 09-29 答「现在」。
+    #   * 协议：预登记 `5ea74803`（RESEARCH_LOG 2026-09-29「预登记：tsmom 证据重出」），命令与 09-25 那份相同，
+    #     config 一个字没改；`--to` 不钉，窗口延到 09-28T16:00Z。
+    #   * 读数：WEAK_PASS，理由同上。样本外 1.8257，门 1.5720，headroom +0.2537。N = 341 没动：本次两格与 09-25
+    #     那两行落在同一个 7 天桶，fold key 相同，报告记 replayed 2。CPCV 负路径 0；成本 x2 1.70；PBO 0.02。
+    #   * 新块只报告、不进判定：条件 beta 0.73（t 56），常数 beta −0.02；样本外前一名 BTCUSDT 10.7%；
+    #     样本外 CAGR 34.2%。
+    #   * 上一份：`tsmom-validation-20260925T143836Z.json`，sha256 `d06162dd…`。
+    # 构造没变：`evidence` 块既不进 `registry_digest`，也不进构造指纹。
     evidence:
-      report: reports/research/tsmom-validation-20260925T143836Z.json
-      sha256: d06162dd803e42c897ff85311cb7b413dbde2c098a797827894179978405f0a5
+      report: reports/research/tsmom-validation-20260929T023619Z.json
+      sha256: b8f6890d4223a25acffce853399cc431834663bad3f39f8a9f7ed891b4ca67d8
       verdict: WEAK_PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，

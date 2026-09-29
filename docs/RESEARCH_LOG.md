@@ -20421,3 +20421,55 @@ PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research 
 | # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
 | --- | --- | --- | --- | --- |
 | 1 | 若启动证据门对新报告读出问题，则下一次 armed 重启被挡 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
+
+## 2026-09-29 · tsmom 证据重出：WEAK_PASS，样本外 1.83，门 1.57，N 341 没动
+
+按「预登记：tsmom 证据重出」一节的协议，一字不改地跑。
+
+- 预登记提交 `5ea74803`，提交时刻 2026-09-29T02:04:22Z，开跑前已推上远端。报告写于 02:36:19Z。
+- 用时 91 秒：02:34:49Z 到 02:36:20Z。config 没改，`BEIDOU_TRIALS_LEDGER` 没设。
+- 开跑前的进程检查命中的是 Bash 工具自己的 zsh 进程，没有别的 `research` 或 `data` 进程。
+- 代码是 main `6ce2a0d1` 加 #262 的提交 `08cffca5`（validate 的 Markdown 印出样本外 CAGR）。判定与 JSON 不受这个提交影响。
+- 报告：`reports/research/tsmom-validation-20260929T023619Z.json`，sha256 `b8f6890d4223a25acffce853399cc431834663bad3f39f8a9f7ed891b4ca67d8`。
+- `trials.jsonl`：22,213 行变成 22,215 行，sha256 前 16 位从 `350b3105aa28adbe` 变成 `001d643cae5d48d4`。
+
+### 读数
+
+| 项 | 值 |
+| --- | --- |
+| verdict | **WEAK_PASS**，理由是 `oos_is_full_sample_tail`，与 09-25 相同 |
+| 窗口 | 2021-01-31T01:00Z 到 2026-09-28T16:00Z，49,600 根（09-25 那份到 09-25T13:00Z） |
+| 样本外 Sharpe | 1.8257（09-25：1.8329） |
+| family gate | 1.5720，N = 341，余量 +0.2537 |
+| N 的构成 | ledger 167 + 申报 172 + 本次 2 = 341；报告记 `replayed_rows` 2 |
+| tsmom 桶 | 214 行，去重后仍是 169 |
+| CPCV / 成本 x2 / DSR p / PBO | 负路径 0.00 / 1.70 / 0.24 / 0.02 |
+
+计费与预登记第 4 项的推断一致：新两行与 09-25 两行同在 7 天桶 2960，同一个 fold key。这次写了 2 行，没有新 trial，
+family gate 的 N 不动。
+
+### 新块（只报告，不进判定）
+
+| 读数 | 值 |
+| --- | --- |
+| 书，样本外 | CAGR 34.2%，Sharpe 1.83，最大回撤 −10.4%，Calmar 3.30 |
+| 时点等权篮子（每根 bar 再平衡） | Sharpe −0.08，复利 −89.8% |
+| BTC 买入持有 | CAGR 20.2%，Sharpe 0.61 |
+| 常数拟合 | beta −0.02（t −3.6），alpha 0.35 bps/bar（t 4.1） |
+| 条件拟合 | beta 0.73（t 56），alpha 0.24 bps/bar（t 4.5）；这里的 beta 含信号自己的择时 |
+| signal state | 两边都有仓 78.9%，全多头 12.1%，全空头 8.9% |
+| 集中度 | 样本外前一名 BTCUSDT 10.7%，前三名 24.3%；去掉 APEUSDT 的贡献后 Sharpe 1.83 → 1.74 |
+| 邻域 | 扰动了 `crowding_window`、`entry_threshold`、`return_scale`、`vol_window`；`horizons` 是列表，列为没扰动 |
+| 全样本 | CAGR 35.7%，Calmar 3.44，逐 bar 盈亏比 1.02 |
+
+这些数与 09-28 的零 ledger 验收跑逐位相同：窗口一样，截到 09-28T16:00Z。
+
+### 换指针
+
+- armed 与 candidate 两份 registry 一起换。candidate 照旧按「头注 + armed」重新生成，顺带补上 #251 往 armed 加、
+  却没同步过来的三行注释。
+- 离线跑启动门（`live run` 的两道：`registry_evidence_problems` 与 `registry_dataset_problems`）：
+  - evidence problems 与 dataset blocking 都为空。
+  - tsmom 原来那条「数据集自证据产生后有变化」的 advisory 消失了，因为新证据的 manifest 就是今天的数据。
+- `registry_digest`：换之前、换之后与 candidate 三者都是 `7f8adb754962`，与实盘循环记录的相同。构造指纹不含 evidence，
+  两个构造测试前后都绿。所以不用重启，M-010 与 `realised_vol` 的窗口也不重置。
