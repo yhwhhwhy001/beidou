@@ -504,6 +504,14 @@ def test_cost_flag_and_grid_table(tmp_path: Path, august_dir: Path) -> None:
     assert gate["x2"]["oos_sharpe"] < gate["x1"]["oos_sharpe"], "paying more cannot help the OOS Sharpe"
     for level in gate.values():
         assert level["margin"] == pytest.approx(level["oos_sharpe"] - level["threshold"])
+    # 2026-09-29 review: N2-N5's blocks reach the Markdown, including the OOS growth figures that were
+    # written to the JSON and nowhere else.
+    assert "Against its own basket, out of sample" in markdown and "Concentration by symbol" in markdown
+    assert "oos_cagr" in markdown and "oos_calmar" in markdown
+    neighbourhood = payload["stability"]["parameter_neighborhood"]
+    assert "vol_window" in neighbourhood["neighbours"], "the dimension this run searched is perturbed (N4)"
+    assert neighbourhood["not_perturbed"] == ["horizons"], "a list-valued dimension is named, not skipped"
+    assert "parameter_neighbourhood_not_perturbed" in markdown
 
 
 def _mine(root: Path, out: Path, *extra: str) -> tuple[int, str, dict]:

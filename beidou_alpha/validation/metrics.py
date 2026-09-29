@@ -145,7 +145,11 @@ def payoff_ratio(returns: pd.Series | np.ndarray) -> float | None:
 
 
 def cagr(returns: pd.Series | np.ndarray, bars_per_year: float) -> float | None:
-    """Compound annual growth of a per-bar return series, through logs; None where a float cannot hold it."""
+    """Compound annual growth of a per-bar return series, through logs; None where a float cannot hold it.
+
+    A non-finite bar is dropped, as `compound` drops it, so it adds no time either.  `max_drawdown` reads the
+    same bar as 0, which leaves the equity path, and so Calmar's denominator, unchanged (review 2026-09-29).
+    """
     values = np.asarray(returns, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:

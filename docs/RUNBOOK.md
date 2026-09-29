@@ -44,7 +44,7 @@
 | 规则重放：每份报告都要能被解释（AC-G0 未归因项必须为 0） | `beidou governance replay` |
 | 状态 / 在位时长 / 事务链 / 机器判定 / 人工复核 | `beidou governance status\|tenure\|transactions\|verdicts\|review` |
 | 进程持有的 registry 与磁盘上的是否分岔 | `beidou governance divergence` |
-| 重开条件 / 批次窗口 | `beidou governance reopen`；`beidou governance window` |
+| 重开条件 / 批次窗口（reopen 的 G11 一条读 `--state-dir` 下的 `cycles.jsonl`，读不到时报 UNREADABLE） | `beidou governance reopen`；`beidou governance window` |
 | 60 天内会翻转的日期开关（只读，不动任何开关） | `beidou governance calendar` |
 | 自主开关：建或删本 checkout 的 `governance/ENABLED` | `beidou governance enable`；`beidou governance disable` |
 

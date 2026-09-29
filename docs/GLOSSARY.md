@@ -50,6 +50,9 @@
 | mainnet | 主网（TCA 一节的固定说法「主网与 demo 的价格差」照旧） | `beidou_exchange/guard.py` 今天拒绝签名请求的场地 `fapi.binance.com`，它不在 `ALLOWED_HOSTS` 里（2026-09-28 起） |
 | fixture | 夹具 | `tests/fixtures/` 下从真实数据切出的文件，测试里的 `FIXTURES`（2026-09-28 起；旧文不改） |
 | seam | 接缝 | 同一个名字下两段序列的分界，如 BNX 2023-02 的重新计价；`scratchpad/seam_membership_after_redenomination.py` 的 `seam_of`（2026-09-28 起；旧文不改）。代码注释里的 test seam 是另一个意思 |
+| signal state | 持仓形状 | validate 证据文件 `against_basket.signal_state`：样本外各 bar 两边都有仓、全多头、全空头的占比（2026-09-29 起；旧文不改） |
+| against_basket | 对篮子 | validate 证据文件里样本外的书对它自己的等权篮子与 BTC 的读数块，`beidou_alpha/validation/basket.py`（2026-09-29 起；旧文不改） |
+| stitched OOS | 拼接、拼接的样本外 | `walk_forward.stitched_oos`：每折被选配置的持仓与逐币净收益拼成的样本外帧（2026-09-29 起） |
 
 ## 保留中文的近形词
 
@@ -97,6 +100,10 @@
 
 `轮`写中文，指一份 shadow soak 记录里每 168 个尝试过的周期（OK 与 ERROR 算，SKIPPED 不算），
 说「第二轮」「最近一轮」（2026-09-26）。代码里是 `beidou_governance/canary.py` 的 `rounds`。不写 round。
+
+`集中度`、`留一`、`空头腿`写中文（2026-09-29，validate 证据文件的新读数与 G11 的重开条件）。集中度是净 P&L
+落在前一名、前三名币上的份额，代码里是 `concentration`。留一是去掉一个币的贡献后重算的 Sharpe，代码里是
+`leave_one_out_min_sharpe`。空头腿是书里负权重的那一侧，G11 读它占毛敞口的份额，代码里是 `short_legs`。
 
 ## 没定的怎么办
 

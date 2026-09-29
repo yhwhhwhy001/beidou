@@ -444,15 +444,17 @@ def plan_cmd(
 @click.option("--data-root", default=".beidou/data", show_default=True, help="Data store, for the columns.")
 @click.option("--all", "show_all", is_flag=True, help="Include RESOLVED entries.")
 def reopen_cmd(root: str, state_dir: str, data_root: str, show_all: bool) -> None:
-    """Which closed hypotheses could be looked at again - the thirteen 「重开条件」 with a reader.
+    """Which closed hypotheses could be looked at again - the 「重开条件」 in `governance/reopen.yaml`, with a reader.
 
     They were written carefully and read by nothing: a full-tree grep for `REFUTED` and `reopen` across
     the governance package returned zero before 2026-09-10.  So a hypothesis whose reopen condition had
     come true stayed closed by neglect rather than by evidence.
 
-    Nine of the thirteen cannot be asked of a machine and are reported as NEEDS A PERSON, counted in the
-    summary every time.  This command reopens nothing; reopening is a named ruling, and a command that
-    could do it on its own would be the thing R10 forbids.
+    The ones a machine cannot ask are reported as NEEDS A PERSON, counted in the summary every time.  This
+    command reopens nothing; reopening is a named ruling, and a command that could do it on its own would be
+    the thing R10 forbids.  G11's `short_leg` reads `cycles.jsonl` under `--state-dir` from the running
+    construction's first bar; without that record it is UNREADABLE.  (Until 2026-09-29 this said "the
+    thirteen"; the list had reached 26.)
     """
     from beidou_governance.reopen import LIST, load, render, short_legs, survey
     from beidou_live.report_common import _cycles, evidence_window

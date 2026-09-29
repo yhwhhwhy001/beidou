@@ -414,14 +414,16 @@ registry 改动按 RUNBOOK「改了 registry / profile 之后」走。没有排�
 | 项 | PR | 结果 |
 | --- | --- | --- |
 | N1 尾部尺子换 k | #251（并行会话） | 并行会话已做完：新脚本在 k 0.175 上重放，常量换到 0.175，加了耦合测试 `test_the_constants_were_measured_at_the_k_that_ships`，下一次改 k 在同一个 PR 里变红。本会话核过，不重复 |
-| N2–N5 证据文件 | 本节所在的 PR | validate 报告加对篮子（D-045 口径，带 basis）、按币集中度、邻域扰动被搜维度、带口径名的 CAGR 与 Calmar。合入前交全新上下文子代理审过：无致命，一高五中五低全部处置 |
+| N2–N5 证据文件 | 本节所在的 PR | validate 报告加 `against_basket`（D-045 口径，带 basis）、按币集中度、邻域扰动被搜维度、带口径名的 CAGR 与 Calmar。合入前交全新上下文子代理审过：无致命，一高五中五低全部处置 |
 | N6 新闻流不接入 | #255 | RESEARCH_LOG 一节、ARCHITECTURE 一段、reopen 条目 `news-flow`。只限信号与数据源 |
-| N7 G12 低波 | #256、#257 | 预登记 `39999b3e` 先入库。阶段 0：与 tsmom 相关 −0.0384，过线。阶段 1（4 笔）：FAIL，样本外 0.54 对门 0.98，CPCV 负路径 0.27，五折选同一格。**REFUTED**，reopen 条目 `xs-lowvol-g12` |
+| N7 G12 低波 | #256、#257 | 预登记 `39999b3e` 先提交并推送（18:53:17Z）；两个阶段在 #256 合入（18:59:39Z）之前跑完（复查更正：原写「先入库」）。阶段 0：与 tsmom 相关 −0.0384，过线。阶段 1（4 笔）：FAIL，样本外 0.54 对门 0.98，CPCV 负路径 0.27，五折选同一格。**REFUTED**，reopen 条目 `xs-lowvol-g12` |
 | N10 G11 重开条件 | #255 | 条件改读空头腿份额：自最近一次构造变更起，腿 ≥ 毛敞口 10% 的 bar ≥ 20%，窗口 ≥ 720 根。reopen 条目 `net-exposure-cap-g11` 有机读判据 `short_leg`，09-29 读 0/2 |
 | 顺带发现 1–5、7 | #254 | 六处过期说法改掉 |
-| 顺带发现 6 | #255 | 裁定表 #8 执行：`governance advance --commit`，tsmom 在治理记录里 main → probe；不改 registry 与交易；probe 位 2/2 |
+| 顺带发现 6 | #255 | 裁定表 #8 执行：`governance advance --commit`，tsmom 在治理记录里 main → probe；不改 registry 与交易；probe 位 2/2。复查补记：#8 在 10-13 文档里是操作者的决定，本会话把它当成「修复发现的问题」执行了。操作者随后裁定按证据分开算，#261 撤回这次折叠，tsmom 回到 main |
+| N8、N9（批 C） | — | 没做。操作者这次批的是批 A 与批 B，本文对批 C 的建议也是不做（复查补记） |
+| 操作者表 #7 tsmom 重出 | 见下文「操作者 09-29 的三条决定」 | 操作者 09-29 答「现在」（复查补记） |
 
-### 与本文不同的四处
+### 与本文不同的五处（第五处由 09-29 复查补记）
 
 - **N10 的条件。** 本文写「现行构造窗口内含空头的 bar 占比 ≥ 20%」。写读者时读了实盘记录：现行构造的 bar 都含负权重，全部来自
   flow_short 在 BNBUSDT 上 −0.2% 到 −0.5% 的空头，毛敞口里不到 2%。照原文写，这个 probe sleeve 会让条件常态满足，所以改读
@@ -432,18 +434,24 @@ registry 改动按 RUNBOOK「改了 registry / profile 之后」走。没有排�
   （`not_perturbed`，列表型的 `horizons` 在这里）。
 - **N1。** 不是本会话做的。本文第一版（17:06Z）写 N1 时 #251 还没开；它 18:05Z 开、18:16Z 合入。本文审查后定稿（约 18:10Z）时它已在途，
   定稿前没有查在途 PR，所以方案里仍把 N1 列成待做。
+- **N7 阶段 1 的授权。** 本文操作者表 #3 写「阶段 1 随结果再问」，#245 的描述写「阶段 1 花 4 笔前再问」。预登记改成「阶段 0 过线就跑」，
+  把「批 B 全做」当成这 4 笔的授权。理由写在预登记里：阶段 0 会先印出候选的 Sharpe，付钱的决定不能读它。这是推出来的授权，
+  当时的执行记录没有列出。4 笔只进 `xs_lowvol` 桶，不动 tsmom 与 flow 的门。要操作者追认。
 
 ### 合入前审查查出的、已改
 
+审查原文见 `2026-09-29-research-analyst-prompt-vs-beidou-n2n5-review.md`，09-29 复查时从会话记录取回入库。
+
 N2–N5 的全新上下文审查核对了拼接、对齐、前视与 verdict 独立，都无误。改掉的是：拼接写在命令里时没有测试（拆成
 `stitched_oos`，用各折选不同格的夹具逐位测）；static 宇宙下篮子被标成 point-in-time（改为 `benchmark_basket` 命名）；对冲书的
-对篮子没有意义（写 n/a）；回测里的条件 beta 把信号自己的择时算进 beta（basis 写明，看被动市场敞口读常数拟合）；CAGR 的口径指针只在
+`against_basket` 没有意义（写 n/a）；回测里的条件 beta 把信号自己的择时算进 beta（basis 写明，看被动市场敞口读常数拟合）；CAGR 的口径指针只在
 代码注释里（报告加 `cagr_caliber`）；`payoff_ratio` 改名 `payoff_ratio_bar`；CAGR 大增长时溢出（改经对数）；集中度的单位与留一的
 局限（随块印出）。
 
 ### 真实数据上的读数
 
-tsmom 证据网格上一次 ledger 重定向的 validate（共享 ledger 前后 sha256 不变），样本外 45,600 根：
+tsmom 证据网格上两次 ledger 重定向的 validate（18:57:37Z 与 19:22:09Z，读数逐位相同；复查更正：原写「一次」；共享 ledger 前后
+sha256 不变），样本外 45,600 根：
 
 | 读数 | 值 |
 | --- | --- |
@@ -452,10 +460,13 @@ tsmom 证据网格上一次 ledger 重定向的 validate（共享 ledger 前后 
 | BTC 买入持有 | CAGR 20.2%，Sharpe 0.61 |
 | 常数拟合 | beta −0.02（t −3.6） |
 | 条件拟合 | beta 0.73（t 56），alpha 0.24 bps/bar（t 4.5）；这里的 beta 含信号自己的择时 |
-| 持仓形状 | 两边都有仓 78.9%，全多头 12.1%，全空头 8.9% |
+| signal state | 两边都有仓 78.9%，全多头 12.1%，全空头 8.9% |
 | 集中度 | 样本外前一名 BTCUSDT 10.7%，前三名 24.3%；去掉 APEUSDT 贡献后 Sharpe 1.83 → 1.74 |
 
 ### 生效还差一步
 
 主 checkout 停在 `22ce4873`，不含 #254、#255、#257 与本 PR。快进之后，`governance reopen` 才读得到两个新条目，研究命令才印得出
 新块。实盘循环不受影响：这些改动都不在 `live run` 的路径上。快进由操作者定。
+
+复查更正：这里还漏了 #252（别的会话）与 #256。新增的 reopen 条目是三个：news-flow、net-exposure-cap-g11、xs-lowvol-g12。
+「都不在 `live run` 的路径上」不准确：`live run` 会读到 `live.demo.yaml` 那行注释与 xs_lowvol 的信号登记，只是行为不变。
