@@ -10,7 +10,8 @@
 被 bash 3.2 读成变量 `rc\\xEF`，`set -u` 当场退出（见 `tests/architecture/test_shell_variables_next_to_non_ascii_are_braced.py`）。
 
 这里跑脚本自己的那一段：`cd "$REPO"` 之后到结尾。前面几行读凭据文件，测试不该执行它们。
-`beidou` 是桩，按环境变量 `STUB_OUTPUT`、`STUB_RC` 印出输出、以那个码退出。环境里没有 webhook 变量，notify 只打印、不发送。
+`beidou` 是桩，按环境变量 `STUB_OUTPUT`、`STUB_RC` 印出输出、以那个码退出；`governance reopen` 那一次直接以 0 退出
+（09-29 起 gate 之前先跑它，它的读数另有 `test_the_governance_gate_job_reads_the_reopen_conditions.py`）。环境里没有 webhook 变量，notify 只打印、不发送。
 bash 用本机的 /bin/bash，在操作者的 Mac 上就是 launchd 用的 3.2.57。两个 locale 都跑：
 C 是 launchd 给的，C.UTF-8 是终端里手动跑的样子。
 """
@@ -27,6 +28,7 @@ GATE = ROOT / "deploy" / "run_governance_gate.sh"
 BASH = Path("/bin/bash")
 
 STUB = """#!/bin/bash
+[ "$2" = "reopen" ] && exit 0
 printf '%s' "$STUB_OUTPUT"
 exit "$STUB_RC"
 """

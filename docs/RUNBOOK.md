@@ -243,6 +243,9 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 2026-09-25 与 09-27 两行就这样在工作树里放了三天，一次 `git checkout -- .` 就会丢，直到 #239 才入库。
 日报「治理裁决入库（只报告）」一节会印出未入库的行数和最新一行；它读 `governance/verdicts.jsonl` 的工作树与 HEAD 的差。不告警。
 
+2026-09-29 起，同一个 job 在 gate 之前先跑一次 `beidou governance reopen`，往同一份日志（`governance-gate.stdout.log`）
+印汇总行，并照抄 MET 的条目。只报告，不告警；reopen 自己出错也只记日志，不改 job 的退出码。重开仍要操作者裁定。
+
 入库步骤（顺序不能反）：
 
 1. 从最新 `origin/main` 开 worktree，把主 checkout 的 `governance/verdicts.jsonl` **原样复制**过去（`cp`，逐字节）。
