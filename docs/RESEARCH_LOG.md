@@ -20218,3 +20218,76 @@ bar；每根 bar 只留最后写的那一行。今天读 0/2，NOT MET。
 
 **没动。** paper-l3（PID 811）与 shadow（PID 26020）。它们也跑主 checkout 的代码，要各自重启才载入新代码。共享的
 metrics 快照记录只由 armed 循环写（`LiveEngine._snapshot_metrics` 的 `record_metrics`），所以这两个进程不影响新读数。
+
+## 2026-09-29 · 预登记：tsmom 证据重出，带上 #259 的只报告读数（写在跑之前）
+
+起因：本会话收尾时问操作者「tsmom 什么时候重出一次证据」，建议等下次构造变更一起做，操作者答「现在」。
+#259 给 validate 报告加了四样只报告、不进判定的读数：对篮子、集中度、邻域里没扰动的维度、标明口径的 CAGR。
+registry 引用的 `tsmom-validation-20260925T143836Z.json` 写在 #259 之前，没有这些块。
+
+### 8. 本次服务四个目标里的哪一个
+
+都不直接服务，它不产出新 alpha。它让 registry 引用的那份证据带上 N2–N5 的读数，读证据的人不用另跑。
+
+### 1. 假设
+
+判定与 09-25 那份相同：WEAK_PASS，理由是 `oos_is_full_sample_tail`（两折同选一格，D-043 封顶）；样本外 Sharpe 高于
+family gate。若不成立，报告会读出 FAIL，或样本外低于门。
+
+### 2. 这是「新信息」还是「新网格」
+
+都不是。配置、网格、构造与 09-25 相同，差别只有数据窗口：照 09-25 的协议 `--to` 不钉，窗口延到今天。
+
+选择污染先声明：
+
+1. 09-28 本会话在 #259 合入前做过两次零 ledger 验收跑（`BEIDOU_TRIALS_LEDGER` 指向空文件），看过这两格在截到
+   09-28 16:00Z 的数据上的读数：样本外 1.8257，verdict WEAK_PASS，理由与 09-25 相同。没有据此挑任何东西，
+   配置与网格 09-25 就定了。
+2. 09-25 之后 RESEARCH_LOG 记下的零 ledger 运行，没有一次看 tsmom 的别的配置。它们属于别的族（新数据族、
+   多空比择时、对冲 carry），或是同一配置的耗时剖析与回撤门复核。所以申报维持 172。
+
+### 3. 协议（照抄 09-25 那一份，config 一个字不改）
+
+```bash
+# 在 worktree 里；config/live.demo.yaml 的 vol_target 已是 0.175，不改
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' \
+  --prior-trials 172 --charge 2 --prereg <本节的 commit>
+```
+
+- 其余参数全部用默认值，与 09-25 相同。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+- 开跑前确认没有别的 `beidou data` 或 `research` 进程，避开 17:20Z 的数据任务，环境里不设 `BEIDOU_TRIALS_LEDGER`。
+
+### 4. 计费与桶
+
+2 行，进 `tsmom` 桶。今天桶里 212 行、去重后 169，`trials.jsonl` 的 sha256 前 16 位是 `350b3105aa28adbe`。
+
+- 按 7 天分桶，09-25 那次的 range_end 落在桶 2960（09-24 至 09-30）。今天跑，range_end 也在 2960。
+- 其余指纹也与 09-25 那两行相同：construction `0f903fb27452`、overlay `3eb03166f268`、symbol set `3cf25156a7fc`、
+  212 个币、起点 2021-01-31 01:00。
+- 所以新两行与 09-25 两行同一个 fold key。报告应读 replayed 2、N = 167 + 172 + 2 = 341；桶去重后仍是 169，
+  family gate 的 N 不动。实际花费是 2 行、0 个新 trial。
+- 10-01 00:00Z 以后再跑，range_end 进桶 2961，这两行才算新 trial。
+- 若报告的 N 不是 341，说明有指纹变了。那是另一件事，要查明原因记下来。
+
+### 5. 功效读数
+
+沿用 09-25 那份：N = 341 时门 1.5733。这次不做选择，功效只作参考，不另算。
+
+### 7. 预期与两种结果
+
+预期 WEAK_PASS，样本外约 1.83（验收跑读 1.8257），门约 1.57。
+
+- WEAK_PASS 或 PASS：armed 与 candidate 两份 registry 一起换指针，RESEARCH_LOG 记读数。
+- FAIL：不换指针。FAIL 会挡 armed 启动（`registry.evidence_problems`）。记下读数交操作者，按 D-020 定。
+  只多三天数据就翻成 FAIL，本身就是要报告的新情况。
+
+### 9. 实盘失效方式（How this fails）
+
+换指针不改构造：evidence 块不进 registry digest，也不进构造指纹。合入前跑两个构造测试核对。
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若启动证据门对新报告读出问题，则下一次 armed 重启被挡 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
