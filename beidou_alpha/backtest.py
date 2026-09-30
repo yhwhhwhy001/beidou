@@ -22,7 +22,8 @@ executed at bar ``t+1``.  Two return conventions:
 Costs charged on the execution bar: ``turnover_bps`` per unit of |Δw|,
 ``carry_bps_per_bar`` per unit of |w| (flat adverse carry, legacy diagnostic)
 and, when ``use_funding``, the actual settled funding ``w * rate`` (longs pay
-positive funding).
+positive funding) on the position the settlement found - the one held INTO the
+bar, before its rebalance (see the funding line in ``run_backtest``).
 
 When ``guards`` replays the book, it also reports a margin buffer: post-bar equity
 over the maintenance requirement ``gross * maintenance_margin_rate``, so 1.0 is the
@@ -292,7 +293,12 @@ def run_backtest(
         # the replay makes it path dependent on a quantity the replay is itself producing.
         costs = costs + impact_costs(turnover, rets, panel, columns, impact)
     if funding is not None:
-        costs = costs + executed * funding
+        # A settlement floored into bar t (`panel.align_funding_to_bars`) is paid at t's open, and the loop
+        # trades about 27 s after the close that decided it - so the position a settlement finds is the one
+        # held into t, the row before.  Until 2026-09-30 it was charged to t's new position (backtest-guard
+        # 2026-09-25, 🔵).  On the shipped book: full-sample Sharpe 1.915202 -> 1.914861, and 0.03% of equity
+        # more funding over 5.66 years (RESEARCH_LOG 2026-09-30).
+        costs = costs + executed.shift(1).fillna(0.0) * funding
     net = gross - costs
     return BacktestResult(
         execution=execution,
@@ -356,7 +362,7 @@ def _replay_book_guards(
         realised = float(row @ returns[t])
         charge = float(np.abs(row - held).sum()) * turnover_rate + float(np.abs(row).sum()) * carry_rate
         if fees is not None:
-            charge += float(row @ fees[t])
+            charge += float(held @ fees[t])  # the position the settlement found, as in `run_backtest`
         if participation is not None and liquidity is not None:
             wanted = np.abs(row - held) * participation.capital * equity
             cap = liquidity[t] * participation.max_participation
