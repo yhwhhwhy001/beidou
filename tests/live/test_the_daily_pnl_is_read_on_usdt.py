@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from beidou_live.report_risk import usdt_pnl
-from beidou_live.reports import daily_markdown, daily_payload
+from beidou_live.reports import daily_markdown, daily_payload, weekly_markdown, weekly_payload
 from beidou_live.risk_budget import RiskBudgetParams
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
@@ -126,3 +126,23 @@ def test_the_report_leads_with_usdt_and_no_longer_prints_total_equity_as_pnl(tmp
     assert "| usdt_since_baseline | +2635.72 |" in head
     assert "equity_start" not in head
     assert "equity_change_pct" not in head
+
+
+def test_a_range_of_days_starts_before_its_first_day() -> None:
+    """周报读七天：起点是第一天之前的最后一个读数，终点是最后一天的最后一个读数。"""
+    out = usdt_pnl(ROWS, "2026-09-23", "2026-09-29", baseline=5000.0)
+    assert out["usdt_start"] == 7579.56427275  # 09-28 的最后一行落在区间里，没有更早的：取区间第一行
+    assert out["usdt_end"] == 7635.71639563
+    assert usdt_pnl(ROWS, "2026-09-29", "2026-10-05", baseline=5000.0)["usdt_start"] == 7579.56427275
+
+
+def test_the_weekly_report_leads_with_usdt_too(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "live")
+    for row in ROWS:
+        store.append_cycle(row)
+    payload = weekly_payload(store, "2026-09-29", usdt_baseline=5000.0)
+    assert payload["usdt_pnl"]["usdt_end"] == 7635.71639563
+    head = weekly_markdown(payload).split("\n## ")[1]
+    assert head.startswith("PnL (USDT")
+    assert "| usdt_since_baseline | +2635.72 |" in head
+    assert "equity_start" not in head

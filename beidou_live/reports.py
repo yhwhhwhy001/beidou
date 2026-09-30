@@ -492,6 +492,7 @@ def weekly_payload(
     dataset: Mapping[str, Any] | None = None,
     source_lines: Mapping[str, int] | None = None,
     source_lines_week_ago: Mapping[str, int] | None = None,
+    usdt_baseline: float | None = RiskBudgetParams().usdt_baseline,
 ) -> dict[str, Any]:
     """The plan's weekly research report, which was listed as a deliverable and never built.
 
@@ -508,6 +509,7 @@ def weekly_payload(
     income = income_drift(store, expectations or {}, equity=equities[-1] if equities else None, since_ms=since_ms)
     decay = decay_watch(store, expectations or {}, equity=equities[-1] if equities else None)
     constructions = sorted({str(row.get("construction")) for row in cycles if row.get("construction")})
+    first_day = (end - timedelta(days=7)).strftime("%Y-%m-%d")
     return {
         "week_ending": day,
         "since_ms": since_ms,
@@ -515,6 +517,8 @@ def weekly_payload(
         "skipped_cycles": sum(1 for row in cycles if row.get("skip")),
         "equity_start": equities[0] if equities else None,
         "equity_end": equities[-1] if equities else None,
+        # The week's P&L on USDT only, from the declared baseline (operator, 2026-09-30); `equity_*` stay in the json.
+        "usdt_pnl": usdt_pnl(store.read_jsonl(store.cycles_path), first_day, day, baseline=usdt_baseline),
         "constructions_seen": constructions,
         "promotions": max(0, len(constructions) - 1),
         "promotion_budget": 1,
@@ -540,8 +544,11 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
         f"Weekly report, week ending {payload['week_ending']}",
         [
             (
-                "Cycles",
-                {key: payload.get(key) for key in ("cycles", "skipped_cycles", "equity_start", "equity_end")},
+                "PnL (USDT, collateral excluded)",
+                {
+                    **_usdt_pnl_lines(payload.get("usdt_pnl") or {}),
+                    **{key: payload.get(key) for key in ("cycles", "skipped_cycles")},
+                },
             ),
             (
                 # The adopted decay rule.  It cannot fire before roughly 2026-11-05 - the construction

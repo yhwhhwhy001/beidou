@@ -1640,8 +1640,12 @@ def _holdings_correlation_lines(block: Mapping[str, Any], risk_budget: Mapping[s
     return {**lines, **engine}
 
 
-def usdt_pnl(rows: Sequence[Mapping[str, Any]], day: str, *, baseline: float | None) -> dict[str, Any]:
-    """The day's P&L on the money that can trade, and the account's P&L since `baseline` (operator, 2026-09-30).
+def usdt_pnl(
+    rows: Sequence[Mapping[str, Any]], day: str, last_day: str | None = None, *, baseline: float | None
+) -> dict[str, Any]:
+    """The P&L of the UTC days `day`..`last_day` on the money that can trade, and since `baseline` (operator, 2026-09-30).
+
+    The daily report reads one day; the weekly report reads its seven (`last_day` is then the week's end).
 
     The report used to lead with total equity, which carries USDC and BTC collateral at mark: BTC moved and so
     did the headline, on a bar where the book did nothing.  The drawdown moved to the USDT series on 09-20
@@ -1656,9 +1660,10 @@ def usdt_pnl(rows: Sequence[Mapping[str, Any]], day: str, *, baseline: float | N
         for row in rows
         if isinstance(value := (row.get("collateral") or {}).get("usdt_equity"), int | float) and value > 0
     ]
-    today = [(row, value) for row, value in series if _day_of(dict(row)) == day]
+    last_day = last_day or day
+    today = [(row, value) for row, value in series if day <= (_day_of(dict(row)) or "") <= last_day]
     if not today:
-        return {"usdt_end": None, "why": "当天没有带 usdt_equity 的周期行"}
+        return {"usdt_end": None, "why": "这段日子里没有带 usdt_equity 的周期行"}
     before = [(row, value) for row, value in series if (_day_of(dict(row)) or "") < day]
     start_row, start = before[-1] if before else today[0]
     end = today[-1][1]

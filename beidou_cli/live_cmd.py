@@ -1117,6 +1117,7 @@ def report_weekly(
         dataset=asdict(registry_dataset_problems(registry, data_root, _interval(payload))),
         source_lines=package_lines(Path.cwd()),
         source_lines_week_ago=_source_lines_days_before_head(7),
+        usdt_baseline=RiskBudgetParams.from_mapping(payload.get("risk_budget", {}) or {}).usdt_baseline,
     )
     # DL-K3: the week's validations, checked for the one ordering the protocol depends on and nothing
     # verified - that the hypothesis was written down before the result was seen (KILL-R9).
