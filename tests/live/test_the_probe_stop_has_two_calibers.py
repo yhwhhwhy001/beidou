@@ -9,11 +9,11 @@ Neither is the "-2 sigma" D-019 claimed, and they miss in opposite directions.  
 moves when a position closes, and the no-trade band held 197 symbol-cycles on the day this was
 measured - a sleeve can bleed on the mark for a month while that series barely moves.
 
-The GATE is deliberately not moved here, and the reason is the plan's own rule: `max_loss` is inside
-`construction_fingerprint` (`stop_of`), so changing it clears M-010's 30-day window (7.96/30 today) and
-restarts M-G06's eighteen months.  §1 puts "changing the construction outside a window" out of scope.
-The replacement is measured and waiting for 2026-10-03: the empirical 2.28% quantile of each book's own
-30-day mark-to-market P&L, **-7.5%** for flow_short and **-11.2%** for main.
+The GATE is deliberately not moved here.  The 09-12 reason was that `max_loss` sat in
+`construction_fingerprint` and changing it would clear M-010; `stop_of` sits in `registry_digest`, so what it
+resets is M-Q08's window (corrected 2026-09-30, #275).  The replacement waits in `governance/window_changes.yaml`
+(`probe-stop-caliber`): the empirical 2.28% quantile of each book's own 30-day mark-to-market P&L, with the
+numbers and the vol target they were measured at kept there - 09-12's -7.5% / -11.2% belong to k 0.30.
 """
 
 from __future__ import annotations

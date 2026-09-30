@@ -20986,6 +20986,81 @@ entry_threshold 这一对组合，不是一片高原。
 - 读数写进 `docs/MAINNET_READINESS.md` 的 Q-M2。
 - 按预登记：不重跑，不换网格，不申诉门，`governance/reopen.yaml` 不改。
 
+## 2026-09-30 · probe-stop-caliber 的阈值在 k 0.175 上重量：pit 口径 flow 2.5%、main 5.1%，09-12 的口径 4.5% / 7.5%；队列里的 7.5% / 11.2% 是 k 0.30 的数
+
+**起因。** 系统审查（`docs/analysis/2026-09-30-system-audit.md`）清点 10-03 的日期翻转时读到这条排队变更。
+它的阈值是 09-12 在 k = 0.30 上量的。之后 k 改过两次：09-14 到 0.60，09-27 到 0.175。条目没有跟着改。
+阈值是权益的份额，书的盯市盈亏随 vol target 同比例变，所以旧数描述的不是今天这本书。
+
+**做法。** 方法与 09-12 相同（预登记 `b883d01e`，结果 `3e584cbf`）。在被验证过的那段面板上
+（2021-01-31 → 2026-09-07），用今天的 profile 与 registry 重建每本书自己的权重路径，
+取 w_{t-1}·r_t 的 720 bar 滚动和，读经验 2.28% 分位数。多印一项：每个候选阈值下，
+30 天窗口落到它以下的比例。脚本是 `scratchpad/probe_stop_tails.py`，约 3 分钟。
+量的是在跑的配置，不选、不比，不计 ledger。`reports/research/trials.jsonl` 的 sha256 前后都是 `001d643c…`。
+
+**两种口径。** 09-12 的脚本调 `strategy_targets(panel, None)`：不套成员表，按面板里全部币排序（09-12 是 241 币，
+今天 878 币）。预登记写的是「在被验证过的那段面板上」，被引用的 book 报告与实盘用的都是 pit 成员口径。
+所以两种都量了：`panel` 原样复现 09-12 的做法，两次运行逐位相同；`pit` 只取成员表里出现过的 212 币，逐 bar 套成员表，
+与 `research book --universe pit` 同一个做法。
+
+| 口径 | 书 | 年化 σ | 30 天 σ | 2.28% 分位数 |
+| --- | --- | ---: | ---: | ---: |
+| pit | main | 17.32% | 4.053% | −5.09% |
+| pit | flow_short | 4.86% | 1.407% | −2.48% |
+| 全面板 | main | 17.58% | 4.473% | −7.54% |
+| 全面板 | flow_short | 5.59% | 1.887% | −4.51% |
+| 09-12 全面板（k 0.30） | main | 29.69% | 7.233% | −11.22% |
+| 09-12 全面板（k 0.30） | flow_short | 9.70% | 3.239% | −7.51% |
+
+30 天窗口落到阈值以下的比例（48,361 个窗口）：
+
+| 书 | 阈值 | 来源 | pit | 全面板 |
+| --- | ---: | --- | ---: | ---: |
+| flow_short | 2.0% | registry 现行 | 4.70% | 13.3% |
+| flow_short | 2.5% | pit 规则值 | 2.18% | — |
+| flow_short | 4.5% | 全面板规则值 | — | 2.31% |
+| flow_short | 7.5% | 队列里的旧数 | 0.000% | 0.000% |
+| main | 6.0% | registry 现行 | 1.07% | 5.80% |
+| main | 5.1% | pit 规则值 | 2.27% | — |
+| main | 7.5% | 全面板规则值 | — | 2.36% |
+| main | 11.2% | 队列里的旧数 | 0.000% | 0.196% |
+
+年化 σ 两种口径都贴着 vol target（main 0.175，flow 0.175 / 3 ≈ 5.8%），差在尾部：全面板多出 666 个从没进过成员表的币，
+左尾更厚。全面板口径下，两次测量之比 flow 约 0.60、main 约 0.67，接近 0.175 / 0.30 = 0.58。
+
+**结论。** 照旧数应用，flow 的新停损在这 5.6 年里一次都不会触发，两种口径都是。那正是这条变更要修掉的「打不响」。
+按预登记的原意（book 报告的 pit 口径），规则值是 flow 2.5%、main 5.1%，离现行的 2% / 6% 不远；按 09-12 的实现口径是
+4.5% / 7.5%。全面板的 main 7.5% 放到 pit 口径下，只在 0.335% 的 30 天窗口里触发。用哪个口径由操作者定（审查文档的 D1），
+应用当天在当时的配置上再量一次。操作者同日另有裁定（#279）：flow 10-03 退役，flow_short 的数随之作废，要定的只剩 main。
+
+**改了什么。**
+
+- `governance/window_changes.yaml` 的条目：带日期的更正、两种口径的读数、结构化的 `thresholds`，以及 `measured_at`
+  （vol_target、flow_short fraction、证据构造摘要 `221d001c3c07a626`、registry 摘要 `7f8adb754962`、commit）。
+- 原测试只断言 7.5% 与 11.2% 在条目里，k 变了两次它一直是绿的。改成读 `thresholds`，要求更正那句逐字写出两种口径的数，
+  两个 σ 都在。只查子串不够：旧的 flow 值「7.5%」恰好是全面板口径下 main 的新值。
+- 新测试 `test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_them`：条目未应用时，`measured_at`
+  必须等于 profile 的 vol_target、registry 的 flow fraction、证据构造摘要与 registry 摘要。
+  七个变异各让它变红，按字节还原后变绿：k 改 0.60、fraction 改 1/6、`max_scalar` 显式设 12、`vol_halflife` 翻倍、
+  tsmom 的 `crowding_window` 改 24，以及把更正句里 pit、全面板的 main 值各改成 9.9%。
+- `beidou_live/probe.py`、`beidou_governance/window_changes.py` 与两个测试文件的 docstring 还写着旧前提和旧数，
+  原行数改写（不动 ratchet）。
+
+**更正 09-12 那一节的前提（原段不改）。** 那一节写「`stop_of()` 把 `window_days / max_loss / …` 全部放进
+`construction_fingerprint`」，并据此判「闸今天不能动」。在 `3e584cbf` 上读，`stop_of` 在 `registry_digest` 里
+（`registry_digest` 从第 1631 行起，`stop_of` 在 1657 行，`construction_fingerprint` 从 1717 行起），今天也一样。
+所以改 `max_loss` 改的是 registry 摘要，不是构造：在当时的代码里，M-010、M-G06、衰减规则都不清零，清零的是 M-Q08，
+它的比较窗口同时看两个摘要（`execution_fidelity.comparison_window`）。同日合入的 #280 改了这条：证据窗口也在 registry
+摘要变化处截断，只改 probe stop 的变更要在 `REGISTRY_ALIASES` 里声明才不清零。K-EX14 管 exit overlay 与信号参数，
+这条两样都不是。
+发现者是同日 Backtest guard 会话（#275），本节在代码上核过。「口径与阈值必须一起动」那条不受影响。
+
+**没做的。** 不改 registry，不改代码，不应用这条变更。应用要改 registry 的两个 `max_loss`、改 `probe_status` 读的口径，
+再重启一次；M-Q08 对现行构造的第一次判定因此从约 10-13 推到约 10-18。何时应用由操作者定。registry 里 flow 的
+`max_loss` 注释写着「随 vol_target 等比例调」（09-04 那次 0.01 → 0.02），09-14 与 09-27 两次改 k 都没跟。
+循环现在读的是已实现口径，今天 flow 的 30 天读数是权益的 −0.02%，离 −2% 很远，这道闸按哪个数都打不响，
+所以没有影响过交易。条目的 `note` 记了这一条。
+
 ## 2026-09-30 · M-Q08 的 b8f215ab 窗口离线补完：整段 2.09 ± 0.54，去掉只在实盘发生的 8 次退出与再入场后 0.94 ± 0.13，落在带内
 
 来源：backtest-guard 09-30 体检第一遍 🟡。日报 09-23 至 09-26 读了四次（2.07 → 2.38），09-27 构造换了，
