@@ -3637,6 +3637,25 @@ WP-C8 修法 A（操作者 2026-09-28 裁定「按建议处理」）：`ExitOver
 
 实测 15_748，余量 36 -> 159（= `headroom_policy(15_907)`）。理由不在这里重述，见文末「2026-09-28 headroom 政策（WP-C2）」一节。
 
+### 2026-09-30 · 顶 15_907 -> 16_133（重启补记停机期间的 bar；backoff 补行上限少算一根）
+
+09-30 实测：主机 09-29 14:46Z 之后休眠、关机，01:36Z 开机，launchd 01:37Z 拉起循环。中间收盘 11 根 bar，
+记录里只有重启自己为 00:00 写的一行，`missed_rebalances: 1`。M-Q03 按行计数，前 10 根谁也没记。同一天，
+backoff 的补行上限只按睡眠时长算，默认失败周期准时。06:00 那次周期 08:58Z 才失败，睡 4.78h 只许补 5 行，
+07–12 共 6 根，12:00 没有行。
+
+花在哪（净增）：
+
+- +55 `engine.py`：`_record_downtime`（从记录里最新一根 bar 之后起算，不从 `state.last_bar_ms` 起算，
+  否则死掉的进程已写的 ERROR/backoff 行会被重记一次；无记录＝首次启动不补；超过一周只补最近一周）与
+  它的 docstring；`run()` 里调用它的 4 行；`_record_missed_rebalance` 对 downtime 行不逐行打日志；
+  `_backoff` 的上限加上睡前已收盘的 bar（在睡前读时钟，时钟跳变仍抬不高它）及 5 行注释。
+- +12 `scheduler.py`：`DOWNTIME_REASON` 与 `DOWNTIME_MAX_BARS`，各带为什么的注释。
+- +11 `report_execution.py`：`NOT_A_RESTART`，一次停机算一次重启而不是 11 次；import 拆行。
+- +4 `health.py`：`cycle_health` 不把 downtime 行当尝试。不排除的话，它们作为 SKIPPED 行各算一次成功。
+
+实测 15_972。顶抬到「实测 + 政策」：16_133，余量 161（= `headroom_policy(16_133)`）。
+
 ## beidou_cli
 
 原文：blob 里第 3615–4030 行，`"beidou_cli": 8_740,` 之上的注释，共 416 行。
