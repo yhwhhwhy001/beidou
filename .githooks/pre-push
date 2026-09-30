@@ -152,13 +152,27 @@ cat >&2 <<'MSG'
 ║  推送被拦下：将要进入远端的 commit 里有疑似密钥                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-上面列出了命中的 commit、文件与行号（值已脱敏）。
+上面列出了命中的 commit、文件与行号（值已脱敏），每处都有一行 `RuleID:`。
 
 注意这些 commit **已经在本地历史里了**，光改文件不够——那只会再加一个 commit，
 旧的那个照样会被推上去。
 
   1. 真的是密钥：
-       - **先去交易所把它作废重发**，这一步不能等，也不需要任何人批准。
+       - **先让它失效**，这一步不能等，也不需要任何人批准。去哪里失效，
+         看 `RuleID:` 那一行：
+           RuleID 是 `beidou-lark-webhook-url`：漏的是告警 webhook 的 URL，
+             token 就是它的最后一段。**在 Lark 里让这个机器人的旧地址失效**，
+             换一条新地址。交易所的 key 没漏，不用动。
+           别的 RuleID（本仓库里多半是 Binance 的 key）：**去交易所把它作废重发**。
+         两支的完整步骤都在 SECURITY.md 第四节。
+       - 新值写进凭据**此刻实际所在**的位置，替换旧值：
+         `~/Library/Application Support/beidou/env.sh` 存在就写进它，
+         不存在就改 `~/.zshrc` 里的 `export BEIDOU_*` 行。
+         **不要为了这一步新建 `env.sh`**——文件一存在，`~/.zshrc` 就不再被读，
+         其余 `BEIDOU_*` 变量会跟着消失：只放了新 key，告警 webhook 静默丢失；
+         只放了 webhook，Binance 的 key 也没了，实盘循环下一次启动以 78 退出。
+       - 换的是 webhook：重启 live 与 shadow（shadow 在跑的话）。它们是长驻的
+         `live run`，不重启就一直用旧地址。窗口与步骤见 CLAUDE.md「重启实盘循环」。
        - 然后再处理历史：`git rebase -i` 改掉那个 commit，或者
          `git reset --soft` 回到它之前重做。
        - 记住这是**公开仓库**：一旦推上去，force push 也收不回来——
@@ -170,7 +184,8 @@ cat >&2 <<'MSG'
   3. `git push --no-verify` 能绕过这里。但要知道后面没有网了：
      GitHub 的 push protection **认不出 Binance 的密钥**（不在 partner pattern
      列表，个人公开仓库也加不了 custom pattern），而 CI 的 Secrets 门是事后的——
-     它红的时候，密钥已经公开可读了。
+     它红的时候，密钥已经公开可读了。告警 webhook 也一样：Lark 在
+     partner pattern 列表里，但列的五类凭据里没有 webhook。
 
 MSG
 exit 1

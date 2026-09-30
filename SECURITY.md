@@ -216,6 +216,12 @@ ledger 的 `param_key`，9 处是 sha256 文件摘要，2 处是 SSH 公钥指�
 
 **顺序不能反。先作废，再清理。** 清理历史要几十分钟，而密钥在这几十分钟里仍然有效。
 
+去哪里作废，看 gitleaks 清单里每处命中的 `RuleID:`。是 `beidou-lark-webhook-url` 时，漏的是告警 webhook，
+走下面「漏的是告警 webhook」那一支。别的 RuleID 走「漏的是交易所的 key」，本仓库里多半是 Binance 的。
+走错支的后果是：该作废的没作废，没漏的反倒被换掉。
+
+### 漏的是交易所的 key
+
 1. **立刻去交易所作废那个 key**，重发一对新的。这一步不能等，也不需要任何人批准。
    Binance：API Management → 删除该 key。
 2. **确认损失**：`beidou live status` 看仓位，交易所网页看 API 调用记录与提现记录。
@@ -227,6 +233,27 @@ ledger 的 `param_key`，9 处是 sha256 文件摘要，2 处是 SSH 公钥指�
 4. **然后**才考虑清理 git 历史。清理不能替代作废：任何人都可能已经克隆过。
    工具是 `git filter-repo`，会重写全部 commit hash，所有 worktree 与 clone 都要重建。
 5. 把经过记进 `docs/RESEARCH_LOG.md`，只写可观测事实。
+
+### 漏的是告警 webhook（2026-09-30 补）
+
+`BEIDOU_ALERTS_WEBHOOK_URL` 是一条 Lark 自定义机器人的 webhook，token 是 URL 的最后一段。交易所的 key 没漏，
+不用动。
+
+1. **在 Lark 里让这个机器人的旧地址失效**，换一条新地址。这一步不能等，也不需要任何人批准。
+2. **确认损失**：按 Lark 的文档，自定义机器人没有任何数据访问权限，拿到地址的人只能往告警群里发消息。
+   所以旧地址失效之前，群里的告警不一定都是循环发的。拿不准的那条，用 `beidou live status` 核实。
+3. 新地址写进凭据**此刻实际所在**的位置，替换 `BEIDOU_ALERTS_WEBHOOK_URL` 的旧值：有 `env.sh` 就写进它，
+   没有就改 `~/.zshrc` 里那一行 export。**不要为了这一步新建 `env.sh`**——文件一存在，`~/.zshrc` 就不再被读，
+   Binance 的两个变量跟着消失，`run_live.sh` 下一次启动以 78 退出（见上「凭据正确的存放位置」）。
+4. 重启 live 与 shadow（shadow 在跑的话）。两者都是长驻的 `live run`，进程的环境在启动时就定了，
+   不重启就一直用旧地址。窗口与步骤见 `CLAUDE.md` 的"重启实盘循环"。别的 launchd job（`com.beidou.check`、
+   `com.beidou.data` 等）每次启动都重读凭据，`com.beidou.paper-l3` 不读凭据，都不用动。
+5. 清理历史、记 `docs/RESEARCH_LOG.md`，同上一支的第 4、5 步。
+
+Lark 侧怎么让旧地址失效，这里没写具体操作，因为没核到。2026-09-30 读过飞书与 Lark 两版「自定义机器人使用指南」
+（open.feishu.cn 与 open.larksuite.com 的 `/document/client-docs/bot-v3/add-custom-bot`）。两版都写了怎么删除
+自定义机器人，也写了怎么添加一个新的并拿到地址。删除之后旧地址是否失效，文档没说；能不能原地重置地址，文档也
+没写。「重置」只出现在签名校验那一节，换的是签名秘钥，不是地址。等第一次真做过，再把核实过的操作补进这里。
 
 ### 报告漏洞
 
