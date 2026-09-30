@@ -68,6 +68,39 @@ description = "锁文件里的 wheel 摘要与 base64 编码块不是凭据"
 paths = ['''.*\.lock$''']
 
 # ---------------------------------------------------------------------------
+# 自定义规则：告警 webhook 的 URL（Lark / 飞书自定义机器人）
+#
+# 这条 URL 就是凭据。token 是它的最后一段，拿到整条 URL 就能以机器人的身份往告警群里发消息。
+# 本仓库的告警通道 `BEIDOU_ALERTS_WEBHOOK_URL` 是一条 Lark webhook。2026-09-29 发送失败时，
+# `beidou_live/alerts.py` 把它原样写进了本机日志（#269 已改）。而本仓库的惯例是把日志行抄进
+# 公开的 `docs/RESEARCH_LOG.md`。
+#
+# 加这条规则之前，四层都认不出它。gitleaks 的默认规则里没有它：2026-09-30 用随机 UUID 拼一条
+# 写进临时文件，`gitleaks dir` 报 `no leaks found`。GitHub 的 push protection 也没有：Lark 在
+# partner pattern 列表里有五类凭据，没有一类是自定义机器人的 webhook（同日核对 github/docs
+# 里的模式清单）。
+#
+# 只认路径加 UUID，不锚 host。凭据是 token，host 只是 open.larksuite.com 与 open.feishu.cn
+# 两个公开值之一。锚了 host，只写路径的那种行（HTTP 请求行、代理日志）就漏了。
+#
+# token 只认 UUID 形态（8-4-4-4-12 位 hex，共 36 位），本机那一条就是这个形态。收窄到 UUID，
+# 仓库里现有的假值一个都不命中：测试里人手敲的 `SUPER-SECRET-TOKEN-VALUE`、`abc`、`x`，
+# f-string 里的 `{MARKER}`，文档里的 `<token>`。所以这条规则不带 allowlist，基线是零。
+# 代价也写在这里：Lark 哪天改发别的形态，这条规则会静默失效。到那时放宽 token 那一段，
+# 再按 SECURITY.md 第三节给测试里的假值写 allowlist。
+#
+# `(?i)` 让大写的 UUID 也算。secret 取 UUID 那一组，`--redact` 只遮 token，被拦时还看得出
+# 命中的是一条 webhook。UUID 带连字符，下面全局 allowlist 那几条 `^[0-9a-f]{N}$` 管不到它。
+# 但全局 allowlist 对每条规则都生效：哪天往里加一条放行 UUID 的（比如为了压 session id 的
+# 误报），这条规则就跟着哑了。`tests/architecture/test_secret_scanning_is_alive.py` 里伪造
+# webhook 的那组测试守这件事。
+[[rules]]
+id = "beidou-lark-webhook-url"
+description = "Lark/飞书自定义机器人的 webhook URL（token 是 URL 的最后一段）"
+regex = '''(?i)open-apis/bot/v2/hook/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'''
+secretGroup = 1
+
+# ---------------------------------------------------------------------------
 # 全局 allowlist：逐条对应 2026-09-19 那 117 处误报
 # ---------------------------------------------------------------------------
 [allowlist]
