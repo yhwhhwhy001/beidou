@@ -6,7 +6,7 @@
 `env.sh` / `~/.zshrc` 读，代码与 plist 里都没有值）。
 
 于是这个文件的职责不是「找密钥」——CI 的 Secrets 门每次跑都在找。它守的是**扫描本身
-还有没有用**，因为这道门有四种坏法，而且都不会自己喊出来：
+还有没有用**，因为这道门有五种坏法，而且都不会自己喊出来：
 
   1. **配置崩了，扫描根本没跑。**  建这道门的当天就撞上了：`.gitleaks.toml` 第一版用
      `(?=.*[A-Z])(?=.*[a-z])` 表达「大小写混排」，而 gitleaks 的正则是 RE2 语法，**不支持
@@ -34,6 +34,11 @@
      range 无效，推送不扫就放行。2026-09-29 在临时仓库里复现过，伪造凭据随强推进了远端。
      守这一条的有两处：`_run_pre_push` 的第三种推送，与文件末尾的 fail-closed 测试。
 
+  5. **有一类凭据，没有一条规则认得它。**  2026-09-30 发现：告警 webhook 的 URL 是凭据
+     （Lark/飞书自定义机器人的 token 就是 URL 的最后一段），默认规则与 `.gitleaks.toml` 都认不出。
+     这里的零命中读作「没有这条规则」，不是「干净」，从输出上分不开。文件末尾那组测试守这一条：
+     随机拼一条假 webhook，pre-commit 与 CI 都得把它记在 `beidou-lark-webhook-url` 名下。
+
 测试用的「密钥」全部是当场随机生成的假值，不落在仓库里，也从未对应任何账户。
 """
 
@@ -48,6 +53,7 @@ import shutil
 import string
 import subprocess
 import tempfile
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -923,3 +929,129 @@ def test_scan_refuses_to_read_a_gitleaks_error_as_no_findings(tmp_path: Path, fa
     _break_config(tmp_path, fault)
     with pytest.raises(AssertionError, match=re.escape(GITLEAKS_FAULTS[fault])):
         _scan({"ordinary.py": "x = 1\n"}, config)
+
+
+# ---------------------------------------------------------------------------
+# 第五种坏法：有一类凭据，没有一条规则认得它
+# ---------------------------------------------------------------------------
+#
+# 告警 webhook 的 URL 是凭据。Lark/飞书自定义机器人的 token 就是 URL 的最后一段，拿到它就能以机器人的
+# 身份往告警群里发消息。2026-09-30 之前，默认规则与 `.gitleaks.toml` 都认不出它：用随机 UUID 拼一条
+# 写进临时文件，扫出来是 `no leaks found`。可 09-29 发送失败的日志里有 39 行带着真 URL，本仓库又惯于
+# 把日志行抄进公开的 `docs/RESEARCH_LOG.md`。
+#
+# 规则是 `.gitleaks.toml` 里的 `beidou-lark-webhook-url`，只认路径加 UUID。下面几组各守一件事：
+# 两个 hook 拦得下，CI 与手动审计的命令扫得到，仓库里现有的假值不误报。SECURITY.md 第二节那张表上
+# 「对告警 webhook」一列，第 1、2、4 层各对应这里的一组。
+
+LARK_RULE = "beidou-lark-webhook-url"
+LARK_HOSTS = ("open.larksuite.com", "open.feishu.cn")
+
+# 泄漏时的三种样子。第一种是 09-29 那 39 行，第二种是 `~/.zshrc` 里存它的那一行。
+# 第三种只有路径、没有 host：规则不锚 host，理由写在 `.gitleaks.toml` 那条规则上面。
+LARK_LEAKS = {
+    "failed-delivery-log": "alert delivery failed (https://open.larksuite.com/open-apis/bot/v2/hook/{token}): \n",
+    "zshrc-export": 'export BEIDOU_ALERTS_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/{token}"\n',
+    "request-line": "POST /open-apis/bot/v2/hook/{token} HTTP/1.1\n",
+}
+
+
+def _forged_lark_token() -> str:
+    """Lark webhook 的 token 形态：36 位 UUID。每次随机生成，理由同 `_forged_binance_credential`。"""
+    return str(uuid.uuid4())
+
+
+@pytest.mark.parametrize("form", list(LARK_LEAKS))
+def test_pre_commit_blocks_a_forged_lark_webhook(form: str) -> None:
+    """假 webhook 进了暂存区，pre-commit 要拦下，命中要记在这条规则名下，token 要脱敏。
+
+    规则名只在 stdout 里找。hook 自己的话都写到 stderr，stdout 只有 gitleaks 的命中清单
+    （pre-push 那组「干净的推送 stdout 为空」守的就是这个分工）。在两者合起来的输出里找，
+    hook 哪天把规则名写进拦截框，这条断言就什么也证明不了。
+    """
+    token = _forged_lark_token()
+    proc = _run_pre_commit(LARK_LEAKS[form].format(token=token))
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 1 and COMMIT_LEAK_BOX in proc.stderr, (
+        f"暂存区里的假 webhook 没被 pre-commit 拦下（{form}，returncode={proc.returncode}）。\n"
+        f"检查 `.gitleaks.toml` 里的 `{LARK_RULE}` 还在不在，全局 allowlist 最近加了什么。\n{shown[-2000:]}"
+    )
+    assert LARK_RULE in proc.stdout, (
+        f"pre-commit 拦下了，stdout 的命中清单里却没有 `{LARK_RULE}`（{form}）。两种可能：\n"
+        "hook 不带 `--verbose` 了，清单根本没列出来；或者拦它的是别的规则，这条规则自己已经坏了。\n"
+        f"{shown[-2000:]}"
+    )
+    assert token not in shown, "pre-commit 把假 webhook 的 token 打到了屏幕上。检查 hook 里的 `--redact` 还在不在。"
+
+
+@pytest.fixture(scope="module", params=LARK_HOSTS)
+def lark_repo(request: pytest.FixtureRequest) -> Iterator[_MergeRepo]:
+    """一个临时仓库：解冲突时把一条假 webhook 写进了 merge 提交。两个 host 各建一个。
+
+    放进 merge 提交，是因为 CI 这一层要接住的正是本机 hook 一个都没跑的情况，最典型的是在 GitHub
+    网页上解冲突。
+    """
+    url = f"https://{request.param}/open-apis/bot/v2/hook/{_forged_lark_token()}"
+    with tempfile.TemporaryDirectory() as tmp:
+        yield _build_merge_repo(Path(tmp) / "lark", url)
+
+
+def test_pre_push_blocks_a_forged_lark_webhook(lark_repo: _MergeRepo) -> None:
+    """pre-push 读同一份配置。它接的是 pre-commit 没跑的那些：`--no-verify`，或者提交时 hook 还没装。"""
+    token = lark_repo.resolution.rsplit("/", 1)[1]
+    proc = _run_pre_push(lark_repo, "existing-branch")
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 1 and PUSH_LEAK_BOX in proc.stderr, (
+        f"merge 提交里的假 webhook 没被 pre-push 拦下（returncode={proc.returncode}）。\n"
+        f"检查 `.gitleaks.toml` 里的 `{LARK_RULE}` 还在不在，全局 allowlist 最近加了什么。\n{shown[-2000:]}"
+    )
+    assert LARK_RULE in proc.stdout, (
+        f"pre-push 拦下了，stdout 的命中清单里却没有 `{LARK_RULE}`。两种可能：hook 不带 `--verbose` 了，\n"
+        f"或者拦它的是别的规则，这条规则自己已经坏了。\n{shown[-2000:]}"
+    )
+    assert token not in shown, "pre-push 把假 webhook 的 token 打到了屏幕上。检查 hook 里的 `--redact` 还在不在。"
+
+
+@pytest.mark.parametrize("source", list(HISTORY_SCANS))
+def test_history_scans_catch_a_forged_lark_webhook(lark_repo: _MergeRepo, source: str) -> None:
+    """CI 的 Secrets 门与 SECURITY.md 的手动审计命令，都要把这条假 webhook 记在这条规则名下。
+
+    CI 红的时候 webhook 已经公开可读，所以它是事后的一层。但在 GitHub 网页上解冲突或改文件时，
+    本机两个 hook 一个都不跑，发现得了它的只剩这一层。
+    """
+    scans = HISTORY_SCANS[source]()
+    assert scans, f"{source} 里找不到用 gitleaks 扫 git 历史的命令。是门被删了，还是换了写法？"
+    for argv in scans:
+        proc, findings = _run_history_scan(argv, lark_repo)
+        found = {(f["RuleID"], f["Commit"], f["File"]) for f in findings}
+        assert (LARK_RULE, lark_repo.merge, "settings.py") in found, (
+            f"{source} 的 `{shlex.join(argv)}` 没把 merge 提交里的假 webhook 记在 `{LARK_RULE}` 名下"
+            f"（returncode={proc.returncode}，命中 {sorted(found)}）。\n"
+            "检查 `.gitleaks.toml` 里的这条规则还在不在，全局 allowlist 最近加了什么。\n"
+            f"stderr:\n{proc.stderr[-2000:]}"
+        )
+        assert proc.returncode != 0, f"{source} 的命令看见了命中却返回 0，CI 那一步不会变红"
+
+
+# 仓库里已有的 Lark 形态假值，每个文件一种。按文件原样扫，不把字符串抄进这里：抄一份的话，
+# 哪天那几个文件换了写法，这里照绿，红的却是下一次推送时 CI 的全历史扫描。
+LARK_LOOKALIKE_FILES = (
+    "tests/cli/test_alert_drill.py",  # 人手敲的 token：SUPER-SECRET-TOKEN-VALUE
+    "tests/live/test_delivery_is_verified.py",  # 三个字符与一个字符的 token：abc、x
+    "tests/live/test_alert_logs_never_carry_the_webhook_token.py",  # f-string 里的 {MARKER}
+)
+
+
+@pytest.mark.parametrize("path", LARK_LOOKALIKE_FILES)
+def test_repository_lark_lookalikes_do_not_false_positive(path: str) -> None:
+    """测试里的假 webhook 不该报。它们的 token 都不是 UUID 形态，而规则只认 UUID。
+
+    任何一条误报，基线就不是零，而不是零基线的检查三天之内就会被忽略。
+    """
+    text = (ROOT / path).read_text(encoding="utf-8")
+    assert "open-apis/bot/v2/hook/" in text, f"{path} 里已经没有 Lark 形态的假值了，把它从这一组里删掉"
+    findings = _scan({Path(path).name: text})
+    assert findings == [], (
+        f"{path} 里的假 webhook 被报成了密钥：{[(f['RuleID'], f['StartLine']) for f in findings]}\n"
+        "基线必须是零。别把规则的 token 那一段放宽到认得出人手敲的假值；真要放宽，按 SECURITY.md 第三节写 allowlist。"
+    )

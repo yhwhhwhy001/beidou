@@ -13,6 +13,7 @@ fork、克隆、第三方镜像和搜索引擎缓存都不受 `git push --force`
 
 - Binance API key / secret（本仓库唯一真正怕丢的东西）
 - 任何交易所、云服务、AI 服务的 key、token、密码
+- 告警 webhook 的完整 URL。Lark/飞书机器人的 token 就是 URL 的最后一段，抄进来的日志行里也算
 - SSH 私钥、`.pem`、`.p12`、证书私钥
 - `.env`、`env.sh` 及任何含实际值的配置文件
 
@@ -51,12 +52,14 @@ key = os.environ.get("BEIDOU_BINANCE_API_KEY", "")  # 错：缺了会带着空�
 诚实地写清楚每层的边界，比说"我们有防护"有用。**尤其是这一条：GitHub 的 push
 protection 认不出 Binance 的密钥。**
 
-| 层 | 位置 | 什么时候响 | 对 Binance 密钥 | 怎么被绕过 |
-|---|---|---|---|---|
-| 1. pre-commit | 本机 | `git commit` 扫暂存区 | ✅ 有效 | `commit --no-verify` |
-| 2. pre-push | 本机 | `git push` 扫将要推送的全部 commit，含 merge 提交的 diff | ✅ 有效 | `push --no-verify` |
-| 3. GitHub push protection | 服务端 | `git push` 时 | ❌ **无效** | 绕不过，但也拦不住它 |
-| 4. CI 的 Secrets 门 | Actions | PR 与 main push，扫**全历史**，含 merge 提交的 diff | ⚠️ **事后** | 改 workflow |
+| 层 | 位置 | 什么时候响 | 对 Binance 密钥 | 对告警 webhook | 怎么被绕过 |
+|---|---|---|---|---|---|
+| 1. pre-commit | 本机 | `git commit` 扫暂存区 | ✅ 有效 | ✅ 有效（2026-09-30 起） | `commit --no-verify` |
+| 2. pre-push | 本机 | `git push` 扫将要推送的全部 commit，含 merge 提交的 diff | ✅ 有效 | ✅ 有效（2026-09-30 起） | `push --no-verify` |
+| 3. GitHub push protection | 服务端 | `git push` 时 | ❌ **无效** | ❌ **无效** | 绕不过，但也拦不住它 |
+| 4. CI 的 Secrets 门 | Actions | PR 与 main push，扫**全历史**，含 merge 提交的 diff | ⚠️ **事后** | ⚠️ **事后**（2026-09-30 起） | 改 workflow |
+
+「告警 webhook」一列在 2026-09-30 之前四格都是 ❌，原因与生效条件见下面「告警 webhook」一节。
 
 ### 第 3 层为什么对 Binance 无效
 
@@ -76,6 +79,37 @@ protection 认不出 Binance 的密钥。**
 ```bash
 gh api repos/yhwhhwhy001/beidou --jq '.security_and_analysis'
 ```
+
+### 告警 webhook（2026-09-30 补）
+
+告警通道 `BEIDOU_ALERTS_WEBHOOK_URL` 是一条 Lark 自定义机器人的 webhook。这条 URL 本身就是凭据：
+token 是它的最后一段，拿到整条 URL 就能以机器人的身份往告警群里发消息。
+
+2026-09-30 之前，上表四层都认不出它：
+
+- 第 1、2、4 层用的都是 gitleaks，而 gitleaks 的默认规则里没有它。当天用随机 UUID 拼一条
+  写进临时文件，`gitleaks dir` 报 `no leaks found`。
+- 第 3 层：Lark 在 partner pattern 列表里，但只有五类凭据（APaaS Client Secret、Application
+  Secret、MCP Grant Token、Meego Plugin Secret、User Session），没有自定义机器人的 webhook。
+  Slack 的 incoming webhook 在列表里，Lark 的不在。核对的是 github/docs 仓库
+  `src/secret-scanning/data/pattern-docs/fpt/public-docs.yml` 的 2026-09-29 版。
+
+它真进过日志。09-29 发送失败时，`beidou_live/alerts.py` 把完整 URL 写进本机日志 39 行（#269 已改）。
+而本仓库惯于把日志行抄进公开的 `docs/RESEARCH_LOG.md`。
+
+现在 `.gitleaks.toml` 有一条 `beidou-lark-webhook-url`。`open-apis/bot/v2/hook/` 后面跟一个 UUID
+（8-4-4-4-12 位 hex）就算命中，不看 host：open.larksuite.com 与 open.feishu.cn 都在内，只写了路径的
+请求行也算。它的边界写在规则上面：Lark 哪天改发别的形态的 token，这条规则就认不出了。
+`tests/architecture/test_secret_scanning_is_alive.py` 末尾那组测试逐层核这一列：第 1、2 层要拦下，
+第 4 层与「手动全量审计」要扫到。
+
+本机两层什么时候生效，要分开说：
+
+- hook 脚本是主 checkout 那一份：本机的 `core.hooksPath` 配的是绝对路径。
+- hook 读的 `.gitleaks.toml` 却是提交或推送所在那个 checkout 的。它按 `git rev-parse --show-toplevel` 找。
+
+所以主 checkout 要快进过合入这条规则的那个 merge，在它里面提交才会被拦。worktree 里的分支要从那之后的
+main 开，或者 merge 过它。第 4 层合入即生效。
 
 ### 由此得到的实际结论
 
@@ -169,10 +203,12 @@ ledger 的 `param_key`，9 处是 sha256 文件摘要，2 处是 SSH 公钥指�
    于是它永远留着。
 
 `tests/architecture/test_secret_scanning_is_alive.py` 是这件事的刹车：allowlist 再怎么
-加，一个随机生成的 Binance 形态必须还能被抓出来。那个测试红了，说明口子开得太大了。
+加，一个随机生成的 Binance 形态、一条随机拼的 Lark webhook，都必须还能被抓出来。那个测试
+红了，说明口子开得太大了。全局 allowlist 对每条规则都生效，所以为 A 规则压误报的一条，
+可能让 B 规则一起哑掉。
 
 这条刹车在这个仓库里比一般项目重要：上面第二节说清楚了，GitHub 那层接不住 Binance 的
-密钥，所以 allowlist 放宽的代价没有别的东西替你兜。
+密钥，也接不住告警 webhook，所以 allowlist 放宽的代价没有别的东西替你兜。
 
 ---
 
@@ -210,6 +246,20 @@ Telegram、Google、GitLab——所有形态零命中。两套独立扫描（手
 diff**（原因见第二节）。手写那套的方法没有留下记录，这里不替它下结论。当天带
 `--diff-merges=separate` 对 `--remotes=origin` 重扫：2,311 个 commit、159.4 MB，
 仓库里的 436 个 merge 全部进了扫描，**仍然零泄漏**。基线仍是零，现在它覆盖 merge 了。
+
+**2026-09-30 补：上面「所有形态」不含告警 webhook。** 清单里没有 Lark/飞书，因为当时没有
+一条规则认得它（见第二节「告警 webhook」）。那时的零命中读作「没有这条规则」，不是「干净」。
+当天加了 `beidou-lark-webhook-url`，用第二节「手动全量审计」那条命令重扫，范围照 09-28 取
+`--remotes=origin`：2,425 个 commit、162.3 MB，**零命中**。范围里共 2,427 个 commit，489 个
+merge 全在内。差的两个只删了文件，而 gitleaks 只扫新增行。同日另用
+`git log --diff-merges=separate -G open-apis/bot -p` 手工翻过全历史，`--all` 与
+`--remotes=origin` 各一遍：出现过的 webhook 只有测试里的假值（`SUPER-SECRET-TOKEN-VALUE`、
+`abc`、`x`、f-string 里的 `{MARKER}`），没有 UUID 形态的 token。基线仍是零，现在它覆盖
+告警 webhook 了。
+
+同一天还核到一个缺口：`--all` 与 `--remotes=origin` 都只扫本地有的 ref。GitHub 上 3 个关掉
+没合的 PR（#15、#16、#82），head 不在任何远端分支上，`refs/pull/<n>/head` 却照样公开可取。
+它们独有的 3 个 commit 当天单独扫过，也是零。
 
 **以下是公开的，是权衡后接受的，不是疏漏：**
 
