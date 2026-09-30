@@ -3656,6 +3656,23 @@ backoff 的补行上限只按睡眠时长算，默认失败周期准时。06:00 
 
 实测 15_972。顶抬到「实测 + 政策」：16_133，余量 161（= `headroom_policy(16_133)`）。
 
+### 2026-09-30 · 顶 16_133 -> 16_345（日报的 Drift、Probe、Noise scale 改按 USDT 读）
+
+操作者 2026-09-30 要求盈亏统一按可动用 USDT 读（不含抵押品），并对两处判据当场裁定：Drift 的回撤阈值按当天
+「总权益 ÷ USDT」换算；Probe 的 stop 不动，只加 USDT 读数。合入前 main 实测 16_094。
+
+花在哪（净增 88）：
+
+- +44 `report_decay.py`：`drift_check` 的收益序列换成 `collateral.usdt_equity`，验证期回撤乘 `usdt_factor`
+  再比（不换算的话，同一笔书的亏损告警会提前约 1.75 倍）。因子取窗口内两条序列各自的峰值之比，不取最后一行：
+  亏损落在 USDT 上，最后一行的比值随亏损变大，会把阈值推离它要抓的亏损。docstring 写明这两条；`_usdt` 读数助手；
+  `probe_rows` 加 `pnl_pct_usdt` 与为什么 stop 仍按总权益的 docstring。
+- +38 `report_risk.py`：`_usdt_noise`，Noise scale 的 giveback、高水位、已实现 σ 全部换到 USDT 序列，
+  高水位取 `usdt_drawdown_state` 的（TRANSFER 重置）；设计 σ 仍是书的，按总权益定尺寸；渲染改成只印 USDT 那组。
+- +6 `reports.py`：Probe 行印两个口径，两段标题改名，`probe_rows` 传入 USDT。
+
+实测 16_182。顶抬到「实测 + 政策」：16_345，余量 163（= `headroom_policy(16_345)`）。
+
 ## beidou_cli
 
 原文：blob 里第 3615–4030 行，`"beidou_cli": 8_740,` 之上的注释，共 416 行。

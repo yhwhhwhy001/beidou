@@ -146,3 +146,84 @@ def test_the_weekly_report_leads_with_usdt_too(tmp_path: Path) -> None:
     assert head.startswith("PnL (USDT")
     assert "| usdt_since_baseline | +2635.72 |" in head
     assert "equity_start" not in head
+
+
+# --- Drift, Probe, Noise scale on USDT (operator, 2026-09-30) ------------------------------------------------
+
+
+def _usdt_rows(usdt: list[float], factor: float = 2.0) -> list[dict[str, Any]]:
+    """Hourly rows whose total equity is `factor` times the USDT, collateral constant in between."""
+    base = 1_790_640_000_000  # 2026-09-29T01:00Z
+    collateral = usdt[0] * (factor - 1.0)
+    return [
+        {
+            "bar_open_ms": base + i * 3_600_000,
+            "at": f"2026-09-29T{i % 24:02d}:00:30+00:00",
+            "equity": value + collateral,
+            "collateral": {"usdt_equity": value, "equity": value + collateral},
+        }
+        for i, value in enumerate(usdt)
+    ]
+
+
+def _store_of(tmp_path: Path, rows: list[dict[str, Any]]) -> StateStore:
+    store = StateStore(tmp_path / "live")
+    for row in rows:
+        store.append_cycle(row)
+    return store
+
+
+def test_drift_reads_usdt_and_converts_the_drawdown_bar(tmp_path: Path) -> None:
+    """USDT −30% at factor 2 is a −15% book loss: under 1.5 × 13%, so no alert.  Unconverted it would page.
+
+    The factor is peak over peak.  The last row's ratio would be 8500/3500 = 2.43 here and 3.22 below, where a
+    −27.5% book loss (past 1.5 × 13%) would then read as inside the bar.
+    """
+    from beidou_live.report_decay import drift_check
+
+    expectations = {"tsmom": {"oos_sharpe": 1.5, "full_sample_max_drawdown": -0.13}}
+    falling = [5_000.0 * (1 - 0.30 * i / 59) for i in range(60)]
+    drift = drift_check(_store_of(tmp_path / "a", _usdt_rows(falling)), expectations)
+    assert drift["series"] == "usdt_equity"
+    assert drift["trailing_drawdown"] == pytest.approx(-0.30, abs=1e-9)
+    assert drift["usdt_factor"] == pytest.approx(2.0, abs=1e-12)
+    assert drift["validated_drawdown_in_usdt"] == pytest.approx(-0.13 * drift["usdt_factor"], abs=1e-12)
+    assert not any("回撤" in reason for reason in drift["reasons"])
+
+    deeper = [5_000.0 * (1 - 0.55 * i / 59) for i in range(60)]
+    alert = drift_check(_store_of(tmp_path / "b", _usdt_rows(deeper)), expectations)
+    assert any("USDT 滚动回撤" in reason for reason in alert["reasons"])
+
+
+def test_the_probe_row_carries_its_pnl_over_usdt_and_the_stop_still_reads_total_equity(tmp_path: Path) -> None:
+    from beidou_live.probe import ProbeParams
+    from beidou_live.report_decay import probe_rows
+
+    store = _store_of(tmp_path, _usdt_rows([5_000.0, 5_000.0]))
+    store.append_attribution(
+        {
+            "bar_open_ms": 1_790_640_000_000,
+            "until_ms": 1_790_643_600_000,
+            "basis": "net_exposure",
+            "by_strategy": {"flow": -50.0},
+        }
+    )
+    probe = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.02, accepted_on="2026-09-01")
+    row = probe_rows(store, (probe,), equity=10_000.0, now_ms=1_790_650_000_000, usdt_equity=5_000.0)[0]
+    assert row["pnl_pct_usdt"] == pytest.approx(-0.01, abs=1e-12)
+    assert row["pnl_pct"] == pytest.approx(-0.005, abs=1e-12), "the stop's own reading is unchanged"
+
+
+def test_noise_scale_measures_the_giveback_from_the_usdt_series_own_high(tmp_path: Path) -> None:
+    """Collateral falls while USDT peaks: the two highs are at different bars, and the page reads USDT's."""
+    from beidou_live.report_risk import noise_scale
+
+    rows = _usdt_rows([5_000.0, 5_200.0, 5_100.0, 5_050.0])
+    rows[0]["equity"] = 20_000.0  # the total-equity high, from collateral, at bar 0
+    out = noise_scale(_store_of(tmp_path, rows), "2026-09-29", vol_target=0.175)
+    assert out["usdt_hwm_u"] == 5_200.0
+    assert out["usdt_hwm_at"] == "2026-09-29T01:00:30+00:00"
+    assert out["usdt_giveback_since_hwm_u"] == pytest.approx(150.0, abs=1e-9)
+    assert out["usdt_giveback_since_hwm_hours"] == pytest.approx(2.0, abs=1e-9)
+    assert out["usdt_drawdown_vs_hwm_pct"] == pytest.approx(150.0 / 5_200.0, abs=1e-12)
+    assert out["usdt_peak_giveback_u"] == pytest.approx(150.0, abs=1e-9)
