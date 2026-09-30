@@ -95,9 +95,11 @@ from beidou_live.report_execution import (
     _restart_cost_lines,
     clock_health,
     per_order_tca,
+    plan_gap_notices,
     plan_gaps,
     restart_cost,
     tca_lines,
+    unpin_falsifier_line,
 )
 from beidou_live.report_exits import (
     exit_and_pool_events,
@@ -472,6 +474,7 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         # this is what a reader at review needs, and the two go to different places.
         notices.append("M-Q03 迟到成交：" + "；".join(str(r) for r in restarts.get("reasons") or []))
     notices.extend(fidelity_notices(payload))  # M-Q08 turnover: a review item, see `fidelity_notices`
+    notices.extend(plan_gap_notices(payload))  # the 2026-09-15 unpin's falsifier, see `plan_gap_notices`
     lagging = payload.get("long_run_sharpe") or {}
     if str(lagging.get("status")) == "FAIL":
         # M-G06.  INSUFFICIENT_DATA says nothing here on purpose - it will be the answer until
@@ -723,6 +726,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "blocked_entry": json_dumps(payload["plan_gaps"]["blocked_entry"]),
                     "blocked_exit": json_dumps(payload["plan_gaps"]["blocked_exit"]),
                     "by_reason": json_dumps(payload["plan_gaps"]["by_reason"]),
+                    "blocked_entry_streaks": json_dumps(payload["plan_gaps"].get("blocked_entry_streaks") or {}),
+                    "unpin_falsifier (5 天，registry 2026-09-15)": unpin_falsifier_line(payload["plan_gaps"]),
                 },
             ),
             (
