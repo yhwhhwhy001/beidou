@@ -37,6 +37,73 @@ from beidou_live.soak import _decided
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
 
+#: The falsifier the operator registered when the universe was unpinned on 2026-09-15, in the comment
+#: above `universe: []` in `config/alpha_registry.yaml`: "若任一标的连续 5 天记 BAND_BLOCKS_ENTRY 且没被
+#: 重排踢出池子，这条说法即被证伪，届时重议".  A comment is not something any check reads, and nothing
+#: counted it until 2026-09-30, when AKEUSDT, LSKUSDT and NEARUSDT had been kept out by D3 on every
+#: planned cycle since the k 0.175 switch (09-27T15:00Z) without leaving the pool.
+UNPIN_FALSIFIER_DAYS = 5.0
+
+
+def entry_block_streaks(rows: Sequence[dict[str, Any]], *, through_day: str) -> dict[str, dict[str, Any]]:
+    """Symbols the band has kept out of the book on every planned cycle since ``since``, still in the pool.
+
+    Only a cycle that planned is evidence: a full row carrying its ``skipped`` and ``universe`` lists.  A
+    SKIPPED or ERROR row, a guard-stopped cycle and hours with no row at all (the host asleep) neither extend
+    a streak nor break it, and ``widest_gap_hours`` names the widest such hole, because whether a hole is
+    still "consecutive" is the operator's reading of the falsifier and not this function's.  A planned cycle
+    breaks the streak when the symbol is in the pool and not blocked, or when it has left the pool.
+    """
+    open_streaks: dict[str, tuple[int, int, int, int]] = {}
+    for row in rows:
+        day, skipped, pool = _day_of(row), row.get("skipped"), row.get("universe")
+        stamp = row.get("as_of_ms", row.get("bar_open_ms"))
+        if day is None or day > through_day or row.get("phase") is not None or row.get("skip"):
+            continue
+        if not isinstance(skipped, list) or not isinstance(pool, list) or not isinstance(stamp, int | float):
+            continue
+        blocked = {str(g.get("symbol")) for g in skipped if g.get("reason") == "BAND_BLOCKS_ENTRY"}
+        blocked &= {str(symbol) for symbol in pool}
+        open_streaks = {symbol: streak for symbol, streak in open_streaks.items() if symbol in blocked}
+        for symbol in blocked:
+            first, last, cycles, gap = open_streaks.get(symbol, (int(stamp), int(stamp), 0, 0))
+            open_streaks[symbol] = (first, int(stamp), cycles + 1, max(gap, int(stamp) - last))
+    return {
+        symbol: {
+            "since": datetime.fromtimestamp(first / 1000, tz=UTC).isoformat(),
+            "days": round((last - first) / DAY_MS, 2),
+            "cycles": cycles,
+            "widest_gap_hours": round(gap / 3_600_000, 1),
+        }
+        for symbol, (first, last, cycles, gap) in sorted(open_streaks.items())
+    }
+
+
+def unpin_falsifier_line(block: Mapping[str, Any]) -> str:
+    """`plan_gaps`' reading of the 2026-09-15 falsifier, in the words the Plan gaps block and the notice share."""
+    streaks = block.get("blocked_entry_streaks") or {}
+    met = [symbol for symbol in (block.get("unpin_falsifier") or {}).get("met") or [] if symbol in streaks]
+    if met:
+        hole = max(streaks[symbol]["widest_gap_hours"] for symbol in met)
+        return (
+            "已满足："
+            + "、".join(f"{symbol} {streaks[symbol]['days']:.1f} 天" for symbol in met)
+            + f"（连续记 BAND_BLOCKS_ENTRY 且仍在池里，其间最长 {hole:.0f} 小时没有做计划的周期）；"
+            + "registry 2026-09-15 取消钉住那段写的是届时重议"
+        )
+    if streaks:
+        longest = max(streaks, key=lambda symbol: streaks[symbol]["days"])
+        return f"未满足：最长 {longest} {streaks[longest]['days']:.1f} 天，要 {UNPIN_FALSIFIER_DAYS:.0f} 天"
+    return "无：没有标的连续被挡"
+
+
+def plan_gap_notices(payload: Mapping[str, Any]) -> list[str]:
+    """A notice once the falsifier is met: what it asks for is a discussion at review, not an action this hour."""
+    block = payload.get("plan_gaps") or {}
+    if not (block.get("unpin_falsifier") or {}).get("met"):
+        return []
+    return ["取消钉住时预登记的证伪判据" + unpin_falsifier_line(block)]
+
 
 def plan_gaps(store: StateStore, day: str) -> dict[str, Any]:
     """Symbols the planner could not act on, and why - including the band's own live falsifier.
@@ -47,17 +114,26 @@ def plan_gaps(store: StateStore, day: str) -> dict[str, Any]:
     they look identical, in every other instrument, to a symbol that simply did not need trading.
     ``band_held`` counts the ordinary suppressed resize, which is what P10 cell B registered as its live
     falsifier when it widened ``no_trade_rel_band`` to 0.40 and predicted roughly 12% less turnover.
+    ``blocked_entry_streaks`` is how long each of today's blocked names has been kept out without a break,
+    read against the unpin's falsifier (`UNPIN_FALSIFIER_DAYS`).
     """
-    rows = [row for row in store.read_jsonl(store.cycles_path) if _day_of(row) == day]
+    everything = store.read_jsonl(store.cycles_path)
+    rows = [row for row in everything if _day_of(row) == day]
     gaps = [gap for row in rows for gap in (row.get("skipped") or [])]
     counted: dict[str, int] = {}
     for gap in gaps:
         counted[str(gap.get("reason"))] = counted.get(str(gap.get("reason")), 0) + 1
+    streaks = entry_block_streaks(everything, through_day=day)
     return {
         "by_reason": counted,
         "band_held": counted.get("NO_TRADE_BAND", 0),
         "blocked_entry": sorted({str(g.get("symbol")) for g in gaps if g.get("reason") == "BAND_BLOCKS_ENTRY"}),
         "blocked_exit": sorted({str(g.get("symbol")) for g in gaps if g.get("reason") == "BAND_BLOCKS_EXIT"}),
+        "blocked_entry_streaks": streaks,
+        "unpin_falsifier": {
+            "days": UNPIN_FALSIFIER_DAYS,
+            "met": [symbol for symbol, streak in streaks.items() if streak["days"] >= UNPIN_FALSIFIER_DAYS],
+        },
     }
 
 
