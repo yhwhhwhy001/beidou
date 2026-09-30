@@ -322,7 +322,13 @@ def daily_payload(
         # 3.9, reported only: a full close is one market order, so what it costs is impact, not bars.
         "liquidity_to_close": liquidity_to_close(store, day, root=data_root),
         "risk_adaptation": risk_adaptation(store, day),
-        "probes": probe_rows(store, probes, equity=equities[-1] if equities else None, now_ms=_day_end_ms(day)),
+        "probes": probe_rows(
+            store,
+            probes,
+            equity=equities[-1] if equities else None,
+            now_ms=_day_end_ms(day),
+            usdt_equity=(latest(cycles, "collateral") or {}).get("usdt_equity"),
+        ),
         # E-PR16: the week's date flips, off the checkout's files.  `gate` lets the bridge read `inert`.
         "dated_switches": dated_switch_block(day, gate=gate),
         # 2026-09-29: gate verdicts appended in the checkout and never committed (#239 found two).  Reported only.
@@ -728,7 +734,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 or {"none": 0},
             ),
             ("Risk budget (P13)", _risk_budget_lines(payload.get("risk_budget") or {})),
-            ("Drift vs expectation (equity)", payload.get("drift") or {"none": 0}),
+            # USDT since 2026-09-30; the drawdown bar is converted by `usdt_factor` (`drift_check`).
+            ("Drift vs expectation (USDT equity)", payload.get("drift") or {"none": 0}),
             (
                 "Evidence window (D-026 construction)",
                 {
@@ -878,7 +885,8 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     str(row.get("book")): (
                         f"{row.get('status')} strategy={row.get('strategy')} "
                         f"pnl_{row.get('window_days')}d={_fmt_num(row.get('pnl'))} "
-                        f"({_fmt_pct(row.get('pnl_pct'))} of equity, stop at -{_fmt_pct(row.get('max_loss'))}) "
+                        f"({_fmt_pct(row.get('pnl_pct_usdt'))} of USDT；stop 仍按总权益判："
+                        f"{_fmt_pct(row.get('pnl_pct'))} of equity, stop at -{_fmt_pct(row.get('max_loss'))}) "
                         f"days={_fmt_num(row.get('days_running'))}/{row.get('review_after_days')}"
                         # M-014 beside the countdown it belongs to.  The correlation was computed
                         # every day and read by nothing, and the one moment it decides anything is

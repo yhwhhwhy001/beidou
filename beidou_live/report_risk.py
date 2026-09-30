@@ -31,13 +31,14 @@ from beidou_live.report_common import (
     _day_of,
     _fmt_num,
     _fmt_pct,
+    _parsed,
     _store_closes,
     evidence_window,
     json_dumps,
     newest_day,
     readable_state,
 )
-from beidou_live.risk_budget import books_by_symbol
+from beidou_live.risk_budget import RiskBudgetParams, books_by_symbol, usdt_drawdown_state
 
 # Defined in `risk_budget` so the engine reads it without importing the report layer (WP-C6, 2026-09-28);
 # kept at this address because `reports` re-exports it from here.
@@ -697,6 +698,7 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         if int(row.get("bar_open_ms") or 0) >= since
     )
     return {
+        **_usdt_noise(store, trailing, today, anchor, design),
         "design_daily_sigma_u": design,
         "realised_daily_sigma_u": realised,
         "peak_giveback_u": giveback,
@@ -716,6 +718,55 @@ def noise_scale(store: StateStore, day: str, *, vol_target: float | None) -> dic
         "usdt_equity_u": usdt,
         "design_daily_sigma_in_usdt_pct": (design / usdt) if (design and usdt) else None,
         "giveback_since_hwm_in_usdt_pct": (since_hwm / usdt) if (since_hwm is not None and usdt) else None,
+    }
+
+
+def _usdt_noise(
+    store: StateStore,
+    trailing: Sequence[Mapping[str, Any]],
+    today: Sequence[Mapping[str, Any]],
+    anchor: int | None,
+    design: float | None,
+) -> dict[str, Any]:
+    """`noise_scale`'s giveback readings on the USDT series, numerator and denominator (operator, 2026-09-30).
+
+    The fourth ruler the docstring above refused to build, now the one the page prints: the high-water
+    mark is the USDT series' own (`usdt_drawdown_state`, reset by a TRANSFER), not the loop's total-equity
+    `throttle.equity_hwm`.  `design` stays the book's: it is sized on total equity, and a sigma in U is a
+    sigma in U whichever series the giveback is read on.  The total-equity keys stay in the json.
+    """
+
+    def usdt(row: Mapping[str, Any]) -> float | None:
+        value = (row.get("collateral") or {}).get("usdt_equity")
+        return float(value) if isinstance(value, int | float) and value > 0 else None
+
+    series = [(row, value) for row in trailing if (value := usdt(row)) is not None]
+    steps = [b - a for (_, a), (row, b) in pairwise(series) if not (row.get("external_flows") or {}).get("rebaselined")]
+    realised = float(np.std(steps, ddof=1) * math.sqrt(24.0)) if len(steps) >= 24 else None
+    peak = giveback = None
+    for value in (value for row in today if (value := usdt(row)) is not None):
+        peak = value if peak is None else max(peak, value)
+        giveback = (peak - value) if giveback is None else max(giveback, peak - value)
+    upto = [
+        row for row in _cycles(store) if anchor and int(row.get("as_of_ms") or row.get("bar_open_ms") or 0) <= anchor
+    ]
+    state = usdt_drawdown_state(upto, RiskBudgetParams()) if upto else {}
+    hwm, last = state.get("peak"), state.get("equity")
+    since = max(0.0, hwm - last) if (hwm is not None and last is not None) else None
+    now_at, peak_at = (_parsed(str(upto[-1].get("at"))), _parsed(state.get("peak_at"))) if upto else (None, None)
+    hours = (now_at - peak_at).total_seconds() / 3600.0 if (since is not None and now_at and peak_at) else None
+    horizon = design * math.sqrt(hours / 24.0) if (design and hours and hours > 0) else None
+    return {
+        "usdt_realised_daily_sigma_u": realised,
+        "usdt_peak_giveback_u": giveback,
+        "usdt_giveback_in_design_sigma": (giveback / design) if (giveback is not None and design) else None,
+        "usdt_hwm_u": hwm,
+        "usdt_hwm_at": state.get("peak_at"),
+        "usdt_giveback_since_hwm_u": since,
+        "usdt_giveback_since_hwm_hours": hours,
+        "usdt_giveback_since_hwm_in_design_sigma": (since / design) if (since is not None and design) else None,
+        "usdt_giveback_since_hwm_in_horizon_sigma": (since / horizon) if (since is not None and horizon) else None,
+        "usdt_drawdown_vs_hwm_pct": (since / hwm) if (since is not None and hwm) else None,
     }
 
 
@@ -1289,27 +1340,20 @@ def _noise_scale_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     measurement is doing its job; the failure was never the arithmetic, it was the name.
     """
     return {
-        "design_daily_sigma_u": _fmt_num(block.get("design_daily_sigma_u")),
-        "realised_daily_sigma_u": _fmt_num(block.get("realised_daily_sigma_u")),
-        "peak_giveback_u (today, UTC)": _fmt_num(block.get("peak_giveback_u")),
-        "giveback_in_design_sigma (today)": _fmt_num(block.get("giveback_in_design_sigma")),
-        "equity_hwm_u": _fmt_num(block.get("equity_hwm_u")),
-        "giveback_since_hwm_u": _fmt_num(block.get("giveback_since_hwm_u")),
-        "giveback_since_hwm_hours": _fmt_num(block.get("giveback_since_hwm_hours")),
-        "giveback_since_hwm_in_design_sigma": _fmt_num(block.get("giveback_since_hwm_in_design_sigma")),
-        "giveback_since_hwm_in_horizon_sigma": _fmt_num(block.get("giveback_since_hwm_in_horizon_sigma")),
-        "drawdown_vs_hwm_pct (equity)": _fmt_pct(block.get("drawdown_vs_hwm_pct")),
+        # 2026-09-30 (operator): every giveback below is on the USDT series, its own high-water mark included
+        # (`_usdt_noise`).  The total-equity readings and A-GB01's mixed one stay in the json, off the page.
+        "design_daily_sigma_u (book, sized on total equity)": _fmt_num(block.get("design_daily_sigma_u")),
+        "realised_daily_sigma_u (USDT)": _fmt_num(block.get("usdt_realised_daily_sigma_u")),
+        "peak_giveback_u (today, UTC, USDT)": _fmt_num(block.get("usdt_peak_giveback_u")),
+        "giveback_in_design_sigma (today)": _fmt_num(block.get("usdt_giveback_in_design_sigma")),
+        "usdt_hwm_u": f"{_fmt_num(block.get('usdt_hwm_u'))} @ {block.get('usdt_hwm_at') or 'n/a'}",
+        "giveback_since_hwm_u (USDT)": _fmt_num(block.get("usdt_giveback_since_hwm_u")),
+        "giveback_since_hwm_hours": _fmt_num(block.get("usdt_giveback_since_hwm_hours")),
+        "giveback_since_hwm_in_design_sigma": _fmt_num(block.get("usdt_giveback_since_hwm_in_design_sigma")),
+        "giveback_since_hwm_in_horizon_sigma": _fmt_num(block.get("usdt_giveback_since_hwm_in_horizon_sigma")),
+        "drawdown_vs_hwm_pct (USDT)": _fmt_pct(block.get("usdt_drawdown_vs_hwm_pct")),
         "ladder_drawdown_pct (R8, attributed)": _fmt_pct(block.get("ladder_drawdown_pct")),
-        "usdt_equity_u (A-GB01 denominator)": _fmt_num(block.get("usdt_equity_u")),
         "design_daily_sigma_in_usdt_pct": _fmt_pct(block.get("design_daily_sigma_in_usdt_pct")),
-        # Renamed 2026-09-20, not recomputed: the number is a conversion and stays one, but its old
-        # label let it be read as "the drawdown of my USDT" - which it is not, and which the P13 block
-        # now prints properly.  Numerator from the total-equity high, denominator from USDT, and on
-        # 2026-09-20 those two highs were 13 hours apart.
-        "giveback_since_hwm_in_usdt_pct (混口径，非 USDT 自己的回撤)": _fmt_pct(
-            block.get("giveback_since_hwm_in_usdt_pct")
-        ),
-        "→ USDT 自己的回撤见 Risk budget (P13) 的 drawdown (可动用 USDT)": "",
         "expected_exits_so_far": _fmt_num(block.get("expected_exits_so_far")),
         "exits_so_far": block.get("exits_so_far"),
     }

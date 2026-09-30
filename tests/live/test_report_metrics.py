@@ -490,11 +490,15 @@ def test_exit_counterfactuals_survive_a_truncated_parquet(tmp_path: Path) -> Non
 
 def test_drift_check_skips_bars_whose_clock_jumped(tmp_path: Path) -> None:
     """M-012 promised it; the bars were recorded but still counted as returns."""
-    clean = [_cycle(i, equity=10_000.0 + i) for i in range(60)]
+
+    def usdt(value: float) -> dict:  # drift reads USDT since 2026-09-30
+        return {"usdt_equity": value}
+
+    clean = [_cycle(i, equity=10_000.0 + i, collateral=usdt(10_000.0 + i)) for i in range(60)]
     jumped = [
         *clean[:30],
-        _cycle(30, equity=99_999.0, clock={"jumped": True}),
-        *[_cycle(i, equity=10_000.0 + i) for i in range(31, 60)],
+        _cycle(30, equity=99_999.0, clock={"jumped": True}, collateral=usdt(99_999.0)),
+        *[_cycle(i, equity=10_000.0 + i, collateral=usdt(10_000.0 + i)) for i in range(31, 60)],
     ]
     expectations = {"tsmom": {"oos_sharpe": 1.5, "full_sample_max_drawdown": -0.13}}
     without = drift_check(_store(tmp_path / "a", clean), expectations)

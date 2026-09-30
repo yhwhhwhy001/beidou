@@ -183,15 +183,16 @@ def test_the_p13_block_prints_both_drawdowns_adjacent() -> None:
     assert lines["drawdown (可动用 USDT)"].startswith("当前 20.00%"), "10% of equity is 20% of what can trade"
 
 
-def test_the_mixed_line_now_says_it_is_mixed() -> None:
-    """Not recomputed - the arithmetic was never the failure, the name was."""
-    keys = _noise_scale_lines({"giveback_since_hwm_in_usdt_pct": 0.0658})
+def test_the_mixed_line_is_off_the_page_and_the_usdt_giveback_replaces_it() -> None:
+    """2026-09-20 renamed the mixed line; 2026-09-30 (operator) put the whole section on the USDT series.
 
-    mixed = [key for key in keys if key.startswith("giveback_since_hwm_in_usdt_pct")]
-    assert len(mixed) == 1
-    assert "混口径" in mixed[0]
-    assert keys[mixed[0]] == "6.58%", "the number is the same one A-GB01 chose"
-    assert any("drawdown (可动用 USDT)" in key for key in keys), "and it points at the one that is not"
+    The mixed reading stays in the json, off the page: its numerator is the total-equity high.
+    """
+    keys = _noise_scale_lines({"giveback_since_hwm_in_usdt_pct": 0.0658, "usdt_drawdown_vs_hwm_pct": 0.0315})
+
+    assert not [key for key in keys if key.startswith("giveback_since_hwm_in_usdt_pct")]
+    assert keys["drawdown_vs_hwm_pct (USDT)"] == "3.15%"
+    assert not [key for key in keys if "(equity)" in key]
 
 
 def test_the_helper_names_where_the_deepest_reading_happened() -> None:

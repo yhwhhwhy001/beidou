@@ -133,6 +133,7 @@ def _cycles(store: StateStore, equities: list[float], *, start: int = 0, flagged
         record = {
             "bar_open_ms": base + i * 3_600_000,
             "equity": equity,
+            "collateral": {"usdt_equity": equity},  # drift reads USDT since 2026-09-30
             "skip": False,
             "guard_reasons": [],
             "targets": {},

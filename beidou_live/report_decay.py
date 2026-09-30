@@ -52,9 +52,19 @@ def expectations_from_evidence(evidence_by_strategy: dict[str, dict[str, Any]]) 
 
 
 def probe_rows(
-    store: StateStore, probes: Sequence[ProbeParams], *, equity: float | None, now_ms: int
+    store: StateStore,
+    probes: Sequence[ProbeParams],
+    *,
+    equity: float | None,
+    now_ms: int,
+    usdt_equity: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Status of every probe book (D-019) from the attribution file and the persisted stop records."""
+    """Status of every probe book (D-019) from the attribution file and the persisted stop records.
+
+    `pnl_pct_usdt` is the same P&L over the USDT equity (operator, 2026-09-30).  Reported only: the stop the
+    loop acts on (`engine._check_probes`) still reads `pnl_pct` on total equity, and which denominator the
+    stop takes belongs to the 2026-10-03 probe-stop-caliber window, whose thresholds were derived on it.
+    """
     if not probes:
         return []
     attributions = store.read_jsonl(store.attribution_path)
@@ -65,6 +75,8 @@ def probe_rows(
         status = probe_status(probe, attributions, equity=equity, now_ms=now_ms, cycles=cycles)
         if probe.book in stopped:
             status = {**status, "status": "STOPPED", "stopped": stopped[probe.book]}
+        pnl = status.get("pnl")
+        status["pnl_pct_usdt"] = float(pnl) / usdt_equity if (pnl is not None and usdt_equity) else None
         rows.append(status)
     return rows
 
@@ -582,19 +594,30 @@ def probe_correlation(store: StateStore, probes: Sequence[ProbeParams], *, since
 def drift_check(
     store: StateStore, expectations: dict[str, Any], *, window_days: int = 30, bars_per_year: float = 8760.0
 ) -> dict[str, Any]:
-    """Realised trailing Sharpe/drawdown from cycle equity versus the validation expectation."""
+    """Realised trailing Sharpe/drawdown of the USDT equity versus the validation expectation.
+
+    On USDT since 2026-09-30 (operator): total equity carries collateral at mark.  The validated drawdown
+    is a fraction of the capital the book sizes on, which is still total equity, so the same loss reads
+    `usdt_factor` times deeper here: the window's total-equity peak over its USDT peak, each series' own,
+    as `usdt_drawdown_state.vs_total_equity` reads it.  Not the last row's ratio - the loss lands in USDT,
+    so that ratio grows as USDT falls and would push the bar away from the loss it is meant to catch.
+    The bar is scaled by the factor, so the alert fires at the same book loss as before; unscaled it would
+    fire about 1.75x sooner.
+    Rows without a USDT reading are skipped, not read as zero.
+    """
     cycles = [
-        row for row in store.read_jsonl(store.cycles_path) if row.get("equity") is not None and not row.get("dry_run")
+        row
+        for row in store.read_jsonl(store.cycles_path)
+        if _usdt(row) is not None and row.get("equity") is not None and not row.get("dry_run")
     ][-(window_days * 24) :]
     if len(cycles) < 48:
         return {"status": "INSUFFICIENT_DATA", "bars": len(cycles)}
     # a bar that absorbed an external cash flow (deposit, demo reset; E-044) is not a return and is skipped
     returns = np.asarray(
         [
-            float(current["equity"]) / float(previous["equity"]) - 1.0
+            float(_usdt(current) or 0.0) / float(_usdt(previous) or 1.0) - 1.0
             for previous, current in pairwise(cycles)
-            if float(previous["equity"]) > 0
-            and not (current.get("external_flows") or {}).get("rebaselined")
+            if not (current.get("external_flows") or {}).get("rebaselined")
             # M-012: a bar whose host clock jumped re-maps every label, so neither the return into it
             # nor the one out of it is a return between two comparable timestamps
             and not (current.get("clock") or {}).get("jumped")
@@ -611,6 +634,8 @@ def drift_check(
         v["full_sample_max_drawdown"] for v in expectations.values() if v.get("full_sample_max_drawdown") is not None
     ]
     worst_expected_mdd = min(mdds) if mdds else None
+    factor = max(float(row["equity"]) for row in cycles) / max(float(_usdt(row) or 0.0) for row in cycles)
+    bar = worst_expected_mdd * factor if worst_expected_mdd is not None else None
     days = len(returns) / 24.0
     status = "OK"
     reasons: list[str] = []
@@ -620,9 +645,12 @@ def drift_check(
         if z < -2.0:
             status = "ALERT"
             reasons.append(f"实现 Sharpe {realised:.2f} 比预期的 {expected_sharpe:.2f} 低 {abs(z):.1f} 个标准误")
-    if worst_expected_mdd is not None and drawdown < 1.5 * worst_expected_mdd:
+    if bar is not None and drawdown < 1.5 * bar:
         status = "ALERT"
-        reasons.append(f"滚动回撤 {drawdown:.3f} 已超过验证期回撤 {worst_expected_mdd:.3f} 的 1.5 倍")
+        reasons.append(
+            f"USDT 滚动回撤 {drawdown:.3f} 已超过验证期回撤 {worst_expected_mdd:.3f}"
+            f"（按 USDT 换算 ×{factor:.2f} = {bar:.3f}）的 1.5 倍"
+        )
     return {
         "status": status,
         "window_days": round(days, 1),
@@ -630,8 +658,16 @@ def drift_check(
         "expected_sharpe": expected_sharpe,
         "trailing_drawdown": drawdown,
         "validated_drawdown": worst_expected_mdd,
+        "usdt_factor": factor,
+        "validated_drawdown_in_usdt": bar,
+        "series": "usdt_equity",
         "reasons": reasons,
     }
+
+
+def _usdt(row: Mapping[str, Any]) -> float | None:
+    value = (row.get("collateral") or {}).get("usdt_equity")
+    return float(value) if isinstance(value, int | float) and value > 0 else None
 
 
 def _long_run_sharpe_lines(block: Mapping[str, Any]) -> dict[str, Any]:
