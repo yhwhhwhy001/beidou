@@ -20584,3 +20584,62 @@ family gate 的 N 不动。
 - 03:01:49Z 主 checkout 一步快进到 `9d105537`，前置核对同上。
 - 快进后 `live status --check` 读 7 次、71.4%，退出码 1。旧口径同一时刻读 13 次、84.6%，多出的 6 行是 backoff 行。
 - 两条 PR 都只改记账。交易、构造指纹与三个摘要都没动。
+
+## 2026-09-30 · 重启 #66：载入 #269 的告警日志脱敏——操作者指示，本会话按 RUNBOOK 纪律执行，构造不变；shadow 同时重启
+
+只记可观测事实。时刻一律 UTC。
+
+**谁、为什么。**
+- 操作者在本会话里选「先重启」，本会话执行。#269 也是本会话写的。
+- 要载入的是 #269：告警投递失败与拒收的日志行不再写出 webhook 的完整 URL；`--verbose` 下 httpx 的请求行也压到 WARNING。
+- 主 checkout 上已有的 #266、#267 一并载入。
+- 告警 webhook 待操作者在 Lark 作废重发。改完 `~/.zshrc` 还要再重启一次，循环才会载入新地址。
+
+**主 checkout。**
+- 03:47:01Z 一步快进到 `9c677701`，即 #269 的 merge。reflog 记为 `merge 9c677701: Fast-forward`。
+- 快进前核过三件事：HEAD 仍是 `969b30e5`，工作树干净，`969b30e5` 是 `9c677701` 的祖先。
+- 更早的两次快进不是本会话做的：reflog 记着 03:01:49Z 到 `9d105537`（#266），03:15:07Z 到 `969b30e5`（#267、#268）。
+
+**重启前。**
+- 04:26Z，在安全窗口内。`ps` 读到 armed 进程是 PID 5349，02:28:08Z 起。
+- `state.restarts` 65，`restarted_at` 02:28:08Z。最后一个周期 04:00:29Z 处理 03:00 那根，OK。
+- 在 `9c677701` 上跑两个构造测试，03:48Z 前后与 04:26Z 各一次：都是 18 passed，退出码 0。
+
+**重启。**
+- 04:26:52Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，返回 0。
+- 新进程 PID 30639，启动于 04:27:22Z。launchd 的 `runs` 读回 3。
+- `state.restarts` 65 → 66，`restarted_at` 2026-09-30T04:27:22+00:00。
+- 04:29Z 读 mtime：#269 改的两个源文件是 03:47:01Z，早于进程启动：`beidou_live/alerts.py`、`beidou_cli/live_cmd.py`。
+- #266 的 `scheduler.py`、`health.py`（03:01:49Z）与 #267 的 `config.py`、`risk_budget.py`、`report_risk.py`（03:15:07Z）也都早于它。
+
+**之后。**
+- 启动日志三行：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13 …`，bridge 生效时的固定文案；
+  - 场地时钟偏差 +2.5s；
+  - `restart was 1651.4s after the bar close (window 88.7s); reconciled but did not rebalance`。
+- 04:27:31Z 为 03:00 那根写一行 SKIPPED，原因「restart outside the rebalance window; this bar was already rebalanced」。`missed_rebalances` 0，无单。
+- 没有 downtime 行：停机约 30 秒，其间没有 bar 收盘。
+- 心跳 04:27:31Z 的 construction 摘要是 `e32f3856ac1e`，与重启前相同。
+- 第一个真周期 05:00:40Z，处理 04:00 那根：OK，0 单，没有护栏原因与退出事件。
+- 三个摘要与重启前最后一个周期（04:00:29Z）相同：construction `e32f3856ac1e`、registry `7f8adb754962`、治理规则 `9cc96461276f`。权益 13,279.97，交易池 17 个。
+
+**shadow（`com.beidou.shadow`）同时重启。**
+- 重启前是 PID 880，01:36:57Z 起。按 reflog，那时主 checkout 在 `3cb0452f`。04:00:26Z 的周期 OK。
+- 03:48Z 前后读 `governance canary --remaining` 是 23。
+- 04:28:08Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.shadow`，返回 0。
+- 新进程 PID 31490，04:28:38Z 起。launchd 的 `runs` 读回 2。state 的 `restarts` 2 → 3，`restarted_at` 04:28:39Z。
+- 心跳 04:28:42Z 为 STARTED，construction 摘要 `e32f3856ac1e`。
+- 04:31Z 前后读 `--remaining` 是 22：同一轮接着跑，没有另起一轮。
+- stderr 两行：场地时钟偏差 +2.6s；`positions outside the managed universe are left untouched: ['ARBUSDT']`。shadow 是 dry run，不碰账户。
+- 重启后第一个周期 05:00:37Z，处理 04:00 那根：3 笔 dry-run 单，重启前 04:00:26Z 那个周期也是 3 笔。三个摘要与重启前相同。
+
+**paper-l3 没重启。** 它的启动脚本不载入 `BEIDOU_*`，没有告警通道。
+
+**连带的事。**
+- 本机四个日志里有 39 处旧 webhook token，都写于 09-29：`check.stderr.log` 26、`check.stdout.log` 9、`live.stderr.log` 2、`shadow.stderr.log` 2。
+- 03:47Z 快进之前，本会话把它们原地换成等长掩码（`<redacted 2026-09-30>` 加星号补齐 36 位）。inode 与文件大小不变，整个目录复查为 0 处。
+- 原地改是因为 live、shadow 与 check 任务正往这些文件追加。换 inode 会让它们接着写进一个已删掉的文件。
+- #270（Lark/飞书 webhook 的 gitleaks 规则）04:25:13Z 合入。本机 hook 读的是主 checkout 那份 `.gitleaks.toml`，快进后才生效。
+- 04:41:40Z 主 checkout 又被快进到 `e4d970e5`，不是本会话做的。它含 #270，本机 hook 从那时起认得 Lark webhook。
+- 那次快进晚于两个进程启动，多出的 #270、#271 不在它们里面。#270 只改 gitleaks 配置、文档与测试，#271 只改报告层（`report_decay.py`、`report_risk.py`、`reports.py`）。
+- 重启 #64 一节末尾提醒过：引用 `live.stderr.log` 要避开 `alert delivery failed` 那几行。代码侧由 #269（`9c677701`）修掉，这次重启载入；旧行已按上文掩码。
