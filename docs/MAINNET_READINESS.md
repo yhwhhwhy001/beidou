@@ -324,6 +324,11 @@ L-B 的设计：
 - B：要 PASS。代价：D-043 把 tsmom 今天的证据封顶在 WEAK_PASS，因为 5 个 fold 都选了同一格（:361-362）。
   拿 PASS 要一次真做选择的 validate：新预登记，计 ledger。拿到之前 L-B 不开。
 
+2026-09-30 补读数（操作者当天批准跑，RESEARCH_LOG「tsmom 在 k = 0.175 上的默认 16 格」两节）：那次真做选择的 validate
+跑了。各折自选的混合样本外 1.5840，对门 1.5984（N 357），差 −0.0144，verdict FAIL；在跑配置自己的样本外是 1.8029。
+报告是 `reports/research/tsmom-validation-20260930T142244Z.json`。所以选 A，真钱建在一份已知差 0.014 过不了门的
+选择读数上；选 B，今天没有一份证据满足它。registry 没换指针，demo 仍按 D-043 跑在封顶的 WEAK_PASS 上。
+
 **Q-M3 HC-3 要不要一道机械检查**
 
 - A：只靠规则（本文 §4.4 与 D-PR06）。代价：KILL-08 的洞还在，能开 auto-merge 的会话就能合。

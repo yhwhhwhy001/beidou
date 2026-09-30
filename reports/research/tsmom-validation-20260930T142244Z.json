@@ -1,0 +1,1048 @@
+{
+  "against_basket": {
+    "bars": 44880,
+    "basis": {
+      "basket": "equal weight, zero cost, rebalanced every bar: a volatile basket's compounded return is mostly drag, so compare Sharpe, not return",
+      "conditional": "exposure is the book's own net exposure, so this fit counts the signal's timing as beta; whether the book is passive market exposure is the constant fit",
+      "returns": "simple per-bar returns; the live D-045 page regresses log returns",
+      "signal_state": "signs of the executed positions, flat bars included; the live page counts the signal's +/-1"
+    },
+    "basket": "pit members at each bar",
+    "basket_leg": {
+      "cagr": -0.4191736105084302,
+      "max_drawdown": -0.9735654651214689,
+      "return": -0.938178217485969,
+      "sharpe": -0.19921326972215317
+    },
+    "book": {
+      "cagr": 0.29130247504531437,
+      "max_drawdown": -0.16606417972130083,
+      "return": 2.7053419960703255,
+      "sharpe": 1.583996462786068
+    },
+    "btc_buy_and_hold": {
+      "cagr": 0.12412452720645448,
+      "max_drawdown": -0.7727097974916198,
+      "return": 0.821113067905056,
+      "sharpe": 0.4847318359626357
+    },
+    "conditional": {
+      "alpha_bps_per_bar": 0.21917725325299228,
+      "alpha_t": 3.9676671032332522,
+      "beta": 0.7423697454606564,
+      "beta_t": 55.6359030646682,
+      "nw_covers_intended_horizon": true,
+      "nw_lags": 48
+    },
+    "constant": {
+      "alpha_bps_per_bar": 0.30469996284110773,
+      "alpha_t": 3.445626153146851,
+      "beta": -0.019074134222074834,
+      "beta_t": -3.2871513450888554,
+      "nw_covers_intended_horizon": true,
+      "nw_lags": 48
+    },
+    "enforced": false,
+    "signal_state": {
+      "all_long_share": 0.09922014260249554,
+      "all_short_share": 0.11265597147950089,
+      "flat_share": 0.0026515151515151517,
+      "gross_exposure_mean": 0.5244484349379468,
+      "net_exposure_mean": -0.0009831372091502343,
+      "two_sided_share": 0.7854723707664885
+    }
+  },
+  "best_key_oos_sharpe": 1.8028746545044811,
+  "best_params": {
+    "conviction_mode": "sign",
+    "crowding_cut": 0.7,
+    "crowding_penalty": 0.5,
+    "crowding_window": 72,
+    "entry_threshold": 0.2,
+    "horizon_weights": [
+      0.2,
+      0.3,
+      0.5
+    ],
+    "horizons": [
+      168,
+      336,
+      720
+    ],
+    "momentum_mode": "fixed",
+    "persistence_weight": 0.1,
+    "return_scale": 0.2,
+    "return_weight": 0.4,
+    "slope_scale": 0.01,
+    "slope_weight": 0.25,
+    "vol_window": 400
+  },
+  "best_params_selected_by": "full-sample argmax",
+  "book_guards": {
+    "daily_loss_pause": -0.05,
+    "max_gross": 2.0,
+    "max_weight": 0.15
+  },
+  "concentration": {
+    "basis": {
+      "leave_one_out": "one symbol's net column dropped; nothing re-priced, weights not renormalised, guards and exits not replayed, so the error has no known sign",
+      "units": "sums of per-bar simple net returns, not compounded; a share exceeds 100% when other names lost"
+    },
+    "enforced": false,
+    "full_sample": {
+      "net_pnl_total": 1.8061823892647688,
+      "top": [
+        [
+          "BTCUSDT",
+          0.18316237274696845
+        ],
+        [
+          "BNBUSDT",
+          0.1309160106130257
+        ],
+        [
+          "SOLUSDT",
+          0.1247521789964827
+        ]
+      ],
+      "top1_share": 0.10140856971899011,
+      "top3_share": 0.24296027077038929
+    },
+    "oos": {
+      "leave_one_out_min_sharpe": 1.5089526828438742,
+      "leave_one_out_min_without": "HYPEUSDT",
+      "net_pnl_total": 1.3842957652174497,
+      "sharpe": 1.583996462786068,
+      "top": [
+        [
+          "SOLUSDT",
+          0.12761384966127529
+        ],
+        [
+          "ADAUSDT",
+          0.1204271038532691
+        ],
+        [
+          "AVAXUSDT",
+          0.09365051336207483
+        ]
+      ],
+      "top1_share": 0.09218683815104302,
+      "top3_share": 0.24683414878679863
+    }
+  },
+  "cost_break_even": {
+    "basis": {
+      "full_sample": "the series cost_stress prices",
+      "multiple": "on turnover_bps and carry_bps_per_bar together, as cost_stress; funding and impact unscaled",
+      "oos": "the series cost_stress_gate prices: best_key re-priced, on common_index, fold test slices",
+      "zero_of": "mean per-bar net return, i.e. the Sharpe's zero: not D-028's threshold, not compounded return"
+    },
+    "full_sample": {
+      "converged": true,
+      "cost_per_multiple": 4.165086666350181e-06,
+      "linear_estimate": 9.742907517314496,
+      "mean_net_at_multiple": -2.9518278502508574e-20,
+      "multiple": 9.742907517314496,
+      "repricings": 1
+    },
+    "oos": {
+      "converged": true,
+      "cost_per_multiple": 4.298334681026408e-06,
+      "linear_estimate": 9.101196555035472,
+      "mean_net_at_multiple": 2.1645390965842513e-20,
+      "multiple": 9.101196555035472,
+      "repricings": 1
+    }
+  },
+  "cost_stress": {
+    "x1": 1.91520162451697,
+    "x1.5": 1.8055353293292233,
+    "x2": 1.6958006064135251
+  },
+  "cost_stress_gate": {
+    "x1": {
+      "clears": true,
+      "margin": 0.21319340461919212,
+      "oos_sharpe": 1.8028746545044811,
+      "threshold": 1.589681249885289
+    },
+    "x1.5": {
+      "clears": true,
+      "margin": 0.10104493704602513,
+      "oos_sharpe": 1.691443102820695,
+      "threshold": 1.59039816577467
+    },
+    "x2": {
+      "clears": false,
+      "margin": -0.011175438882668587,
+      "oos_sharpe": 1.5799505633006459,
+      "threshold": 1.5911260021833145
+    }
+  },
+  "costs": {
+    "carry_bps_per_bar": 0.0,
+    "turnover_bps": 7.0,
+    "use_funding": true
+  },
+  "cpcv": {
+    "chosen": [
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400",
+      "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400"
+    ],
+    "fraction_negative": 0.0,
+    "oos_sharpe_mean": 1.8763980145438546,
+    "oos_sharpe_min": 1.2936726107840306,
+    "oos_sharpe_q05": 1.3311775900731626,
+    "paths": 15
+  },
+  "cpcv_groups": 6,
+  "dataset": {
+    "digest": "faf73c738b4f731f",
+    "funding": {
+      "bytes": 23959195,
+      "fingerprint": "5f04d48d95249c0d",
+      "symbols": 274
+    },
+    "interval": "1h",
+    "kind": "dataset-manifest",
+    "klines": {
+      "bytes": 1032453918,
+      "fingerprint": "e147b884b20d507e",
+      "symbols": 878
+    },
+    "membership": {
+      "file": {
+        "bytes": 442969
+      },
+      "first": "2021-01-31 00:00:00+00:00",
+      "last": "2026-09-24 00:00:00+00:00",
+      "mean_size": 17.5744,
+      "median_gap_hours": 24.0,
+      "refreshes": 2063,
+      "symbols": 889,
+      "union": 212
+    },
+    "root": "/Users/maguannan/beidou/.beidou/data",
+    "universe": {
+      "count": 17,
+      "fingerprint": "a7d983afab4cc2da",
+      "selected_at_ms": 1790733623125,
+      "source": "live-refresh"
+    },
+    "version": 2
+  },
+  "embargo": 50,
+  "evidence_construction": "221d001c3c07a626",
+  "execution": "open_to_close",
+  "execution_comparison": {
+    "annualized_sharpe": 1.8865312597764505,
+    "annualized_sharpe_gross": 2.1191641000696757,
+    "average_absolute_exposure": 0.5048283187653789,
+    "bars": 49600,
+    "cost_share_of_gross": 0.10979765495791413,
+    "execution": "close_to_close",
+    "gross_return": 5.82454620628358,
+    "guards": {
+      "bars": 49600,
+      "daily_loss_pause_bars": 0,
+      "gross_capped_bars": 0,
+      "liquidation_touches": 0,
+      "min_margin_buffer": 107.30622463921829,
+      "replayed": true
+    },
+    "hit_rate": 0.5099352488870903,
+    "kurtosis": 28.420504521921696,
+    "max_drawdown": -0.10478919180872193,
+    "net_return": 4.479675621633136,
+    "nonzero_target_bars": 49409,
+    "risk_free_rate": 0.0,
+    "skew": 0.9979324587971531,
+    "sortino": 2.7861206304465473,
+    "turnover_units": 295.1261409299559
+  },
+  "exits": {
+    "bars_per_day": 24,
+    "cooldown_bars": 24,
+    "min_unit": 0.005,
+    "regime_er_cut": 0.05,
+    "regime_side": "low",
+    "regime_tp_scale": 0.5,
+    "regime_window": 0,
+    "stale_carry_bars": 2,
+    "stop_loss": 6.0,
+    "stop_loss_price_cap": 0.0,
+    "take_profit": 6.0,
+    "trailing_activate": 0.0,
+    "trailing_stop": 0.0,
+    "unit_mode": "entry",
+    "vol_halflife": 48
+  },
+  "folds": 5,
+  "full_sample": {
+    "annualized_sharpe": 1.91520162451697,
+    "annualized_sharpe_gross": 2.147897042470161,
+    "average_absolute_exposure": 0.5048283187653789,
+    "bars": 49600,
+    "cagr_caliber": "full-sample drift of the selected book, not the honest-drift bootstrap CAGR median the k decision reads beside vol_target in config/live.demo.yaml",
+    "cagr_full_sample": 0.35680872500835364,
+    "calmar_full_sample": 3.435671513829387,
+    "cost_share_of_gross": 0.10835446223654047,
+    "gross_return": 6.0089498823090794,
+    "guards": {
+      "bars": 49600,
+      "daily_loss_pause_bars": 0,
+      "gross_capped_bars": 0,
+      "liquidation_touches": 0,
+      "min_margin_buffer": 107.30041336902661,
+      "replayed": true
+    },
+    "hit_rate": 0.5104006475111291,
+    "kurtosis": 28.39888670423833,
+    "max_drawdown": -0.10385414425451167,
+    "net_return": 4.6277368548468925,
+    "nonzero_target_bars": 49409,
+    "payoff_ratio_bar": 1.020421993504347,
+    "risk_free_rate": 0.0,
+    "skew": 1.0011683367592719,
+    "sortino": 2.8297583427885793,
+    "turnover_units": 295.1261409299559
+  },
+  "full_sample_argmax_params": {
+    "conviction_mode": "sign",
+    "crowding_cut": 0.7,
+    "crowding_penalty": 0.5,
+    "crowding_window": 72,
+    "entry_threshold": 0.2,
+    "horizon_weights": [
+      0.2,
+      0.3,
+      0.5
+    ],
+    "horizons": [
+      168,
+      336,
+      720
+    ],
+    "momentum_mode": "fixed",
+    "persistence_weight": 0.1,
+    "return_scale": 0.2,
+    "return_weight": 0.4,
+    "slope_scale": 0.01,
+    "slope_weight": 0.25,
+    "vol_window": 400
+  },
+  "funding_inputs": {
+    "panel_carried": true,
+    "panel_symbols": 212,
+    "required_by": [
+      "tsmom"
+    ],
+    "symbols_settled": 212
+  },
+  "generated_at": "2026-09-30T14:22:44.096944+00:00",
+  "grid": {
+    "entry_threshold": [
+      0.2,
+      0.3
+    ],
+    "horizons": [
+      [
+        5,
+        20,
+        50
+      ],
+      [
+        24,
+        72,
+        168
+      ],
+      [
+        168,
+        336,
+        720
+      ],
+      [
+        336,
+        720,
+        1440
+      ]
+    ],
+    "return_scale": [
+      0.2,
+      0.3
+    ],
+    "vol_window": [
+      400
+    ]
+  },
+  "grid_size": 16,
+  "holdout": null,
+  "impact_model": {
+    "adv_window": 720,
+    "capital": 0.0,
+    "coefficient": 1.0,
+    "vol_window": 720
+  },
+  "interval": "1h",
+  "kind": "validation",
+  "layers": {
+    "band": "model",
+    "book_guards": {
+      "daily_loss_pause": -0.05,
+      "max_gross": 2.0,
+      "max_weight": 0.15
+    },
+    "exits": {
+      "bars_per_day": 24,
+      "cooldown_bars": 24,
+      "min_unit": 0.005,
+      "regime_er_cut": 0.05,
+      "regime_side": "low",
+      "regime_tp_scale": 0.5,
+      "regime_window": 0,
+      "stale_carry_bars": 2,
+      "stop_loss": 6.0,
+      "stop_loss_price_cap": 0.0,
+      "take_profit": 6.0,
+      "trailing_activate": 0.0,
+      "trailing_stop": 0.0,
+      "unit_mode": "entry",
+      "vol_halflife": 48
+    }
+  },
+  "ledger": {
+    "duplicate_rows": 45,
+    "ledger_rows": 214,
+    "ledger_trials": 169,
+    "pooled_sharpes": 184,
+    "replayed_rows": 0,
+    "whole_library_trials": 21652
+  },
+  "min_tenure": 0,
+  "min_train": 4000,
+  "multiple_testing": {
+    "candidate_sharpe_annual": 1.8787251812775576,
+    "degradation_slope": -0.991194243246432,
+    "dsr": 0.7250290702069011,
+    "dsr_p_value": 0.2749709297930989,
+    "expected_max_sharpe_annual": 1.62785540196138,
+    "grid_effective_trials": 8.000000000000005,
+    "grid_trials": 16,
+    "ledger_trials": 169,
+    "n_trials": 357,
+    "noise_null": {
+      "dsr_p_value": 0.06332926180880216,
+      "expected_max_sharpe_annual": 1.237789586966604,
+      "sharpe_variance_period": 2.0100743279722886e-05
+    },
+    "pbo": 0.0354,
+    "pbo_combinations": 5000,
+    "prior_trials": 172,
+    "prob_oos_loss": 0.0038,
+    "sharpe_variance_period": 3.4765631088337516e-05
+  },
+  "oos_selection": {
+    "alpha": 0.05,
+    "expected_max_annual": 1.3001214947013786,
+    "gate": "max_sharpe_quantile",
+    "n_obs": 44880,
+    "n_trials": 357,
+    "oos_sharpe_annual": 1.583996462786068,
+    "p_family": 0.056507367086431004,
+    "power": {
+      "alpha": 0.05,
+      "binding": "selection",
+      "detects": [
+        {
+          "power": 0.08729338894426664,
+          "true_sharpe_annual": 1.0
+        },
+        {
+          "power": 0.18303926781991353,
+          "true_sharpe_annual": 1.2
+        },
+        {
+          "power": 0.41169389061523154,
+          "true_sharpe_annual": 1.5
+        },
+        {
+          "power": 0.8189135718677398,
+          "true_sharpe_annual": 2.0
+        }
+      ],
+      "excludes": [
+        "cpcv_fraction_negative",
+        "pbo",
+        "fold_consistency",
+        "cost_stress_x2"
+      ],
+      "gate_annual": 1.5983715672358672,
+      "n_trials": 357,
+      "pass_line_annual": 1.0,
+      "se_annual": 0.4407529474072526,
+      "selection_threshold_annual": 1.5983715672358672
+    },
+    "threshold_annual": 1.5983715672358672,
+    "variance": 2.2176159891344796e-05
+  },
+  "oos_selection_whole_library": {
+    "alpha": 0.05,
+    "expected_max_annual": 1.7830945910538456,
+    "gate": "max_sharpe_quantile",
+    "n_obs": 44880,
+    "n_trials": 21652,
+    "oos_sharpe_annual": 1.583996462786068,
+    "p_family": 0.9706306472086633,
+    "power": {
+      "alpha": 0.05,
+      "binding": "selection",
+      "detects": [
+        {
+          "power": 0.01052118959926096,
+          "true_sharpe_annual": 1.0
+        },
+        {
+          "power": 0.031908637008333685,
+          "true_sharpe_annual": 1.2
+        },
+        {
+          "power": 0.12043783690070398,
+          "true_sharpe_annual": 1.5
+        },
+        {
+          "power": 0.48469295314335537,
+          "true_sharpe_annual": 2.0
+        }
+      ],
+      "excludes": [
+        "cpcv_fraction_negative",
+        "pbo",
+        "fold_consistency",
+        "cost_stress_x2"
+      ],
+      "gate_annual": 2.0169154351008025,
+      "n_trials": 21652,
+      "pass_line_annual": 1.0,
+      "se_annual": 0.4407529474072526,
+      "selection_threshold_annual": 2.0169154351008025
+    },
+    "threshold_annual": 2.0169154351008025,
+    "variance": 2.2176159891344796e-05
+  },
+  "portfolio": {
+    "band_entry_multiple": 2.0,
+    "budget_mode": "inverse_vol",
+    "covariance_halflife": 96,
+    "flat_inside_band": true,
+    "garch_fit_bars": 8760,
+    "garch_refit_bars": 720,
+    "hrp_refit_bars": 720,
+    "max_gross": 2.0,
+    "max_scalar": 3.0,
+    "max_weight": 0.15,
+    "min_asset_vol": 0.1,
+    "no_trade_band": 0.005,
+    "no_trade_rel_band": 0.4,
+    "sleeve_max_gross": 0.0,
+    "vol_halflife": 48,
+    "vol_model": "ewma",
+    "vol_target": 0.175
+  },
+  "preregistration": {
+    "commit": "8533df15225d6fca1c62e6e097cba3a770f9ed81",
+    "committed_at": "2026-09-30T22:19:44+08:00"
+  },
+  "prior_trials_declared": 172,
+  "purge": 50,
+  "range": {
+    "bars": 48880,
+    "end": "2026-09-28 16:00:00+00:00",
+    "start": "2021-03-02 01:00:00+00:00"
+  },
+  "reasons": [
+    "oos_sharpe 1.58 < the deflated threshold 1.60 at 357 trials, p_family=0.0565"
+  ],
+  "slippage_stress": {
+    "slip2": 1.91520162451697,
+    "slip4.43": 1.8390699096520908,
+    "slip5.5": 1.8055353293292233,
+    "slip9.2": 1.6895283272765134
+  },
+  "slippage_stress_gate": {
+    "slip2": {
+      "clears": true,
+      "margin": 0.21319340461919212,
+      "oos_sharpe": 1.8028746545044811,
+      "threshold": 1.589681249885289
+    },
+    "slip4.43": {
+      "clears": true,
+      "margin": 0.1353387752612365,
+      "oos_sharpe": 1.7255165964980796,
+      "threshold": 1.5901778212368431
+    },
+    "slip5.5": {
+      "clears": true,
+      "margin": 0.10104493704602513,
+      "oos_sharpe": 1.691443102820695,
+      "threshold": 1.59039816577467
+    },
+    "slip9.2": {
+      "clears": false,
+      "margin": -0.017589835852383384,
+      "oos_sharpe": 1.5735780795754024,
+      "threshold": 1.5911679154277858
+    }
+  },
+  "stability": {
+    "parameter_neighborhood": {
+      "base": 1.91520162451697,
+      "neighbours": {
+        "entry_threshold": {
+          "down": 1.6970586371864953,
+          "up": 1.6852488687061222
+        },
+        "return_scale": {
+          "down": 1.7978242985266952,
+          "up": 1.8316539954244242
+        },
+        "vol_window": {
+          "down": 1.91520162451697,
+          "up": 1.91520162451697
+        }
+      },
+      "not_perturbed": [
+        "horizons"
+      ],
+      "worst_degradation": 0.12006712654540685,
+      "worst_neighbour": 1.6852488687061222
+    },
+    "regime_split_basis": {
+      "cut_points": "this sample's own terciles: the state is ex-ante, the cut points are not.  Volatility trends over years, so a tercile is partly a calendar period: read it against time_split_sharpes",
+      "label_on_bar_t_reads": "benchmark bars through t-1: what was known when bar t's position was decided",
+      "series": "walk_forward oos_returns, the series time_split_sharpes splits",
+      "state": "annualised std, over vol_window_days, of benchmark_returns: equal-weight, zero cost, over the symbols the book could hold at each bar (pit members; every panel symbol if static)",
+      "vol_window_days": 30
+    },
+    "regime_split_sharpes": {
+      "high": {
+        "bars": 14960,
+        "sharpe": 0.5056666179845125,
+        "vol_from": 0.8740735119201819,
+        "vol_to": 2.2312660030465183
+      },
+      "low": {
+        "bars": 14960,
+        "sharpe": 3.1019918370323434,
+        "vol_from": 0.40311253767019284,
+        "vol_to": 0.7042183184135022
+      },
+      "mid": {
+        "bars": 14960,
+        "sharpe": 0.9139767534574048,
+        "vol_from": 0.7042206963110452,
+        "vol_to": 0.8740644938913072
+      }
+    },
+    "time_split_sharpes": [
+      1.1490360817210634,
+      1.4734955055422978,
+      1.5290132513981547,
+      2.172060610179686
+    ]
+  },
+  "strategy": "tsmom",
+  "symbols": [
+    "1000BONKUSDT",
+    "1000FLOKIUSDT",
+    "1000LUNCUSDT",
+    "1000PEPEUSDT",
+    "1000RATSUSDT",
+    "1000SATSUSDT",
+    "1000SHIBUSDT",
+    "1MBABYDOGEUSDT",
+    "AAVEUSDT",
+    "ACEUSDT",
+    "ADAUSDT",
+    "AGIXUSDT",
+    "AKEUSDT",
+    "ALICEUSDT",
+    "ALLOUSDT",
+    "ALPACAUSDT",
+    "ALTUSDT",
+    "APEUSDT",
+    "API3USDT",
+    "APTUSDT",
+    "ARBUSDT",
+    "ARKUSDT",
+    "ARPAUSDT",
+    "ASTERUSDT",
+    "ATOMUSDT",
+    "AUCTIONUSDT",
+    "AVAXUSDT",
+    "AVNTUSDT",
+    "AXSUSDT",
+    "BABYUSDT",
+    "BANDUSDT",
+    "BANKUSDT",
+    "BBUSDT",
+    "BCHUSDT",
+    "BEATUSDT",
+    "BELUSDT",
+    "BERAUSDT",
+    "BIGTIMEUSDT",
+    "BIOUSDT",
+    "BLESSUSDT",
+    "BLURUSDT",
+    "BLZUSDT",
+    "BNBUSDT",
+    "BNTUSDT",
+    "BNXUSDT",
+    "BOMEUSDT",
+    "BSBUSDT",
+    "BTCUSDT",
+    "CFXUSDT",
+    "CHIPUSDT",
+    "CHZUSDT",
+    "COAIUSDT",
+    "COMPUSDT",
+    "CRVUSDT",
+    "CTSIUSDT",
+    "CYBERUSDT",
+    "CYSUSDT",
+    "DASHUSDT",
+    "DEXEUSDT",
+    "DOGEUSDT",
+    "DOGSUSDT",
+    "DOTUSDT",
+    "DYDXUSDT",
+    "EDUUSDT",
+    "ENAUSDT",
+    "ENJUSDT",
+    "ENSOUSDT",
+    "ENSUSDT",
+    "EOSUSDT",
+    "ETCUSDT",
+    "ETHFIUSDT",
+    "ETHUSDT",
+    "EVAAUSDT",
+    "FARTCOINUSDT",
+    "FETUSDT",
+    "FILUSDT",
+    "FLMUSDT",
+    "FOLKSUSDT",
+    "FTMUSDT",
+    "FTTUSDT",
+    "FUNUSDT",
+    "GALAUSDT",
+    "GALUSDT",
+    "GASUSDT",
+    "GIGGLEUSDT",
+    "GMTUSDT",
+    "GOATUSDT",
+    "GRTUSDT",
+    "HBARUSDT",
+    "HIFIUSDT",
+    "HIGHUSDT",
+    "HNTUSDT",
+    "HUSDT",
+    "HYPERUSDT",
+    "HYPEUSDT",
+    "IDUSDT",
+    "INJUSDT",
+    "IOUSDT",
+    "IPUSDT",
+    "JASMYUSDT",
+    "JUPUSDT",
+    "KAITOUSDT",
+    "KNCUSDT",
+    "LABUSDT",
+    "LAYERUSDT",
+    "LDOUSDT",
+    "LEVERUSDT",
+    "LIGHTUSDT",
+    "LINAUSDT",
+    "LINKUSDT",
+    "LOOMUSDT",
+    "LPTUSDT",
+    "LQTYUSDT",
+    "LRCUSDT",
+    "LSKUSDT",
+    "LTCUSDT",
+    "LUNA2USDT",
+    "LUNAUSDT",
+    "MANAUSDT",
+    "MANTAUSDT",
+    "MASKUSDT",
+    "MATICUSDT",
+    "MEMEUSDT",
+    "MEWUSDT",
+    "MKRUSDT",
+    "MMTUSDT",
+    "MOODENGUSDT",
+    "MOVEUSDT",
+    "MTLUSDT",
+    "MUBARAKUSDT",
+    "MYXUSDT",
+    "NEARUSDT",
+    "NEIROETHUSDT",
+    "NEIROUSDT",
+    "NOTUSDT",
+    "NXPCUSDT",
+    "OCEANUSDT",
+    "OGNUSDT",
+    "OMUSDT",
+    "OPUSDT",
+    "ORDIUSDT",
+    "PAXGUSDT",
+    "PENGUUSDT",
+    "PEOPLEUSDT",
+    "PERPUSDT",
+    "PIPPINUSDT",
+    "PNUTUSDT",
+    "POLYXUSDT",
+    "POPCATUSDT",
+    "POWERUSDT",
+    "PUMPUSDT",
+    "RAREUSDT",
+    "RAVEUSDT",
+    "REEFUSDT",
+    "REUSDT",
+    "RIVERUSDT",
+    "RNDRUSDT",
+    "RSRUSDT",
+    "RUNEUSDT",
+    "RVNUSDT",
+    "SANDUSDT",
+    "SEIUSDT",
+    "SIRENUSDT",
+    "SKYAIUSDT",
+    "SOLUSDT",
+    "STMXUSDT",
+    "STORJUSDT",
+    "STOUSDT",
+    "STXUSDT",
+    "SUIUSDT",
+    "SUNUSDT",
+    "SUSHIUSDT",
+    "SXPUSDT",
+    "SYNUSDT",
+    "TAOUSDT",
+    "THETAUSDT",
+    "TIAUSDT",
+    "TNSRUSDT",
+    "TOMOUSDT",
+    "TONUSDT",
+    "TRBUSDT",
+    "TRUMPUSDT",
+    "TRXUSDT",
+    "TSTUSDT",
+    "TURBOUSDT",
+    "TUTUSDT",
+    "UMAUSDT",
+    "UNFIUSDT",
+    "UNIUSDT",
+    "USUALUSDT",
+    "UXLINKUSDT",
+    "VELVETUSDT",
+    "VETUSDT",
+    "VINEUSDT",
+    "VIRTUALUSDT",
+    "VOXELUSDT",
+    "WAVESUSDT",
+    "WCTUSDT",
+    "WIFUSDT",
+    "WLDUSDT",
+    "WLFIUSDT",
+    "XAIUSDT",
+    "XLMUSDT",
+    "XPLUSDT",
+    "XRPUSDT",
+    "XTZUSDT",
+    "YFIUSDT",
+    "YGGUSDT",
+    "ZECUSDT",
+    "ZILUSDT",
+    "ZROUSDT",
+    "\u5e01\u5b89\u4eba\u751fUSDT"
+  ],
+  "trial_sharpes": {
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.8787251812775576,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.6903080636463121,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[24, 72, 168]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.965069073343838,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[24, 72, 168]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.0102641946480369,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[336, 720, 1440]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.2987292341749929,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[336, 720, 1440]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.39045225296909614,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[5, 20, 50]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.3324848580654436,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.2|horizon_weights=[0.2, 0.3, 0.5]|horizons=[5, 20, 50]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.36916022184268343,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.371295887555477,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[168, 336, 720]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.198819336244233,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[24, 72, 168]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.2055282984959352,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[24, 72, 168]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 1.1305085510136152,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[336, 720, 1440]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.32927360557252866,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[336, 720, 1440]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.3273081913097015,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[5, 20, 50]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.2|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.48745979242098403,
+    "conviction_mode=sign|crowding_cut=0.7|crowding_penalty=0.5|crowding_window=72|entry_threshold=0.3|horizon_weights=[0.2, 0.3, 0.5]|horizons=[5, 20, 50]|momentum_mode=fixed|persistence_weight=0.1|return_scale=0.3|return_weight=0.4|slope_scale=0.01|slope_weight=0.25|vol_window=400": 0.9175944318296463
+  },
+  "universe_mode": "pit",
+  "verdict": "FAIL",
+  "walk_forward": {
+    "chosen_params": [
+      {
+        "conviction_mode": "sign",
+        "crowding_cut": 0.7,
+        "crowding_penalty": 0.5,
+        "crowding_window": 72,
+        "entry_threshold": 0.2,
+        "horizon_weights": [
+          0.2,
+          0.3,
+          0.5
+        ],
+        "horizons": [
+          24,
+          72,
+          168
+        ],
+        "momentum_mode": "fixed",
+        "persistence_weight": 0.1,
+        "return_scale": 0.2,
+        "return_weight": 0.4,
+        "slope_scale": 0.01,
+        "slope_weight": 0.25,
+        "vol_window": 400
+      },
+      {
+        "conviction_mode": "sign",
+        "crowding_cut": 0.7,
+        "crowding_penalty": 0.5,
+        "crowding_window": 72,
+        "entry_threshold": 0.2,
+        "horizon_weights": [
+          0.2,
+          0.3,
+          0.5
+        ],
+        "horizons": [
+          24,
+          72,
+          168
+        ],
+        "momentum_mode": "fixed",
+        "persistence_weight": 0.1,
+        "return_scale": 0.2,
+        "return_weight": 0.4,
+        "slope_scale": 0.01,
+        "slope_weight": 0.25,
+        "vol_window": 400
+      },
+      {
+        "conviction_mode": "sign",
+        "crowding_cut": 0.7,
+        "crowding_penalty": 0.5,
+        "crowding_window": 72,
+        "entry_threshold": 0.2,
+        "horizon_weights": [
+          0.2,
+          0.3,
+          0.5
+        ],
+        "horizons": [
+          168,
+          336,
+          720
+        ],
+        "momentum_mode": "fixed",
+        "persistence_weight": 0.1,
+        "return_scale": 0.2,
+        "return_weight": 0.4,
+        "slope_scale": 0.01,
+        "slope_weight": 0.25,
+        "vol_window": 400
+      },
+      {
+        "conviction_mode": "sign",
+        "crowding_cut": 0.7,
+        "crowding_penalty": 0.5,
+        "crowding_window": 72,
+        "entry_threshold": 0.2,
+        "horizon_weights": [
+          0.2,
+          0.3,
+          0.5
+        ],
+        "horizons": [
+          168,
+          336,
+          720
+        ],
+        "momentum_mode": "fixed",
+        "persistence_weight": 0.1,
+        "return_scale": 0.2,
+        "return_weight": 0.4,
+        "slope_scale": 0.01,
+        "slope_weight": 0.25,
+        "vol_window": 400
+      },
+      {
+        "conviction_mode": "sign",
+        "crowding_cut": 0.7,
+        "crowding_penalty": 0.5,
+        "crowding_window": 72,
+        "entry_threshold": 0.2,
+        "horizon_weights": [
+          0.2,
+          0.3,
+          0.5
+        ],
+        "horizons": [
+          168,
+          336,
+          720
+        ],
+        "momentum_mode": "fixed",
+        "persistence_weight": 0.1,
+        "return_scale": 0.2,
+        "return_weight": 0.4,
+        "slope_scale": 0.01,
+        "slope_weight": 0.25,
+        "vol_window": 400
+      }
+    ],
+    "fold_consistency": 1.0,
+    "fold_sharpes": [
+      1.8410300311651941,
+      0.22499277778410343,
+      2.4519956760309403,
+      1.2629637256335478,
+      2.293731003632884
+    ],
+    "folds": 5,
+    "oos_bars": 44880,
+    "oos_cagr": 0.29130247504531437,
+    "oos_calmar": 1.754155986764853,
+    "oos_is_full_sample_tail": false,
+    "oos_max_drawdown": -0.16606417972130083,
+    "oos_return": 2.7053419960703255,
+    "oos_sharpe": 1.583996462786068,
+    "oos_t_lags": 15,
+    "oos_t_stat": 3.4930529400433263,
+    "oos_window_sharpe_q10": -2.2772134648933307,
+    "oos_windows": 62,
+    "selection_consistent": false
+  }
+}
