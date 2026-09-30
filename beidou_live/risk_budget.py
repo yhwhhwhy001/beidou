@@ -63,6 +63,10 @@ class RiskBudgetParams:
     max_missed_rebalances: int = 0
     guard_window_days: int = 90
     bars_per_year: float = 8760.0
+    # The USDT the account's P&L is counted from (operator, 2026-09-30).  An account fact, declared, not read
+    # off the record: a demo reset and a real deposit both land as TRANSFER rows.  5000 is the USDT balance after
+    # the 2026-09-04 demo reset (E-044).  None prints none rather than a P&L counted from zero.
+    usdt_baseline: float | None = 5000.0
 
     def __post_init__(self) -> None:
         if not 0 < self.deescalate_at < self.rollback_at < 1:

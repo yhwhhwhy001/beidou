@@ -117,6 +117,7 @@ REPORT_ONLY_KEYS: frozenset[str] = frozenset(
         "risk_budget.max_late_cycle_share",
         "risk_budget.max_missed_rebalances",
         "risk_budget.guard_window_days",
+        "risk_budget.usdt_baseline",
     }
 )
 # `profile: demo` is a label for people.  Nothing reads it: the loop knows its profile by the `--profile` path.

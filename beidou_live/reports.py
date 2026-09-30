@@ -130,6 +130,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     _risk_budget_lines,
     _tail_readings_lines,
     _tradable_drawdown_line,
+    _usdt_pnl_lines,
     _weight_cap_line,
     collateral_share,
     holdings_correlation,
@@ -143,6 +144,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     risk_adaptation,
     risk_adaptation_headline,
     tail_readings,
+    usdt_pnl,
     weight_cap_bindings,
 )
 from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, one_row_per_order, risk_budget_status
@@ -220,6 +222,10 @@ def daily_payload(
         # L1-10: the last cycle's split of that equity into USDT and collateral.  Rows written before the
         # engine recorded it carry nothing, and nothing is what gets reported - not a zero.
         "collateral": latest(cycles, "collateral"),
+        # The report's P&L headline, on USDT only (operator, 2026-09-30).  `equity_*` above stay in the json.
+        "usdt_pnl": usdt_pnl(
+            store.read_jsonl(store.cycles_path), day, baseline=(risk_budget or RiskBudgetParams()).usdt_baseline
+        ),
         "orders": statuses,
         "traded_notional": traded,
         "realized_pnl": realized,
@@ -486,6 +492,7 @@ def weekly_payload(
     dataset: Mapping[str, Any] | None = None,
     source_lines: Mapping[str, int] | None = None,
     source_lines_week_ago: Mapping[str, int] | None = None,
+    usdt_baseline: float | None = RiskBudgetParams().usdt_baseline,
 ) -> dict[str, Any]:
     """The plan's weekly research report, which was listed as a deliverable and never built.
 
@@ -502,6 +509,7 @@ def weekly_payload(
     income = income_drift(store, expectations or {}, equity=equities[-1] if equities else None, since_ms=since_ms)
     decay = decay_watch(store, expectations or {}, equity=equities[-1] if equities else None)
     constructions = sorted({str(row.get("construction")) for row in cycles if row.get("construction")})
+    first_day = (end - timedelta(days=7)).strftime("%Y-%m-%d")
     return {
         "week_ending": day,
         "since_ms": since_ms,
@@ -509,6 +517,8 @@ def weekly_payload(
         "skipped_cycles": sum(1 for row in cycles if row.get("skip")),
         "equity_start": equities[0] if equities else None,
         "equity_end": equities[-1] if equities else None,
+        # The week's P&L on USDT only, from the declared baseline (operator, 2026-09-30); `equity_*` stay in the json.
+        "usdt_pnl": usdt_pnl(store.read_jsonl(store.cycles_path), first_day, day, baseline=usdt_baseline),
         "constructions_seen": constructions,
         "promotions": max(0, len(constructions) - 1),
         "promotion_budget": 1,
@@ -534,8 +544,11 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
         f"Weekly report, week ending {payload['week_ending']}",
         [
             (
-                "Cycles",
-                {key: payload.get(key) for key in ("cycles", "skipped_cycles", "equity_start", "equity_end")},
+                "PnL (USDT, collateral excluded)",
+                {
+                    **_usdt_pnl_lines(payload.get("usdt_pnl") or {}),
+                    **{key: payload.get(key) for key in ("cycles", "skipped_cycles")},
+                },
             ),
             (
                 # The adopted decay rule.  It cannot fire before roughly 2026-11-05 - the construction
@@ -627,10 +640,12 @@ def daily_markdown(payload: dict[str, Any]) -> str:
         f"Daily report {payload['day']}",
         [
             (
-                "Equity",
+                # Total equity carries collateral at mark, so it is not the P&L; it is still in the section
+                # below (operator, 2026-09-30: the P&L is read on USDT, from the declared baseline).
+                "PnL (USDT, collateral excluded)",
                 {
-                    k: payload[k]
-                    for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
+                    **_usdt_pnl_lines(payload.get("usdt_pnl") or {}),
+                    **{k: payload[k] for k in ("cycles", "skipped_cycles")},
                 },
             ),
             # Second, because a date is the one finding here that has a deadline (E-PR16).
