@@ -863,6 +863,17 @@ def _tradable_drawdown_line(block: Mapping[str, Any]) -> str:
     )
 
 
+def _vol_note(volatility: Mapping[str, Any]) -> str:
+    """How P13's realised vol was put together since 2026-09-30: restated across constructions, holes left out."""
+    dropped = volatility.get("dropped") or {}
+    parts = []
+    if volatility.get("rescaled"):
+        parts.append(f"按当前 k 折算 {volatility['rescaled']} 根，跨 {volatility.get('constructions')} 个构造")
+    if dropped.get("gaps") or dropped.get("unknown_target"):
+        parts.append(f"丢掉跨空档 {dropped.get('gaps', 0)} 根、找不到 k 的 {dropped.get('unknown_target', 0)} 根")
+    return f"（{'；'.join(parts)}）" if parts else ""
+
+
 def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
     """One readable line per metric; a metric that could not be computed says why instead of showing 0."""
     if not block:
@@ -887,7 +898,7 @@ def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         # Current first: "回撤是多少" was asked on 2026-09-20 and answered with the line above, which is
         # the deepest reading ever and not today's.
         "drawdown (可动用 USDT)": _tradable_drawdown_line(tradable),
-        "realised vol": number(volatility, "{:.1%}") + f" band {volatility.get('band')}",
+        "realised vol": number(volatility, "{:.1%}") + f" band {volatility.get('band')}" + _vol_note(volatility),
         "slippage": number(slippage, "{:.2f} bps") + f" limit {slippage.get('limit')} bps",
         "guards": f"pause {guards.get('daily_loss_pause_bars')} / capped {guards.get('gross_capped_bars')} bars"
         f" in {guards.get('window_days')}d",
