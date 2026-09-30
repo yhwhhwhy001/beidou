@@ -83,6 +83,18 @@ ALREADY_REBALANCED_REASON = "restart outside the rebalance window; this bar was 
 #: ALREADY_REBALANCED_REASON, so naming it here is all the wiring a miss needs.
 BACKOFF_REASON = "failure backoff slept through this bar's close"
 
+#: The fourth, and the one the other three all assumed away: no process at all.  A restart charged the
+#: ONE bar it woke on and nothing before it, and the backoff only runs inside a live process, so the
+#: bars between the last one in the record and the restart left no row.  Measured 2026-09-30: the host
+#: slept and shut down after the 09-29 13:00 bar, came back at 01:36Z, and the restart row said
+#: `missed_rebalances: 1` for a gap of eleven bars.  Its own name rather than MISSED_REBALANCE_REASON
+#: because `restart_cost` counts every non-backoff skip as a restart - one outage is one restart, not ten.
+DOWNTIME_REASON = "no process was running at this bar's close"
+
+#: How far back a restart charges.  A week: past that the days are out of every window M-Q03 and the
+#: daily report read, and a state directory that old is a different question from a missed bar.
+DOWNTIME_MAX_BARS = 168
+
 
 def restart_reason(*, bar_open_ms: int, last_traded_bar_ms: int | None) -> str:
     """Which of the two a late restart is, decided by the record rather than by the clock.

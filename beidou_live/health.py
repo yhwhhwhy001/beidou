@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from beidou_live.scheduler import DOWNTIME_REASON
+
 #: When a run of ERROR cycles stops being the proxy blinking and becomes an incident.  `live status
 #: --check` fails on `phase == "ERROR" and consecutive_errors >= 3`, which is the alarm that pages the
 #: operator, and §5 L3's streak bar is the same number by construction: a week that contained an
@@ -75,14 +77,16 @@ def cycle_health(
 
     A failed cycle is a row with ``phase == "ERROR"`` (written since 2026-09-04); a
     guard-skipped cycle counts as a success, because the loop did the right thing.
-    Dry-run rows are excluded: they are rehearsals, not the loop doing its job.
+    Dry-run rows are excluded: they are rehearsals, not the loop doing its job.  So are the rows a
+    restart writes for bars that closed while no process ran (2026-09-30): nothing attempted them,
+    and as SKIPPED rows they would each count as a success.  The outage is M-Q03's to charge.
     """
     cutoff = now - timedelta(hours=window_hours)
     attempts = failures = 0
     failure_days: set[str] = set()
     last_failure: str | None = None
     for row in rows:
-        if row.get("dry_run"):
+        if row.get("dry_run") or row.get("reason") == DOWNTIME_REASON:
             continue
         stamp = _stamp(row)
         if stamp is None:

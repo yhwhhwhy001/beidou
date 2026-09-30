@@ -50,6 +50,8 @@ from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state,
 from beidou_live.scheduler import (
     ALREADY_REBALANCED_REASON,
     BACKOFF_REASON,
+    DOWNTIME_MAX_BARS,
+    DOWNTIME_REASON,
     last_closed_bar_open_ms,
     late_seconds,
     rebalance_window_seconds,
@@ -579,6 +581,10 @@ class LiveEngine:
             throttle_interval=self.config.throttle_interval_seconds,
             startup_seconds=self.startup_seconds,
         )
+        # The bar `immediate` handles below is its own; without `immediate` the last closed bar is part of
+        # the gap too, because nothing after this line will ever trade it.
+        last_closed = last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms)
+        self._record_downtime(before_ms=last_closed if immediate else last_closed + self.config.interval_ms)
         if immediate:
             bar = last_closed_bar_open_ms(self.clock.now_ms(), self.config.interval_ms)
             window = self.rebalance_window
@@ -614,6 +620,47 @@ class LiveEngine:
             if await self.guarded_cycle(bar) is not None:
                 succeeded += 1
         return succeeded
+
+    def _record_downtime(self, *, before_ms: int) -> None:
+        """One row per bar that closed while no process was running, up to (not including) ``before_ms``.
+
+        The gap starts after the newest bar the record already names, not after `state.last_bar_ms`:
+        that is the last COMPLETED cycle, and a process that failed or backed off before it died has
+        already written its own ERROR and SKIPPED rows for the bars after it - charging them again here
+        would count one miss twice.  A record with no rows of this process's kind is a first start, and
+        a first start owes nothing.
+        """
+        interval = self.config.interval_ms
+        named = [
+            int(bar)
+            for row in self.store.read_jsonl(self.store.cycles_path)
+            if bool(row.get("dry_run")) == self.config.dry_run and isinstance(bar := row.get("bar_open_ms"), int)
+        ]
+        if self.state.last_bar_ms is not None:
+            named.append(int(self.state.last_bar_ms))
+        if not named:
+            return
+        first = max(named) + interval
+        owed = max(0, (before_ms - first) // interval)
+        if owed == 0:
+            return
+        if owed > DOWNTIME_MAX_BARS:
+            logger.error(
+                "%d bars closed with no process running; charging the newest %d (DOWNTIME_MAX_BARS)",
+                owed,
+                DOWNTIME_MAX_BARS,
+            )
+            first = before_ms - DOWNTIME_MAX_BARS * interval
+        now = self.clock.now_ms()
+        window = self.rebalance_window if self.rebalance_window is not None else 0.0
+        for bar in range(first, before_ms, interval):
+            self._record_missed_rebalance(bar, late_seconds(bar, interval, at_ms=now), window, reason=DOWNTIME_REASON)
+        logger.warning(
+            "no process was running at %d bar closes (%s .. %s); each counted as a missed rebalance",
+            (before_ms - first) // interval,
+            datetime.fromtimestamp(first / 1000, tz=UTC).isoformat(),
+            datetime.fromtimestamp((before_ms - interval) / 1000, tz=UTC).isoformat(),
+        )
 
     def _record_missed_rebalance(
         self, bar_open_ms: int, age_seconds: float, window_seconds: float, *, reason: str
@@ -656,6 +703,8 @@ class LiveEngine:
                 "dry_run": self.config.dry_run,
             }
         )
+        if reason == DOWNTIME_REASON:
+            return  # `_record_downtime` says it once for the whole gap
         if reason == BACKOFF_REASON:
             logger.warning(
                 "failure backoff slept through the close of bar %s (%.1fs ago); counted as a missed rebalance",
@@ -1887,7 +1936,13 @@ class LiveEngine:
         # Always set by `run()` before the first cycle; 0.0 only when a cycle is driven directly.
         window = self.rebalance_window if self.rebalance_window is not None else 0.0
         last_closed = last_closed_bar_open_ms(resumed, interval)
-        limit = int(max(0, resumed - started) // interval) + 1
+        # Bars that had already closed when the sleep began are owed too, and are read off the clock
+        # BEFORE the sleep, so a jump during it cannot inflate them.  Until 2026-09-30 the bound was the
+        # sleep alone, which assumed the failed cycle ran on time: on 2026-09-29 the host slept, the
+        # 06:00 cycle failed at 08:58Z with 07:00 already closed, a 4.78h sleep allowed 5 rows for the 6
+        # bars 07-12, and 12:00 was left with none.
+        already = max(0, (last_closed_bar_open_ms(started, interval) - bar_open_ms) // interval)
+        limit = already + int(max(0, resumed - started) // interval) + 1
         bar = bar_open_ms + interval
         while bar <= last_closed and limit > 0:
             self._record_missed_rebalance(

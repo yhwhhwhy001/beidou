@@ -32,7 +32,12 @@ from beidou_live.risk_budget import (
     one_row_per_order,
     slippage_bps,
 )
-from beidou_live.scheduler import ALREADY_REBALANCED_REASON, BACKOFF_REASON, MISSED_REBALANCE_REASON
+from beidou_live.scheduler import (
+    ALREADY_REBALANCED_REASON,
+    BACKOFF_REASON,
+    DOWNTIME_REASON,
+    MISSED_REBALANCE_REASON,
+)
 from beidou_live.soak import _decided
 from beidou_live.state import StateStore
 from beidou_shared.config import load_yaml
@@ -145,6 +150,10 @@ def _woke_seconds_after_close(row: Mapping[str, Any], interval_ms: int) -> float
     return max(0.0, (woke_ms - (float(bar) + interval_ms)) / 1000.0)
 
 
+#: Skip rows that are misses but not restarts: the process that wrote them had no wake-up of its own there.
+NOT_A_RESTART = frozenset({BACKOFF_REASON, DOWNTIME_REASON})
+
+
 def restart_cost(
     rows: Sequence[Mapping[str, Any]],
     trades: Sequence[Mapping[str, Any]] = (),
@@ -218,8 +227,10 @@ def restart_cost(
             # of zero could not see them at all (the loop stayed up, so nothing else recorded the gap).
             # They are genuine MISSES and are charged below; counting them as restarts too would make a
             # single six-hour outage read as six process restarts and inflate `worst_restart_late`,
-            # which is the number the failure action "查重启原因" sends someone to look at.
-            if reason != BACKOFF_REASON:
+            # which is the number the failure action "查重启原因" sends someone to look at.  The bars a
+            # restart charges for the time no process ran (2026-09-30) are the same kind: the restart
+            # already has its own row, and an eleven-bar outage is one restart.
+            if reason not in NOT_A_RESTART:
                 restarts += 1
             # A bar that was already rebalanced cannot have had its rebalance missed.  The row still
             # carries the window the engine allowed, so `widest_window_seconds` keeps it; only the miss
@@ -230,7 +241,7 @@ def restart_cost(
                 reached.add(bar)
             if isinstance(window := row.get("window_seconds"), int | float):
                 windows.append(float(window))
-            if reason != BACKOFF_REASON and isinstance(value := row.get("late_seconds"), int | float):
+            if reason not in NOT_A_RESTART and isinstance(value := row.get("late_seconds"), int | float):
                 restart_late.append(float(value))
             continue
         # The bar is per row when the row carries it (every completed cycle does, from 2026-09-10) and
