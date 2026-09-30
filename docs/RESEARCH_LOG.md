@@ -20803,3 +20803,83 @@ evidence: reports/research/tsmom-validation-20260929T023619Z.json sha256=b8f6890
 | 1 | 若启动门对新报告读出问题，则 10-03 那次重启被挡，循环停在重试里 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
 | 2 | 若报告的 N 不是 356 或 357，则某个指纹变了，family gate 的 N 会跟着意外变动 | 报告 `oos_selection.n_trials` 与 `multiple_testing.ledger_trials` | N ∉ {356, 357} | 合入前对照报告的 replayed 行数与三个指纹 |
 | 3 | 若并行会话在合入前也往 tsmom 桶写了行，则 ledger 合并冲突，N 要重读 | `git merge` 的冲突；夜间 governance-gate 的 family gate 行 | ledger 行数 ≠ 22,215 + 16 | 合入前 `git fetch`，按时间顺序拼接 ledger，重算 N |
+
+## 2026-09-30 · 结果：tsmom 在 k = 0.175 上的默认 16 格——各折真做了选择，混合样本外 1.5840 对门 1.5984，FAIL
+
+按上一节预登记，一字不改地跑。
+
+- 预登记提交 `8533df15`，提交时刻 14:19:44Z，开跑前已推上远端。开跑 14:19:59Z，报告写于 14:22:44Z，用时 2 分 45 秒。
+- 开跑前的进程检查为空，环境里没有 `BEIDOU_TRIALS_LEDGER`。代码是 main `ef0d8c80` 加预登记那一个提交。
+- 报告：`reports/research/tsmom-validation-20260930T142244Z.json`，sha256 `75f5ff5769bce29a443841f8ea9afc4c8c84d62a0a19ddd38961e769a91a1746`。
+- `trials.jsonl`：22,215 行变成 22,231 行（+16），sha256 前 16 位从 `001d643cae5d48d4` 变成 `7fd3c3bfe6c825fc`。
+
+### 判据
+
+| # | 判据 | 读数 | 结果 |
+| --- | --- | --- | --- |
+| 1 | `oos_is_full_sample_tail` 为假 | 否；`selection_consistent` 也是否 | 成立 |
+| 2 | `oos_sharpe > threshold_annual + 1e-9` | 1.5840 对 1.5984 | 不成立，差 −0.0144 |
+| 3 | verdict | FAIL：`oos_sharpe 1.58 < the deflated threshold 1.60 at 357 trials, p_family=0.0565` | — |
+
+诚实读数在门下，这就是假设所说的。按预登记第 6 项不换指针：registry 一行未改，在位证据仍是
+`tsmom-validation-20260929T023619Z.json`（WEAK_PASS，D-043 封顶）。
+
+### 各折选了什么
+
+| fold | horizons | entry_threshold | return_scale | 样本外 Sharpe |
+| --- | --- | ---: | ---: | ---: |
+| 1 | [24, 72, 168] | 0.20 | 0.20 | 1.841 |
+| 2 | [24, 72, 168] | 0.20 | 0.20 | 0.225 |
+| 3 | [168, 336, 720] | 0.20 | 0.20 | 2.452 |
+| 4 | [168, 336, 720] | 0.20 | 0.20 | 1.263 |
+| 5 | [168, 336, 720] | 0.20 | 0.20 | 2.294 |
+
+全样本 argmax 就是在跑的配置，逐键相同（含 `crowding_window` 72）。它自己的 walk-forward 样本外是 1.8029，
+与各折自选的混合差 0.219。09-19 在 k = 0.60 上同一个差是 0.2986（1.5292 对 1.2306）。
+
+### N 是 357，不是预登记算的 356
+
+预登记第 4 项把在跑那一格算成 replay，理由是它与 09-29 那一行同一个 fold key。**这一步算错了。**
+fold key 还含 `range_start`（`beidou_alpha/validation/ledger.py:128-153`）。16 格里 `[336, 720, 1440]` 那几格的预热
+长 720 根，公共区间因此从 2021-03-02 01:00 起，09-29 那一行是 2021-01-31 01:00。两行不同，这一格记成新 trial：
+N = 169 + 172 + 16 = 357。多计一笔，方向是对的，分母只许往多里错。
+
+判定不受影响：按新报告自己的方差，N = 356 时门是 1.5981，1.5840 同样在门下。预登记第 9 项第 2 行的证伪线
+（N ∉ {356, 357}）没有成真；原因在这里写明，再合入。
+
+### 其余读数（只报告，不进判定）
+
+| 读数 | 值 |
+| --- | --- |
+| 区间 | 2021-03-02T01:00Z 到 2026-09-28T16:00Z，48,880 根；样本外 44,880 根 |
+| CPCV | mean 1.8764，q05 1.3312，min 1.2937，负路径 0 |
+| DSR p / PBO | 0.2750 / 0.0354 |
+| 16 格折合独立试验 | 8.0 |
+| 成本 x2（best_key 口径） | 样本外 1.58 对门 1.59，headroom −0.01 |
+| 滑点 9.2 bps（best_key 口径） | headroom −0.02 |
+| 对篮子，常数拟合（混合） | beta −0.02（t −3.29），alpha 0.305 bps/bar（t 3.45） |
+| signal state（混合） | 两边都有仓 78.5%，全多头 9.9%，全空头 11.3% |
+| regime 分段（混合） | 低 3.10，中 0.91，高 0.51 |
+| 集中度（混合） | 样本外前一名 SOLUSDT 9.2%；去掉 HYPEUSDT 后 1.58 → 1.51 |
+| 全书口径（R0，只报告） | N 21,652 时门 2.02，headroom −0.43 |
+
+### entry_threshold 的曲面（09-30 体检第一遍 🟡 那条要的）
+
+在跑的 horizons `[168, 336, 720]` 上，四格的全样本 Sharpe（16 格的公共区间）：
+
+| return_scale | entry_threshold 0.20 | entry_threshold 0.30 |
+| --- | ---: | ---: |
+| 0.20 | 1.88 | 1.37 |
+| 0.30 | 1.69 | 1.20 |
+
+从 0.20 到 0.30，两种 return_scale 下都掉约 0.5。换一组 horizons，方向就反过来：`[24, 72, 168]` 上 0.30 比 0.20 高
+（1.21、1.13 对 0.97、1.01），`[5, 20, 50]` 上也是。所以在跑配置站在一个局部峰上。赢的是 horizons 与
+entry_threshold 这一对组合，不是一片高原。
+
+### 后果
+
+- registry 不动，demo 照跑在在位证据上。
+- tsmom 桶的 N 从 341 变成 357。在位证据（样本外 1.8257）的门按它自己的方差是 1.5772，headroom 从 +0.2537
+  降到 +0.2485。
+- 读数写进 `docs/MAINNET_READINESS.md` 的 Q-M2。
+- 按预登记：不重跑，不换网格，不申诉门，`governance/reopen.yaml` 不改。
