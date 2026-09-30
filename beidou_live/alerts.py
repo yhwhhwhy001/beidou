@@ -18,12 +18,14 @@ and the return value is what lets the caller refuse to exit quietly.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import httpx
 
@@ -51,6 +53,39 @@ def payload_for(url: str, text: str) -> dict[str, object]:
     if any(host == known or host.endswith(f".{known}") for known in LARK_HOSTS):
         return {"msg_type": "text", "content": {"text": text}}
     return {"text": text}
+
+
+def redacted(url: str) -> str:
+    """How a log line or the drill names a webhook: scheme, host and a short digest, never the path.
+
+    A webhook URL is a credential - whoever holds it can post as the bot - and a Lark bot's token IS its
+    last path segment.  Until 2026-09-30 a failed delivery logged the whole URL: 39 lines in four local
+    logs on 2026-09-29, in a repository that copies log lines into the public `docs/RESEARCH_LOG.md`.
+    The digest tells two URLs on one host apart (both channels can be Lark bots) and changes when one is
+    rotated; `printf %s "$URL" | shasum -a 256` reproduces it.  Eight hex digits cannot give back a token.
+    """
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:8]
+    try:
+        parts = urlsplit(url)
+        channel = f"{parts.scheme}://{parts.hostname}/..." if parts.hostname else "(unparseable)"
+    except ValueError:
+        channel = "(unparseable)"
+    return f"{channel}(sha256 {digest})"
+
+
+def scrubbed(text: str, url: str) -> str:
+    """``text`` with every piece of ``url`` long enough to be a credential replaced.
+
+    For the text this module does not write: an exception's message and a provider's reply.  httpx 0.28's
+    `HTTPStatusError` spells the whole URL, and a provider may quote back the token it refused.  The URL is
+    cut at its delimiters rather than matched whole, because httpx normalises what it prints (host case,
+    percent-encoding) and a token survives that unchanged.  Pieces under 8 characters stay: a Lark token is
+    36, and `bot`, `hook` and `v2` are not secrets.  Longest first, so no piece is left half-replaced.
+    """
+    for piece in sorted(set(re.split(r"[/?&=#@:]", url)), key=len, reverse=True):
+        if len(piece) >= 8:
+            text = text.replace(piece, "<redacted>")
+    return text
 
 
 def accepted(response: httpx.Response) -> bool:
@@ -199,12 +234,18 @@ class WebhookAlerts:
                 try:
                     response = await client.post(url, json=payload_for(url, text))
                 except httpx.HTTPError as exc:
-                    logger.warning("alert delivery failed (%s): %s", url, exc)
+                    # The class as well: `%s` of an httpx error is its message alone, and a ReadError's is
+                    # empty - each of the 39 warnings of 2026-09-29 ended in "): " and named only the URL.
+                    detail = scrubbed(str(exc), url)
+                    reason = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+                    logger.warning("alert delivery failed (%s): %s", redacted(url), reason)
                     continue
                 if accepted(response):
                     delivered = True
                 else:
-                    logger.warning("alert rejected by %s: HTTP %s %s", url, response.status_code, response.text[:200])
+                    # Scrubbed before it is cut, or a token straddling the cut keeps its first characters.
+                    reply = scrubbed(response.text, url)[:200]
+                    logger.warning("alert rejected by %s: HTTP %s %s", redacted(url), response.status_code, reply)
         if delivered:
             self._last_sent[fingerprint] = asked
             self._save_state()
