@@ -18,30 +18,42 @@ entries:
     queued: 2026-09-12
     earliest_window: 2026-10-03
     change: >-
-      **2026-09-30 更正在前：阈值用 flow_short 4.5%、main 7.5%。** 原文的 7.5% / 11.2% 是 k = 0.30 时量的，已经过期；
-      同一条规则在 k = 0.175 上给出前面这两个数。照旧数应用，flow 的 −7.5% 在 48,361 个 30 天窗口里一次都碰不到，
-      又回到这条变更要修的「打不响」。应用时用 `measured_at` 记下的那套配置上量出的数；vol_target 或 fraction
-      变了先重量（`scratchpad/probe_stop_tails.py`，零 ledger），再改这里的数与 `measured_at`。测试钉住两边一致。
+      **2026-09-30 更正在前：先定口径，再取数。** 同一条规则（经验 2.28% 分位数）在 k = 0.175 上：按 book 报告与实盘
+      用的 pit 成员口径，pit：flow_short 2.5%、main 5.1%；按 09-12 脚本的实现口径（面板里全部币，不套成员表），
+      全面板：flow_short 4.5%、main 7.5%。原文的 7.5% / 11.2% 是 k = 0.30、全面板口径的数，在两种口径下 flow 都一次
+      不触发，又回到这条变更要修的「打不响」。用哪个口径由操作者定（2026-09-30 系统审查的 D1）；应用前在应用那天的
+      配置上重量（`scratchpad/probe_stop_tails.py pit|panel`，零 ledger），再改这里的数、`thresholds` 与 `measured_at`。
       原文（2026-09-12）：`probe_status` 的闸从「已实现归因收入」改读「盯市」口径（`marked_pnl`，已实现并已在日报并排打印），
       同时把 `config/alpha_registry.yaml` 的 `probe.stop.max_loss` 改为该口径下的经验 2.28% 分位数：
       flow_short 2.0% → **7.5%**，main 6.0% → **11.2%**。两者必须一起改。
     measured: >-
-      **2026-09-30 重量在前**（同一方法、同一段面板，今天的 profile 与 registry，k = 0.175；面板 878 币；
-      `scratchpad/probe_stop_tails.py`，读数全文在 RESEARCH_LOG 同日一节）：flow_short 年化 σ 5.59% / 30 天 σ 1.887% /
-      2.28% 分位数 −4.51%；main 17.58% / 4.473% / −7.54%。30 天窗口落到阈值以下的比例：flow 现行 2.0% 13.3%、
-      规则值 4.5% 2.31%、旧数 7.5% 0.000%；main 现行 6.0% 5.80%、规则值 7.5% 2.36%、旧数 11.2% 0.196%。
+      **2026-09-30 重量在前**（k = 0.175，同一段面板 2021-01-31 → 2026-09-07，每本书自己的权重路径；
+      `scratchpad/probe_stop_tails.py`，读数全文在 RESEARCH_LOG 同日一节）。pit（212 币，逐 bar 套成员表）：
+      flow_short 年化 σ 4.86% / 30 天 σ 1.407% / 2.28% 分位数 −2.48%；main 17.32% / 4.053% / −5.09%。
+      全面板（878 币，09-12 的口径）：flow_short 5.59% / 1.887% / −4.51%；main 17.58% / 4.473% / −7.54%。
+      30 天窗口落到阈值以下的比例，pit：flow 现行 2.0% 4.70%、规则值 2.5% 2.18%、旧数 7.5% 0.000%；
+      main 现行 6.0% 1.07%、规则值 5.1% 2.27%、旧数 11.2% 0.000%。全面板：flow 13.3% / 2.31% / 0.000%；
+      main 5.80% / 2.36% / 0.196%。
       原文（2026-09-12，k = 0.30）：在被验证过的面板（2021-01-31 → 2026-09-07，49,080 bar × 241 币）上重建每本书自己的权重路径，
       取 w_{t-1}·r_t 的 30 天滚动和：flow_short 年化 σ 9.70% / 30 天 σ 3.239% / 2.28% 分位数 −7.51%；
       main 29.69% / 7.233% / −11.22%。现行阈值分别位于 0.62σ 与 0.83σ；而在循环现在读的那个
       已实现口径上，flow 的 −2% 位于 **14.6σ**——打不响。
-    # What the thresholds above were measured on: the profile's vol target and the registry's flow fraction.
-    # They are shares of equity and the book's P&L scales with both, so they belong to these values and no others.
-    # `tests/governance/test_the_batch_window_has_a_list.py` goes red when the profile or the registry moves
-    # away from it while this entry is still queued: re-measure, then update the numbers and this block.
+    # The rule's values on the configuration in `measured_at`, per population, as numbers a test can hold the text to.
+    # Which population applies is the operator's call (2026-09-30 system audit, D1).
+    thresholds:
+      pit: {flow_short: 0.025, main: 0.051}
+      panel: {flow_short: 0.045, main: 0.075}
+    # What the thresholds were measured on.  They are shares of equity, and the book's P&L moves with everything the
+    # evidence construction digest covers (vol target, half-lives, caps, bands, exits) and with the registry (signal
+    # params, weights, fractions), so they belong to these digests and no others.  The two readable fields repeat the
+    # two that moved before.  `tests/governance/test_the_batch_window_has_a_list.py` goes red when any of them moves
+    # while this entry is queued: re-measure, then update the numbers, `thresholds` and this block together.
     measured_at:
       vol_target: 0.175
       flow_short_fraction: 0.333333
-      commit: ec2d97a7
+      evidence_construction: 221d001c3c07a626
+      registry: 7f8adb754962
+      commit: 4e3ceb87
     why_it_waits: >-
       **2026-09-30 更正在前：它不是构造变更。** `stop_of` 在 `registry_digest` 里，不在 `construction_fingerprint`
       里，09-12 的 `3e584cbf` 上就是这样（`registry_digest` 从第 1631 行起，`stop_of` 在 1657 行，
@@ -55,6 +67,8 @@ entries:
       清零的是 M-Q08：它的比较窗口要求构造与 registry 摘要都不变（`execution_fidelity.comparison_window`）。
       现行构造 `e32f3856ac1e` 下，M-Q08 第一次判定最早约 10-13；10-03 应用会推到约 10-18。
       另要改 `probe_status` 读哪个口径（代码），再重启一次，循环才会读新的 registry 与新代码。
+      以上是今天 main 上的规则。在途的 #280 让证据窗口（M-010、衰减规则）也在 registry 摘要变化处截断，只改 probe stop
+      的变更可以在 `REGISTRY_ALIASES` 里声明等价。与 flow 退役同一次做时，构造本来就变，这一笔不另算。
       原文（2026-09-12）：清零 M-010 的 30 天窗口（应用当日归零，最早读数顺延约 8 天）并重启 M-G06 的 18 个月。
       这是任何一次构造变更都要付的同一笔钱，所以它应当与该窗口的其他构造变更**一起**付。
     prereg: b883d01e
@@ -70,6 +84,13 @@ entries:
       注释写着「随 vol_target 等比例调」（09-04 那次 0.01 → 0.02），09-14（0.30 → 0.60）与 09-27（0.60 → 0.175）
       两次改 k 都没跟。在循环现在读的已实现口径上，这道闸按哪个数都打不响，所以没有影响过交易。本条应用时，
       阈值按上面的规则在应用那天的构造上重定，那条「等比例」注释随之作废。
+      2026-09-30 再补一条：阈值一旦写进 registry，本条标 `applied`，这里的守卫就停了，registry 里的数又没人钉。
+      应用的那个 PR 要在 registry 的 probe 块旁记下 `measured_at`，并把 `test_the_batch_window_has_a_list.py` 里的守卫
+      搬去读 registry，否则「k 变了阈值没跟」会在 registry 里再发生一次。
+      2026-09-30 操作者裁定（Backtest guard 会话，记录在 #279）：10-03 一次重启载入 tsmom 主书 stop 重定阈、本条与
+      flow 退役，之后 60 天不改构造与 registry。flow 退役后 flow_short 的阈值作废，要定的只剩 main 用哪个口径
+      （pit 5.1% 或全面板 7.5%，2026-09-30 系统审查 D1）。那次的 registry 改动会让本条的守卫变红，这是设计：
+      应用的 PR 把本条标 `applied`；若只退役 flow、本条不应用，就在新 registry 上重量 main，再改 `measured_at`。
 
   - id: vol-target-repricing
     subject: 在冲击成本模型下重推 `vol_target`

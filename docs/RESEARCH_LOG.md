@@ -20726,7 +20726,7 @@ family gate 的 N 不动。
 - 构造变更不再让这个钟清零。M-010、G1、M-G06 照旧从构造变更起算，本节不动它们。
 - 循环不调用 `realised_vol`，它只在日报与每小时巡检里读。不用重启，主 checkout 快进后下一次巡检起生效。
 
-## 2026-09-30 · probe-stop-caliber 的阈值在 k 0.175 上重量：flow 4.5%、main 7.5%；队列里的 7.5% / 11.2% 是 k 0.30 的数
+## 2026-09-30 · probe-stop-caliber 的阈值在 k 0.175 上重量：pit 口径 flow 2.5%、main 5.1%，09-12 的口径 4.5% / 7.5%；队列里的 7.5% / 11.2% 是 k 0.30 的数
 
 **起因。** 系统审查（`docs/analysis/2026-09-30-system-audit.md`）清点 10-03 的日期翻转时读到这条排队变更。
 它的阈值是 09-12 在 k = 0.30 上量的。之后 k 改过两次：09-14 到 0.60，09-27 到 0.175。条目没有跟着改。
@@ -20735,37 +20735,56 @@ family gate 的 N 不动。
 **做法。** 方法与 09-12 相同（预登记 `b883d01e`，结果 `3e584cbf`）。在被验证过的那段面板上
 （2021-01-31 → 2026-09-07），用今天的 profile 与 registry 重建每本书自己的权重路径，
 取 w_{t-1}·r_t 的 720 bar 滚动和，读经验 2.28% 分位数。多印一项：每个候选阈值下，
-30 天窗口落到它以下的比例。脚本是 `scratchpad/probe_stop_tails.py`，在 `ec2d97a7` 上跑，约 3 分钟。
+30 天窗口落到它以下的比例。脚本是 `scratchpad/probe_stop_tails.py`，约 3 分钟。
 量的是在跑的配置，不选、不比，不计 ledger。`reports/research/trials.jsonl` 的 sha256 前后都是 `001d643c…`。
 
-| 书 | 年化 σ | 30 天 σ | 2.28% 分位数 | 09-12（k 0.30）的分位数 |
-| --- | ---: | ---: | ---: | ---: |
-| main | 17.58% | 4.473% | −7.54% | −11.22% |
-| flow_short | 5.59% | 1.887% | −4.51% | −7.51% |
+**两种口径。** 09-12 的脚本调 `strategy_targets(panel, None)`：不套成员表，按面板里全部币排序（09-12 是 241 币，
+今天 878 币）。预登记写的是「在被验证过的那段面板上」，被引用的 book 报告与实盘用的都是 pit 成员口径。
+所以两种都量了：`panel` 原样复现 09-12 的做法，两次运行逐位相同；`pit` 只取成员表里出现过的 212 币，逐 bar 套成员表，
+与 `research book --universe pit` 同一个做法。
 
-| 书 | 阈值 | 来源 | 位于几个 30 天 σ | 30 天窗口落到阈值以下的比例 |
+| 口径 | 书 | 年化 σ | 30 天 σ | 2.28% 分位数 |
+| --- | --- | ---: | ---: | ---: |
+| pit | main | 17.32% | 4.053% | −5.09% |
+| pit | flow_short | 4.86% | 1.407% | −2.48% |
+| 全面板 | main | 17.58% | 4.473% | −7.54% |
+| 全面板 | flow_short | 5.59% | 1.887% | −4.51% |
+| 09-12 全面板（k 0.30） | main | 29.69% | 7.233% | −11.22% |
+| 09-12 全面板（k 0.30） | flow_short | 9.70% | 3.239% | −7.51% |
+
+30 天窗口落到阈值以下的比例（48,361 个窗口）：
+
+| 书 | 阈值 | 来源 | pit | 全面板 |
 | --- | ---: | --- | ---: | ---: |
-| flow_short | 2.0% | registry 现行 | 1.06 | 13.3% |
-| flow_short | 4.5% | 规则今天的值 | 2.39 | 2.31% |
-| flow_short | 7.5% | 队列里的旧数 | 3.98 | 0.000%（0 / 48,361） |
-| main | 6.0% | registry 现行 | 1.34 | 5.80% |
-| main | 7.5% | 规则今天的值 | 1.68 | 2.36% |
-| main | 11.2% | 队列里的旧数 | 2.50 | 0.196% |
+| flow_short | 2.0% | registry 现行 | 4.70% | 13.3% |
+| flow_short | 2.5% | pit 规则值 | 2.18% | — |
+| flow_short | 4.5% | 全面板规则值 | — | 2.31% |
+| flow_short | 7.5% | 队列里的旧数 | 0.000% | 0.000% |
+| main | 6.0% | registry 现行 | 1.07% | 5.80% |
+| main | 5.1% | pit 规则值 | 2.27% | — |
+| main | 7.5% | 全面板规则值 | — | 2.36% |
+| main | 11.2% | 队列里的旧数 | 0.000% | 0.196% |
 
-分位数之比 flow 约 0.60、main 约 0.67，接近 0.175 / 0.30 = 0.58。main 偏高一些。两次测量之间面板从 241 币变成 878 币，
-成员表也重建过，这两样都算在今天的数里。
+年化 σ 两种口径都贴着 vol target（main 0.175，flow 0.175 / 3 ≈ 5.8%），差在尾部：全面板多出 666 个从没进过成员表的币，
+左尾更厚。全面板口径下，两次测量之比 flow 约 0.60、main 约 0.67，接近 0.175 / 0.30 = 0.58。
 
-**结论。** 照旧数应用，flow 的新停损在这 5.6 年里一次都不会触发。那正是这条变更要修掉的「打不响」。
-要应用就用 4.5% / 7.5%，或者在应用当天的构造上再量一次。
+**结论。** 照旧数应用，flow 的新停损在这 5.6 年里一次都不会触发，两种口径都是。那正是这条变更要修掉的「打不响」。
+按预登记的原意（book 报告的 pit 口径），规则值是 flow 2.5%、main 5.1%，离现行的 2% / 6% 不远；按 09-12 的实现口径是
+4.5% / 7.5%。全面板的 main 7.5% 放到 pit 口径下，只在 0.335% 的 30 天窗口里触发。用哪个口径由操作者定（审查文档的 D1），
+应用当天在当时的配置上再量一次。操作者同日另有裁定（#279）：flow 10-03 退役，flow_short 的数随之作废，要定的只剩 main。
 
 **改了什么。**
 
-- `governance/window_changes.yaml` 的条目加了带日期的更正、今天的读数，以及 `measured_at`
-  （vol_target 0.175、flow_short fraction 0.333333、commit）。
-- 原测试只断言 7.5% 与 11.2% 在条目里。k 变了两次，它一直是绿的。现在断言 4.5% 与 7.5%，并且要有今天的 σ。
-- 新测试 `test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_them`：条目未应用时，
-  `measured_at` 必须等于 profile 的 `portfolio.vol_target` 与 registry 的 flow fraction。
-  两个变异（k 改成 0.60、fraction 改成 1/6）各让它变红，还原后变绿。
+- `governance/window_changes.yaml` 的条目：带日期的更正、两种口径的读数、结构化的 `thresholds`，以及 `measured_at`
+  （vol_target、flow_short fraction、证据构造摘要 `221d001c3c07a626`、registry 摘要 `7f8adb754962`、commit）。
+- 原测试只断言 7.5% 与 11.2% 在条目里，k 变了两次它一直是绿的。改成读 `thresholds`，要求更正那句逐字写出两种口径的数，
+  两个 σ 都在。只查子串不够：旧的 flow 值「7.5%」恰好是全面板口径下 main 的新值。
+- 新测试 `test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_them`：条目未应用时，`measured_at`
+  必须等于 profile 的 vol_target、registry 的 flow fraction、证据构造摘要与 registry 摘要。
+  七个变异各让它变红，按字节还原后变绿：k 改 0.60、fraction 改 1/6、`max_scalar` 显式设 12、`vol_halflife` 翻倍、
+  tsmom 的 `crowding_window` 改 24，以及把更正句里 pit、全面板的 main 值各改成 9.9%。
+- `beidou_live/probe.py`、`beidou_governance/window_changes.py` 与两个测试文件的 docstring 还写着旧前提和旧数，
+  原行数改写（不动 ratchet）。
 
 **更正 09-12 那一节的前提（原段不改）。** 那一节写「`stop_of()` 把 `window_days / max_loss / …` 全部放进
 `construction_fingerprint`」，并据此判「闸今天不能动」。在 `3e584cbf` 上读，`stop_of` 在 `registry_digest` 里

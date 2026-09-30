@@ -173,7 +173,7 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 **什么时候会出现。** 最早在当前构造起点之后 60 天，那时才有两个完整窗口。起点不写在这里，它随每一次构造变更
 移动：读日报「Edge decay (M-010 vs backtest q10)」一节的 `windows_start` 与每条策略的「不早于」。在那之前这一节读
 INSUFFICIENT_DATA，只印不告警。（2026-09-30 更正：这里原写「当前构造从 2026-09-17T16:00Z 起算，最早
-2026-11-16T16:00Z」。09-27、09-28 两次构造变更之后，起点是 2026-09-28T16:00Z，最早 2026-11-27T16:00Z。
+2026-11-16T16:00Z」。09-27 两次、09-28 一次构造变更之后，起点是 2026-09-28T16:00Z，最早 2026-11-27T16:00Z。
 同一个错在「采纳 exit overlay / 信号改动的最短干净窗口」一节犯过一次，那一节因此不写日期。）
 
 **读之前先看口径。** 实盘窗口是已实现归因，q10 是回测盯市（操作者 2026-09-23 裁定 A）。
@@ -343,15 +343,16 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 ```
 
 （2026-09-30 更正：这条命令原先少一对括号，`%` 先把数格式化成字符串再除以 1000，一跑就是 `TypeError`。
-负数表示主机比交易所慢。）
+它算的是「主机 − 交易所」，负数表示主机慢；每周期记录的 `clock.skew_ms` 是「交易所 − 主机」，符号相反。）
 
 2026-09-30 的读数：主机比交易所慢 2.7 s，与 NTP 对照也是慢 2.66 s（`sntp time.apple.com`）。偏差每天增加
-0.1–0.2 s，09-05 到 09-10 那段每天约 1 s；09-11 与 09-15 两次被校回到 0.5 s 以内。按每周期记录的 `clock.skew_ms`
-逐日看就是这条曲线。签名请求靠 -1021 自愈，`recvWindow` 是 10 s，对齐告警线是 60 s，这个量级不用处理。
+0.1–0.2 s，09-05 到 09-10 那段每天约 1 s。它只在两次系统更新重启时被校回：09-10T04:42Z（5,960 → 33 ms）与
+09-14T18:57Z（852 → 55 ms），两次之间单调增长，说明本机的系统对时平时不起作用。签名请求靠 -1021 自愈，
+`recvWindow` 是 10 s，对齐告警线是 60 s，眼下这个量级不用处理；少了重启，偏差会一直攒下去。
 
 影响与不影响：
 
-- **不影响下单**：REST 客户端会自己测出偏移并写进 `clock_offset_ms`（实测 3,611,691），签名请求照常成功。
+- **不影响下单**：REST 客户端会自己测出偏移并写进 `clock_offset_ms`（09-04 实测 3,611,691），签名请求照常成功。
 - **不影响过期护栏**：`expected_bar_ms - latest_bar_ms > stale_bars_max × interval` 是单向判断，慢钟只会让差值为负。
 - **不影响唤醒时刻**（当偏移接近整数个 interval 时）：本地 bar 边界与真实 bar 边界落在同一批真实时刻，循环仍在每个真实整点后不久运行，用的是刚收盘的那根真实 bar。
 - **影响记录**：`cycles.jsonl` 的 `bar` / `bar_open_ms` 与 `heartbeat.at` 会整体偏移，`bar` 与 `as_of_ms` 不再一致（`as_of_ms` 是真实的最新闭合 bar，可用它交叉核对）；日报的 UTC 日切也跟着偏移。
@@ -363,10 +364,11 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - **周期迟到、缺行、一串 backoff，或心跳过期**：先查主机是不是睡了、关了或重启了，再怀疑代理和交易所。
   `pmset -g log | grep -E "Clamshell|Wake from|DarkWake|Using (AC|BATT)"` 看合盖与睡眠；`last reboot shutdown` 与
   `sysctl -n kern.boottime` 看关机和开机；`grep -h Rebooting /var/log/install.log` 看系统更新触发的重启；旧进程的
-  `live.stderr.log` 里找 `stopping cleanly` 与 SIGTERM。两次实例：2026-09-29 合盖睡眠（当时接着电源）之后关机，
-  19 根 bar 没有完成周期（RESEARCH_LOG「重启 #64」一节）；2026-09-14T18:57Z 一次系统更新重启，74 分钟里起了三个进程，
-  RESEARCH_LOG 当时只记了「主机 19:00:14Z 回来」。主机关着的时候，launchd 不补跑错过的日历任务（data、
-  forward-board、governance-gate），它们等下一次到点；睡眠中错过的会在醒来时补跑一次。
+  `live.stderr.log` 里找 `stopping cleanly` 与 SIGTERM。实例：2026-09-29 合盖睡眠（当时接着电源）之后关机，
+  19 根 bar 没有完成周期（RESEARCH_LOG「重启 #64」一节）。系统更新约每一到两周重启一次（`install.log` 自 06-16 起
+  11 次），实盘期内两次，当时都没认出来：09-10T04:42Z 那次，RESEARCH_LOG 只记了重启后 04:51 死在 `exchangeInfo` 的一次崩溃；09-14T18:57Z 那次 74 分钟里起了
+  三个进程，只记了「主机 19:00:14Z 回来」。主机关着的时候，launchd 不补跑错过的日历任务（data、forward-board、
+  governance-gate），它们等下一次到点；睡眠中错过的会在醒来时补跑一次。
 - **巡检的 status 与 report 两格一起失败，告警末三行是 Python traceback，verify 那格照常 ok**：报告层 import 时坏了。循环不 import 报告层（2026-09-28 起），照常交易；不需要重启，重启也修不好。代价在巡检这边：`live status --check` 在报告层那三个读数处就退出，时钟、两个 digest、心跳与成功率这一小时都没查。循环活没活，看 `beidou live status` 先印出的心跳 JSON，报告层坏了它照样印，报错在它后面。修好报告层并快进主 checkout，下一个 :10 两格自己转绿。
 - 连续 12 个周期失败触发熔断（`beidou_live/engine.py` 的 `breaker_stop`）。告警送达就以 0 退出，launchd **不会**再拉起（`KeepAlive.SuccessfulExit=false`）；恢复是一次重启，按上文「改了 registry / profile 之后」的窗口与纪律做。没有任何通道收下告警时才非零退出，launchd 60s 后拉起。失败之间循环自己按指数退避，上限 1 小时。根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
 - `cycles.jsonl` 每周期一行：`targets`、`orders`（含 `note`：`PARTICIPATION_CAPPED` / `MARGIN_SCALED`）、`exit_events`、`throttle`、`universe_update`、`skipped`。

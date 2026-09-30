@@ -185,14 +185,14 @@ def probe_status(
     * so caliber and threshold have to move TOGETHER.  Measured: moving the caliber alone would fire
       immediately - flow_short's marked 30-day reading is -3.197%, already past -2% (falsifier F3 of
       the 2026-09-12 pre-registration);
-    * and `max_loss` is inside `construction_fingerprint` (`stop_of`), so changing it CLEARS M-010's
-      30-day window - 7.96/30 today - and restarts M-G06's eighteen months.  §1 puts "changing the
-      construction outside a window" out of scope and K-EX14 is the rule it serves.
+    * and changing `max_loss` resets M-Q08's comparison window, which reads the registry digest.  The
+      09-12 text said it sat in `construction_fingerprint` and cleared M-010; `stop_of` is and was in
+      `registry_digest` (corrected 2026-09-30, #275), so M-010, M-G06 and K-EX14 are untouched by it.
 
-    The pre-registered replacement is measured and waiting for the next batch window (2026-10-03):
-    `max_loss` becomes the empirical 2.28% quantile of each book's own 30-day mark-to-market P&L -
-    **7.5%** for flow_short and **11.2%** for main, against 2% and 6% today.  Those look looser and are
-    not: today's rule cannot fire at all, and the new one fires at its stated 2.3% tail.
+    The pre-registered replacement waits in `governance/window_changes.yaml` (`probe-stop-caliber`):
+    `max_loss` becomes the empirical 2.28% quantile of each book's own 30-day mark-to-market P&L.  The
+    entry, not this docstring, holds the numbers and the vol target they belong to: 09-12's 7.5% / 11.2%
+    were measured at k 0.30 and went stale when k moved.  Looser-looking, and not: today's rule cannot fire.
 
     Until then `marked` is computed and printed beside the gated number, which is what the same day's
     L3, M-015 and M-Q08 rulings did in the other direction: a reading that gates nothing is still a
