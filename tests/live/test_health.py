@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from beidou_live.health import cycle_health
+from beidou_live.scheduler import BACKOFF_REASON, MISSED_REBALANCE_REASON
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
 
@@ -64,3 +65,27 @@ def test_failures_are_dated_by_the_bar_not_by_the_write() -> None:
     assert cycle_health([row], now=NOW).clean_days == 0 or cycle_health([row], now=NOW).clean_days == 1
     health = cycle_health([row], now=NOW)
     assert health.last_failure is not None and health.last_failure.startswith("2026-09-03")
+
+
+def test_bars_the_backoff_slept_through_are_not_attempts() -> None:
+    """2026-09-30's 01:43Z check read 83.3%: 12 rows, 2 failed, and 6 of the 12 were backoff rows.
+
+    No cycle ran for those bars, yet as SKIPPED rows each counted as a success, so the longer the
+    backoff slept, the better the rate read.  They are M-Q03's misses (`restart_cost` charges them);
+    this rate is about the cycles that ran.  The shape below is that window, bar for bar.
+    """
+    backoff = {"phase": "SKIPPED", "reason": BACKOFF_REASON}
+    rows = [
+        _row(23),
+        _row(22),
+        _row(21, phase="ERROR"),
+        {**_row(20), **backoff},
+        _row(19, phase="ERROR"),
+        *[{**_row(h), **backoff} for h in (18, 17, 16, 15, 14)],
+        _row(12),
+        # A restart row stays an attempt: that process woke, reconciled, and decided not to trade late.
+        {**_row(1), "phase": "SKIPPED", "reason": MISSED_REBALANCE_REASON},
+    ]
+    health = cycle_health(rows, now=NOW)
+    assert (health.attempts, health.failures) == (6, 2)
+    assert health.success_rate is not None and round(health.success_rate, 4) == 0.6667

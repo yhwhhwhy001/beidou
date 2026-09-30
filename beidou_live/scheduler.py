@@ -91,6 +91,12 @@ BACKOFF_REASON = "failure backoff slept through this bar's close"
 #: because `restart_cost` counts every non-backoff skip as a restart - one outage is one restart, not ten.
 DOWNTIME_REASON = "no process was running at this bar's close"
 
+#: The skip rows no process woke to write for their own bar: the backoff's, from a process asleep through
+#: the close, and the downtime's, from the next process.  Both are misses and M-Q03 charges them; neither
+#: is a restart (`restart_cost`) nor an attempted cycle (M-001, `cycle_health`).  One set for both readers,
+#: because they ask the same question of the same rows.
+NO_WAKE_REASONS = frozenset({BACKOFF_REASON, DOWNTIME_REASON})
+
 #: How far back a restart charges.  A week: past that the days are out of every window M-Q03 and the
 #: daily report read, and a state directory that old is a different question from a missed bar.
 DOWNTIME_MAX_BARS = 168

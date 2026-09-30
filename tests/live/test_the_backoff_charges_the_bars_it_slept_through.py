@@ -17,11 +17,13 @@ the reporter is untouched, and this module asserts that by reading through it.
 from __future__ import annotations
 
 import inspect
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from beidou_alpha.panel import Panel
 from beidou_live.engine import LiveEngine
+from beidou_live.health import cycle_health
 from beidou_live.reports import restart_cost
 from beidou_live.scheduler import BACKOFF_REASON
 from beidou_live.state import StateStore
@@ -108,6 +110,24 @@ async def test_the_reporter_counts_it_with_no_change_on_its_side(august_panel: P
     assert (cost["failed_bars"], cost["skipped_bars"]) == (1, 1), "the bar that failed, and the one slept through"
     assert cost["missed_rebalances"] == 2
     assert cost["status"] == "ALERT", "against the shipped threshold of 0 this is a finding, not a footnote"
+
+
+async def test_the_bar_slept_through_is_not_an_m001_attempt(august_panel: Panel, tmp_path: Path) -> None:
+    """M-Q03 charges it; M-001's rate is about the cycles that ran, and none ran for it (2026-09-30).
+
+    Until then the backoff row counted as a successful cycle, so this failure read 50% instead of 0%.
+    """
+    world = _world(august_panel, tmp_path)
+    engine, market, store, clock = world["engine"], world["market"], world["store"], world["clock"]
+    await engine.startup()
+    engine.consecutive_errors = 6
+    market.fail_next = 1
+
+    await engine.guarded_cycle(world["bar"])
+
+    now = datetime.fromtimestamp(clock.now_ms() / 1000, tz=UTC)
+    health = cycle_health(store.read_jsonl(store.cycles_path), now=now)
+    assert (health.attempts, health.failures, health.success_rate) == (1, 1, 0.0)
 
 
 async def test_two_bars_slept_through_are_two_rows(august_panel: Panel, tmp_path: Path) -> None:
