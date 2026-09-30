@@ -20643,3 +20643,14 @@ family gate 的 N 不动。
 - 04:41:40Z 主 checkout 又被快进到 `e4d970e5`，不是本会话做的。它含 #270，本机 hook 从那时起认得 Lark webhook。
 - 那次快进晚于两个进程启动，多出的 #270、#271 不在它们里面。#270 只改 gitleaks 配置、文档与测试，#271 只改报告层（`report_decay.py`、`report_risk.py`、`reports.py`）。
 - 重启 #64 一节末尾提醒过：引用 `live.stderr.log` 要避开 `alert delivery failed` 那几行。代码侧由 #269（`9c677701`）修掉，这次重启载入；旧行已按上文掩码。
+
+## 2026-09-30 · 重启 #66 的后续：告警 webhook 不作废重发，没有重启 #67
+
+只记可观测事实。时刻一律 UTC。
+
+- 13:26Z，本会话对现用的告警地址发过一次缺 content 的探测，留作失效前的基线。
+- 结果是 HTTP 200、code 19002（`params error, unknown content value`），群里没有出现消息。
+- 13:27Z，本会话把主 checkout 一步快进到 `79ad656c`。快进前核过：HEAD 仍是 `e4d970e5`，工作树干净，`79ad656c` 的 main CI 为 success。
+- 多出的 #272、#273 只改 hook、文档与测试，不动运行时代码，循环不用重启。
+- 此后操作者在本会话里说「Lark 机器人使用原来的就行」，不作废重发。没有新建机器人，`~/.zshrc` 没改，也就没有重启 #67。
+- 重启 #66 一节里「告警 webhook 待操作者在 Lark 作废重发」「还要再重启一次」两句，到此不再成立。
