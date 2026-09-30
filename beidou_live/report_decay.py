@@ -47,6 +47,9 @@ def expectations_from_evidence(evidence_by_strategy: dict[str, dict[str, Any]]) 
             "full_sample_sharpe": full.get("annualized_sharpe"),
             "full_sample_max_drawdown": full.get("max_drawdown"),
             "verdict": verdict,
+            # The OOS Sharpe by basket-volatility tercile (validate's `stability` block; a book report has none),
+            # so the decay reading can be printed beside the regime it was taken in (`_regime_line`).
+            "regime_split": (report.get("stability") or {}).get("regime_split_sharpes"),
         }
     return out
 
@@ -384,6 +387,34 @@ def _decay_alerts(block: Mapping[str, Any]) -> list[str]:
     ]
 
 
+def _regime_line(payload: Mapping[str, Any], strategy: str) -> str | None:
+    """Where today's basket volatility sits in this strategy's evidence regime split - reported, never enforced.
+
+    backtest-guard 2026-09-30 (Ⅲ.1): the in-force tsmom evidence reads its OOS Sharpe by the basket's 30-day
+    volatility tercile at 2.97 / 1.44 / 0.91, and M-010 and the decay rule compare against the unconditional
+    number, so a month in the high tercile reads as decay and a calm one as health.  Whether the rule should
+    condition on it is the operator's call; this prints it.  The basis is not research's, and the line says so:
+    the managed universe's equal-weight basket over 720 hourly log returns ending 24 bars before the newest
+    (`report_events.market_extremes`), annualised by sqrt(8760), against research's pit members' 30-day
+    simple-return std through t-1.  The tercile edges are the evidence's own in-sample cut points.
+    """
+    split = ((payload.get("expectations") or {}).get(strategy) or {}).get("regime_split") or {}
+    basket = (((payload.get("event_risk") or {}).get("market") or {}).get("series") or {}).get("basket") or {}
+    if not split or not basket.get("measured") or basket.get("sigma_1h") is None:
+        return None
+    vol = float(basket["sigma_1h"]) * math.sqrt(8760.0)
+    names = sorted(split, key=lambda name: float(split[name]["vol_from"]))
+    here = next((n for n in names if float(split[n]["vol_from"]) <= vol <= float(split[n]["vol_to"])), None)
+    if here is not None:
+        where = f"落在证据的 {here} 段（{float(split[here]['vol_from']):.2f}–{float(split[here]['vol_to']):.2f}）"
+    elif vol < float(split[names[0]]["vol_from"]):
+        where = f"低于证据最低段的下沿 {float(split[names[0]]['vol_from']):.2f}"
+    else:
+        where = f"高于证据最高段的上沿 {float(split[names[-1]]['vol_to']):.2f}"
+    tiers = " / ".join(f"{name} {float(split[name]['sharpe']):.2f}" for name in names)
+    return f"篮子年化波动约 {vol:.2f}，{where}；证据的样本外 Sharpe 分段 {tiers}（只报告；口径近似，见 `_regime_line`）"
+
+
 def _decay_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
     """§12.9 in the daily report: the weekly's reading verbatim, its two calibers, what it still waits for.
 
@@ -417,6 +448,8 @@ def _decay_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
                 else ""
             )
         )
+        if (regime := _regime_line(payload, str(strategy))) is not None:
+            lines[f"{strategy} regime"] = regime
     return lines
 
 
