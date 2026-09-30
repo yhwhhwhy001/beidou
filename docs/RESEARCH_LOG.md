@@ -20789,8 +20789,10 @@ family gate 的 N 不动。
 **更正 09-12 那一节的前提（原段不改）。** 那一节写「`stop_of()` 把 `window_days / max_loss / …` 全部放进
 `construction_fingerprint`」，并据此判「闸今天不能动」。在 `3e584cbf` 上读，`stop_of` 在 `registry_digest` 里
 （`registry_digest` 从第 1631 行起，`stop_of` 在 1657 行，`construction_fingerprint` 从 1717 行起），今天也一样。
-所以改 `max_loss` 改的是 registry 摘要，不是构造：M-010、M-G06、衰减规则都不清零，清零的是 M-Q08，它的比较窗口
-同时看两个摘要（`execution_fidelity.comparison_window`）。K-EX14 管 exit overlay 与信号参数，这条两样都不是。
+所以改 `max_loss` 改的是 registry 摘要，不是构造：在当时的代码里，M-010、M-G06、衰减规则都不清零，清零的是 M-Q08，
+它的比较窗口同时看两个摘要（`execution_fidelity.comparison_window`）。同日合入的 #280 改了这条：证据窗口也在 registry
+摘要变化处截断，只改 probe stop 的变更要在 `REGISTRY_ALIASES` 里声明才不清零。K-EX14 管 exit overlay 与信号参数，
+这条两样都不是。
 发现者是同日 Backtest guard 会话（#275），本节在代码上核过。「口径与阈值必须一起动」那条不受影响。
 
 **没做的。** 不改 registry，不改代码，不应用这条变更。应用要改 registry 的两个 `max_loss`、改 `probe_status` 读的口径，

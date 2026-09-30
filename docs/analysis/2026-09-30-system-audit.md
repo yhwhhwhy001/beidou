@@ -12,7 +12,7 @@
 
 ## 底数
 
-- 开始时 origin/main 在 `79ad656c`。审查期间并行会话先后合入 #274–#276 与 #278，本 PR 两次合进最新 main，解了研究日志尾部的追加冲突。
+- 开始时 origin/main 在 `79ad656c`。审查期间并行会话先后合入 #274–#276、#278 与 #280，本 PR 三次合进最新 main，解了研究日志尾部的追加冲突。
 - 四道门在 `79ad656c` 的临时 worktree 上全绿：ruff format、ruff check、mypy（155 个文件），pytest 3110 passed、
   10 skipped，用时 189 s。10 个 skip 是归档专属测试与网络测试，它们只在主 checkout 与夜间 data job 里跑。
 - main 最近 8 次 CI 都跑起来了，全部 success。
@@ -64,9 +64,10 @@ flow 7.5%、main 11.2%。这两个数是 09-12 在 k = 0.30 上量的。之后 k
 所以没有影响过交易。
 
 条目还有一个从 09-12 起就错的前提：它说 `max_loss` 在 `construction_fingerprint` 里，所以改它是构造变更、
-要等批次窗口。代码里 `stop_of` 一直在 `registry_digest` 里（`3e584cbf` 上第 1657 行）。改 `max_loss` 不清零 M-010、
-M-G06 与衰减规则，清零的是 M-Q08：它的比较窗口要求构造与 registry 摘要都不变。K-EX14 管 exit overlay 与信号参数，
-这条也管不到。这一处是 Backtest guard 会话（#275）先发现的，本会话在代码上核过。同一个错前提还写在
+要等批次窗口。代码里 `stop_of` 一直在 `registry_digest` 里（`3e584cbf` 上第 1657 行）。在 #280 之前的代码里，改
+`max_loss` 不清零 M-010、M-G06 与衰减规则，只清零 M-Q08（它的比较窗口要求构造与 registry 摘要都不变）；#280 同日合入后，
+证据窗口也在 registry 变化处截断，只改 probe stop 的变更要在 `REGISTRY_ALIASES` 里声明才不清零。K-EX14 管 exit overlay
+与信号参数，这条也管不到。这一处是 Backtest guard 会话（#275）先发现的，本会话在代码上核过。同一个错前提还写在
 `beidou_live/probe.py`、`beidou_governance/window_changes.py` 与两个测试文件的 docstring 里。
 
 **已修（本 PR）**：
