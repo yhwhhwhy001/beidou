@@ -90,22 +90,35 @@ cat >&2 <<'MSG'
 ║  提交被拦下：暂存区里有疑似密钥                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-上面列出了命中的文件与行号（值已脱敏）。按这个顺序处理：
+上面列出了命中的文件与行号（值已脱敏），每处都有一行 `RuleID:`。按这个顺序处理：
 
   1. 先看它是不是真的密钥。本仓库的 construction fingerprint、sha256 摘要、
      git object id 都是纯 hex，`.gitleaks.toml` 已经放行；还能红说明形态不同。
 
-  2. 真的是密钥：
-       - 把值从文件里删掉，改成从环境读。
-       - **去交易所把这个 key 作废重发**。写进过文件的密钥就当已经泄漏，
-         哪怕它一次都没被提交——本机可能有备份、编辑器可能有 swap、
-         Time Machine 可能已经存了一份。
-       - 新 key 写进凭据**此刻实际所在**的位置，替换旧值：
-         `~/Library/Application Support/beidou/env.sh` 存在就写进它，
-         不存在就改 `~/.zshrc` 里的 `export BEIDOU_*` 行。
-         **不要为了这一步新建 `env.sh`**——文件一存在，`~/.zshrc` 就不再被读，
-         告警 webhook 等其余 `BEIDOU_*` 变量会跟着消失。
+  2. 真的是密钥：先把值从文件里删掉，改成从环境读。写进过文件的密钥就当
+     已经泄漏，哪怕它一次都没被提交——本机可能有备份、编辑器可能有 swap、
+     Time Machine 可能已经存了一份。接着看 `RuleID:` 那一行，两支处置不同。
+
+     RuleID 是 `beidou-lark-webhook-url`：漏的是告警 webhook 的 URL。
+       - **在 Lark 里让这个机器人的旧地址失效**，换一条新地址。
+         token 就是 URL 的最后一段。交易所的 key 没漏，不用动。
+       - 新地址替换 `BEIDOU_ALERTS_WEBHOOK_URL` 的旧值，写到哪见下面。
+       - 重启 live 与 shadow（shadow 在跑的话）。它们是长驻的 `live run`，
+         不重启就一直用旧地址。窗口与步骤见 CLAUDE.md「重启实盘循环」。
+         别的 launchd job 每次启动都重读凭据，不用管。
+       - 完整步骤见 SECURITY.md 第四节「漏的是告警 webhook」。
+
+     别的 RuleID（本仓库里多半是 Binance 的 key）：
+       - **去交易所把这个 key 作废重发**。
+       - 新 key 替换旧值，写到哪见下面。
        - 其余步骤（确认损失、重启循环）见 SECURITY.md 第四节。
+
+     写到哪：凭据**此刻实际所在**的位置。
+       `~/Library/Application Support/beidou/env.sh` 存在就写进它，
+       不存在就改 `~/.zshrc` 里的 `export BEIDOU_*` 行。
+       **不要为了这一步新建 `env.sh`**——文件一存在，`~/.zshrc` 就不再被读，
+       其余 `BEIDOU_*` 变量会跟着消失：只放了新 key，告警 webhook 静默丢失；
+       只放了 webhook，Binance 的 key 也没了，实盘循环下一次启动以 78 退出。
 
   3. 确认是误报：往 `.gitleaks.toml` 的 allowlist 加一条，**按它是什么写**
      （形态或具体值），不要按目录整片放行，并写一句它为什么不可能是密钥。
@@ -115,7 +128,8 @@ cat >&2 <<'MSG'
      也能被 `--no-verify` 绕过，而再往后没有网接得住 Binance 的密钥：
      GitHub 的 push protection 认不出它（不在 partner pattern 列表，
      个人公开仓库也加不了 custom pattern），CI 的 Secrets 门是事后的——
-     它红的时候，密钥已经公开可读了。
+     它红的时候，密钥已经公开可读了。告警 webhook 也一样：Lark 在
+     partner pattern 列表里，但列的五类凭据里没有 webhook。
 
 MSG
 exit 1

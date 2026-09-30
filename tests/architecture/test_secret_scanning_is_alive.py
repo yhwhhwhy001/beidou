@@ -1055,3 +1055,60 @@ def test_repository_lark_lookalikes_do_not_false_positive(path: str) -> None:
         f"{path} 里的假 webhook 被报成了密钥：{[(f['RuleID'], f['StartLine']) for f in findings]}\n"
         "基线必须是零。别把规则的 token 那一段放宽到认得出人手敲的假值；真要放宽，按 SECURITY.md 第三节写 allowlist。"
     )
+
+
+# ---------------------------------------------------------------------------
+# 命中之后怎么处置：按 RuleID 分流
+# ---------------------------------------------------------------------------
+#
+# 2026-09-30 之前，两个「有疑似密钥」框与 SECURITY.md 第四节只写了 Binance 的处置：去交易所作废重发。
+# 命中上面那条 webhook 规则时照着做，换掉的是没漏的交易所 key，漏了的地址照样能往告警群发消息。
+#
+# 框是带引号的 heredoc，不看命中的是哪条规则，打出来的永远是同一段字。分流靠读的人对照清单里的
+# `RuleID:` 那一行，所以框里要写出规则的名字。框写在 stderr，上面那组只在 stdout 里找规则名，不受影响。
+
+
+def _quoted_box(hook: Path, title: str) -> str:
+    """hook 里标题为 `title` 的那个框。
+
+    只认带引号的 heredoc（`<<'MSG'`）。它不展开变量，文件里的字就是屏幕上的字，所以这里读文件等于读屏幕。
+    哪天改成不带引号，这里就找不到框。
+    """
+    boxes = re.findall(r"<<'MSG'\n(.*?)\nMSG\n", hook.read_text(encoding="utf-8"), re.S)
+    matching = [box for box in boxes if title in box]
+    assert len(matching) == 1, (
+        f"`.githooks/{hook.name}` 里标题为「{title}」的带引号 heredoc 应该恰好一个，找到 {len(matching)} 个。\n"
+        "框改成不带引号的 heredoc 会展开变量，屏幕上的字就不再是文件里的字。"
+    )
+    return matching[0]
+
+
+@pytest.mark.parametrize(
+    ("hook", "title"), [(PRE_COMMIT, COMMIT_LEAK_BOX), (HOOK, PUSH_LEAK_BOX)], ids=["pre-commit", "pre-push"]
+)
+def test_the_leak_box_routes_a_webhook_hit_by_rule_id(hook: Path, title: str) -> None:
+    """「有疑似密钥」的框要写出 webhook 规则的名字，也要守住「不要新建 `env.sh`」。
+
+    第二条是换 webhook 时最容易踩的坑。凭据此刻在 `~/.zshrc`，为放新地址去建 `env.sh`，`~/.zshrc` 就不再
+    被读，Binance 的两个变量跟着消失，实盘循环下一次启动以 78 退出。
+    """
+    box = _quoted_box(hook, title)
+    assert LARK_RULE in box, (
+        f"`.githooks/{hook.name}` 被拦时的框里没有 `{LARK_RULE}`。读的人对不上清单里的 `RuleID:`，\n"
+        "命中 webhook 也会照 Binance 那支去交易所作废 key，漏了的地址照样能用。"
+    )
+    assert "不要为了这一步新建 `env.sh`" in box, (
+        f"`.githooks/{hook.name}` 被拦时的框不再说「不要为了这一步新建 `env.sh`」。\n"
+        "照着框去建 `env.sh`，`~/.zshrc` 就不再被读，实盘循环下一次启动以 78 退出。"
+    )
+
+
+def test_security_md_routes_a_webhook_hit_by_rule_id() -> None:
+    """SECURITY.md 第四节同样要分出 webhook 那一支。两个框都让人去那里看完整步骤。"""
+    text = SECURITY.read_text(encoding="utf-8")
+    assert "## 四、真漏了怎么办" in text, "SECURITY.md 第四节的标题改了，两个框里的「SECURITY.md 第四节」要跟着核对"
+    section = text.split("## 四、真漏了怎么办", 1)[1].split("\n## ", 1)[0]
+    assert LARK_RULE in section, (
+        f"SECURITY.md 第四节「真漏了怎么办」里没有 `{LARK_RULE}`。两个框都让人去那里看完整步骤，\n"
+        "那里只剩交易所那一支，命中 webhook 的人会照着去作废没漏的 key。"
+    )
