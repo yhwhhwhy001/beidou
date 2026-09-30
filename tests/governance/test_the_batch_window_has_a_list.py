@@ -111,18 +111,27 @@ def test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_th
     measured_at = stop.extra["measured_at"]
     profile = load_yaml(Path("config/live.demo.yaml"))
     model, registry = build_model_from_profile(profile)
-    assert float(measured_at["vol_target"]) == float(profile["portfolio"]["vol_target"]), (
-        "portfolio.vol_target moved since the probe-stop thresholds were measured; re-measure before applying"
+    # Said in the failure itself, because the likely first reader is whoever merges the 10-03 flow retirement (#282):
+    # that registry change turns this red by design, and the entry's note is where the two ways out are written.
+    remedy = (
+        "either mark probe-stop-caliber `applied` in the PR that applies it, or re-measure "
+        "(`scratchpad/probe_stop_tails.py pit|panel`, zero ledger) and update the numbers, `thresholds` and "
+        "`measured_at` together - see the entry's note in governance/window_changes.yaml"
     )
-    assert float(measured_at["flow_short_fraction"]) == float(registry.books["flow_short"].fraction), (
-        "books.flow_short.fraction moved since the probe-stop thresholds were measured; re-measure before applying"
+    assert float(measured_at["vol_target"]) == float(profile["portfolio"]["vol_target"]), (
+        f"portfolio.vol_target moved since the probe-stop thresholds were measured; {remedy}"
+    )
+    flow = registry.books.get("flow_short")
+    assert flow is not None and float(measured_at["flow_short_fraction"]) == float(flow.fraction), (
+        f"books.flow_short moved since the probe-stop thresholds were measured; {remedy}"
     )
     config = live_config(profile, [], registry, dry_run=True)
     assert str(measured_at["evidence_construction"]) == evidence_construction_of(config), (
-        "the evidence construction moved since the probe-stop thresholds were measured; re-measure before applying"
+        f"the evidence construction moved since the probe-stop thresholds were measured; {remedy}"
     )
     assert str(measured_at["registry"]) == registry_digest(model), (
-        "the registry moved since the probe-stop thresholds were measured; re-measure before applying"
+        f"the registry digest moved since the probe-stop thresholds were measured "
+        f"({measured_at['registry']} -> {registry_digest(model)}); {remedy}"
     )
 
 
