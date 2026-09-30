@@ -68,15 +68,67 @@ def test_a_rebaselined_cycle_resets_the_high_water_mark() -> None:
     assert state["value"] == pytest.approx(0.01)
 
 
-def test_volatility_refuses_to_answer_on_too_few_bars_or_a_mixed_construction() -> None:
+def test_volatility_refuses_to_answer_on_too_few_bars_and_drops_what_it_cannot_restate() -> None:
     params = RiskBudgetParams(min_vol_bars=10)
     short = [_cycle(i, 100.0 + i) for i in range(5)]
     thin = realised_vol(short, params)
     assert thin["value"] is None and not thin["enforced"] and "需要 10 根" in thin["why"]
 
+    # Two constructions and no vol_target recorded for either.  Until 2026-09-30 this refused outright; now
+    # the older construction's returns are dropped, because they cannot be restated at today's target, and
+    # the rest is read.  What is never done is reading them as if the book had not changed.
     mixed = [_cycle(i, 100.0 + i, construction="aaa" if i < 10 else "bbb") for i in range(30)]
     straddled = realised_vol(mixed, params)
-    assert straddled["value"] is None and "有 2 个构造" in straddled["why"]
+    assert straddled["enforced"] and straddled["bars"] == 19 and straddled["rescaled"] == 0
+    assert straddled["dropped"] == {"gaps": 0, "unknown_target": 10}
+
+
+def _two_books(*, full_payload: bool) -> list[dict[str, Any]]:
+    """One book at k=0.60 for 40 bars, then the same book at k=0.175: each moves in proportion to its target."""
+    rows, equity = [], 100.0
+    for i in range(80):
+        big = i < 40
+        step = 0.006 if big else 0.00175
+        equity *= (1.0 + step) if i % 2 else (1.0 - step)
+        extra: dict[str, Any] = {"construction": "big" if big else "small"}
+        if not big or not full_payload:
+            extra["book_vol"] = {"target": 0.60 if big else 0.175}
+        if big and full_payload and i == 0:
+            # before 2026-09-17 the target was written once per process, in the first row's full payload
+            extra["construction_full"] = {"portfolio": {"vol_target": 0.60}}
+        rows.append(_cycle(i, equity, **extra))
+    return rows
+
+
+def test_returns_from_another_construction_are_restated_at_todays_vol_target() -> None:
+    """2026-09-30, operator: read across constructions.  The loop never held one construction for 30 days."""
+    from beidou_live.report_risk import _risk_budget_lines
+
+    params = RiskBudgetParams(min_vol_bars=10)  # the shipped band, k=0.175's
+    for full_payload in (False, True):
+        rows = _two_books(full_payload=full_payload)
+        out = realised_vol(rows, params)
+        assert out["enforced"] and out["inside"], out
+        assert out["rescaled"] == 40 and out["constructions"] == 2 and out["dropped"]["unknown_target"] == 0
+        alone = realised_vol(rows[40:], params)["value"]
+        assert out["value"] == pytest.approx(alone, rel=0.05), "restated, the k=0.60 bars read like the k=0.175 ones"
+    line = _risk_budget_lines({"realised_vol": out})["realised vol"]
+    assert "按当前 k 折算 40 根" in line and "跨 2 个构造" in line
+
+
+def test_a_return_across_a_hole_in_the_record_is_not_an_hourly_return() -> None:
+    """The host asleep for ten hours: the first row after it carries eleven hours of market in one return."""
+    params = RiskBudgetParams(min_vol_bars=10, vol_band=(0.26, 0.38))
+    rows = _wiggle(0.003)
+    baseline = realised_vol(rows, params)
+    equity = float(rows[-1]["equity"]) * 1.04
+    for i in range(len(rows) + 10, len(rows) + 31):
+        rows.append(_cycle(i, equity))
+        equity *= 1.003 if i % 2 else 0.997
+    out = realised_vol(rows, params)
+    assert out["enforced"] and out["inside"], f"the hole was read as one bar: {out['value']}"
+    assert out["dropped"]["gaps"] == 1 and out["bars"] == len(rows) - 2
+    assert out["value"] == pytest.approx(baseline["value"], abs=0.02)
 
 
 def _wiggle(step: float, bars: int = 40) -> list[dict[str, Any]]:

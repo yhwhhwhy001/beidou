@@ -323,9 +323,15 @@ def test_a_genuinely_different_construction_still_cuts_the_window(tmp_path) -> N
 
 
 def test_realised_vol_does_not_refuse_over_a_definitional_change() -> None:
-    """`realised_vol` gives up when the window spans two constructions - it must not see two here."""
+    """`realised_vol` restates or drops returns from another construction - it must not see another one here.
+
+    Until 2026-09-30 it gave up on any window spanning two constructions; since then it restates each
+    return at today's vol_target and drops those it cannot.  An alias is the same construction, so here
+    nothing may be restated and nothing dropped.
+    """
     from beidou_live.risk_budget import RiskBudgetParams, realised_vol
 
     rows = _rows([BEFORE] * 300 + [AFTER] * 300)
     out = realised_vol(rows, RiskBudgetParams(min_vol_bars=10))
     assert out["enforced"] is True, out.get("why")
+    assert out["rescaled"] == 0 and out["dropped"] == {"gaps": 0, "unknown_target": 0}
