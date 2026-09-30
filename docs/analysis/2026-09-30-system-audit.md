@@ -158,8 +158,8 @@ PID 887 于 01:36:57Z 随开机起跑，早于 #265（02:15:46Z 合入）、#266
 ### S10 🔵 本机残留
 
 两个本地分支上游已删、已合入 main，挂在已消失的 worktree 上：`docs/proxy-probe-verdict-and-teardown`、
-`security/hooks-lark-webhook-disposition`。按 CLAUDE.md 第 5 步清掉（`git worktree prune` 后 `git branch -d`）。
-`.claude/worktrees/*` 是会话自己的 worktree，不动。
+`security/hooks-lark-webhook-disposition`。已按 CLAUDE.md 第 5 步清掉：`git worktree prune` 清了 3 条目录已不存在的
+worktree 记录，`git branch -d` 删了这两个分支，之后 `: gone` 的分支是 0 个。`.claude/worktrees/*` 是会话自己的 worktree，不动。
 
 ## 看过、没问题的
 
