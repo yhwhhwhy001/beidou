@@ -20490,3 +20490,97 @@ family gate 的 N 不动。
    - 生效要等主 checkout 快进：launchd 跑的是主 checkout 的脚本。
 3. **降级的 main 按 probe 的 stop 折叠：先不动。** 今天 tsmom 是 main，这条路径要等 tsmom 再次因现行证据被降级才会走到。
    到那时再议。
+
+## 2026-09-30 · 重启 #64：主机关机又开机，LaunchAgent 在登录时拉起循环——补记可观测事实，停机 10 根 bar 没有行
+
+只记可观测事实。时刻一律 UTC。这一节由会话 b6371593 在 #65 之后补写。
+
+**谁、为什么。**
+- 主机 09-29 关机，09-30 开机。
+- 三个 LaunchAgent 在开机后约 31 秒的同一秒起来。这与登录时 `RunAtLoad` 拉起一致。
+- `com.beidou.live` 的 plist：`RunAtLoad` 为 true，`KeepAlive` 为 `{SuccessfulExit: false}`。
+- 没有看到手动 `kickstart` 的记录。关机由谁发起，这里不推断。
+
+**停机前（09-29）。**
+- 03:00 那根 04:00:28Z 准时跑完。
+- 04:39:24Z，`pmset -g log` 记 `Clamshell Sleep`，当时接着电源（`Using AC`）。04:40:46Z 起改用电池。
+- 此后到 14:44Z 只有周期性的 DarkWake。循环的写入都落在某次 DarkWake 之后几秒内：
+  - 04:00 那根 05:39:21Z 才写出，报 `ReadError`，前一次 DarkWake 在 05:39:15Z；
+  - 05:00 那根由 backoff 06:57:27Z 补一行 SKIPPED，DarkWake 在 06:57:24Z；
+  - 06:00 那根 08:58:16Z 才写出，又报 `ReadError`，DarkWake 在 08:58:13Z；
+  - backoff 13:45:13Z 为 07:00–11:00 各补一行 SKIPPED，DarkWake 在 13:45:06Z。
+- 12:00 那根没有行，原因见 #265。两次 `ReadError` 的成因这里不推断。
+- 14:44:50Z 与 15:00:12Z，`pmset` 记了两次 Wake，原因字段含 `lid` 与 `UserActivity`，电量 80%、79%。
+- 14:46:26Z 跑完最后一个周期，处理 13:00 那根：OK，权益 13,379.29。
+- 15:00:49Z，#63 起的 PID 17557 记 `stopping cleanly before the cycle: SIGTERM`。14:00 那根的周期因此没跑。
+- 进程退出时打印 `completed 11 cycle(s) without error`。`last` 记关机 15:00Z。
+
+**开机与启动（09-30）。**
+- `kern.boottime` 01:36:25Z。`last` 记 console 会话 01:36Z 登录。
+- 01:36:57Z，`com.beidou.live`（PID 874）、`com.beidou.shadow`（PID 880）、`com.beidou.paper-l3`（PID 887）同时起来。
+- 01:37:47Z 启动途中连续 3 次连不上 demo-fapi（`ConnectTimeout`），重试后成功。场地时钟偏差 +2.5s。
+- 再平衡窗口 137.1s，此前五次重启是 86.7–98.9s。窗口含实测的启动耗时，这次的重试拉长了启动。
+- `state.restarts` 63 → 64，`restarted_at` 2026-09-30T01:37:00+00:00。
+- 重启前没有跑构造测试，重启时没有人在场。
+- 主 checkout 自 09-29 04:18:19Z 起停在 `3cb0452f`，源文件 mtime 都早于进程启动。
+- 相对 #63 载入的 `769de3e9`，配置只动了两处：
+  - registry 的 `evidence` 指针换成 09-29 重出的 tsmom 报告。`evidence` 块不进 `registry_digest`。
+  - `live.demo.yaml` 改了一行注释。
+- 其余改动在研究、报告与治理命令里，例如新增的 `xs_lowvol` 信号、`family_gate` 与 `reopen`。
+- 在跑的 registry 不引用 `xs_lowvol`。
+- 三个摘要与 #63 相同：construction `e32f3856ac1e`、registry `7f8adb754962`、治理规则 `9cc96461276f`。
+
+**之后。**
+- 01:37:57Z 为 00:00 那根写一行 SKIPPED，原因 `restart outside the rebalance window`，`missed_rebalances` 1。
+- 14:00–23:00 这 10 根 bar 没有任何行。M-Q03 按行计数，这 10 根谁也没记。
+- 第一个真周期 02:00:36Z，处理 01:00 那根：OK。
+- 同一周期做了每日池子重排：`ARBUSDT` 进池，池子 16 → 17（`universe_update.entered`）。
+
+**连带的事。**
+- 缺行的两处都在 #265 修了：重启补记停机期间收盘的 bar；backoff 的补行上限算上睡前已收盘的 bar。
+- #265 不回补已写的记录。09-29 的 M-Q03 仍读 8 次：6 次跳过、2 次失败。
+- 那天实际只有 00:00–03:00 与 13:00 五根完成了周期，19 根没有。
+- 引用 `live.stderr.log` 时，避开 `alert delivery failed` 那几行：它们带着告警通道的完整 URL。已另开任务修日志。
+
+## 2026-09-30 · 重启 #65：载入 #265 的停机补行——操作者指示，本会话按 RUNBOOK 纪律执行，构造不变
+
+只记可观测事实。时刻一律 UTC。
+
+**谁、为什么。**
+- 操作者在会话 b6371593 里打字「合入后重启循环并记进 RESEARCH_LOG」，本会话执行。
+- 要载入的是 #265：重启补记停机期间收盘的 bar；backoff 的补行上限算上睡前已收盘的 bar。
+
+**主 checkout。**
+- 02:27:28Z 一步快进到 `de00ce3e`，即 #265 的 merge。reflog 记为 `merge de00ce3e…: Fast-forward`。
+- 快进前核过三件事：HEAD 仍是 `3cb0452f`，工作树干净，`3cb0452f` 是 `de00ce3e` 的祖先。
+
+**重启前。**
+- 02:27:38Z，在安全窗口内。`ps` 读到 armed 进程是 PID 874，01:36:57Z 起。
+- `state.restarts` 64，`restarted_at` 01:37:00Z。最后一个周期 02:00:36Z 处理 01:00 那根，OK。
+- 02:27:28Z 在 `de00ce3e` 上跑两个构造测试：18 passed，退出码 0。
+
+**重启。**
+- 02:27:38Z 执行 `launchctl kickstart -k gui/$(id -u)/com.beidou.live`，02:28:08Z 返回 0。
+- 新进程 PID 5349，启动于 02:28:08Z。launchd 的 `runs` 读回 2。
+- `state.restarts` 64 → 65，`restarted_at` 2026-09-30T02:28:08+00:00。
+- #265 改的四个源文件 mtime 是 02:27:28Z，早于进程启动：`beidou_live/engine.py`、`health.py`、`report_execution.py`、`scheduler.py`。
+
+**之后。**
+- 启动日志三行：
+  - `run_live.sh: D-041 bridge ACTIVE until 2026-10-13 …`，bridge 生效时的固定文案；
+  - 场地时钟偏差 +2.5s；
+  - `restart was 1697.6s after the bar close (window 88.6s); reconciled but did not rebalance`。
+- 02:28:17Z 为 01:00 那根写一行 SKIPPED，原因「restart outside the rebalance window; this bar was already rebalanced」。`missed_rebalances` 0，无单。
+- 没有 downtime 行。记录里最新的 bar 就是 01:00，没有缺口。这是 #265 的对照情形。
+- 心跳 02:28:17Z 的 construction、registry、治理规则三个摘要与重启前相同。
+- 02:28Z 的 `live status --check` 退出码 1：周期成功率 84.6%，13 次里失败 2 次。
+- 那两次失败是 09-29 04:00 与 06:00，与这次重启无关，约 06:00Z 滑出 24 小时窗口。
+- 第一个真周期 03:00:30Z，处理 02:00 那根：OK，0 单，没有护栏原因与退出事件。
+- 三个摘要都没变。权益 13,300.10，交易池 17 个，窗口 88.6s。
+
+**连带的事。**
+- #266 让 M-001 不再把 backoff 行算成功周期，02:47:58Z 合入（`9d105537`）。
+- 只有 `live status` 读 `cycle_health`，引擎不读，所以不需要重启。
+- 03:01:49Z 主 checkout 一步快进到 `9d105537`，前置核对同上。
+- 快进后 `live status --check` 读 7 次、71.4%，退出码 1。旧口径同一时刻读 13 次、84.6%，多出的 6 行是 backoff 行。
+- 两条 PR 都只改记账。交易、构造指纹与三个摘要都没动。
