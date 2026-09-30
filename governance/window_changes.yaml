@@ -21,18 +21,42 @@ entries:
       `probe_status` 的闸从「已实现归因收入」改读「盯市」口径（`marked_pnl`，已实现并已在日报并排打印），
       同时把 `config/alpha_registry.yaml` 的 `probe.stop.max_loss` 改为该口径下的经验 2.28% 分位数：
       flow_short 2.0% → **7.5%**，main 6.0% → **11.2%**。两者必须一起改。
+      **2026-09-30 更正：上面两个数是 k = 0.30 时量的，已经过期。** 同一条规则在今天的构造（k = 0.175）上给出
+      flow_short **4.5%**、main **7.5%**。照旧数应用，flow 的 −7.5% 在 48,361 个 30 天窗口里一次都碰不到，
+      又回到这条变更要修的「打不响」。应用时用 `measured_at` 记下的那套配置上量出的数；vol_target 或 fraction
+      变了先重量（`scratchpad/probe_stop_tails.py`，零 ledger），再改这里的数与 `measured_at`。测试钉住两边一致。
     measured: >-
       在被验证过的面板（2021-01-31 → 2026-09-07，49,080 bar × 241 币）上重建每本书自己的权重路径，
       取 w_{t-1}·r_t 的 30 天滚动和：flow_short 年化 σ 9.70% / 30 天 σ 3.239% / 2.28% 分位数 −7.51%；
       main 29.69% / 7.233% / −11.22%。现行阈值分别位于 0.62σ 与 0.83σ；而在循环现在读的那个
       已实现口径上，flow 的 −2% 位于 **14.6σ**——打不响。
+      **2026-09-30 重量**（同一方法、同一段面板，今天的 profile 与 registry，k = 0.175；面板 878 币；
+      `scratchpad/probe_stop_tails.py`，读数全文在 RESEARCH_LOG 同日一节）：flow_short 年化 σ 5.59% / 30 天 σ 1.887% / 2.28% 分位数
+      −4.51%；main 17.58% / 4.473% / −7.54%。30 天窗口落到阈值以下的比例：flow 现行 2.0% 13.3%、规则值 4.5%
+      2.31%、旧数 7.5% 0.000%；main 现行 6.0% 5.80%、规则值 7.5% 2.36%、旧数 11.2% 0.196%。
+    # What the thresholds above were measured on: the profile's vol target and the registry's flow fraction.
+    # They are shares of equity and the book's P&L scales with both, so they belong to these values and no others.
+    # `tests/governance/test_the_batch_window_has_a_list.py` goes red when the profile or the registry moves
+    # away from it while this entry is still queued: re-measure, then update the numbers and this block.
+    measured_at:
+      vol_target: 0.175
+      flow_short_fraction: 0.333333
+      commit: ec2d97a7
     why_it_waits: >-
       `max_loss` 在 `construction_fingerprint` 里（`engine.py` 的 `stop_of`），所以改它是一次构造变更，
       而 §1 把「窗口外改构造」列为 Out、K-EX14 就是为这件事写的。并且口径与阈值必须一起动：
       只换口径而留着 2%，flow 的盯市读数 −3.197% 当场就会触发停损、把书关掉（falsifier F3 量到的）。
+      **2026-09-30 更正：第一句的前提不成立。** `stop_of` 在 `registry_digest` 里，不在 `construction_fingerprint`
+      里，09-12 的 `3e584cbf` 上就是这样（`registry_digest` 从第 1631 行起，`stop_of` 在 1657 行，
+      `construction_fingerprint` 从 1717 行起）。改 `max_loss` 改的是 registry 摘要，不是构造。K-EX14 管 exit overlay
+      与信号参数，这条两样都不是。「口径与阈值必须一起动」仍然成立。发现者是同日 Backtest guard 会话（#275）。
     cost: >-
       清零 M-010 的 30 天窗口（应用当日归零，最早读数顺延约 8 天）并重启 M-G06 的 18 个月。
       这是任何一次构造变更都要付的同一笔钱，所以它应当与该窗口的其他构造变更**一起**付。
+      **2026-09-30 更正价钱**（前提见 `why_it_waits` 的更正）：M-010、M-G06、衰减规则只看构造，不清零。
+      清零的是 M-Q08：它的比较窗口要求构造与 registry 摘要都不变（`execution_fidelity.comparison_window`）。
+      现行构造 `e32f3856ac1e` 下，M-Q08 第一次判定最早约 10-13；10-03 应用会推到约 10-18。
+      另要改 `probe_status` 读哪个口径（代码），再重启一次，循环才会读新的 registry 与新代码。
     prereg: b883d01e
     verdict: 3e584cbf
     note: >-
@@ -40,6 +64,12 @@ entries:
       2.3% 尾部。从「不可触发」变成「按设计触发」是收紧。四条 falsifier（F1 权重逐位不变、
       F2 σ 差 1.38 倍、F3 新阈值不回看触发、F4 两书分位数差 1.49 倍）全部未触发。
       探针自己的 30 天复核在 2026-10-02，正好是窗口前一天。
+      ——
+      2026-09-30 补两条。其一，复核日：代码按 `accepted_on` + 30 天判，两本书都在 2026-10-03T00:00Z 变
+      REVIEW_DUE（`beidou governance calendar`），不是上面写的 10-02。其二，registry 里 flow 的 `max_loss`
+      注释写着「随 vol_target 等比例调」（09-04 那次 0.01 → 0.02），09-14（0.30 → 0.60）与 09-27（0.60 → 0.175）
+      两次改 k 都没跟。在循环现在读的已实现口径上，这道闸按哪个数都打不响，所以没有影响过交易。本条应用时，
+      阈值按上面的规则在应用那天的构造上重定，那条「等比例」注释随之作废。
 
   - id: vol-target-repricing
     subject: 在冲击成本模型下重推 `vol_target`

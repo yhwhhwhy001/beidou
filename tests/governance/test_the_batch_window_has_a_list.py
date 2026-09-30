@@ -29,6 +29,7 @@ from beidou_governance.window_changes import (
     render,
     survey,
 )
+from beidou_shared.config import load_yaml
 
 NOW = datetime(2026, 9, 12, 15, 0, tzinfo=UTC)
 
@@ -63,11 +64,43 @@ def test_the_live_queue_carries_the_probe_stop_change_with_its_measurements() ->
     changes = {c.id: c for c in load(Path(LIST))}
     stop = changes["probe-stop-caliber"]
     assert stop.earliest_window == "2026-10-03"
-    assert "7.5%" in stop.change and "11.2%" in stop.change, "the new thresholds, not a pointer to them"
+    # 2026-09-30: 4.5% / 7.5% are the rule's values at k 0.175.  The 09-12 pair (7.5% / 11.2%, k 0.30) stays in
+    # the entry as history; this asserted only that pair, which is how it stayed pinned after k moved twice.
+    assert "4.5%" in stop.change and "7.5%" in stop.change, "the thresholds to apply, not a pointer to them"
     assert "3.239%" in stop.measured and "14.6" in stop.measured
-    assert "construction_fingerprint" in stop.why_it_waits
+    assert "1.887%" in stop.measured, "the re-measurement on the configuration in force"
+    # The 09-12 premise ("`max_loss` is in `construction_fingerprint`") was wrong from the start: `stop_of` sits in
+    # `registry_digest`.  The original sentence stays as history; its correction is what must not go missing.
+    assert "registry_digest" in stop.why_it_waits
+    assert "M-Q08" in stop.cost, "the clock a registry change resets"
     assert "M-010" in stop.cost and "M-G06" in stop.cost
     assert stop.prereg and stop.verdict, "the commits are the pointers (先写后跑)"
+
+
+def test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_them() -> None:
+    """A stop written as a share of equity belongs to the vol target and fraction it was measured at.
+
+    2026-09-30: the entry still carried 7.5% / 11.2%, measured on 09-12 at k 0.30, after k had moved to 0.60 and
+    then to 0.175.  Applied as written, flow's stop would have sat where none of 48,361 thirty-day windows of
+    the validated panel reach - the unfireable stop this change exists to replace - and nothing said so,
+    because the test above asserted the numbers were present, not that they still described the book.
+
+    So the entry names what it was measured on, and this goes red when the profile or the registry moves away
+    from that while the change is still queued.  The fix is never to edit `measured_at` alone: re-measure
+    (`scratchpad/probe_stop_tails.py`, zero ledger), then change the numbers and `measured_at` together.
+    """
+    stop = {c.id: c for c in load(Path(LIST))}["probe-stop-caliber"]
+    if stop.applied:
+        return  # applied: the thresholds moved into the registry and this entry is history
+    measured_at = stop.extra["measured_at"]
+    profile = load_yaml(Path("config/live.demo.yaml"))
+    registry = load_yaml(Path("config/alpha_registry.yaml"))
+    assert float(measured_at["vol_target"]) == float(profile["portfolio"]["vol_target"]), (
+        "portfolio.vol_target moved since the probe-stop thresholds were measured; re-measure before applying"
+    )
+    assert float(measured_at["flow_short_fraction"]) == float(registry["books"]["flow_short"]["fraction"]), (
+        "books.flow_short.fraction moved since the probe-stop thresholds were measured; re-measure before applying"
+    )
 
 
 def test_the_summary_shouts_when_a_window_has_opened() -> None:

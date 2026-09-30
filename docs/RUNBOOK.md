@@ -170,9 +170,11 @@ armed 启动随即被数据集门挡住（`registry_dataset_problems`）。要�
 **含义。** 两个不重叠的 30 天窗口里，这条策略的归因夏普都低于它的证据报告里的回测 q10。
 窗口从当前构造起算（`evidence_window`，与 M-010 同一起点）。构造一变，窗口重新起算。
 
-**什么时候会出现。** 当前构造从 2026-09-17T16:00Z 起算，最早 2026-11-16T16:00Z 才有两个完整窗口。
-在那之前，日报「Edge decay (M-010 vs backtest q10)」一节读 INSUFFICIENT_DATA，只印不告警。
-10-13 若改构造，窗口从那天重新起算。
+**什么时候会出现。** 最早在当前构造起点之后 60 天，那时才有两个完整窗口。起点不写在这里，它随每一次构造变更
+移动：读日报「Edge decay (M-010 vs backtest q10)」一节的 `windows_start` 与每条策略的「不早于」。在那之前这一节读
+INSUFFICIENT_DATA，只印不告警。（2026-09-30 更正：这里原写「当前构造从 2026-09-17T16:00Z 起算，最早
+2026-11-16T16:00Z」。09-27、09-28 两次构造变更之后，起点是 2026-09-28T16:00Z，最早 2026-11-27T16:00Z。
+同一个错在「采纳 exit overlay / 信号改动的最短干净窗口」一节犯过一次，那一节因此不写日期。）
 
 **读之前先看口径。** 实盘窗口是已实现归因，q10 是回测盯市（操作者 2026-09-23 裁定 A）。
 两种口径的波动差得很远：flow 的 30 天 σ 在 09-12 读数，已实现 0.137%，盯市 3.239%。
@@ -337,8 +339,15 @@ M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录
 检测：
 
 ```bash
-python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('https://fapi.binance.com/fapi/v1/time'))['serverTime'];print('drift %.1f s' % (time.time()*1000-s)/1000)"
+python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('https://fapi.binance.com/fapi/v1/time'))['serverTime'];print('drift %.1f s' % ((time.time()*1000-s)/1000))"
 ```
+
+（2026-09-30 更正：这条命令原先少一对括号，`%` 先把数格式化成字符串再除以 1000，一跑就是 `TypeError`。
+负数表示主机比交易所慢。）
+
+2026-09-30 的读数：主机比交易所慢 2.7 s，与 NTP 对照也是慢 2.66 s（`sntp time.apple.com`）。偏差每天增加
+0.1–0.2 s，09-05 到 09-10 那段每天约 1 s；09-11 与 09-15 两次被校回到 0.5 s 以内。按每周期记录的 `clock.skew_ms`
+逐日看就是这条曲线。签名请求靠 -1021 自愈，`recvWindow` 是 10 s，对齐告警线是 60 s，这个量级不用处理。
 
 影响与不影响：
 
@@ -350,7 +359,14 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 
 ## 排障
 
-- 心跳超时：`beidou live status --check`；看 `~/Library/Application Support/beidou/live.err.log`。
+- 心跳超时：`beidou live status --check`；看 `~/Library/Application Support/beidou/live.stderr.log`（2026-09-30 更正：原写 `live.err.log`，这个文件不存在，plist 写的是 `live.stderr.log` 与 `live.stdout.log`）。
+- **周期迟到、缺行、一串 backoff，或心跳过期**：先查主机是不是睡了、关了或重启了，再怀疑代理和交易所。
+  `pmset -g log | grep -E "Clamshell|Wake from|DarkWake|Using (AC|BATT)"` 看合盖与睡眠；`last reboot shutdown` 与
+  `sysctl -n kern.boottime` 看关机和开机；`grep -h Rebooting /var/log/install.log` 看系统更新触发的重启；旧进程的
+  `live.stderr.log` 里找 `stopping cleanly` 与 SIGTERM。两次实例：2026-09-29 合盖睡眠（当时接着电源）之后关机，
+  19 根 bar 没有完成周期（RESEARCH_LOG「重启 #64」一节）；2026-09-14T18:57Z 一次系统更新重启，74 分钟里起了三个进程，
+  RESEARCH_LOG 当时只记了「主机 19:00:14Z 回来」。主机关着的时候，launchd 不补跑错过的日历任务（data、
+  forward-board、governance-gate），它们等下一次到点；睡眠中错过的会在醒来时补跑一次。
 - **巡检的 status 与 report 两格一起失败，告警末三行是 Python traceback，verify 那格照常 ok**：报告层 import 时坏了。循环不 import 报告层（2026-09-28 起），照常交易；不需要重启，重启也修不好。代价在巡检这边：`live status --check` 在报告层那三个读数处就退出，时钟、两个 digest、心跳与成功率这一小时都没查。循环活没活，看 `beidou live status` 先印出的心跳 JSON，报告层坏了它照样印，报错在它后面。修好报告层并快进主 checkout，下一个 :10 两格自己转绿。
 - 连续 12 个周期失败触发熔断（`beidou_live/engine.py` 的 `breaker_stop`）。告警送达就以 0 退出，launchd **不会**再拉起（`KeepAlive.SuccessfulExit=false`）；恢复是一次重启，按上文「改了 registry / profile 之后」的窗口与纪律做。没有任何通道收下告警时才非零退出，launchd 60s 后拉起。失败之间循环自己按指数退避，上限 1 小时。根因通常是网络或 -1021 时钟漂移（客户端自动重同步）。
 - `cycles.jsonl` 每周期一行：`targets`、`orders`（含 `note`：`PARTICIPATION_CAPPED` / `MARGIN_SCALED`）、`exit_events`、`throttle`、`universe_update`、`skipped`。
@@ -362,6 +378,6 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - `cycles.jsonl` 的 `gross_before` 自 D-023 起按 `positionRisk` 的仓位求和；此前恒为 0（账户报文不带 positions 数组），满仓也显示为空仓。
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
-- 当前实测：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
+- 2026-09-04 实测（今天的读数见上文《主机时钟漂移》）：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
 - **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data metrics` + `data pool refresh`（`data spot` 2026-09-09 加入，`data metrics` 2026-09-27 加入；每日 01:20，`com.beidou.data.plist`）。2026-09-28 起最后再跑 `pytest -m archive`，失败推送，见「归档专属测试告警」一节。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。`data metrics` 不带参数：取快照 store 里的全部币，截到昨天，每个币从自己的水位续传。M-011 每小时拿这份归档和快照比；此前归档只在 09-09 手动灌过一次，停在 09-07，见 RESEARCH_LOG「M-011 读了十九天的 09-07」一节。
 - **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check`、`report daily --check` 与 `data pool lag --check`（成员表落后，见上文「成员表落后告警」），失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。`report daily` 不带 `--date` 时渲染最新一行周期行所在的 UTC 日（`newest_day`），不是主机时钟的今天：00:10Z 那次给前一天定稿，含 23:00 那根 bar；当天的文件从 01:10Z 起才有。所以 `reports/daily/D.json` 最后写于 D+1 日 00:10Z，只差 01:00:2x 才写的归因行（每天 00:00 那次资金费结算）。这条规则生效（合入并快进主 checkout）之前写的归档，最后写于 D 日 23:10Z，缺 23:00 那根（RESEARCH_LOG 2026-09-28「归档日报缺每天 23:00 那根 bar」一节）。
