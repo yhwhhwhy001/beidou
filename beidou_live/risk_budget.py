@@ -560,8 +560,28 @@ def attributed_drawdown_state(
     }
 
 
+def _vol_targets(rows: Sequence[Mapping[str, Any]]) -> dict[Any, float]:
+    """Each construction's ``vol_target`` from the full payload a process writes into its first cycle row."""
+    targets: dict[Any, float] = {}
+    for row in rows:
+        full = row.get("construction_full")
+        value = (full.get("portfolio") or {}).get("vol_target") if isinstance(full, Mapping) else None
+        if isinstance(value, int | float) and value > 0:
+            targets[canonical_construction(row.get("construction"))] = float(value)
+    return targets
+
+
 def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) -> dict[str, Any]:
-    """Annualised volatility of the live equity path, enforced only on a single-construction window.
+    """Annualised volatility of the live equity path over the window, every return restated at today's k.
+
+    Until 2026-09-30 it answered only on a window holding one construction.  The loop never held one for
+    30 days - the longest run from go-live to that day was 9.8 days - so it had never been enforced.  The
+    operator ruled that day to read across constructions instead: a vol-targeted book moves in proportion
+    to its target, so a return earned under target k_a is restated as r * k_now / k_a.  The target comes
+    from the row's own ``book_vol.target`` (every row since 2026-09-17), else from the construction's full
+    payload.  A return whose target cannot be found is dropped rather than guessed, and so is one spanning
+    more than a bar: after the host slept, the first row carries hours of market in one return.  Inside
+    the newest construction nothing is restated, so a window that never changed reads as it always did.
 
     A bar that absorbed an external cash flow (deposit, demo reset; E-044) is a step in equity, not a
     return, and is skipped - as ``drawdown_state`` and ``reports.drift_check`` already do.  Not
@@ -570,32 +590,47 @@ def realised_vol(rows: Sequence[Mapping[str, Any]], params: RiskBudgetParams) ->
     cutoff = _latest_ms(rows) - params.vol_window_days * DAY_MS
     window = [row for row in rows if int(row.get("bar_open_ms") or 0) >= cutoff]
     priced = [row for row in window if isinstance(row.get("equity"), int | float)]
-    # Canonicalised: a fingerprint field-set change is not a construction change, and this gate gave up
-    # entirely when it saw two digests (2026-09-07, twice).
-    constructions = {canonical_construction(row.get("construction")) for row in window if row.get("construction")}
-    returns = [
-        float(b["equity"]) / float(a["equity"]) - 1.0
-        for a, b in pairwise(priced)
-        if float(a["equity"]) > 0 and not (b.get("external_flows") or {}).get("rebaselined")
-    ]
-    reason = None
+    known = _vol_targets(rows)
+
+    def target(row: Mapping[str, Any]) -> float | None:
+        value = (row.get("book_vol") or {}).get("target")
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+        return known.get(canonical_construction(row.get("construction")))
+
+    # Canonicalised: a fingerprint field-set change is not a construction change (2026-09-07, twice).
+    newest = canonical_construction(priced[-1].get("construction")) if priced else None
+    k_now = target(priced[-1]) if priced else None
+    bar_ms = round(365 * DAY_MS / params.bars_per_year)
+    returns: list[float] = []
+    constructions: set[Any] = set()
+    rescaled, dropped = 0, {"gaps": 0, "unknown_target": 0}
+    for a, b in pairwise(priced):
+        if float(a["equity"]) <= 0 or (b.get("external_flows") or {}).get("rebaselined"):
+            continue
+        if int(b.get("bar_open_ms") or 0) - int(a.get("bar_open_ms") or 0) != bar_ms:
+            dropped["gaps"] += 1
+            continue
+        held = canonical_construction(a.get("construction"))
+        scale = 1.0
+        if held != newest:
+            k_held = target(a)
+            if not k_now or not k_held:
+                dropped["unknown_target"] += 1
+                continue
+            scale, rescaled = k_now / k_held, rescaled + 1
+        constructions.add(held)
+        returns.append((float(b["equity"]) / float(a["equity"]) - 1.0) * scale)
+    reading: dict[str, Any] = {"band": list(params.vol_band), "bars": len(returns), "rescaled": rescaled}
+    reading |= {"constructions": len(constructions), "dropped": dropped}
     if len(returns) < params.min_vol_bars:
-        reason = f"只有 {len(returns)} 根 bar，需要 {params.min_vol_bars} 根"
-    elif len(constructions) > 1:
-        reason = f"窗口内有 {len(constructions)} 个构造"
-    if reason is not None:
-        return {"value": None, "band": list(params.vol_band), "bars": len(returns), "enforced": False, "why": reason}
+        why = f"只有 {len(returns)} 根可读的 bar，需要 {params.min_vol_bars} 根"
+        return {"value": None, "enforced": False, "why": why, **reading}
     mean = sum(returns) / len(returns)
     variance = sum((r - mean) ** 2 for r in returns) / max(1, len(returns) - 1)
     annual = math.sqrt(variance * params.bars_per_year)
     low, high = params.vol_band
-    return {
-        "value": annual,
-        "band": [low, high],
-        "bars": len(returns),
-        "enforced": True,
-        "inside": low <= annual <= high,
-    }
+    return {"value": annual, "enforced": True, "inside": low <= annual <= high, **reading}
 
 
 def books_by_symbol(cycle: Mapping[str, Any] | None) -> dict[str, frozenset[str]]:
