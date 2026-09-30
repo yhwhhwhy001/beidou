@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from beidou_live.scheduler import DOWNTIME_REASON
+from beidou_live.scheduler import NO_WAKE_REASONS
 
 #: When a run of ERROR cycles stops being the proxy blinking and becomes an incident.  `live status
 #: --check` fails on `phase == "ERROR" and consecutive_errors >= 3`, which is the alarm that pages the
@@ -77,16 +77,20 @@ def cycle_health(
 
     A failed cycle is a row with ``phase == "ERROR"`` (written since 2026-09-04); a
     guard-skipped cycle counts as a success, because the loop did the right thing.
-    Dry-run rows are excluded: they are rehearsals, not the loop doing its job.  So are the rows a
-    restart writes for bars that closed while no process ran (2026-09-30): nothing attempted them,
-    and as SKIPPED rows they would each count as a success.  The outage is M-Q03's to charge.
+    Dry-run rows are excluded: they are rehearsals, not the loop doing its job.  So are the skip rows
+    no process woke to write (`NO_WAKE_REASONS`): the bars a restart charges for the time no process
+    ran, and the bars the failure backoff slept through.  Nothing attempted them, and as SKIPPED rows
+    each would count as a success.  The bars are M-Q03's to charge; this rate is about the cycles that
+    ran.  The backoff half was measured on 2026-09-30's 01:43Z check: 12 attempts, 2 failed, 83.3%.
+    Six of the twelve were backoff rows for bars 05:00 and 07:00-11:00; without them, 2 of 6 failed,
+    66.7%.
     """
     cutoff = now - timedelta(hours=window_hours)
     attempts = failures = 0
     failure_days: set[str] = set()
     last_failure: str | None = None
     for row in rows:
-        if row.get("dry_run") or row.get("reason") == DOWNTIME_REASON:
+        if row.get("dry_run") or row.get("reason") in NO_WAKE_REASONS:
             continue
         stamp = _stamp(row)
         if stamp is None:
