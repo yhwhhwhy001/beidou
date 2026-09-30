@@ -17,7 +17,7 @@ from typing import Any
 import pandas as pd
 
 from beidou_data.store import KlineStore
-from beidou_live.construction import canonical_construction
+from beidou_live.construction import canonical_construction, canonical_registry
 from beidou_live.state import LiveState, StateStore, StateUnreadable
 
 
@@ -97,39 +97,60 @@ def _cycles(store: StateStore, *, window_days: int | None = None, now_ms: int | 
     )
 
 
+def _book(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    """A row's (construction, registry), each compared as its declared twin (`beidou_live.construction`)."""
+    return canonical_construction(row.get("construction")), canonical_registry(row.get("registry"))
+
+
+def _same_book(a: tuple[str | None, str | None], b: tuple[str | None, str | None]) -> bool:
+    """A row written before the loop recorded its registry digest (2026-09-06) has no signal key to differ on."""
+    return a[0] == b[0] and (a[1] is None or b[1] is None or a[1] == b[1])
+
+
 def evidence_window(store: StateStore) -> dict[str, Any]:
-    """When the currently running construction started (D-026 fingerprint), i.e. when live evidence begins.
+    """When the book now running started - its construction (D-026) and its signals - i.e. when live evidence begins.
 
     Every change to the book - a signal parameter, a band, a half-life - resets what the live record is
     evidence *of*.  Adopting `conviction_mode: sign` and then P10 cell B on the same day made this
     concrete: the numbers before each change describe a different book.  M-010's 30-day window has to
     start here, not at the first cycle ever recorded.
+
+    Until 2026-09-30 only the construction fingerprint cut it, and that fingerprint covers the portfolio
+    layer alone - the signals are in the registry digest.  So the first sentence held for a band and a
+    half-life but not for a signal parameter: six registry-only switches (2026-09-08..15) ran inside one
+    window before M-010 had ever read.  Operator ruling that day: a registry change cuts too, unless
+    `REGISTRY_ALIASES` declares it the same signals.  `changes_7d` still counts constructions alone, because
+    the weekly promotion notice reads it; `registry_changes_7d` counts the other key.
     """
     rows = [row for row in _cycles(store) if row.get("construction")]
     if not rows:
-        return {"construction": None, "since_ms": None, "bars": 0, "changes_7d": 0}
+        return {
+            "construction": None,
+            "registry": None,
+            "since_ms": None,
+            "bars": 0,
+            "changes_7d": 0,
+            "registry_changes_7d": 0,
+        }
     # Compared through `canonical_construction`, because a digest can move without the book moving: the
     # fingerprint's own field set grew twice on 2026-09-07 (P22, P23) and each time this window reset to
     # one bar while every construction VALUE was identical.  Old rows keep the digest they were written
     # with - history is not rewritten - and the equivalence is declared in code, with its proof.
-    current = canonical_construction(rows[-1]["construction"])
+    current = _book(rows[-1])
     since = rows[-1]
     for row in reversed(rows):
-        if canonical_construction(row.get("construction")) != current:
+        if not _same_book(_book(row), current):
             break
         since = row
     latest_ms = int(rows[-1].get("bar_open_ms") or 0)
-    recent = [row for row in rows if int(row.get("bar_open_ms") or 0) >= latest_ms - 7 * DAY_MS]
-    changes = sum(
-        1
-        for a, b in pairwise(recent)
-        if canonical_construction(a.get("construction")) != canonical_construction(b.get("construction"))
-    )
+    recent = [_book(row) for row in rows if int(row.get("bar_open_ms") or 0) >= latest_ms - 7 * DAY_MS]
     return {
-        "construction": str(current)[:12],
+        "construction": str(current[0])[:12],
+        "registry": None if current[1] is None else str(current[1])[:12],
         "since_ms": int(since.get("bar_open_ms") or 0),
-        "bars": sum(1 for row in rows if canonical_construction(row.get("construction")) == current),
-        "changes_7d": changes,
+        "bars": sum(1 for row in rows if _same_book(_book(row), current)),
+        "changes_7d": sum(1 for a, b in pairwise(recent) if a[0] != b[0]),
+        "registry_changes_7d": sum(1 for a, b in pairwise(recent) if None not in (a[1], b[1]) and a[1] != b[1]),
     }
 
 

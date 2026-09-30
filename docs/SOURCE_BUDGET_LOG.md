@@ -3673,6 +3673,21 @@ backoff 的补行上限只按睡眠时长算，默认失败周期准时。06:00 
 
 实测 16_182。顶抬到「实测 + 政策」：16_345，余量 163（= `headroom_policy(16_345)`）。
 
+### 2026-09-30 · 顶 16_345 -> 16_519（证据窗口随 registry digest 切，非信号改动声明豁免）
+
+操作者 2026-09-30 裁定（backtest-guard 09-30 体检第一遍 🔵）：`evidence_window` 只比构造指纹，而信号参数在
+registry digest 里，只改信号参数的重启会让 M-010 把两本书拼进一个窗口。合入前 main 实测 16_309（#276、#278 之后）。
+
+花在哪（净增 45）：
+
+- +21 `construction.py`：`REGISTRY_ALIASES`（今天是空表，注释写明为什么空）与 `canonical_registry`，写法同
+  `CONSTRUCTION_ALIASES`，一跳；模块 docstring 两行。
+- +21 `report_common.py`：`evidence_window` 按（构造, registry）切；`_book`、`_same_book` 两个小函数，2026-09-06
+  之前没有 registry 字段的行按未知处理；docstring 写明裁定，以及 `changes_7d` 为什么仍只数构造。
+- +3 `reports.py`：日报 Evidence window 一节印 `registry` 与 `registry_changes_last_7d`。
+
+实测 16_354。顶抬到「实测 + 政策」：16_519，余量 165（= `headroom_policy(16_519)`）。
+
 ## beidou_cli
 
 原文：blob 里第 3615–4030 行，`"beidou_cli": 8_740,` 之上的注释，共 416 行。
