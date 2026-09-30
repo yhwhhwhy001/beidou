@@ -3,7 +3,8 @@
 `construction_fingerprint` answers "is this the same book?".  Two things here keep that answer honest
 across changes to the question: a version for the field set being hashed, reported outside the hash so
 bumping it cannot move the digest it explains, and the aliases an operator has declared to mean the
-same book.
+same book.  Since 2026-09-30 it also holds the registry digests declared to carry the same signals,
+because the evidence window now ends on a registry change too.
 
 Split out of ``health.py`` in 2026-09-15.  The table lived there for one reason - `engine.py` would
 have imported it circularly - which is a module chosen by an import graph rather than by a concept, and
@@ -187,3 +188,23 @@ def canonical_construction(digest: str | None) -> str | None:
     if digest is None:
         return None
     return CONSTRUCTION_ALIASES.get(str(digest), str(digest))
+
+
+# Registry digests declared to carry the SAME SIGNALS as an earlier one (operator ruling 2026-09-30).
+# `registry_digest` hashes every strategy's parameters, the universe pin and each probe's stop, while the
+# construction fingerprint covers the portfolio layer only - so until that day a restart that changed only a
+# signal parameter left M-010's window running across two books.  Now a registry change ends the window by
+# default (`report_common.evidence_window`), and a change that touched ONLY the universe pin or a probe stop
+# earns an entry here.  The proof goes in the commit that adds it: both payloads recomputed, the diff naming
+# no other key.  One hop, like `CONSTRUCTION_ALIASES`.
+#
+# Empty on purpose.  The six registry-only switches of 2026-09-08..15 predate every live window, and the stop
+# change of 2026-10-03 rides a construction change (flow's retirement) that restarts the window anyway.
+REGISTRY_ALIASES: dict[str, str] = {}
+
+
+def canonical_registry(digest: str | None) -> str | None:
+    """The registry digest a row should be COMPARED as: the declared twin's, one hop, or its own."""
+    if digest is None:
+        return None
+    return REGISTRY_ALIASES.get(str(digest), str(digest))
