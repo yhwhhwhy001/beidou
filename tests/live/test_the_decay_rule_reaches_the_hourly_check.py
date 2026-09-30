@@ -122,7 +122,9 @@ def test_two_whole_windows_below_q10_page_from_the_hourly_check(tmp_path: Path) 
     row = payload["decay"]["tsmom"]
     assert row["status"] == "REVIEW" and row["below"] == 2 and row["bars"] == 2 * WINDOW
     assert row["windows"] == pytest.approx([q10 - 3.0, q10 - 2.0], abs=1e-9)
-    assert payload["decay"]["flow"]["status"] == "OK", "flow's windows sit above ITS q10"
+    # flow retired 2026-10-03: the registry cites no evidence for it, so it has no q10, reads INSUFFICIENT_DATA and
+    # routes nowhere - the assertions below still hold that only tsmom pages.
+    assert payload["decay"]["flow"]["status"] == "INSUFFICIENT_DATA", payload["decay"]["flow"]
     alerts, notices = daily_alerts(payload)
     paged = _mentions_decay(alerts)
     assert len(paged) == 1 and "tsmom" in paged[0] and "flow" not in paged[0]

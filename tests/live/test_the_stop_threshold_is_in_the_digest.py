@@ -82,10 +82,17 @@ def test_the_shipped_registry_still_declares_the_main_book_stop() -> None:
 
 
 def test_removing_one_probe_of_two_is_visible() -> None:
-    """The flow probe's stop is the one that can actually halt a book; deleting it must be loud."""
-    before = _digest(_shipped())
+    """A probe's stop is what can halt a book; deleting one of two must be loud.
+
+    Flow was the second probe until its retirement (2026-10-03), so the shipped registry now carries one enabled
+    probe.  The property is about two, so flow is switched back on here rather than the test being dropped.
+    """
+    two = _shipped()
+    next(s for s in two["strategies"] if s["id"] == "flow")["enabled"] = True
+    before = _digest(two)
     payload = _shipped()
     flow = next(s for s in payload["strategies"] if s["id"] == "flow")
+    flow["enabled"] = True
     flow.pop("probe", None)
     assert _digest(payload) != before
 

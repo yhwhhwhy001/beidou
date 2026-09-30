@@ -71,6 +71,9 @@
 # 2026-09-29，随 tsmom 重出再同步一次。整份照旧按「头注 + armed」重新生成：tsmom 指针换到
 # `tsmom-validation-20260929T023619Z.json`（同一协议重出，verdict 仍是 WEAK_PASS）。#251 往 armed 里加的三行
 # G4 注释当时没同步过来，这次一并补上；那三行是注释，`test_the_candidate_does_not_lie_about_what_it_is` 看不见它们。
+#
+# 2026-10-03，随 flow 退役再同步一次（操作者 2026-09-30 裁定「10-03 直接退役」）。整份照旧按「头注 + armed」
+# 重新生成：armed 里 flow 的 `enabled` 变成 false，`books.flow_short` 的声明留着（惰性）。
 # Strategies the live loop is allowed to run.  A strategy may only be enabled
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
@@ -147,6 +150,8 @@ ensemble:
 books:                         # independent sleeves next to the main book (D-018/D-019): each book is vol-targeted
   flow_short:                  # on its own, scaled by `fraction`, summed with the main book; the main caps/band then apply
     fraction: 0.333333         # must equal the `fraction` of the cited book report (checked at startup)
+    # 2026-10-03 起惰性：唯一挂在这本书上的 flow 已退役。声明留着，因为停用的 flow 条目仍写着 `book: flow_short`，
+    # 删掉声明会被 `parse_registry` 拒绝（strategy flow refers to undeclared book）。
 strategies:
   - id: tsmom
     enabled: true
@@ -522,7 +527,13 @@ strategies:
     # in the daily report, and `beidou live run` refuses an ACCEPT verdict without this probe block (KILL-015).
     # The 91% above is a backtest-period statistic.  Measured live on 2026-09-17 it was 0%: the two books shared
     # three names and disagreed on all three, flow short against tsmom long (D-044, `beidou_live/attribution.py`).
-    enabled: true
+    #
+    # RETIRED 2026-10-03（操作者 2026-09-30 裁定，backtest-guard 09-30 体检的卡 3 「10-03 直接退役」）。
+    # 依据是 09-29 体检第二遍：book-level REJECT、总书 delta 0.00，而 10-03 复审能读到的三个数都被 09-27 的
+    # 构造清零了（归因 30 天 −3.06 U、M-014 只有 28 根）。同一次重启载入 main 止损的重定阈，之后 60 天不改构造
+    # 也不改 registry（同日裁定的卡 1）。下面的 evidence 与 probe 两块留作记录：条目不启用，循环不读它们，
+    # `strategy_weights` 里没有它，所以它们不进构造指纹，也不进 registry digest。
+    enabled: false
     book: flow_short
     weight: 1.0
     # History.  Round 5 (KILL-025): on the point-in-time universe (D-013) flow FAILS - walk-forward OOS

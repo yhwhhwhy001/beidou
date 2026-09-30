@@ -101,4 +101,5 @@ def test_the_shipped_registry_is_on_the_allowed_side() -> None:
     registry = load_registry("config/alpha_registry.yaml")
     per_book = {book: sum(1 for e in registry.enabled if e.book == book) for e in registry.enabled for book in [e.book]}
     assert max(per_book.values()) == 1, per_book
-    assert json.dumps(sorted(per_book)) == json.dumps(["flow_short", "main"])
+    # flow_short left with flow's retirement (2026-10-03); the rule is one enabled strategy per book either way.
+    assert json.dumps(sorted(per_book)) == json.dumps(["main"])
