@@ -740,8 +740,11 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 "Evidence window (D-026 construction)",
                 {
                     "construction": (payload.get("evidence_window") or {}).get("construction"),
+                    # Since 2026-09-30 a registry change ends the window too (operator ruling; `evidence_window`).
+                    "registry": (payload.get("evidence_window") or {}).get("registry"),
                     "bars_under_it": (payload.get("evidence_window") or {}).get("bars"),
                     "construction_changes_last_7d": (payload.get("evidence_window") or {}).get("changes_7d"),
+                    "registry_changes_last_7d": (payload.get("evidence_window") or {}).get("registry_changes_7d"),
                     # O3: the window says how long; these say whether it is whole.
                     **_attribution_coverage_lines(payload.get("attribution_coverage") or {}),
                 },
