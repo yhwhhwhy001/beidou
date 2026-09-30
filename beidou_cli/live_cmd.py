@@ -26,7 +26,6 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import click
 import httpx
@@ -41,7 +40,7 @@ from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore, interval_ms
 from beidou_governance.policy import policy_digest
-from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts
+from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts, redacted
 from beidou_live.benchmark import beta_reading
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
@@ -133,9 +132,9 @@ def _logging(verbose: bool) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
-    if not verbose:
-        # one line per request (14 kline pulls a cycle) is noise in an unattended log; errors still surface
-        logging.getLogger("httpx").setLevel(logging.WARNING)
+    # Verbose too.  One line per request (14 kline pulls a cycle) is noise in an unattended log, and the line
+    # spells the full URL - for the alert webhook, the credential (2026-09-30).  Errors still surface.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def trades_the_account(*, dry_run: bool, paper: bool, state_dir: str, registry_override: str | None) -> bool:
@@ -747,12 +746,6 @@ ALERT_DEDUP_STATE = APP_SUPPORT / "alert-dedup.json"
 def alert_transport() -> httpx.AsyncBaseTransport | None:
     """Seam for the drill's tests; None means a real network client."""
     return None
-
-
-def redacted(url: str) -> str:
-    """A webhook URL is a credential - whoever holds it can post as the bot.  Show the host only."""
-    parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.netloc}/...({len(url)} chars)" if parsed.netloc else "(unparseable)"
 
 
 @live.command("alert-test")
