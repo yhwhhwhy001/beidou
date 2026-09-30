@@ -130,6 +130,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     _risk_budget_lines,
     _tail_readings_lines,
     _tradable_drawdown_line,
+    _usdt_pnl_lines,
     _weight_cap_line,
     collateral_share,
     holdings_correlation,
@@ -143,6 +144,7 @@ from beidou_live.report_risk import (  # noqa: F401  (re-exported at its histori
     risk_adaptation,
     risk_adaptation_headline,
     tail_readings,
+    usdt_pnl,
     weight_cap_bindings,
 )
 from beidou_live.risk_budget import RiskBudgetParams, collateral_drift, one_row_per_order, risk_budget_status
@@ -220,6 +222,10 @@ def daily_payload(
         # L1-10: the last cycle's split of that equity into USDT and collateral.  Rows written before the
         # engine recorded it carry nothing, and nothing is what gets reported - not a zero.
         "collateral": latest(cycles, "collateral"),
+        # The report's P&L headline, on USDT only (operator, 2026-09-30).  `equity_*` above stay in the json.
+        "usdt_pnl": usdt_pnl(
+            store.read_jsonl(store.cycles_path), day, baseline=(risk_budget or RiskBudgetParams()).usdt_baseline
+        ),
         "orders": statuses,
         "traded_notional": traded,
         "realized_pnl": realized,
@@ -627,10 +633,12 @@ def daily_markdown(payload: dict[str, Any]) -> str:
         f"Daily report {payload['day']}",
         [
             (
-                "Equity",
+                # Total equity carries collateral at mark, so it is not the P&L; it is still in the section
+                # below (operator, 2026-09-30: the P&L is read on USDT, from the declared baseline).
+                "PnL (USDT, collateral excluded)",
                 {
-                    k: payload[k]
-                    for k in ("equity_start", "equity_end", "equity_change_pct", "cycles", "skipped_cycles")
+                    **_usdt_pnl_lines(payload.get("usdt_pnl") or {}),
+                    **{k: payload[k] for k in ("cycles", "skipped_cycles")},
                 },
             ),
             # Second, because a date is the one finding here that has a deadline (E-PR16).

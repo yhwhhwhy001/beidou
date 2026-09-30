@@ -1638,3 +1638,58 @@ def _holdings_correlation_lines(block: Mapping[str, Any], risk_budget: Mapping[s
         "effective bets 接近 1，风险几乎全压在一个共同因子上。只报告，不告警：没有预登记的阈值。"
     )
     return {**lines, **engine}
+
+
+def usdt_pnl(rows: Sequence[Mapping[str, Any]], day: str, *, baseline: float | None) -> dict[str, Any]:
+    """The day's P&L on the money that can trade, and the account's P&L since `baseline` (operator, 2026-09-30).
+
+    The report used to lead with total equity, which carries USDC and BTC collateral at mark: BTC moved and so
+    did the headline, on a bar where the book did nothing.  The drawdown moved to the USDT series on 09-20
+    (`risk_budget.usdt_drawdown_state`); this moves the P&L onto the same series.
+
+    The day starts at the previous day's last reading, not the day's first: the 00:00Z bar's cycle belongs
+    to the day before, so starting at the first row drops the day's first bar.  External flows are not taken
+    out - a TRANSFER shows in "External cash flows" and would move both numbers here.
+    """
+    series = [
+        (row, float(value))
+        for row in rows
+        if isinstance(value := (row.get("collateral") or {}).get("usdt_equity"), int | float) and value > 0
+    ]
+    today = [(row, value) for row, value in series if _day_of(dict(row)) == day]
+    if not today:
+        return {"usdt_end": None, "why": "当天没有带 usdt_equity 的周期行"}
+    before = [(row, value) for row, value in series if (_day_of(dict(row)) or "") < day]
+    start_row, start = before[-1] if before else today[0]
+    end = today[-1][1]
+    return {
+        "usdt_start": start,
+        "usdt_start_from": start_row.get("at"),
+        "usdt_end": end,
+        "usdt_change": end - start,
+        "usdt_change_pct": end / start - 1.0,
+        "usdt_baseline": baseline,
+        "usdt_since_baseline": end - baseline if baseline else None,
+        "usdt_since_baseline_pct": end / baseline - 1.0 if baseline else None,
+    }
+
+
+def _usdt_pnl_lines(block: Mapping[str, Any]) -> dict[str, Any]:
+    if block.get("usdt_end") is None:
+        return {"usdt_end": "n/a", "why": block.get("why")}
+
+    def signed(value: Any, pct: bool = False) -> str:
+        if value is None:
+            return "n/a（profile 没有声明 risk_budget.usdt_baseline）"
+        return f"{100.0 * value:+.2f}%" if pct else f"{value:+.2f}"
+
+    return {
+        "usdt_start": _fmt_num(block["usdt_start"]),
+        "usdt_start_from": block["usdt_start_from"],
+        "usdt_end": _fmt_num(block["usdt_end"]),
+        "usdt_change": signed(block["usdt_change"]),
+        "usdt_change_pct": signed(block["usdt_change_pct"], pct=True),
+        "usdt_baseline": _fmt_num(block["usdt_baseline"]),
+        "usdt_since_baseline": signed(block["usdt_since_baseline"]),
+        "usdt_since_baseline_pct": signed(block["usdt_since_baseline_pct"], pct=True),
+    }
