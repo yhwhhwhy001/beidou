@@ -101,7 +101,7 @@ def point_in_time_membership(
     eligible: Iterable[str] | None = None,
     refresh: str = "MS",
     start: str | pd.Timestamp | None = None,
-    enterable: pd.DataFrame | None = None,
+    gate: Callable[[pd.Timestamp, list[str]], Collection[str]] | None = None,
 ) -> pd.DataFrame:
     """Boolean frame (refresh date x symbol): members chosen at each refresh from data strictly before it.
 
@@ -111,8 +111,9 @@ def point_in_time_membership(
     previous refresh's members, so membership churn in backtests matches what
     the live loop would have done.
 
-    ``enterable`` (any index x symbol, bool) is the pool entry gate's answer: at each refresh the last row
-    strictly before it removes the names it marks False, pins excepted (`refresh_selection` is the live half).
+    ``gate`` is the pool entry gate (2026-09-30): asked at each refresh, in date order and with the previous
+    refresh's members, which names the book could not open; those are skipped, pins excepted.  Research's gate
+    simulates the book day by day (`beidou_cli.research_pool_gate`); `refresh_selection` is the live half.
     """
     if quote_volume.empty:
         raise ValueError("no daily quote volume supplied")
@@ -134,13 +135,10 @@ def point_in_time_membership(
         age = observed.loc[: date - pd.Timedelta(nanoseconds=1)].iloc[-1]
         window = before.iloc[-config.volume_lookback_days :]
         volumes = {s: float(window[s].fillna(0.0).sum()) for s in universe if age[s] >= config.min_age_days}
-        allowed = eligible_set & set(volumes)
-        if enterable is not None and (position := int(enterable.index.searchsorted(date, side="left")) - 1) >= 0:
-            judged = enterable.iloc[position]
-            allowed = {s for s in allowed if bool(judged.get(s, True)) or s in config.always_include}
+        blocked = set(gate(date, previous)) - set(config.always_include) if gate is not None else set()
         members = rank_with_hysteresis(
             volumes,
-            allowed,
+            (eligible_set & set(volumes)) - blocked,
             previous,
             enter_rank=config.enter_rank,
             exit_rank=config.exit_rank,
@@ -316,16 +314,15 @@ def refresh_selection(
     config: UniverseConfig,
     previous: Sequence[str],
     at_ms: int,
-    enterable: Collection[str] | None = None,
+    blocked: Collection[str] = (),
 ) -> UniverseUpdate:
     """Rank what the caller measured.  ``volume_by_symbol`` is the eligibility set, pins included.
 
     ``point_in_time_membership`` drops a symbol that is too young *before* pinning, so a pin only survives
     if it was measurable that day.  Live has to intersect the same way or the two disagree about pins.
-    ``enterable`` is the pool entry gate's answer, applied as research applies it: pins are never gated.
+    ``blocked`` is the pool entry gate's answer, applied as research applies it: pins are never gated.
     """
-    pins = set(config.always_include)
-    gated = tuple(sorted(s for s in volume_by_symbol if enterable is not None and s not in enterable and s not in pins))
+    gated = tuple(sorted(s for s in volume_by_symbol if s in blocked and s not in config.always_include))
     measured = {s: v for s, v in volume_by_symbol.items() if s not in gated}
     selected = rank_with_hysteresis(
         measured,
@@ -392,5 +389,5 @@ class LivePool:
         # that justified it - and nothing reports the gap.  A fetch failure raises out of ``gather`` and the
         # engine keeps yesterday's universe (T-P05), so ``bars`` here is always a measurement, never a miss.
         volumes = {symbol: volume for symbol, volume, bars in results if bars >= self.config.min_age_days}
-        allowed = None if gate is None else set(await gate(sorted(volumes)))
-        return refresh_selection(volumes, rules, self.config, previous, now_ms, enterable=allowed)
+        blocked = set(await gate(sorted(volumes))) if gate is not None else set()
+        return refresh_selection(volumes, rules, self.config, previous, now_ms, blocked=blocked)

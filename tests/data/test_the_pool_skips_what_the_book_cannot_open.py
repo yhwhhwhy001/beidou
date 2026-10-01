@@ -2,8 +2,9 @@
 
 Operator ruling 2026-09-30 ("faithful" option): a refresh skips a name the book could not open, and the next
 name by volume takes the slot.  Which names those are is the book's business (`beidou_alpha.portfolio.enterable`);
-this layer only has to apply the answer the same way in research (`point_in_time_membership`) and live
-(`LivePool.select` via `refresh_selection`), causally, and never to a pin.
+this layer only applies the answer - the names the gate BLOCKS - the same way in research
+(`point_in_time_membership`) and live (`LivePool.select` via `refresh_selection`): in date order, against the
+previous refresh's members, and never to a pin.  A name the gate cannot judge is not blocked.
 """
 
 from __future__ import annotations
@@ -28,21 +29,31 @@ def _members(membership: pd.DataFrame, day: str) -> list[str]:
     return sorted(row[row].index)
 
 
-def test_research_skips_a_gated_name_and_the_next_by_volume_takes_the_slot() -> None:
+def test_research_asks_the_gate_in_date_order_and_fills_the_slot_it_frees() -> None:
     base = point_in_time_membership(VOLUME, CONFIG, refresh="D")
-    hourly = pd.date_range(DAYS[0], DAYS[-1], freq="h")
-    gate = pd.DataFrame(True, index=hourly, columns=VOLUME.columns)
-    gate.loc[pd.Timestamp("2024-01-30", tz="UTC") :, "B"] = False  # the book can no longer open B
-    gate.loc[pd.Timestamp("2024-02-10", tz="UTC"), "C"] = False  # exactly at a refresh instant, one bar only
-    gate.loc[:, "A"] = False  # a pin is never gated
-    gated = point_in_time_membership(VOLUME, CONFIG, refresh="D", enterable=gate)
+    asked: list[tuple[pd.Timestamp, list[str]]] = []
 
+    def gate(date: pd.Timestamp, previous: list[str]) -> set[str]:
+        asked.append((date, list(previous)))
+        blocked = {"A"}  # a pin: never gated, whatever the gate says
+        if date >= pd.Timestamp("2024-01-31", tz="UTC"):
+            blocked.add("B")  # from here the book can no longer open B
+        if date == pd.Timestamp("2024-02-10", tz="UTC"):
+            blocked.add("C")  # one refresh only
+        return blocked
+
+    gated = point_in_time_membership(VOLUME, CONFIG, refresh="D", gate=gate)
     assert _members(base, "2024-01-31") == ["A", "B", "C"]
-    assert _members(gated, "2024-01-30") == ["A", "B", "C"], "a refresh sees only readings strictly before it"
+    assert _members(gated, "2024-01-30") == ["A", "B", "C"]
     assert _members(gated, "2024-01-31") == ["A", "C", "D"], "B is skipped and D, next by volume, takes the slot"
-    assert _members(gated, "2024-02-10") == ["A", "C", "D"], "the 02-10T00:00 reading is not before the refresh"
-    assert _members(gated, "2024-02-11") == ["A", "C", "D"], "one bar later C is judged enterable again"
-    pd.testing.assert_frame_equal(point_in_time_membership(VOLUME, CONFIG, refresh="D", enterable=None), base)
+    assert _members(gated, "2024-02-10") == ["A", "D", "E"], "C blocked for one refresh: E fills"
+    assert _members(gated, "2024-02-11") == ["A", "C", "D"], "C is back the next day; E, ranked last, leaves"
+    dates = [date for date, _previous in asked]
+    assert dates == sorted(dates) and len(dates) == len(gated.index), "once per refresh, in date order"
+    assert asked[gated.index.get_loc(pd.Timestamp("2024-02-11", tz="UTC"))][1] == ["A", "D", "E"], (
+        "the gate is told the members the previous refresh chose - what the book holds when it decides"
+    )
+    pd.testing.assert_frame_equal(point_in_time_membership(VOLUME, CONFIG, refresh="D", gate=None), base)
 
 
 def test_live_and_research_skip_the_same_names_given_the_same_answer() -> None:
@@ -53,7 +64,7 @@ def test_live_and_research_skip_the_same_names_given_the_same_answer() -> None:
 
     async def gate(symbols: list[str]) -> set[str]:
         asked.append(symbols)
-        return {"C", "D", "E"}  # the book could open these; A is pinned, B cannot be opened
+        return {"A", "B"}  # A is pinned and stays; B cannot be opened
 
     pool = LivePool(_FakeDailyClient(ages, volumes, now_ms), CONFIG)
     update = asyncio.run(pool.select(("A", "B", "C"), _rules(list(ages)), gate=gate))
@@ -64,10 +75,8 @@ def test_live_and_research_skip_the_same_names_given_the_same_answer() -> None:
     ungated = asyncio.run(pool.select(("A", "B", "C"), _rules(list(ages))))
     assert list(ungated.symbols) == ["A", "B", "C"] and ungated.gated == ()
 
-    # Research, handed the same answer as a frame, picks the same three names.
-    frame = pd.DataFrame(True, index=DAYS, columns=VOLUME.columns)
-    frame["B"] = False
-    research = point_in_time_membership(VOLUME, CONFIG, refresh="D", enterable=frame)
+    # Research, handed the same answer, picks the same three names.
+    research = point_in_time_membership(VOLUME, CONFIG, refresh="D", gate=lambda date, previous: {"A", "B"})
     assert _members(research, "2024-02-29") == sorted(update.symbols)
-    direct = refresh_selection(volumes, _rules(list(ages)), CONFIG, ["A", "B", "C"], 1, enterable={"C", "D", "E"})
+    direct = refresh_selection(volumes, _rules(list(ages)), CONFIG, ["A", "B", "C"], 1, blocked={"A", "B"})
     assert direct.symbols == update.symbols

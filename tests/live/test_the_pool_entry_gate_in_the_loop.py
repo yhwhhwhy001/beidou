@@ -41,13 +41,13 @@ class GatedPool:
         *,
         gate: Callable[[list[str]], Awaitable[Collection[str]]] | None = None,
     ) -> UniverseUpdate:
-        allowed = set(self.candidates)
+        blocked: set[str] = set()
         if gate is not None:
             self.asked.append(sorted(self.candidates))
-            allowed = set(await gate(sorted(self.candidates)))
-        symbols = tuple(symbol for symbol in self.candidates if symbol in allowed)
+            blocked = set(await gate(sorted(self.candidates)))
+        symbols = tuple(symbol for symbol in self.candidates if symbol not in blocked)
         before, after = set(previous), set(symbols)
-        gated = tuple(sorted(set(self.candidates) - allowed))
+        gated = tuple(sorted(blocked))
         return UniverseUpdate(symbols, tuple(sorted(after - before)), tuple(sorted(before - after)), 1, {}, gated)
 
 

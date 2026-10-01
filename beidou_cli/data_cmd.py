@@ -711,10 +711,11 @@ def pool_gate(profile: str, universe_path: str, root: str, market_url: str, alwa
     volume = daily_quote_volume(store, candidates).loc[start:]
     table, record = gated_membership(load_yaml(profile), _membership_table(root), volume, config, eligible, root=root)
     path = write_gated(root, table, record)
-    for row in record["rounds"]:
-        click.echo(f"  round {row['round']}: {row['cells_moved']} cells moved")
     click.echo(
-        f"{'converged' if record['converged'] else 'NOT converged'}; entry line {record['entry_line']:.4f}; "
+        f"{'usable' if record['usable'] else 'NOT usable'}: main book {record['targets_cells_differing']} cells "
+        f"apart from the model's over {record['bars_checked']} bars, "
+        f"{record['decisions_disagreeing']} decisions the model would make differently, "
+        f"{record['admitted_unjudged']} member-days admitted unjudged; entry line {record['entry_line']:.4f}; "
         f"member-days removed {record['member_days_removed']}, added {record['member_days_added']}; written {path}"
     )
 

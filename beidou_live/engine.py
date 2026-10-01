@@ -1360,7 +1360,7 @@ class LiveEngine:
         return {**update.to_dict(), "entered": entered, "left": left, "day": day, **reading}
 
     def _entry_gate(self, day: str) -> Callable[[list[str]], Awaitable[set[str]]]:
-        """The pool entry gate's live half (`PortfolioParams.pool_entry_gate`): which candidates the book could open.
+        """The pool entry gate's live half (`PortfolioParams.pool_entry_gate`): which candidates the book could NOT open.
 
         Read the way research reads the same refresh (`beidou_cli.research_pool_gate`): the book's risk per name
         from the newest row decided before ``day``, each candidate's sigma from its closed bars before it.
@@ -1389,7 +1389,8 @@ class LiveEngine:
             allowed = enterable(pd.Series(risk, index=sigma.index), sigma, line).iloc[0]
             would_be = {} if math.isnan(risk) else {s: risk / float(v) for s, v in sigma.iloc[0].items() if v > 0}
             self._gate_reading = {"book_risk": None if math.isnan(risk) else risk, "line": line, "would_be": would_be}
-            return {symbol for symbol in symbols if bool(allowed.get(symbol, True))}
+            # What it blocks, not what it allows: a candidate it could not judge (no bars) is not blocked.
+            return {symbol for symbol in symbols if not bool(allowed.get(symbol, True))}
 
         return judge
 
