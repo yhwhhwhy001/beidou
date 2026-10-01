@@ -9,16 +9,20 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import click
 import pandas as pd
 
 from beidou_cli import data
+from beidou_cli.research_panel import _membership_table
+from beidou_cli.research_pool_gate import gated_membership, write_gated
 from beidou_data.alignment import verify_spot_contract, write_spot_verification
 from beidou_data.archive import ArchiveClient, Month
 from beidou_data.binance_public import AsyncPublicClient, PublicClient
 from beidou_data.metrics_archive import MetricsArchiveClient, sync_metrics
 from beidou_data.pool import (
+    DAILY,
     MEMBERSHIP_ALERT_DAYS,
     MEMBERSHIP_FILE,
     LivePool,
@@ -504,6 +508,30 @@ def pool_refresh(universe_path: str, root: str, market_url: str, venue_url: str,
     click.echo(f"written {path}")
 
 
+def _history_eligible(candidates: list[str], rules: Mapping[str, Any], config: UniverseConfig) -> set[str]:
+    """Which candidates the point-in-time table may rank; `pool history` and `pool gate` must agree on it.
+
+    Delisted names pass unconditionally (`s not in rules`), which is what keeps the point-in-time
+    universe survivorship-free.  The residual look-ahead, named because it is small rather than
+    absent (2026-09-08 audit): a symbol the venue still lists is filtered by TODAY's contract type
+    and min-notional over its WHOLE history, so one whose min-notional was raised recently is
+    excluded from years in which it qualified.  Binance changes these rarely and the direction is
+    not systematic; recorded rather than fixed, since a point-in-time exchangeInfo archive does
+    not exist to fix it with.
+    """
+    eligible = {
+        s
+        for s in candidates
+        if s not in rules
+        or (
+            rules[s].contract_type == "PERPETUAL"
+            and rules[s].quote_asset == config.quote_asset
+            and (float(rules[s].min_notional) <= config.max_min_notional_usdt or s in config.always_include)
+        )
+    }
+    return eligible - set(config.exclude)
+
+
 @data_pool.command("history")
 @click.option("--universe", "universe_path", default="config/universe.yaml", show_default=True)
 @click.option("--root", default=".beidou/data", show_default=True)
@@ -572,24 +600,7 @@ def pool_history(
                 if index % 50 == 0:
                     click.echo(f"  daily sync {index}/{len(candidates)} ({time.monotonic() - started:.0f}s)")
             click.echo(f"daily sync done: {len(candidates)} symbols, {errors} errors")
-        # Delisted names pass unconditionally (`s not in rules`), which is what keeps the point-in-time
-        # universe survivorship-free.  The residual look-ahead, named because it is small rather than
-        # absent (2026-09-08 audit): a symbol the venue still lists is filtered by TODAY's contract type
-        # and min-notional over its WHOLE history, so one whose min-notional was raised recently is
-        # excluded from years in which it qualified.  Binance changes these rarely and the direction is
-        # not systematic; recorded rather than fixed, since a point-in-time exchangeInfo archive does
-        # not exist to fix it with.
-        eligible = {
-            s
-            for s in candidates
-            if s not in rules
-            or (
-                rules[s].contract_type == "PERPETUAL"
-                and rules[s].quote_asset == config.quote_asset
-                and (float(rules[s].min_notional) <= config.max_min_notional_usdt or s in pins)
-            )
-        }
-        eligible -= set(config.exclude)
+        eligible = _history_eligible(candidates, rules, config)
         volume = daily_quote_volume(store, candidates)
         if volume.empty:
             raise click.ClickException("no daily klines stored; run with --sync")
@@ -676,6 +687,36 @@ def _lag_line(path: Path, today: pd.Timestamp, alert_days: int) -> tuple[bool, s
     if lag.status == "AHEAD":
         return False, f"时点成员表的末行晚于今天（{where}）：本机时钟或这张表有一个不对，落后天数不可信。"
     return False, f"时点成员表是空的（{path}），说不出落后多少天，不能当作新鲜。{_REBUILD}"
+
+
+@data_pool.command("gate")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--universe", "universe_path", default="config/universe.yaml", show_default=True)
+@click.option("--root", default=".beidou/data", show_default=True)
+@click.option("--market-url", default="https://fapi.binance.com", show_default=True)
+@click.option("--always-include", default="BTCUSDT,ETHUSDT", show_default=True, help="the pins `pool history` used")
+def pool_gate(profile: str, universe_path: str, root: str, market_url: str, always_include: str) -> None:
+    """The point-in-time table with the pool entry gate on (2026-09-30), for research while the profile turns it on.
+
+    Reads the stored table and the daily store `pool history` built it from; writes its gated twin and a record of
+    what that was computed from.  Offline but for one exchangeInfo read, the same one `pool history` makes.
+    """
+    pins = tuple(s.strip().upper() for s in always_include.split(",") if s.strip())
+    config = replace(UniverseConfig.from_mapping(load_yaml(universe_path)), always_include=pins)
+    store = KlineStore(root)
+    candidates = sorted(store.symbols(DAILY))
+    with PublicClient(market_url) as public:
+        eligible = _history_eligible(candidates, parse_exchange_info(public.exchange_info()), config)
+    start = pd.Timestamp(Month.parse(config.history_start).start_ms(), unit="ms", tz="UTC")
+    volume = daily_quote_volume(store, candidates).loc[start:]
+    table, record = gated_membership(load_yaml(profile), _membership_table(root), volume, config, eligible, root=root)
+    path = write_gated(root, table, record)
+    for row in record["rounds"]:
+        click.echo(f"  round {row['round']}: {row['cells_moved']} cells moved")
+    click.echo(
+        f"{'converged' if record['converged'] else 'NOT converged'}; entry line {record['entry_line']:.4f}; "
+        f"member-days removed {record['member_days_removed']}, added {record['member_days_added']}; written {path}"
+    )
 
 
 @data_pool.command("lag")

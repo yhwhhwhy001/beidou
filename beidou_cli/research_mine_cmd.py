@@ -182,7 +182,7 @@ def research_mine(
                 "round is one selection however wide the space.  Wait for the next window, or pass "
                 "--reauthorize '<D-decision and reason>'; the reason is recorded in the shortlist report."
             )
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     # DL-D4: `metrics=True`, for the reason `research decompose` states one function up - enumeration
     # happens after the panel exists, so the panel cannot be conditioned on what will be enumerated.
     # This command is the one that ENUMERATES the metrics leaves, and it loaded a panel without them:
@@ -197,7 +197,7 @@ def research_mine(
     # times, so the run was clean and the family was never searched at all.  A quiet defect outlives a
     # noisy one - the narrowing is right, and what was wrong was the panel it narrowed on.
     panel = _load(root, chosen, interval, start, end, funding, metrics=True, spot=True)
-    membership = _membership(root, universe_mode, panel, min_tenure)
+    membership = _membership(root, universe_mode, panel, min_tenure, profile_payload)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     portfolio = portfolio_params(profile_payload)
     history = (

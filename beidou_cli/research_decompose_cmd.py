@@ -70,12 +70,12 @@ def research_decompose(
     del execution  # the decomposition uses the open_to_close convention of the validation reports
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     # DL-D4 and DL-D5: always, because the candidates about to be enumerated are what decides whether
     # the columns are needed, and enumeration happens after the panel exists.
     panel = _load(root, chosen, interval, start, end, funding, metrics=True, spot=True)
     _require_funding([entry], panel)
-    membership = _membership(root, universe_mode, panel, min_tenure)
+    membership = _membership(root, universe_mode, panel, min_tenure, profile_payload)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     payload = decompose_book(model, panel, cost, membership=membership, folds=folds, min_train=min_train, purge=purge)

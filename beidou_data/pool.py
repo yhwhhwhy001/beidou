@@ -11,7 +11,7 @@ keep new listings untraded until they have a month of bars.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -101,6 +101,7 @@ def point_in_time_membership(
     eligible: Iterable[str] | None = None,
     refresh: str = "MS",
     start: str | pd.Timestamp | None = None,
+    enterable: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Boolean frame (refresh date x symbol): members chosen at each refresh from data strictly before it.
 
@@ -109,6 +110,9 @@ def point_in_time_membership(
     same enter/exit hysteresis as the live pool is applied against the
     previous refresh's members, so membership churn in backtests matches what
     the live loop would have done.
+
+    ``enterable`` (any index x symbol, bool) is the pool entry gate's answer: at each refresh the last row
+    strictly before it removes the names it marks False, pins excepted (`refresh_selection` is the live half).
     """
     if quote_volume.empty:
         raise ValueError("no daily quote volume supplied")
@@ -130,9 +134,13 @@ def point_in_time_membership(
         age = observed.loc[: date - pd.Timedelta(nanoseconds=1)].iloc[-1]
         window = before.iloc[-config.volume_lookback_days :]
         volumes = {s: float(window[s].fillna(0.0).sum()) for s in universe if age[s] >= config.min_age_days}
+        allowed = eligible_set & set(volumes)
+        if enterable is not None and (position := int(enterable.index.searchsorted(date, side="left")) - 1) >= 0:
+            judged = enterable.iloc[position]
+            allowed = {s for s in allowed if bool(judged.get(s, True)) or s in config.always_include}
         members = rank_with_hysteresis(
             volumes,
-            eligible_set & set(volumes),
+            allowed,
             previous,
             enter_rank=config.enter_rank,
             exit_rank=config.exit_rank,
@@ -289,6 +297,7 @@ class UniverseUpdate:
     left: tuple[str, ...]
     at_ms: int
     volumes: dict[str, float] = field(default_factory=dict)
+    gated: tuple[str, ...] = ()  # measured names the pool entry gate removed
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -297,6 +306,7 @@ class UniverseUpdate:
             "left": list(self.left),
             "at_ms": self.at_ms,
             "volumes": dict(self.volumes),
+            "gated": list(self.gated),
         }
 
 
@@ -306,15 +316,20 @@ def refresh_selection(
     config: UniverseConfig,
     previous: Sequence[str],
     at_ms: int,
+    enterable: Collection[str] | None = None,
 ) -> UniverseUpdate:
     """Rank what the caller measured.  ``volume_by_symbol`` is the eligibility set, pins included.
 
     ``point_in_time_membership`` drops a symbol that is too young *before* pinning, so a pin only survives
     if it was measurable that day.  Live has to intersect the same way or the two disagree about pins.
+    ``enterable`` is the pool entry gate's answer, applied as research applies it: pins are never gated.
     """
+    pins = set(config.always_include)
+    gated = tuple(sorted(s for s in volume_by_symbol if enterable is not None and s not in enterable and s not in pins))
+    measured = {s: v for s, v in volume_by_symbol.items() if s not in gated}
     selected = rank_with_hysteresis(
-        volume_by_symbol,
-        [symbol for symbol in eligible_symbols(rules, config) if symbol in volume_by_symbol],
+        measured,
+        [symbol for symbol in eligible_symbols(rules, config) if symbol in measured],
         previous,
         enter_rank=config.enter_rank,
         exit_rank=config.exit_rank,
@@ -328,6 +343,7 @@ def refresh_selection(
         left=tuple(sorted(before - after)),
         at_ms=at_ms,
         volumes={s: float(v) for s, v in volume_by_symbol.items() if s in after},
+        gated=gated,
     )
 
 
@@ -351,7 +367,13 @@ class LivePool:
             return symbol, 0.0, 0
         return symbol, float(closed["quote_volume"].tail(days).sum()), len(closed)
 
-    async def select(self, previous: Sequence[str], rules: Mapping[str, InstrumentRules]) -> UniverseUpdate:
+    async def select(
+        self,
+        previous: Sequence[str],
+        rules: Mapping[str, InstrumentRules],
+        *,
+        gate: Callable[[list[str]], Awaitable[Collection[str]]] | None = None,
+    ) -> UniverseUpdate:
         now_ms = await self._client.server_time_ms()
         eligible = set(eligible_symbols(rules, self.config))
         tickers = await self._client.ticker_24h()
@@ -370,4 +392,5 @@ class LivePool:
         # that justified it - and nothing reports the gap.  A fetch failure raises out of ``gather`` and the
         # engine keeps yesterday's universe (T-P05), so ``bars`` here is always a measurement, never a miss.
         volumes = {symbol: volume for symbol, volume, bars in results if bars >= self.config.min_age_days}
-        return refresh_selection(volumes, rules, self.config, previous, now_ms)
+        allowed = None if gate is None else set(await gate(sorted(volumes)))
+        return refresh_selection(volumes, rules, self.config, previous, now_ms, enterable=allowed)

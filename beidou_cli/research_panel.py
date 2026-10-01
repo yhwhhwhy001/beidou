@@ -41,6 +41,7 @@ from beidou_alpha.registry import StrategyEntry
 from beidou_alpha.signals import SIGNALS, get_signal
 from beidou_alpha.signals import register as register_signal
 from beidou_cli.research_feature_store import with_feature_store
+from beidou_cli.research_pool_gate import read_gated
 from beidou_data.pool import MEMBERSHIP_FILE, membership_at_bars, tenure_mask
 from beidou_data.store import SPOT_KLINE_KIND, FundingStore, KlineStore, MetricsStore
 from beidou_live.composition import load_panel, load_registry, portfolio_params, read_universe
@@ -74,11 +75,21 @@ def _membership_table(root: str) -> pd.DataFrame:
     return table.astype(bool)
 
 
-def _resolve_symbols(root: str, symbols: str, interval: str, universe_mode: str = "static") -> list[str]:
+def _pit_table(root: str, profile: Mapping[str, Any] | None) -> pd.DataFrame:
+    """The point-in-time table: the stored one, or its gated twin while the profile turns the pool entry gate on."""
+    base = _membership_table(root)
+    if profile is None or not portfolio_params(profile).pool_entry_gate:
+        return base
+    return read_gated(root, profile, base)
+
+
+def _resolve_symbols(
+    root: str, symbols: str, interval: str, universe_mode: str = "static", profile: Mapping[str, Any] | None = None
+) -> list[str]:
     if symbols:
         return [s.strip().upper() for s in symbols.split(",") if s.strip()]
     if universe_mode == "pit":
-        table = _membership_table(root)
+        table = _pit_table(root, profile)
         union = [str(s) for s in table.columns[table.any(axis=0)]]
         stored = set(KlineStore(root).symbols(interval))
         missing = sorted(set(union) - stored)
@@ -89,11 +100,13 @@ def _resolve_symbols(root: str, symbols: str, interval: str, universe_mode: str 
     return universe or KlineStore(root).symbols(interval)
 
 
-def _membership(root: str, universe_mode: str, panel: Panel, min_tenure: int = 0) -> pd.DataFrame | None:
+def _membership(
+    root: str, universe_mode: str, panel: Panel, min_tenure: int = 0, profile: Mapping[str, Any] | None = None
+) -> pd.DataFrame | None:
     """Bars x symbols boolean mask for ``--universe pit``; ``None`` keeps the static behaviour."""
     if universe_mode != "pit":
         return None
-    return membership_at_bars(tenure_mask(_membership_table(root), min_tenure), panel.index)
+    return membership_at_bars(tenure_mask(_pit_table(root, profile), min_tenure), panel.index)
 
 
 def _resolve_mined(strategy: str, grids: str = "") -> None:
