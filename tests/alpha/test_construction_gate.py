@@ -26,6 +26,9 @@ LIVE = {
     # D3, 2026-09-17.  Carries the shipped value, unlike the two above: doubling 2.0 gives 4.0 and the
     # gate sees it, so this key needs neither the non-zero dodge nor the bool negation.
     "band_entry_multiple": 2.0,
+    # The pool entry gate, 2026-09-30.  True in the fixture so the loop's negation perturbs it; the shipped
+    # False, and a report that never names it, get their own test in `test_the_pool_entry_gate.py`.
+    "pool_entry_gate": True,
 }
 ENTRY = StrategyEntry("tsmom", params={"horizons": [168, 336, 720]})
 

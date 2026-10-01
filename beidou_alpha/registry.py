@@ -9,6 +9,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from beidou_alpha.portfolio import RECORDED_WHEN_ON, as_recorded
+
 MAIN_BOOK = "main"
 PROBE_VERDICT = "ACCEPT"  # a book-level finding from `research book` (D-018); never a signal-level PASS
 # A probe book may also cite a REJECT, but only when the registry says so out loud (D-029): the alternative
@@ -217,6 +219,9 @@ CONSTRUCTION_KEYS: tuple[str, ...] = (
     # the gate still compares it, because the alternative is a key whose meaning depends on another key
     # and a reader who has to know that to trust the digest.
     "band_entry_multiple",
+    # The pool entry gate, 2026-09-30.  Unlike the keys above, a report that lacks it is NOT skipped: it was
+    # produced without the gate, and `RECORDED_WHEN_ON` makes absence mean exactly that.
+    "pool_entry_gate",
 )
 
 
@@ -251,7 +256,8 @@ def construction_problems(
             f"{entry.id}: portfolio {key} is {live_portfolio.get(key)!r} live "
             f"but {recorded.get(key)!r} in the cited evidence"
             for key in CONSTRUCTION_KEYS
-            if key in recorded and not _same_param(live_portfolio.get(key), recorded.get(key))
+            if (key in recorded and not _same_param(live_portfolio.get(key), recorded.get(key)))
+            or (key in RECORDED_WHEN_ON and bool(live_portfolio.get(key)) != bool(recorded.get(key)))
         ]
     for block in OVERLAY_BLOCKS:
         if live_overlays is None or block not in report:
@@ -301,7 +307,7 @@ def evidence_construction_digest(
     """
     payload = {
         "portfolio": (
-            {key: portfolio[key] for key in CONSTRUCTION_KEYS if key in portfolio}
+            {key: value for key, value in as_recorded(portfolio).items() if key in CONSTRUCTION_KEYS}
             if isinstance(portfolio, Mapping)
             else None
         ),
