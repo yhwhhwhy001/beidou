@@ -76,11 +76,11 @@ def research_correlate(
     """Correlation of strategy net-return streams and the marginal Sharpe of each strategy in an equal-weight mix."""
     ids = [s.strip() for s in strategies.split(",") if s.strip()]
     profile_payload = load_yaml(profile)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     panel = _load(root, chosen, interval, start, end, funding)
     entries = {strategy: _entry(strategy, registry_path, "", grids) for strategy in ids}
     _require_funding(list(entries.values()), panel)
-    membership = _membership(root, universe_mode, panel)
+    membership = _membership(root, universe_mode, panel, profile=profile_payload)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     nets: dict[str, pd.Series] = {}
     for strategy in ids:

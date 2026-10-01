@@ -120,10 +120,10 @@ def research_overlay(
         # it could reach the data.  Re-listing fields is the bug; carrying them all is the fix.
         model = replace(model, min_history_bars=min_history)
     model = with_feature_store(model)  # after `replace`, so the store rides on the final model
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding(model.entries, panel)
-    membership = _membership(root, universe_mode, panel)
+    membership = _membership(root, universe_mode, panel, profile=profile_payload)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     bpy = panel.bars_per_year
     weights, _combined, _per = model.evaluate(panel, membership)

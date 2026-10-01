@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,9 +25,9 @@ import pandas as pd
 from beidou_alpha.overlays.exits import ExitParams
 from beidou_alpha.overlays.exposure import DrawdownThrottleParams, drawdown_scalar
 from beidou_alpha.overlays.ladder import ladder_step
-from beidou_alpha.panel import interval_seconds
-from beidou_alpha.portfolio import PortfolioParams
-from beidou_alpha.registry import evidence_construction_digest
+from beidou_alpha.panel import Panel, interval_seconds
+from beidou_alpha.portfolio import PortfolioParams, asset_vol, enterable, entry_line, per_name_risk
+from beidou_alpha.registry import MAIN_BOOK, evidence_construction_digest
 from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
 from beidou_governance.policy import Policy, policy_digest
@@ -257,6 +257,7 @@ class LiveEngine:
         # against data no live decision was made on.
         self.record_metrics = record_metrics
         self.pool = pool
+        self._gate_reading: dict[str, Any] | None = None  # the pool entry gate's last reading, for the record
         self.universe_sink = universe_sink
         # DL-G9: the construction's INPUTS, written once per process into the append-only record.
         # The Phase 0 replay found six construction changes in the live log and could attribute none of
@@ -1311,8 +1312,12 @@ class LiveEngine:
         day = datetime.fromtimestamp(bar_open_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
         if self.state.universe_day == day:
             return None
+        gate = self._entry_gate(day) if self.config.portfolio.pool_entry_gate else None
         try:
-            update = await self.pool.select(self.universe, self.rules)
+            if gate is None:
+                update = await self.pool.select(self.universe, self.rules)
+            else:
+                update = await self.pool.select(self.universe, self.rules, gate=gate)
         except Exception as exc:  # keep trading the previous universe (T-P05)
             logger.warning("universe refresh failed (%s); keeping %s", exc, self.universe)
             return {"error": f"{type(exc).__name__}: {exc}", "universe": list(self.universe)}
@@ -1335,6 +1340,7 @@ class LiveEngine:
                 "leaving": left,
                 "universe": list(self.universe),
                 "adopted": False,
+                **({"gate": self._gate_reading} if gate is not None else {}),
             }
         self.universe = fresh
         self.state.universe = list(fresh)
@@ -1350,7 +1356,43 @@ class LiveEngine:
         if entered or left:
             logger.info("universe refreshed: entered=%s left=%s", entered, left)
             await self.alerts.send(f"北斗 universe 换手：新进 {entered}，移出 {left}")
-        return {**update.to_dict(), "entered": entered, "left": left, "day": day}
+        reading = {"gate": self._gate_reading} if gate is not None else {}
+        return {**update.to_dict(), "entered": entered, "left": left, "day": day, **reading}
+
+    def _entry_gate(self, day: str) -> Callable[[list[str]], Awaitable[set[str]]]:
+        """The pool entry gate's live half (`PortfolioParams.pool_entry_gate`): which candidates the book could NOT open.
+
+        Read the way research reads the same refresh (`beidou_cli.research_pool_gate`): the book's risk per name
+        from the newest row decided before ``day``, each candidate's sigma from its closed bars before it.
+        """
+        before = pd.Timestamp(day, tz="UTC")
+
+        async def judge(symbols: list[str]) -> set[str]:
+            rows = [
+                row
+                for row in self.store.read_jsonl(self.store.cycles_path)
+                if row.get("book_weights")
+                and row.get("asset_vol")
+                and int(row.get("as_of_ms") or 0) < before.value // 10**6
+            ]
+            if not rows:
+                raise RuntimeError("pool entry gate: no cycle row decided before this day carries the book's weights")
+            book = pd.DataFrame([rows[-1]["book_weights"].get(MAIN_BOOK) or {}])
+            risk = float(per_name_risk(book, pd.DataFrame([rows[-1]["asset_vol"]])).iloc[0])
+            bars = await self.market.closed_bars(symbols, self.config.interval, self.history_bars)
+            panel = Panel.from_frames(
+                {s: f for s, f in bars.items() if f is not None and len(f)}, interval=self.config.interval
+            )
+            close = panel.close.loc[: before - pd.Timedelta(nanoseconds=1)]
+            sigma = asset_vol(close, self.config.portfolio, panel.bars_per_year).iloc[[-1]]
+            line = entry_line(self.config.portfolio)
+            allowed = enterable(pd.Series(risk, index=sigma.index), sigma, line).iloc[0]
+            would_be = {} if math.isnan(risk) else {s: risk / float(v) for s, v in sigma.iloc[0].items() if v > 0}
+            self._gate_reading = {"book_risk": None if math.isnan(risk) else risk, "line": line, "would_be": would_be}
+            # What it blocks, not what it allows: a candidate it could not judge (no bars) is not blocked.
+            return {symbol for symbol in symbols if not bool(allowed.get(symbol, True))}
+
+        return judge
 
     async def _leverage_targets(self, symbols: Sequence[str]) -> dict[str, int]:
         if self.config.leverage_mode not in ("auto", "by_vol"):
@@ -2383,6 +2425,10 @@ def construction_fingerprint(config: LiveConfig) -> dict[str, Any]:
             # every weight of a book the loop holds, and D-036's other half was `LiveConfig` not
             # carrying `vol_target`: a knob the record cannot see is a knob that moves silently.
             "sleeve_max_gross": config.portfolio.sleeve_max_gross,
+            # The pool entry gate (2026-09-30).  Hashed only when on (`RECORDED_WHEN_ON`): off is the literal
+            # previous expression, so its arrival moves no digest and needs no alias; on, it decides which names
+            # the book holds, and the digest moves with no alias - a construction change, like v9 and v11.
+            **({"pool_entry_gate": True} if config.portfolio.pool_entry_gate else {}),
         },
         "guards": {
             "max_gross": config.guards.max_gross,
@@ -2526,6 +2572,7 @@ def evidence_construction(config: LiveConfig) -> dict[str, Any]:
             # has no backtest counterpart, so no report can disagree with it.
             "flat_inside_band": config.portfolio.flat_inside_band,
             "band_entry_multiple": config.portfolio.band_entry_multiple,
+            **({"pool_entry_gate": True} if config.portfolio.pool_entry_gate else {}),
         },
         "book_guards": {
             "max_weight": config.guards.max_weight,
