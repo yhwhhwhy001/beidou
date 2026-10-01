@@ -41,6 +41,7 @@ from beidou_alpha.validation.ledger import (
     unique_trials,
 )
 from beidou_alpha.validation.metrics import (
+    DECAY_WINDOW_DAYS,
     cagr,
     calmar,
     payoff_ratio,
@@ -52,6 +53,7 @@ from beidou_alpha.validation.multiple_testing import (
 )
 from beidou_alpha.validation.pipeline import layers_applied, score_book
 from beidou_alpha.validation.stability import (
+    REGIME_MIN_WINDOWS,
     REGIME_VOL_WINDOW_DAYS,
     break_even_cost_multiple,
     cost_stress,
@@ -668,7 +670,10 @@ def research_validate(
         "multiple_testing": mt,
         "stability": {
             "time_split_sharpes": time_split_sharpes(wf.oos_returns, 4, bpy),
-            "regime_split_sharpes": regime_split_sharpes(wf.oos_returns, regime_vol, bpy),
+            # The window is `WalkForwardResult.summary`'s own expression, so the terciles split the same windows its q10 reads.
+            "regime_split_sharpes": regime_split_sharpes(
+                wf.oos_returns, regime_vol, bpy, window_bars=round(DECAY_WINDOW_DAYS * bpy / 365.0)
+            ),
             # What the three rows were computed from, in the artefact: "it happened to be 30 days" and
             # "the report says 30 days" are different facts (the `embargo` key's lesson, 2026-09-13).
             "regime_split_basis": {
@@ -679,6 +684,11 @@ def research_validate(
                 "label_on_bar_t_reads": "benchmark bars through t-1: what was known when bar t's position was decided",
                 "cut_points": "this sample's own terciles: the state is ex-ante, the cut points are not.  Volatility "
                 "trends over years, so a tercile is partly a calendar period: read it against time_split_sharpes",
+                "mean_annual, vol_annual": "the tercile's bars' mean x bars_per_year and std (ddof 1) x sqrt(bars_per_year): "
+                "a mix of terciles is priced from these, since Sharpe ratios do not mix (D-049)",
+                "window_sharpe_q10": f"q10 of the whole non-overlapping {DECAY_WINDOW_DAYS}-day OOS windows that START in the "
+                f"tercile (walk_forward's oos_windows, each filed by its first bar's label); null below "
+                f"{REGIME_MIN_WINDOWS} windows",
             },
             "parameter_neighborhood": neighbourhood,
         },

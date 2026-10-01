@@ -182,6 +182,7 @@ def _regime_rows(split: Mapping[str, Any], basis: Mapping[str, Any]) -> dict[str
     """
     rows = {
         f"{label} (annualised vol {row['vol_from']:.2f}-{row['vol_to']:.2f})": f"sharpe={_fmt(row['sharpe'])}  bars={row['bars']}"
+        + (f"  window_q10={_fmt(row['window_sharpe_q10'])} ({row['windows']} windows)" if "windows" in row else "")
         for label, row in split.items()
     } or {"regime split": "n/a (fewer than 30 OOS bars carry a trailing-vol label)"}
     return {**rows, **{f"basis: {key}": str(value) for key, value in basis.items()}}
