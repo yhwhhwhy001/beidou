@@ -37,6 +37,7 @@ from beidou_live.reports import (
     daily_payload,
     decay_watch,
     expectations_from_evidence,
+    regime_state,
     weekly_payload,
 )
 from beidou_live.state import StateStore
@@ -191,7 +192,9 @@ def test_the_daily_and_the_weekly_read_the_rule_identically(tmp_path: Path) -> N
     q10 = _registry_expectations()["tsmom"]["oos_window_sharpe_q10"]
     store = _record(tmp_path, [(BEFORE_D3, _window(q10 - 3.0)), (CURRENT, _window(q10 - 3.0) + _window(1.0))])
     expectations = _registry_expectations()
-    daily = daily_payload(store, _day(store), expectations, data_root=tmp_path / "no-archive")["decay"]
-    weekly = weekly_payload(store, _day(store), expectations=expectations)["decay"]
-    assert daily == weekly == decay_watch(store, expectations, equity=EQUITY)
+    root = tmp_path / "no-archive"
+    daily = daily_payload(store, _day(store), expectations, data_root=root)["decay"]
+    # D-049: the weekly reads the regime state as the daily does, so the rows agree on why they are unconditioned too.
+    weekly = weekly_payload(store, _day(store), expectations=expectations, data_root=root)["decay"]
+    assert daily == weekly == decay_watch(store, expectations, equity=EQUITY, regime=regime_state(store, root))
     assert daily["tsmom"]["status"] == "OK" and daily["tsmom"]["whole_windows"] == 2

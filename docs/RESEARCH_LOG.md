@@ -21191,3 +21191,65 @@ PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research 
 | 1 | 若启动证据门对新报告读出问题，则下一次 armed 重启被挡 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
 | 2 | 若归档读不出状态（缺数据、滞后），则两条规则悄悄退回不分 regime | 日报 M-010 行与衰减行 | 行内出现「不分 regime：」 | 日报印出原因；`regime_state` 记 `through_ms`，滞后一眼可见 |
 | 3 | 若平静月里低段期望 2.97 本身偏高，则 M-010 在低段误报 | 小时检查的「策略收益漂移告警」 | 告警行写「按 regime 混合 low …」 | 告警行同时印不分段的数，复审时两个都看 |
+
+## 2026-10-01 · 结果：tsmom 证据按同一协议重出——WEAK_PASS，样本外 1.8234 对门 1.5771，N 357 不动；三段 q10 低 −0.02 / 中 −2.67 / 高 −1.59
+
+按「预登记：tsmom 证据按同一协议重出，带上每段 regime 的 q10 与均值波动」一节的协议，一字不改地跑。
+
+- 预登记提交 `4c169a01`，提交时刻 2026-10-01T14:53:02Z，开跑前已推上远端。
+- 用时 89 秒：14:53:21Z 到 14:54:50Z。config 没改，`BEIDOU_TRIALS_LEDGER` 没设，开跑前没有别的 `data` 或 `research` 进程。
+- 代码是 main `97eefc30` 加本分支的 `8c2c598a`。开跑前印过 `stability.__file__`，指向本 worktree。
+- 报告：`reports/research/tsmom-validation-20261001T145450Z.json`，sha256 `acdbb594a9a9c90100700e2f0e28da260174645685887fa4335e8814f1e1dc30`。
+- `trials.jsonl`：22,231 行变成 22,233 行，sha256 前 16 位从 `7fd3c3bfe6c825fc` 变成 `7bb6f1951089674b`。
+
+### 读数
+
+| 项 | 值 |
+| --- | --- |
+| verdict | **WEAK_PASS**，理由是 `oos_is_full_sample_tail`，与 09-29 相同 |
+| 窗口 | 2021-01-31T01:00Z 到 2026-09-28T23:00Z，49,607 根（09-29 那份到 16:00Z） |
+| 样本外 Sharpe | 1.8234（09-29：1.8257） |
+| family gate | 1.5771，N = 357，headroom +0.2463 |
+| N 的构成 | ledger 183 + 申报 172 + 本次 2 = 357；报告记 `replayed_rows` 2 |
+| tsmom 桶 | 232 行，fold key 仍是 185 |
+| 其余 | CPCV 15 条路径负的 0，q05 1.55；成本 x2 1.69；PBO 0.015；不分段 q10 −1.8487 |
+
+每段 regime（状态是篮子 30 天年化波动，切点是这份样本自己的三分位）：
+
+| 段 | 波动区间 | bars | Sharpe | 年化均值 | 年化波动 | 30 天窗口 | 窗口 q10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| low | 0.4031–0.7068 | 15,203 | 2.9606 | 0.5385 | 0.1819 | 23 | −0.0234 |
+| mid | 0.7068–0.8789 | 15,202 | 1.4424 | 0.2510 | 0.1740 | 16 | −2.6691 |
+| high | 0.8789–2.2313 | 15,202 | 0.9039 | 0.1351 | 0.1495 | 24 | −1.5864 |
+
+### 对照预登记
+
+- N 357、replayed 2、0 个新 trial：与预测相同。
+- 门 1.5771：预测约 1.58，相同。
+- 样本外 1.8234：预测约 1.825，低了 0.0016。来源已知：#281 的资金费时点，加多出的 7 根 bar。
+- 三段窗口 23 + 16 + 24 = 63，等于 `oos_windows`。预测「每段约 21 个」不准：窗口按起点归段，三段 bar 数相等，窗口数不必相等。三段都过 10 个的下限。
+- 三段按 bar 占比混合得 1.82333，样本外 1.82337，差 4e-5，在千分之一以内。
+
+### 两处没预料到的读数
+
+- **高波动段的书波动最低**（0.15 对低段 0.18）。vol targeting 在高波动时缩得比市场涨得多，所以高段 Sharpe 低主要是收益低，不是风险高。
+- **中段 q10 低于高段**（−2.67 对 −1.59），不单调。中段只有 16 个窗口，q10 落在第 2 与第 3 小之间。预登记写过这个代价；这里是它的样子，不据此改切点或下限。
+
+### 换指针
+
+- armed 与 candidate 两份 registry 一起换指针，candidate 照「头注 + armed」重新生成。
+- `registry_digest` 换前换后都是 `7f8adb754962`；两个构造测试绿。
+- 启动门离线读：`registry_evidence_problems` 为空，`registry_dataset_problems` 的 blocking 为空。
+  旧证据那条 tsmom 的 dataset advisory（「store contents changed since this result was produced」）随新 manifest 消失；flow 那条照旧。
+- 治理 replay 的 ADOPTIONS 补 10-01 这一行。
+
+### 对今天日报的影响（快照上渲染，什么都没发）
+
+10-01T14:56Z 复制 `.beidou/live/`，新旧代码各出一份 10-01 的日报。
+
+- 状态：研究口径读 0.675（归档读到 09-30T16:00Z），落在 low 段。#283 的近似篮子读 0.72，会把今天放进 mid 段。
+- M-010：tsmom 期望 1.83 → 2.96（52 根 bar 全在 low 段），z −0.72 → −0.81。flow 照旧（证据是 book 报告，没有 regime 表）。
+- 衰减规则：仍是 INSUFFICIENT_DATA（52/1440 根）。整窗起点若在 low 段，比较线是 −0.02，不再是 −1.85。
+- 告警逐字相同，今天没有新告警。
+
+含义：平静持续时，两条规则都比条件化之前严得多。M-010 期望 2.96，衰减线 −0.02。这是裁定要的方向，代价写在 D-049。
