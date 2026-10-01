@@ -87,6 +87,14 @@ class PortfolioParams:
     # of it - the next smallest is LINKUSDT at 202 USDT against 55.33.  So on today's book this is the
     # difference between holding LSKUSDT and TRUMPUSDT or holding neither, and nothing else moves.
     band_entry_multiple: float = 1.0
+    # 2026-09-30 (operator ruling, the "faithful" option).  Under k 0.175 D3 kept AKEUSDT, LSKUSDT and NEARUSDT
+    # flat on every cycle while they held three of the pool's slots; the 09-15 unpin had registered exactly
+    # that as its falsifier.  On, a pool refresh skips any name whose would-be weight - the book's risk per
+    # name over the name's own sigma (`per_name_risk`, `enterable`) - cannot clear `entry_line`, and the next
+    # name by volume takes the slot.  It decides WHICH names the book holds, so it is construction: research
+    # recomputes the point-in-time membership with it (`beidou_cli.research_pool_gate`), the loop applies it at
+    # the daily refresh.  Off is bit-identical: nothing reads it unless it is on.
+    pool_entry_gate: bool = False
 
     def __post_init__(self) -> None:
         if self.vol_target <= 0 or self.min_asset_vol <= 0 or self.max_weight <= 0 or self.max_gross <= 0:
@@ -437,6 +445,48 @@ def banded(weights: pd.DataFrame, params: PortfolioParams) -> pd.DataFrame:
             params.band_entry_multiple,
         )
     return weights
+
+
+#: Construction fields written down only when on.  Off is the literal previous expression, so a record made before
+#: the field existed and one made after it must read the same - the ledger's `impact` precedent - and a report
+#: that does not name one says it was off (`registry.construction_problems` reads absence that way).
+RECORDED_WHEN_ON: tuple[str, ...] = ("pool_entry_gate",)
+
+
+def as_recorded(portfolio: Mapping[str, Any]) -> dict[str, Any]:
+    """``portfolio`` the way every digest and report records it: a `RECORDED_WHEN_ON` field only when it is on."""
+    return {key: value for key, value in portfolio.items() if key not in RECORDED_WHEN_ON or value}
+
+
+def entry_line(params: PortfolioParams) -> float:
+    """The smallest |target| the construction lets stand from flat.
+
+    D2 zeroes any target inside ``no_trade_band * band_entry_multiple`` (`apply_no_trade_band`), held or not;
+    without D2 a target only has to clear the band itself, which is where the live planner blocks an entry.
+    """
+    return params.no_trade_band * (params.band_entry_multiple if params.flat_inside_band else 1.0)
+
+
+def per_name_risk(weights: pd.DataFrame, sigma: pd.DataFrame) -> pd.Series:
+    """Per bar, the risk one held name carries: the median ``|w| * sigma`` over the names with a weight.
+
+    Stage 1 sizes every name to the same standalone vol and stage 2 scales them all by one number, so under
+    ``conviction_mode: sign`` this is the same for every held name (``max_weight`` aside, hence the median).
+    A name the book does not hold would be sized to the same number, which is what makes ``risk / sigma``
+    the weight it WOULD get.  NaN on a bar where the book holds nothing.
+    """
+    risk = weights.abs() * sigma.reindex(index=weights.index, columns=weights.columns)
+    return risk.where(weights.abs() > 0).median(axis=1)
+
+
+def enterable(risk: pd.Series, sigma: pd.DataFrame, line: float) -> pd.DataFrame:
+    """True where a name's would-be weight ``risk / sigma`` clears ``line``, and where nothing can be judged.
+
+    The pool gate removes names the book could not open.  A bar with no book risk, or a name with no sigma
+    yet, says nothing about that, so it gates nothing.
+    """
+    would_be = sigma.rdiv(risk, axis=0)
+    return (would_be >= line) | would_be.isna()
 
 
 def cap_gross(weights: pd.DataFrame, max_gross: float) -> pd.DataFrame:

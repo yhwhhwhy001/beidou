@@ -202,7 +202,7 @@ def forward_add(
         )
 
     ledger_path = resolve_ledger_path(out=out)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     trial = TrialRecord(
         strategy=FORWARD_BOARD_STRATEGY,
         param_key=f"{strategy}|{candidate.param_key}|{universe_mode}",
@@ -347,9 +347,9 @@ def forward_status(
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     readings: list[dict[str, Any]] = []
     for item in live:
-        chosen = _resolve_symbols(root, symbols, interval, item.universe)
+        chosen = _resolve_symbols(root, symbols, interval, item.universe, profile_payload)
         panel = _load(root, chosen, interval, start, end, funding)
-        membership = _membership(root, item.universe, panel, min_tenure)
+        membership = _membership(root, item.universe, panel, min_tenure, profile_payload)
         spec = _entry(item.candidate, registry_path, json.dumps(item.params), grids)
         model = _model(spec, profile_payload, interval, min_history)
         weights, _combined, _per = model.evaluate(panel, membership)

@@ -259,7 +259,7 @@ def research_validate(
     # already known here - afterwards the only thing left to do about it is to have not run it.
     combos = _grid(strategy, grid, entry.params)
     _refuse_an_undeclared_charge(strategy, registry_path, grid, len(combos), charge)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     # DL-D4 and DL-D5: carry the metrics or spot columns only when this strategy declares it reads
     # them, so a run that reads none does not pay for the alignment - and does not carry the one place
     # a look-ahead could enter data it never uses.
@@ -298,7 +298,7 @@ def research_validate(
             f"holdout: reserving {holdout['bars_reserved']} bars from {cutoff.date()} to {last.date()} "
             f"({holdout_months} months); this run sees {holdout['bars_used']} bars"
         )
-    membership = _membership(root, universe_mode, panel, min_tenure)
+    membership = _membership(root, universe_mode, panel, min_tenure, profile_payload)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     impact = impact_model(load_yaml(costs_path), capital=capital)
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates

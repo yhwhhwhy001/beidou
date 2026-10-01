@@ -4127,6 +4127,29 @@ beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`�
 实测 8_904，已含同日先合入的 #255 的 9 行（09-29 复查更正：原写 13，那是 diffstat 的加删合计 +11/−2）（`governance reopen` 读实盘记录）。顶抬到「实测 + 政策」：8_994，余量 90
 （= `headroom_policy(8_994)`）。
 
+### 2026-10-01 · 顶 8_994 -> 9_427（选池按模型目标跳过开不了仓的币：研究侧的逐日前向模拟与各命令的读表入口）
+
+操作者 2026-09-30 裁定「忠实版：按模型目标选池」，10-01 在全局不动点 5 遍不收敛之后改裁「逐日前向模拟」
+（RESEARCH_LOG 2026-10-01「选池按模型目标跳过开不了仓的币」一节）。开关 `portfolio.pool_entry_gate` 默认关，
+关着时各摘要逐字节不变。合入前 main 实测 8_912。
+
+花在哪（净增 421）：
+
+- +362 `research_pool_gate.py`（新模块）：
+  - `MainBook` 按刷新推进主书。与成员无关的部分用信号自己的函数整段算一次；与成员有关的部分逐根推进：
+    crowding 排名、hold、非成员置 0、ensemble。
+  - `ForwardGate` 按刷新日顺序推进主书与 EWMA 协方差（递推照抄 `ewma_portfolio_vol`），给书定价。
+  - `Shortlist` 挡掉实盘 `LivePool` 不去量的名字。
+  - `checked` 在成品表上跑真模型，主书逐格核对，判定逐个核对。
+  - `candidates` 圈定要载入的候选：进过 shortlist 的名字加基础表成员。
+  - `gate_key`、`write_gated`、`read_gated` 管 gated table 与它的记录，记录不再描述这次运行或不可用就拒读。
+- +42 `data_cmd.py`：`pool gate` 命令；`pool history` 的资格集合抽成 `_history_eligible`，两个命令共用一份（−18 是搬走的那段）。
+- +13 `research_panel.py`：`_pit_table`；`_resolve_symbols` 与 `_membership` 多一个可选的 `profile`。
+- +2 `research_ledger_io.py`：账本的构造摘要经 `as_recorded`，关着的开关不会让同一配置被记成新试验。
+- +2 `research_book_cmd.py`，其余八个命令各 0：调用点传上 profile，ruff format 换了两处行。
+
+实测 9_333。顶抬到「实测 + 政策」：9_427，headroom 94（= `headroom_policy(9_427)`）。
+
 ## beidou_data
 
 原文：blob 里第 4032–4126 行，`"beidou_data": 3_677,` 之上的注释，共 95 行。

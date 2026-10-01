@@ -7,7 +7,7 @@ and ``beidou_alpha`` provides the model behind :class:`SignalModel`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any, Protocol
 
 import pandas as pd
@@ -159,7 +159,13 @@ class UniverseUpdate(Protocol):
 class UniverseProvider(Protocol):
     """Re-ranks the tradable universe (daily); the engine flattens what leaves (D-014)."""
 
-    async def select(self, previous: Sequence[str], rules: Mapping[str, InstrumentRules]) -> UniverseUpdate: ...
+    async def select(
+        self,
+        previous: Sequence[str],
+        rules: Mapping[str, InstrumentRules],
+        *,
+        gate: Callable[[list[str]], Awaitable[Collection[str]]] | None = None,
+    ) -> UniverseUpdate: ...
 
 
 class TargetSet(Protocol):

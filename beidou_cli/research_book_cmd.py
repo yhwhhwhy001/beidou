@@ -175,10 +175,10 @@ def research_book(
     costs_payload = load_yaml(costs_path)
     cost = cost_model(costs_payload, use_funding=funding)
     ledger_path = resolve_ledger_path(out=out)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([main_entry, sleeve_entry], panel)
-    decision_membership = _membership(root, universe_mode, panel)
+    decision_membership = _membership(root, universe_mode, panel, profile=profile_payload)
     universes: list[tuple[str, Panel, pd.DataFrame | None]] = [(universe_mode, panel, decision_membership)]
     if robustness_mode not in {"none", universe_mode}:
         if robustness_mode == "static":
@@ -187,8 +187,10 @@ def research_book(
                 raise click.ClickException("robustness universe 'static' needs a selected universe in the store")
             universes.append(("static", panel.select(static), None))
         else:
-            pit_panel = _load(root, _resolve_symbols(root, "", interval, "pit"), interval, start, end, funding)
-            universes.append(("pit", pit_panel, _membership(root, "pit", pit_panel)))
+            pit_panel = _load(
+                root, _resolve_symbols(root, "", interval, "pit", profile_payload), interval, start, end, funding
+            )
+            universes.append(("pit", pit_panel, _membership(root, "pit", pit_panel, profile=profile_payload)))
     # §3's limits are measured against what is RUNNING, so they are computed once, on the decision
     # universe, before the loop: the robustness arm is a sensitivity of the evidence, not a second book.
     running_nets, running_notes = _running_book_nets(
