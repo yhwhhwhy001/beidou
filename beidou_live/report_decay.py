@@ -9,14 +9,22 @@ the attribution series under them (O3), and the probe books' stop and review (D-
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import pairwise
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
+from beidou_alpha.backtest import benchmark_returns
 from beidou_alpha.validation.metrics import DECAY_WINDOW_DAYS, max_drawdown, newey_west_tstat, sharpe, window_sharpes
+from beidou_alpha.validation.stability import trailing_benchmark_vol
+from beidou_data.store import KlineStore
+from beidou_live.composition import load_panel
+from beidou_live.execution_fidelity import _ms, replay_membership
 from beidou_live.probe import ProbeParams, probe_status
 from beidou_live.report_common import _cycles, _fmt_num, _parsed, evidence_window, json_dumps, readable_state
 from beidou_live.state import StateStore
@@ -50,8 +58,92 @@ def expectations_from_evidence(evidence_by_strategy: dict[str, dict[str, Any]]) 
             # The OOS Sharpe by basket-volatility tercile (validate's `stability` block; a book report has none),
             # so the decay reading can be printed beside the regime it was taken in (`_regime_line`).
             "regime_split": (report.get("stability") or {}).get("regime_split_sharpes"),
+            # Which returns the evidence's state was built from, so the live state is built from the same (D-049).
+            "regime_execution": report.get("execution"),
         }
     return out
+
+
+def regime_state(store: StateStore, data_root: str | Path, *, execution: str = "open_to_close") -> dict[str, Any]:
+    """Research's regime state over the live record, so M-010 and the decay rule can condition on it (D-049).
+
+    The two functions `validate` labels its OOS bars with - `trailing_benchmark_vol` of `benchmark_returns` - on the
+    same archive, with the universe the loop recorded on each bar as the membership, forward-filled as M-Q08's replay
+    reads it.  A live bar therefore gets the label research would give a bar with that universe, and the evidence's
+    cut points apply as they stand.  Until 2026-10-01 the report placed today with `market_extremes`' basket instead
+    (log closes, today's names read back): close enough to print, not the same quantity.  The archive trails the loop
+    by up to a day, so bars past its newest close take the newest label; a 30-day standard deviation moves about a
+    thirtieth of itself in a day.  Never raises, for `execution_fidelity`'s reason: it runs in the hourly check, and
+    a failure here leaves both rules unconditioned - each row says so - instead of taking the report down.
+    """
+    try:
+        recorded = sorted(
+            {
+                int(row["bar_open_ms"]): frozenset(row["universe"])
+                for row in store.read_jsonl(store.cycles_path)
+                if isinstance(row.get("bar_open_ms"), int | float) and row.get("universe") and not row.get("dry_run")
+            }.items()
+        )
+        if not recorded:
+            return {"error": "no cycle recorded a universe"}
+        names = sorted({symbol for _bar, universe in recorded for symbol in universe})
+        start = pd.Timestamp(recorded[0][0], unit="ms", tz="UTC").isoformat()
+        panel = load_panel(KlineStore(data_root), names, "1h", start=start)
+        membership = replay_membership(panel.index, panel.symbols, recorded, None)
+        vol = trailing_benchmark_vol(benchmark_returns(panel, execution, panel.symbols, membership), 8760.0).dropna()  # type: ignore[arg-type]
+        if vol.empty:
+            return {"error": "the archive holds less than a quarter window of the loop's universe"}
+        bars = [int(ms) for ms in _ms(pd.DatetimeIndex(vol.index))]
+        by_bar = dict(zip(bars, (float(value) for value in vol), strict=True))
+        return {"execution": execution, "by_bar": by_bar, "through_ms": bars[-1], "latest": by_bar[bars[-1]]}
+    except Exception as error:
+        return {"error": f"{type(error).__name__}: {error}"}
+
+
+def _regime_of(vol: float, split: Mapping[str, Any]) -> str:
+    """The evidence tercile a state falls in, by the upper edges; outside the sample's range, the nearer end."""
+    names = sorted(split, key=lambda name: float(split[name]["vol_from"]))
+    return next((name for name in names[:-1] if vol <= float(split[name]["vol_to"])), names[-1])
+
+
+def _unconditioned(promised: Mapping[str, Any], regime: Mapping[str, Any] | None) -> str | None:
+    """Why this strategy's rows cannot condition on regime, or None when they can (D-049)."""
+    split = promised.get("regime_split") or {}
+    if not split:
+        return "its evidence has no regime split"
+    if not all("window_sharpe_q10" in row and "mean_annual" in row for row in split.values()):
+        return "its evidence predates the per-regime q10 and moments (D-049)"
+    if not regime or regime.get("error"):
+        return f"no regime state: {(regime or {}).get('error', 'not read')}"
+    if promised.get("regime_execution") not in (None, regime.get("execution")):
+        return f"the evidence's state is {promised['regime_execution']} returns, the live one {regime.get('execution')}"
+    return None
+
+
+def _regime_labels(bars: Sequence[int], regime: Mapping[str, Any], split: Mapping[str, Any]) -> list[str | None]:
+    by_bar, through = regime.get("by_bar") or {}, int(regime.get("through_ms") or 0)
+    states = [by_bar.get(min(int(bar), through)) for bar in bars]
+    return [None if vol is None else _regime_of(float(vol), split) for vol in states]
+
+
+def _mixed_sharpe(labels: Sequence[str], split: Mapping[str, Any], bars_per_year: float) -> float | None:
+    """The Sharpe the evidence's terciles promise a period that spent ``labels`` in them (D-049).
+
+    Sharpe ratios do not mix; means and second moments do.  At the evidence's own equal shares this gives back its
+    OOS Sharpe to the ddof, which a test holds on the report the registry cites.
+    """
+    shares = {name: count / len(labels) for name, count in Counter(labels).items()}
+    mean = sum(share * float(split[name]["mean_annual"]) / bars_per_year for name, share in shares.items())
+    second = sum(
+        share
+        * (
+            float(split[name]["vol_annual"]) ** 2 / bars_per_year
+            + (float(split[name]["mean_annual"]) / bars_per_year) ** 2
+        )
+        for name, share in shares.items()
+    )
+    variance = second - mean**2
+    return mean / math.sqrt(variance) * math.sqrt(bars_per_year) if variance > 0 else None
 
 
 def probe_rows(
@@ -263,6 +355,7 @@ def income_drift(
     equity: float | None,
     since_ms: int | None,
     bars_per_year: float = 8760.0,
+    regime: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """M-002 / M-010: each strategy's realised Sharpe from *attributed income*, against its own expectation.
 
@@ -272,6 +365,12 @@ def income_drift(
     funding only - NOT the backtest's caliber, which marks every bar to market (`w_{t-1} . r_t`).  On
     2026-09-12 flow's 30-day sigma read 0.137% of equity realised, 3.239% marked (`probe.py:128`).
     Operator ruling A, 2026-09-23: kept, labelled as two calibers; no computation or alert changed.
+
+    D-049 (operator ruling 2026-10-01): the expectation is conditioned on the regimes the window's bars were in -
+    the evidence's terciles mixed at the live shares (`_mixed_sharpe`), each bar labelled by `regime_state`.  The
+    in-force tsmom evidence reads 2.97 / 1.44 / 0.91 by tercile, so against one unconditional 1.83 a volatile month
+    read as decay and a calm one as health.  `expected_unconditional` stays beside it; a row that cannot condition
+    says why in `unconditioned` and is held to the unconditional number, as every row was before.
     """
     if not equity or equity <= 0:
         return {"status": "INSUFFICIENT_DATA", "reason": "no equity"}
@@ -279,7 +378,14 @@ def income_drift(
     status = "OK"
     for strategy, points in sorted(_series_by_strategy(store, since_ms).items()):
         values = np.asarray([value / equity for _bar, value in points], dtype=float)
-        expected = (expectations.get(strategy) or {}).get("oos_sharpe")
+        promised = expectations.get(strategy) or {}
+        why = _unconditioned(promised, regime)
+        labels = [] if why else _regime_labels([bar for bar, _value in points], regime or {}, promised["regime_split"])
+        known = [label for label in labels if label is not None]
+        if not why and len(known) < len(labels):
+            why = f"{len(labels) - len(known)} of {len(labels)} bars have no regime state"
+        mixed = _mixed_sharpe(known, promised["regime_split"], bars_per_year) if known and not why else None
+        expected = promised.get("oos_sharpe") if mixed is None else mixed
         realised = sharpe(values, bars_per_year) if _has_dispersion(values) else None
         days = values.size / 24.0
         z = None
@@ -292,6 +398,11 @@ def income_drift(
             "days": round(days, 2),
             "realised_sharpe": realised,
             "expected_sharpe": expected,
+            "expected_unconditional": promised.get("oos_sharpe"),
+            "regime_shares": {name: round(count / len(known), 4) for name, count in sorted(Counter(known).items())}
+            if mixed is not None
+            else None,
+            "unconditioned": why,
             "z": z,
             "pnl": float(values.sum() * equity),
         }
@@ -307,6 +418,7 @@ def decay_watch(
     equity: float | None,
     window_days: int = DECAY_WINDOW_DAYS,
     bars_per_year: float = 8760.0,
+    regime: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Per strategy, the adopted decay rule against the live record of the CURRENT construction.
 
@@ -325,6 +437,10 @@ def decay_watch(
     missing is the live one - two whole windows are needed - and the row says which half it is.  That
     reading must stay visible either way: a blank row would be read as "fine".  q10 is marked to market
     and the live windows are realised, the two calibers `income_drift` names; ruling A keeps it, labelled.
+
+    D-049 (operator ruling 2026-10-01): each live window is held to the q10 of the evidence's windows that opened in
+    the same regime, the label of its own first bar - the way `regime_split_sharpes` filed them.  A strategy whose
+    rows cannot condition says why in `unconditioned` and every window is held to the one q10, as before.
     """
     bars = int(window_days * 24)
     rows: dict[str, Any] = {}
@@ -335,13 +451,35 @@ def decay_watch(
             continue
         returns = [value / equity for _bar, value in points]
         windows = window_sharpes(returns, bars_per_window=bars, bars_per_year=bars_per_year)
-        q10 = (expectations.get(strategy) or {}).get("oos_window_sharpe_q10")
-        verdict = decay_verdict(live_windows=windows, q10=q10)
-        rows[strategy] = verdict | {"whole_windows": len(windows), "window_days": window_days, "bars": len(points)}
+        promised = expectations.get(strategy) or {}
+        why = _unconditioned(promised, regime)
+        split = promised.get("regime_split") or {}
+        opened = (
+            [None] * len(windows)
+            if why
+            else _regime_labels([points[k * bars][0] for k in range(len(windows))], regime or {}, split)
+        )
+        if not why and None in opened:
+            why = f"{opened.count(None)} of {len(opened)} windows opened with no regime state"
+        own = [None if label is None else split[label].get("window_sharpe_q10") for label in opened]
+        verdict = decay_verdict(live_windows=windows, q10=promised.get("oos_window_sharpe_q10"), by_window=own)
+        rows[strategy] = verdict | {
+            "whole_windows": len(windows),
+            "window_days": window_days,
+            "bars": len(points),
+            "opened_in": opened,
+            "unconditioned": why,
+        }
     return rows
 
 
-def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, consecutive: int = 2) -> dict[str, Any]:
+def decay_verdict(
+    *,
+    live_windows: Sequence[float | None],
+    q10: float | None,
+    consecutive: int = 2,
+    by_window: Sequence[float | None] | None = None,
+) -> dict[str, Any]:
     """The edge-decay rule adopted 2026-09-07 (report 4.2 Ⅰ; ruling in 12.9).
 
     Two consecutive non-overlapping 30-day windows whose live Sharpe sits below the backtest's q10 for
@@ -353,10 +491,18 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
     A missing ``q10`` is INSUFFICIENT_DATA and never OK.  The quantile must come from the same
     construction, so it dies with every construction change exactly as M-010's window does; reporting OK
     while there is nothing to compare against is how a detector that has never worked looks healthiest.
+
+    ``by_window`` (D-049) gives a window its own line: the q10 of the evidence's windows that opened in its regime.
+    A window without one is held to ``q10``.
     """
-    usable = [value for value in live_windows if value is not None]
     if q10 is None:
         return {"status": "INSUFFICIENT_DATA", "why": "no q10 for this construction yet", "below": 0}
+    lines = list(by_window) if by_window is not None else [None] * len(live_windows)
+    usable = [
+        (value, q10 if own is None else own)
+        for value, own in zip(live_windows, lines, strict=True)
+        if value is not None
+    ]
     if len(usable) < consecutive:
         return {
             "status": "INSUFFICIENT_DATA",
@@ -364,9 +510,27 @@ def decay_verdict(*, live_windows: Sequence[float | None], q10: float | None, co
             "below": 0,
         }
     tail = usable[-consecutive:]
-    below = sum(1 for value in tail if value < q10)
+    below = sum(1 for value, line in tail if value < line)
     status = "REVIEW" if below == consecutive else "OK"
-    return {"status": status, "below": below, "q10": q10, "windows": tail}
+    return {
+        "status": status,
+        "below": below,
+        "q10": q10,
+        "windows": [v for v, _ in tail],
+        "lines": [ln for _, ln in tail],
+    }
+
+
+def _regime_note(row: Mapping[str, Any], *, wrap: bool = False) -> str:
+    """What an M-010 row's expectation is, in words: the regime mix it priced, or why it is unconditional (D-049)."""
+    if "unconditioned" not in row:
+        return ""
+    if row["unconditioned"]:
+        text = f"不分 regime：{row['unconditioned']}"
+    else:
+        shares = " / ".join(f"{name} {float(share):.0%}" for name, share in (row.get("regime_shares") or {}).items())
+        text = f"按 regime 混合 {shares}，不分 regime 是 {_fmt_num(row.get('expected_unconditional'))}"
+    return f"（{text}）" if wrap else text
 
 
 def _decay_alerts(block: Mapping[str, Any]) -> list[str]:
@@ -381,38 +545,39 @@ def _decay_alerts(block: Mapping[str, Any]) -> list[str]:
     return [
         f"衰减规则判 REVIEW（§12.9）：{strategy} 最近两个不重叠的 {row.get('window_days')} 天窗口，"
         f"归因夏普 {'、'.join(f'{float(value):.2f}' for value in row.get('windows') or [])} "
-        f"都低于回测 q10 {float(row['q10']):.2f}（已实现对盯市，口径不同）；窗口从当前构造起算；动作：复审这条策略"
+        f"分别低于回测 q10 {'、'.join(f'{float(line):.2f}' for line in row.get('lines') or [row['q10']])}"
+        f"（{'各按窗口起点的 regime 取，D-049' if not row.get('unconditioned') else '不分 regime'}；已实现对盯市，口径不同）；"
+        "窗口从当前构造起算；动作：复审这条策略"
         for strategy, row in sorted(block.items())
         if str(row.get("status")) == "REVIEW"
     ]
 
 
 def _regime_line(payload: Mapping[str, Any], strategy: str) -> str | None:
-    """Where today's basket volatility sits in this strategy's evidence regime split - reported, never enforced.
+    """Where the newest regime state sits in this strategy's evidence split - the state M-010 and the decay rule read.
 
-    backtest-guard 2026-09-30 (Ⅲ.1): the in-force tsmom evidence reads its OOS Sharpe by the basket's 30-day
-    volatility tercile at 2.97 / 1.44 / 0.91, and M-010 and the decay rule compare against the unconditional
-    number, so a month in the high tercile reads as decay and a calm one as health.  Whether the rule should
-    condition on it is the operator's call; this prints it.  The basis is not research's, and the line says so:
-    the managed universe's equal-weight basket over 720 hourly log returns ending 24 bars before the newest
-    (`report_events.market_extremes`), annualised by sqrt(8760), against research's pit members' 30-day
-    simple-return std through t-1.  The tercile edges are the evidence's own in-sample cut points.
+    backtest-guard 2026-09-30 (Ⅲ.1) found the in-force tsmom evidence reading its OOS Sharpe by the basket's 30-day
+    volatility tercile at 2.97 / 1.44 / 0.91, and #283 printed this line from `market_extremes`' basket, reported
+    only.  Since D-049 (2026-10-01) both rules condition on the state, so the line reads the one they read
+    (`regime_state`) and names the tercile by their rule (`_regime_of`).  The edges are the evidence's in-sample cut points.
     """
     split = ((payload.get("expectations") or {}).get(strategy) or {}).get("regime_split") or {}
-    basket = (((payload.get("event_risk") or {}).get("market") or {}).get("series") or {}).get("basket") or {}
-    if not split or not basket.get("measured") or basket.get("sigma_1h") is None:
+    state = payload.get("regime_state") or {}
+    if not split or state.get("latest") is None:
         return None
-    vol = float(basket["sigma_1h"]) * math.sqrt(8760.0)
+    vol = float(state["latest"])
     names = sorted(split, key=lambda name: float(split[name]["vol_from"]))
-    here = next((n for n in names if float(split[n]["vol_from"]) <= vol <= float(split[n]["vol_to"])), None)
-    if here is not None:
-        where = f"落在证据的 {here} 段（{float(split[here]['vol_from']):.2f}–{float(split[here]['vol_to']):.2f}）"
-    elif vol < float(split[names[0]]["vol_from"]):
-        where = f"低于证据最低段的下沿 {float(split[names[0]]['vol_from']):.2f}"
-    else:
-        where = f"高于证据最高段的上沿 {float(split[names[-1]]['vol_to']):.2f}"
+    here = _regime_of(vol, split)
+    where = f"按证据切点落在 {here} 段（{float(split[here]['vol_from']):.2f}–{float(split[here]['vol_to']):.2f}）"
+    if vol < float(split[names[0]]["vol_from"]):
+        where += f"，低于证据最低段的下沿 {float(split[names[0]]['vol_from']):.2f}"
+    elif vol > float(split[names[-1]]["vol_to"]):
+        where += f"，高于证据最高段的上沿 {float(split[names[-1]]['vol_to']):.2f}"
     tiers = " / ".join(f"{name} {float(split[name]['sharpe']):.2f}" for name in names)
-    return f"篮子年化波动约 {vol:.2f}，{where}；证据的样本外 Sharpe 分段 {tiers}（只报告；口径近似，见 `_regime_line`）"
+    return (
+        f"篮子年化波动 {vol:.2f}（研究口径，读到 {_utc_minute(int(state['through_ms']))}），{where}；"
+        f"证据的样本外 Sharpe 分段 {tiers}；M-010 与衰减规则按它取期望（D-049）"
+    )
 
 
 def _decay_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -436,11 +601,25 @@ def _decay_lines(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
     for strategy, row in sorted(block.items()):
         needed = 2 * int(row.get("window_days") or DECAY_WINDOW_DAYS) * 24  # §12.9's "连续两个"
-        q10 = ((payload.get("expectations") or {}).get(strategy) or {}).get("oos_window_sharpe_q10")
+        promised = (payload.get("expectations") or {}).get(strategy) or {}
+        split = promised.get("regime_split") or {}
+        by_regime = " / ".join(
+            f"{name} {_fmt_num(split[name].get('window_sharpe_q10'))}"
+            for name in sorted(split, key=lambda name: float(split[name]["vol_from"]))
+        )
         lines[str(strategy)] = (
             str(row.get("status"))
             + (f" - {row['why']}" if row.get("why") else f" ({row.get('below')}/2 below q10)")
-            + f"；q10={_fmt_num(q10)}；bars {row.get('bars')}/{needed}"
+            + f"；q10={_fmt_num(promised.get('oos_window_sharpe_q10'))}"
+            + (
+                ""
+                if "unconditioned" not in row
+                else f"（不分 regime：{row['unconditioned']}）"
+                if row["unconditioned"]
+                else f"（按窗口起点的 regime 取：{by_regime}）"
+            )
+            + (f"；整窗起点 {'、'.join(str(label) for label in row['opened_in'])}" if row.get("opened_in") else "")
+            + f"；bars {row.get('bars')}/{needed}"
             + (f"；windows {json_dumps(row['windows'])}" if row.get("windows") else "")
             + (
                 f"；不早于 {_utc_minute(since + needed * 3_600_000)}"

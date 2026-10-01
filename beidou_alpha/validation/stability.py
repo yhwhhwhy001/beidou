@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from beidou_alpha.model import FundingUnavailable
-from beidou_alpha.validation.metrics import sharpe
+from beidou_alpha.validation.metrics import sharpe, window_sharpes
 
 
 def time_split_sharpes(net: pd.Series, n_splits: int, bars_per_year: float) -> list[float | None]:
@@ -153,6 +153,10 @@ def slippage_stress(net_by_slippage: Mapping[float, pd.Series], bars_per_year: f
 # not a CLI option: a window picked by looking at which one splits a strategy most flatteringly is a
 # search, and this table is a description.
 REGIME_VOL_WINDOW_DAYS = 30
+# A tercile's window q10 is reported once it holds ten windows: below that, `np.quantile`'s tenth percentile is an
+# interpolation toward the single worst window rather than a point between two of them.  The in-force tsmom
+# evidence files its 63 windows about 21 to a tercile, so this binds only on short evidence.
+REGIME_MIN_WINDOWS = 10
 
 
 def trailing_benchmark_vol(
@@ -171,7 +175,11 @@ def trailing_benchmark_vol(
 
 
 def regime_split_sharpes(
-    net: pd.Series, benchmark_vol: pd.Series, bars_per_year: float, n_buckets: int = 3
+    net: pd.Series,
+    benchmark_vol: pd.Series,
+    bars_per_year: float,
+    n_buckets: int = 3,
+    window_bars: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Sharpe by trailing benchmark-volatility tercile (low/mid/high), with each tercile's bars and vol range.
 
@@ -180,6 +188,13 @@ def regime_split_sharpes(
     the table says where the sample earned, not what a gate on it would have earned.  The range is kept
     so that "high" carries a number: market volatility trends over years, a tercile's level moves with
     the window a report covers, and two reports' "high" rows are comparable only if that is visible.
+
+    Each row also carries its bars' annualised mean and volatility, because the live M-010 prices a MIX of
+    terciles (D-049) and Sharpe ratios do not mix; means and second moments do.  With ``window_bars`` a row
+    carries the decay rule's distribution inside its tercile: the q10 of the whole non-overlapping windows of
+    ``net`` - the ones `WalkForwardResult.summary` takes its q10 over - filed by the label of their FIRST bar,
+    which was on the screen when the window opened.  Filed by anything later, a crash in a window's first week
+    would move the window into "high" by its own outcome.
     """
     aligned = pd.concat([net, benchmark_vol], axis=1, join="inner").dropna()
     if len(aligned) < n_buckets * 10:
@@ -187,12 +202,27 @@ def regime_split_sharpes(
     returns, vol = aligned.iloc[:, 0], aligned.iloc[:, 1]
     buckets = pd.qcut(vol.rank(method="first"), n_buckets, labels=False)
     labels = ["low", "mid", "high"] if n_buckets == 3 else [str(i) for i in range(n_buckets)]
-    return {
-        labels[int(b)]: {
-            "sharpe": sharpe(returns[buckets == b], bars_per_year),
+    filed: dict[int, list[float]] = {}
+    if window_bars:
+        for k, value in enumerate(window_sharpes(net, bars_per_window=window_bars, bars_per_year=bars_per_year)):
+            first = net.index[k * window_bars]
+            if value is not None and first in buckets.index:
+                filed.setdefault(int(buckets[first]), []).append(value)
+    out: dict[str, dict[str, Any]] = {}
+    for b in sorted(set(buckets)):
+        mine = returns[buckets == b]
+        out[labels[int(b)]] = {
+            "sharpe": sharpe(mine, bars_per_year),
             "bars": int((buckets == b).sum()),
             "vol_from": float(vol[buckets == b].min()),
             "vol_to": float(vol[buckets == b].max()),
+            "mean_annual": float(mine.mean() * bars_per_year),
+            "vol_annual": float(mine.std(ddof=1) * math.sqrt(bars_per_year)),
         }
-        for b in sorted(set(buckets))
-    }
+        if window_bars:
+            windows = filed.get(int(b), [])
+            out[labels[int(b)]]["windows"] = len(windows)
+            out[labels[int(b)]]["window_sharpe_q10"] = (
+                float(np.quantile(windows, 0.10)) if len(windows) >= REGIME_MIN_WINDOWS else None
+            )
+    return out

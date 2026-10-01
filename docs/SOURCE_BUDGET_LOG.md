@@ -3688,6 +3688,27 @@ registry digest 里，只改信号参数的重启会让 M-010 把两本书拼进
 
 实测 16_354。顶抬到「实测 + 政策」：16_519，余量 165（= `headroom_policy(16_519)`）。
 
+### 2026-10-01 · 顶 16_519 -> 16_748（M-010 与衰减规则按 regime 条件化，D-049）
+
+操作者 2026-10-01 裁定「现在就条件化」（backtest-guard 09-30 体检 Ⅲ.1）：在位 tsmom 证据的样本外 Sharpe 按篮子
+30 天波动分三段是 2.97 / 1.44 / 0.91，M-010 与衰减规则却都拿不分段的数比。合入前 main 实测 16_387。
+
+花在哪（净增 194）：
+
+- +179 `report_decay.py`：
+  - `regime_state`：在归档上用研究自己的两个函数（`benchmark_returns` + `trailing_benchmark_vol`）复算 regime 状态，
+    成员取循环每根 bar 记下的 universe。docstring 写明为什么不用 `market_extremes` 的篮子，以及归档滞后时怎么取。
+  - `_regime_of`、`_regime_labels`、`_unconditioned`：按证据切点给 bar 归段；条件化不了时逐条写出原因。
+  - `_mixed_sharpe`：M-010 的期望按实盘各段占比混合均值与二阶矩，Sharpe 本身不能相加。
+  - `income_drift`、`decay_watch`、`decay_verdict` 接上条件化：每个整窗取起点所在段的 q10。条件化不了的行
+    回到不分段的数，与改动前相同。
+  - `_regime_note`、`_regime_line`、`_decay_lines` 与告警文案印出混合占比、各段 q10、整窗起点所在段。
+    `_regime_line` 改读同一个状态，顺带修掉 #283 在两段之间缝隙里的误判（0.710 读成「高于最高段上沿」）。
+- +15 `reports.py`：日报、周报算一次状态并传给两条规则；json 只放状态摘要，不放 700 多个逐 bar 值；
+  M-010 两处渲染与告警印出期望的来历。
+
+实测 16_581。顶抬到「实测 + 政策」：16_748，余量 167（= `headroom_policy(16_748)`）。
+
 ## beidou_cli
 
 原文：blob 里第 3615–4030 行，`"beidou_cli": 8_740,` 之上的注释，共 416 行。

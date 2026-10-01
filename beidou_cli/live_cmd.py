@@ -1111,6 +1111,7 @@ def report_weekly(
         source_lines=package_lines(Path.cwd()),
         source_lines_week_ago=_source_lines_days_before_head(7),
         usdt_baseline=RiskBudgetParams.from_mapping(payload.get("risk_budget", {}) or {}).usdt_baseline,
+        data_root=data_root,  # D-049: the regime state, so the weekly reads M-010 and the decay rule as the daily does
     )
     # DL-K3: the week's validations, checked for the one ordering the protocol depends on and nothing
     # verified - that the hypothesis was written down before the result was seen (KILL-R9).
