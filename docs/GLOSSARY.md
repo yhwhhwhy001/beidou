@@ -53,6 +53,10 @@
 | signal state | 持仓形状 | validate 证据文件 `against_basket.signal_state`：样本外各 bar 两边都有仓、全多头、全空头的占比（2026-09-29 起；旧文不改） |
 | against_basket | 对篮子 | validate 证据文件里样本外的书对它自己的等权篮子与 BTC 的读数块，`beidou_alpha/validation/basket.py`（2026-09-29 起；旧文不改） |
 | stitched OOS | 拼接、拼接的样本外 | `walk_forward.stitched_oos`：每折被选配置的持仓与逐币净收益拼成的样本外帧（2026-09-29 起） |
+| pool entry gate，简称 gate（指这道门时） | 选池门、入池门 | `portfolio.pool_entry_gate`、`LiveEngine._entry_gate`、`beidou data pool gate`（2026-10-01 起） |
+| gated table | 门控表 | `membership.gated.parquet`、`research_pool_gate.read_gated`（2026-10-01 起） |
+| shortlist | 短名单 | `LivePool.select` 的 24h 成交额候选、`pool.candidates`、`research_pool_gate.Shortlist`（2026-10-01 起；旧文不改） |
+| member-day | 成员-日 | `beidou data pool gate` 记录里的 `member_days_removed`、`member_days_added`（2026-10-01 起；旧文不改） |
 
 ## 保留中文的近形词
 

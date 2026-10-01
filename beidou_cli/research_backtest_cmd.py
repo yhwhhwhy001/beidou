@@ -119,10 +119,10 @@ def research_backtest(
     """Backtest one strategy through the full portfolio pipeline and write a research report."""
     profile_payload = load_yaml(profile)
     entry = _entry(strategy, registry_path, params, grids)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([entry], panel)
-    membership = _membership(root, universe_mode, panel, min_tenure)
+    membership = _membership(root, universe_mode, panel, min_tenure, profile_payload)
     model = _model(entry, profile_payload, interval, min_history)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     impact = impact_model(load_yaml(costs_path), capital=capital)

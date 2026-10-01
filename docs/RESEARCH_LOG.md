@@ -20725,3 +20725,617 @@ family gate 的 N 不动。
   「实现波动率已跑出区间」。那说的是书的风险低于目标，不是超出。要不要把「低于下沿」降成提示，由操作者定。
 - 构造变更不再让这个钟清零。M-010、G1、M-G06 照旧从构造变更起算，本节不动它们。
 - 循环不调用 `realised_vol`，它只在日报与每小时巡检里读。不用重启，主 checkout 快进后下一次巡检起生效。
+
+## 2026-09-30 · 资金费改记在结算时刻持有的仓位上：在跑配置的全样本 Sharpe 1.915202 → 1.914861
+
+来源：backtest-guard 09-25 体检第一遍 🔵、09-29 与 09-30 两次遗留项。操作者 09-30「修复所有发现的问题」。
+此前两份体检都建议搭下一次构造变更一起改。这次单独改：它只动研究侧的引擎，不动实盘，也不动构造指纹。
+
+**缺陷。** `align_funding_to_bars` 把 08:00 的结算 floor 进 08:00 那根 bar，而那根的开盘就是结算时刻。
+回测把它记在 `executed` 的 08:00 那一行上，也就是 07:00 收盘时决定、08:00 开盘才持有的**新**仓位。
+实盘在收盘后约 27 秒下单，08:00:00 那一刻持有的是**旧**仓位，付费的是旧仓位。
+
+**改法。** `beidou_alpha/backtest.py` 两处：
+- 向量化那一行由 `executed * funding` 改成 `executed.shift(1).fillna(0.0) * funding`；
+- 护栏重放的权益路径由 `row @ fees[t]` 改成 `held @ fees[t]`。日亏暂停读的就是这条路径，两处必须一致。
+
+**量了多少**（零 ledger，`scratchpad/funding_timing_impact.py`，库函数，不走 `research backtest`）：
+
+| 口径 | 资金费合计（逐 bar 权益比例相加） | 全样本 Sharpe | 复利 |
+| --- | ---: | ---: | ---: |
+| 记在新仓位上（改前） | +0.012902 | 1.915202 | +4.6277 |
+| 记在持有的仓位上（改后） | +0.013217 | 1.914861 | +4.6260 |
+
+- 在跑配置，k = 0.175，2021-01-31 至 2026-09-28，49,600 根，其中两种口径不同的结算 bar 884 根。
+- 改前那一行与证据 `tsmom-validation-20260929T023619Z.json` 的全样本 1.9152 一致，说明量的就是那本书。
+- 这 5.66 年里的日亏暂停为 0，两种口径走同一条路径，差值可以直接相减。
+- 差是 5.66 年多付权益的 0.03%，Sharpe 少 0.0003。09-25 估「五年半合计在权益 1% 以下」，实测小得多。方向与当时判的一致：原来偏乐观。
+
+**测试。** `tests/alpha/test_funding_is_charged_to_the_position_the_settlement_found.py` 两条：一次翻仓里，
+结算由翻仓前的多头付；护栏重放的权益路径同样由它付，所以下一根 bar 触发暂停。把两处改法分别退回，各有一条变红。
+
+**影响。** 研究侧此后所有带资金费的读数会在末一两位上变。已入库的报告不重出，在位证据仍是 09-29 那份（旧引擎）。
+下一次按协议重出 tsmom 证据时，会自然带上这次修正。09-30 在 k = 0.175 上跑的 16 格，按预登记用的是改前的引擎。
+
+## 2026-09-30 · 操作者四条裁定：backtest-guard 09-30 体检的四张卡
+
+来源：`docs/analysis/2026-09-30-backtest-guard-audit.md`（#275）第二遍，以及 09-29 体检的卡 1–3。
+本会话按价钱问了四个问题，操作者当场答。原选项与答案照录：
+
+| 问题 | 答案 |
+| --- | --- |
+| 10-03 到期的三件事怎么执行（09-29 卡 1，按 09-30 更正后的价钱） | **10-03 一次付清，之后 60 天不改** |
+| flow 的 10-03 复审用什么判据（09-29 卡 3） | **10-03 直接退役** |
+| 要不要在 k = 0.175 上跑 16 格（09-29 卡 2，花 ledger） | **跑，先写预登记** |
+| 证据窗口（M-010、M-G06、衰减规则）遇到 registry 改动要不要清零 | **默认清零，非信号改动声明豁免** |
+
+含义，写在执行之前：
+
+- **10-03 一次重启**载入三件事：tsmom 主书 stop 重定阈、`probe-stop-caliber`、flow 退役。flow 退役改
+  `strategy_weights`，构造指纹随之变，M-010、M-G06、衰减规则与 M-Q08 都从那次重启重新起算。之后 60 天
+  （到 12-02 前后）不改构造，也不改 registry digest。
+- flow 退役后 flow_short 的停损数字作废，要定的只剩 main 的新阈值。并行会话「北斗量化交易系统审查」在做
+  k = 0.175 上的停损重估，main 那一半归它；flow 退役的 registry 改动由本会话准备成 PR，不开 auto-merge，
+  等 10-03 由操作者合并。
+- 16 格按下一节的预登记跑。
+- 证据窗口的新规则由本会话实现：registry digest 一变就切窗口；只改 universe 或 probe stop 的，在代码里声明
+  等价并附证明，写法仿 `CONSTRUCTION_ALIASES`。当前窗口不受影响：`7f8adb754962` 自 09-15T16:00Z 起没变。
+
+## 2026-09-30 · 预登记：tsmom 在 k = 0.175 上跑默认 16 格（写在跑之前）
+
+起因：上一节第三条。09-29 体检第二遍第二条：在跑的证据是一条没做过选择的尾巴（`oos_is_full_sample_tail`
+为真，D-043 封顶 WEAK_PASS）。唯一真做过选择的读数是 09-19 在 k = 0.60 上的 16 格：各折自选的混合样本外
+1.2306，FAIL。0.175 上从没跑过。
+
+### 8. 本次服务四个目标里的哪一个
+
+服务：G-D（可安全迁移到真实资金）。`docs/MAINNET_READINESS.md` §8 的 Q-M2（真钱要不要 PASS）缺的正是
+这个读数。它不产出新 alpha。
+
+### 1. 假设
+
+在 k = 0.175 上，tsmom 默认 16 格的 5 折 walk-forward 至少有两折选出不同的格
+（`oos_is_full_sample_tail` 为假），而各折自选的混合样本外 Sharpe **低于** family gate（N 约 356 时约 1.577）。
+若不成立，会看到两种情况之一：各折仍全选同一格；或者混合样本外高于门。
+
+### 2. 这是「新信息」还是「新网格」
+
+都不是。网格是 09-19 用过的默认 16 格，一格不加；新的只有 k（0.60 → 0.175）与十一天数据。
+这是在在跑的 k 上重量一次「真做一次选择」的样本外，操作者 09-30 按卡 2 批准。
+
+选择污染先声明：
+
+1. 09-19 的 16 格（k = 0.60）看过：各折选 `[24, 72, 168]` / 0.20（第 1–3 折）与 `[168, 336, 720]` / 0.30
+   （第 4–5 折），混合 1.2306，全样本 argmax 就是在跑的配置。
+2. 09-25、09-29 两次 2 格（k = 0.175，`crowding_window` 0 / 72）看过：样本外 1.83。
+3. 09-29 与 09-30 两次体检都推算过「0.175 上诚实的混合约 1.53」，那是推理，写在本次运行之前。
+4. 两份 0.175 证据的邻域看过：`entry_threshold` ±10% 两侧 1.70 / 1.69。
+5. 09-29 之后没有看过 tsmom 的别的配置。09-30 的信号对照（`scratchpad/signal_parity_live_vs_replay.py`）
+   只重放在跑的那一格。所以申报维持 172。
+
+### 3. 协议（跑之前钉死，跑完不改）
+
+```bash
+# 在 worktree 里；config/live.demo.yaml 的 vol_target 已是 0.175，不改
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --prior-trials 172 --charge 16 --prereg <本节的 commit>
+```
+
+- 不传 `--grid`：`DEFAULT_GRIDS["tsmom"]` 的 16 格，即 `horizons` 4 档 × `entry_threshold` {0.20, 0.30}
+  × `return_scale` {0.20, 0.30} × `vol_window` {400}。网格外的维度取 registry（`crowding_window` 72 等，
+  `research_grids._grid` 的 `base`），所以在跑的那一格在 16 格里。
+- 其余参数用默认值，与 09-19、09-25、09-29 相同：`--folds 5`、`--min-train 4000`、`--purge 50`、
+  `--embargo` 跟随 purge、`--cpcv-groups 6`、`--guards`、`--exits`、`--capital 0.0`。`--to` 不钉。
+- 代码是 main `ef0d8c80`。回测引擎与在位证据相同。09-30 体检遗留的资金费记账时点，另起 PR 在本次运行之后改，
+  所以这份报告与在位证据、与 09-19 的 16 格同一个引擎。
+- 开跑前：确认没有别的 `beidou research` 或 `beidou data` 进程；避开 17:20Z 的数据任务；环境里不设
+  `BEIDOU_TRIALS_LEDGER`。ledger 与报告写进本 worktree 的 `reports/research/`，随 PR 入库。
+
+### 4. 计费与桶
+
+16 行，进 `tsmom` 桶。今天桶里 214 行、去重后 169；`trials.jsonl` 22,215 行，sha256 前 16 位 `001d643cae5d48d4`。
+
+- 今天的 N：169 + 172 = 341。
+- 跑完的 N：预计 **356**。在跑那一格的 fold key 与 09-29 那一行相同（手写策略的 `search_space_version`
+  为空，range_end 同在桶 2960），按 replay 计；其余 15 格是新 trial。
+- 若 10-01T00:00Z 之后才跑，range_end 进桶 2961，16 格都是新的，N = 357。
+- 报告的 N 若不是这两个数之一，说明有指纹变了。先查明原因写下来，再合入。
+- 价钱：在位证据（`tsmom-validation-20260929T023619Z.json`）的 family gate headroom 从 +0.2537 降到约 +0.249。
+
+### 5. 功效读数
+
+方差借自在位证据：
+
+```
+evidence: reports/research/tsmom-validation-20260929T023619Z.json sha256=b8f6890d4223a25acffce853399cc431834663bad3f39f8a9f7ed891b4ca67d8
+  interval=1h bars_per_year=8760 n_obs=45600 variance=2.15923e-05 (这份报告自己量的样本外方差)
+
+## N=341
+    standard error of the OOS Sharpe (annual): 0.4349
+    gate (max of the two halves): 1.5720  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.4%
+    P(clear | true annual Sharpe = 1.2): 19.6%
+    P(clear | true annual Sharpe = 1.5): 43.4%
+    P(clear | true annual Sharpe = 2.0): 83.7%
+
+## N=356（这次跑完的 N）
+    standard error of the OOS Sharpe (annual): 0.4349
+    gate (max of the two halves): 1.5769  [selection binds]
+    P(clear | true annual Sharpe = 1.0): 9.2%
+    P(clear | true annual Sharpe = 1.2): 19.3%
+    P(clear | true annual Sharpe = 1.5): 43.0%
+    P(clear | true annual Sharpe = 2.0): 83.5%
+    not included in the above: cpcv_fraction_negative, pbo, fold_consistency, cost_stress_x2
+```
+
+### 6. 判定规则（数字出来之后一个字不改）
+
+| # | 判据 | 读哪里 | 容差 |
+| --- | --- | --- | --- |
+| 1 | 做过选择：`oos_is_full_sample_tail` 为假 | 报告 `walk_forward` | 布尔 |
+| 2 | 混合样本外过门：`walk_forward.oos_sharpe > oos_selection.threshold_annual + 1e-9` | 报告 | 1e-9 |
+| 3 | 判定：报告的 `verdict`，由 `verdict.decide` 算，不另判 | 报告 | — |
+
+- 第 1 条为假（各折仍全选一格）：结论写成「0.175 上 16 格仍不足以让各折分歧」，停止，不加格子。
+- 第 2 条为假：记为「诚实读数在门下」，这就是假设所说的。registry 不动，在位证据仍按 D-043 的 WEAK_PASS 上线。
+- 换指针只在三件事同时成立时做：`verdict` 为 PASS；第 1 条为真；`best_params` 与在跑配置逐键相同。
+  这时 armed 与 candidate 两份 registry 一起换 `evidence` 指针。`evidence` 块不进 registry digest，不用重启。
+  其余任何结果都不换指针。
+- 判负之后：不重跑，不换网格，不申诉门，`governance/reopen.yaml` 不改。
+- 无论结果如何，读数写进 `docs/MAINNET_READINESS.md` 的 Q-M2。
+- 只报告、不判：`best_key_oos_sharpe`；逐格全样本 Sharpe 里 `entry_threshold` 0.20 对 0.30 的差
+  （09-30 体检第一遍 🟡 那条要的曲面）。
+
+### 7. 预期与两种结果各值多少
+
+最可能的结果：第 1 条为真，第 2 条为假，verdict FAIL。依据是推理：09-19 的混合 1.23 加上 0.60 → 0.175 时
+护栏不再绑定带来的约 +0.30，约 1.53，在门下约 0.05。功效表说，真 Sharpe 1.5 时过门的概率是 43%。
+
+- FAIL：「弱通过」从此是「已知不过」。Q-M2 有了读数：真钱要 PASS，就得等更长的样本或更强的信号。demo 照跑。
+- PASS 且在跑配置是 argmax：证据从封顶的 WEAK_PASS 升成真做过选择的 PASS。Q-M2 的选项 A 从此有依据。
+- PASS 但 argmax 是另一格：不换指针，也不改配置。10-03 之后有 60 天冻结，采纳是另一次裁定。
+
+### 9. 实盘失效方式（How this fails）
+
+这次运行本身不动实盘。只有换指针那一支会碰到实盘，下面三行都在那一支上。
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若启动门对新报告读出问题，则 10-03 那次重启被挡，循环停在重试里 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
+| 2 | 若报告的 N 不是 356 或 357，则某个指纹变了，family gate 的 N 会跟着意外变动 | 报告 `oos_selection.n_trials` 与 `multiple_testing.ledger_trials` | N ∉ {356, 357} | 合入前对照报告的 replayed 行数与三个指纹 |
+| 3 | 若并行会话在合入前也往 tsmom 桶写了行，则 ledger 合并冲突，N 要重读 | `git merge` 的冲突；夜间 governance-gate 的 family gate 行 | ledger 行数 ≠ 22,215 + 16 | 合入前 `git fetch`，按时间顺序拼接 ledger，重算 N |
+
+## 2026-09-30 · 结果：tsmom 在 k = 0.175 上的默认 16 格——各折真做了选择，混合样本外 1.5840 对门 1.5984，FAIL
+
+按上一节预登记，一字不改地跑。
+
+- 预登记提交 `8533df15`，提交时刻 14:19:44Z，开跑前已推上远端。开跑 14:19:59Z，报告写于 14:22:44Z，用时 2 分 45 秒。
+- 开跑前的进程检查为空，环境里没有 `BEIDOU_TRIALS_LEDGER`。代码是 main `ef0d8c80` 加预登记那一个提交。
+- 报告：`reports/research/tsmom-validation-20260930T142244Z.json`，sha256 `75f5ff5769bce29a443841f8ea9afc4c8c84d62a0a19ddd38961e769a91a1746`。
+- `trials.jsonl`：22,215 行变成 22,231 行（+16），sha256 前 16 位从 `001d643cae5d48d4` 变成 `7fd3c3bfe6c825fc`。
+
+### 判据
+
+| # | 判据 | 读数 | 结果 |
+| --- | --- | --- | --- |
+| 1 | `oos_is_full_sample_tail` 为假 | 否；`selection_consistent` 也是否 | 成立 |
+| 2 | `oos_sharpe > threshold_annual + 1e-9` | 1.5840 对 1.5984 | 不成立，差 −0.0144 |
+| 3 | verdict | FAIL：`oos_sharpe 1.58 < the deflated threshold 1.60 at 357 trials, p_family=0.0565` | — |
+
+诚实读数在门下，这就是假设所说的。按预登记第 6 项不换指针：registry 一行未改，在位证据仍是
+`tsmom-validation-20260929T023619Z.json`（WEAK_PASS，D-043 封顶）。
+
+### 各折选了什么
+
+| fold | horizons | entry_threshold | return_scale | 样本外 Sharpe |
+| --- | --- | ---: | ---: | ---: |
+| 1 | [24, 72, 168] | 0.20 | 0.20 | 1.841 |
+| 2 | [24, 72, 168] | 0.20 | 0.20 | 0.225 |
+| 3 | [168, 336, 720] | 0.20 | 0.20 | 2.452 |
+| 4 | [168, 336, 720] | 0.20 | 0.20 | 1.263 |
+| 5 | [168, 336, 720] | 0.20 | 0.20 | 2.294 |
+
+全样本 argmax 就是在跑的配置，逐键相同（含 `crowding_window` 72）。它自己的 walk-forward 样本外是 1.8029，
+与各折自选的混合差 0.219。09-19 在 k = 0.60 上同一个差是 0.2986（1.5292 对 1.2306）。
+
+### N 是 357，不是预登记算的 356
+
+预登记第 4 项把在跑那一格算成 replay，理由是它与 09-29 那一行同一个 fold key。**这一步算错了。**
+fold key 还含 `range_start`（`beidou_alpha/validation/ledger.py:128-153`）。16 格里 `[336, 720, 1440]` 那几格的预热
+长 720 根，公共区间因此从 2021-03-02 01:00 起，09-29 那一行是 2021-01-31 01:00。两行不同，这一格记成新 trial：
+N = 169 + 172 + 16 = 357。多计一笔，方向是对的，分母只许往多里错。
+
+判定不受影响：按新报告自己的方差，N = 356 时门是 1.5981，1.5840 同样在门下。预登记第 9 项第 2 行的证伪线
+（N ∉ {356, 357}）没有成真；原因在这里写明，再合入。
+
+### 其余读数（只报告，不进判定）
+
+| 读数 | 值 |
+| --- | --- |
+| 区间 | 2021-03-02T01:00Z 到 2026-09-28T16:00Z，48,880 根；样本外 44,880 根 |
+| CPCV | mean 1.8764，q05 1.3312，min 1.2937，负路径 0 |
+| DSR p / PBO | 0.2750 / 0.0354 |
+| 16 格折合独立试验 | 8.0 |
+| 成本 x2（best_key 口径） | 样本外 1.58 对门 1.59，headroom −0.01 |
+| 滑点 9.2 bps（best_key 口径） | headroom −0.02 |
+| 对篮子，常数拟合（混合） | beta −0.02（t −3.29），alpha 0.305 bps/bar（t 3.45） |
+| signal state（混合） | 两边都有仓 78.5%，全多头 9.9%，全空头 11.3% |
+| regime 分段（混合） | 低 3.10，中 0.91，高 0.51 |
+| 集中度（混合） | 样本外前一名 SOLUSDT 9.2%；去掉 HYPEUSDT 后 1.58 → 1.51 |
+| 全书口径（R0，只报告） | N 21,652 时门 2.02，headroom −0.43 |
+
+### entry_threshold 的曲面（09-30 体检第一遍 🟡 那条要的）
+
+在跑的 horizons `[168, 336, 720]` 上，四格的全样本 Sharpe（16 格的公共区间）：
+
+| return_scale | entry_threshold 0.20 | entry_threshold 0.30 |
+| --- | ---: | ---: |
+| 0.20 | 1.88 | 1.37 |
+| 0.30 | 1.69 | 1.20 |
+
+从 0.20 到 0.30，两种 return_scale 下都掉约 0.5。换一组 horizons，方向就反过来：`[24, 72, 168]` 上 0.30 比 0.20 高
+（1.21、1.13 对 0.97、1.01），`[5, 20, 50]` 上也是。所以在跑配置站在一个局部峰上。赢的是 horizons 与
+entry_threshold 这一对组合，不是一片高原。
+
+### 后果
+
+- registry 不动，demo 照跑在在位证据上。
+- tsmom 桶的 N 从 341 变成 357。在位证据（样本外 1.8257）的门按它自己的方差是 1.5772，headroom 从 +0.2537
+  降到 +0.2485。
+- 读数写进 `docs/MAINNET_READINESS.md` 的 Q-M2。
+- 按预登记：不重跑，不换网格，不申诉门，`governance/reopen.yaml` 不改。
+
+## 2026-09-30 · probe-stop-caliber 的阈值在 k 0.175 上重量：pit 口径 flow 2.5%、main 5.1%，09-12 的口径 4.5% / 7.5%；队列里的 7.5% / 11.2% 是 k 0.30 的数
+
+**起因。** 系统审查（`docs/analysis/2026-09-30-system-audit.md`）清点 10-03 的日期翻转时读到这条排队变更。
+它的阈值是 09-12 在 k = 0.30 上量的。之后 k 改过两次：09-14 到 0.60，09-27 到 0.175。条目没有跟着改。
+阈值是权益的份额，书的盯市盈亏随 vol target 同比例变，所以旧数描述的不是今天这本书。
+
+**做法。** 方法与 09-12 相同（预登记 `b883d01e`，结果 `3e584cbf`）。在被验证过的那段面板上
+（2021-01-31 → 2026-09-07），用今天的 profile 与 registry 重建每本书自己的权重路径，
+取 w_{t-1}·r_t 的 720 bar 滚动和，读经验 2.28% 分位数。多印一项：每个候选阈值下，
+30 天窗口落到它以下的比例。脚本是 `scratchpad/probe_stop_tails.py`，约 3 分钟。
+量的是在跑的配置，不选、不比，不计 ledger。`reports/research/trials.jsonl` 的 sha256 前后都是 `001d643c…`。
+
+**两种口径。** 09-12 的脚本调 `strategy_targets(panel, None)`：不套成员表，按面板里全部币排序（09-12 是 241 币，
+今天 878 币）。预登记写的是「在被验证过的那段面板上」，被引用的 book 报告与实盘用的都是 pit 成员口径。
+所以两种都量了：`panel` 原样复现 09-12 的做法，两次运行逐位相同；`pit` 只取成员表里出现过的 212 币，逐 bar 套成员表，
+与 `research book --universe pit` 同一个做法。
+
+| 口径 | 书 | 年化 σ | 30 天 σ | 2.28% 分位数 |
+| --- | --- | ---: | ---: | ---: |
+| pit | main | 17.32% | 4.053% | −5.09% |
+| pit | flow_short | 4.86% | 1.407% | −2.48% |
+| 全面板 | main | 17.58% | 4.473% | −7.54% |
+| 全面板 | flow_short | 5.59% | 1.887% | −4.51% |
+| 09-12 全面板（k 0.30） | main | 29.69% | 7.233% | −11.22% |
+| 09-12 全面板（k 0.30） | flow_short | 9.70% | 3.239% | −7.51% |
+
+30 天窗口落到阈值以下的比例（48,361 个窗口）：
+
+| 书 | 阈值 | 来源 | pit | 全面板 |
+| --- | ---: | --- | ---: | ---: |
+| flow_short | 2.0% | registry 现行 | 4.70% | 13.3% |
+| flow_short | 2.5% | pit 规则值 | 2.18% | — |
+| flow_short | 4.5% | 全面板规则值 | — | 2.31% |
+| flow_short | 7.5% | 队列里的旧数 | 0.000% | 0.000% |
+| main | 6.0% | registry 现行 | 1.07% | 5.80% |
+| main | 5.1% | pit 规则值 | 2.27% | — |
+| main | 7.5% | 全面板规则值 | — | 2.36% |
+| main | 11.2% | 队列里的旧数 | 0.000% | 0.196% |
+
+年化 σ 两种口径都贴着 vol target（main 0.175，flow 0.175 / 3 ≈ 5.8%），差在尾部：全面板多出 666 个从没进过成员表的币，
+左尾更厚。全面板口径下，两次测量之比 flow 约 0.60、main 约 0.67，接近 0.175 / 0.30 = 0.58。
+
+**结论。** 照旧数应用，flow 的新停损在这 5.6 年里一次都不会触发，两种口径都是。那正是这条变更要修掉的「打不响」。
+按预登记的原意（book 报告的 pit 口径），规则值是 flow 2.5%、main 5.1%，离现行的 2% / 6% 不远；按 09-12 的实现口径是
+4.5% / 7.5%。全面板的 main 7.5% 放到 pit 口径下，只在 0.335% 的 30 天窗口里触发。用哪个口径由操作者定（审查文档的 D1），
+应用当天在当时的配置上再量一次。操作者同日另有裁定（#279）：flow 10-03 退役，flow_short 的数随之作废，要定的只剩 main。
+
+**改了什么。**
+
+- `governance/window_changes.yaml` 的条目：带日期的更正、两种口径的读数、结构化的 `thresholds`，以及 `measured_at`
+  （vol_target、flow_short fraction、证据构造摘要 `221d001c3c07a626`、registry 摘要 `7f8adb754962`、commit）。
+- 原测试只断言 7.5% 与 11.2% 在条目里，k 变了两次它一直是绿的。改成读 `thresholds`，要求更正那句逐字写出两种口径的数，
+  两个 σ 都在。只查子串不够：旧的 flow 值「7.5%」恰好是全面板口径下 main 的新值。
+- 新测试 `test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_them`：条目未应用时，`measured_at`
+  必须等于 profile 的 vol_target、registry 的 flow fraction、证据构造摘要与 registry 摘要。
+  七个变异各让它变红，按字节还原后变绿：k 改 0.60、fraction 改 1/6、`max_scalar` 显式设 12、`vol_halflife` 翻倍、
+  tsmom 的 `crowding_window` 改 24，以及把更正句里 pit、全面板的 main 值各改成 9.9%。
+- `beidou_live/probe.py`、`beidou_governance/window_changes.py` 与两个测试文件的 docstring 还写着旧前提和旧数，
+  原行数改写（不动 ratchet）。
+
+**更正 09-12 那一节的前提（原段不改）。** 那一节写「`stop_of()` 把 `window_days / max_loss / …` 全部放进
+`construction_fingerprint`」，并据此判「闸今天不能动」。在 `3e584cbf` 上读，`stop_of` 在 `registry_digest` 里
+（`registry_digest` 从第 1631 行起，`stop_of` 在 1657 行，`construction_fingerprint` 从 1717 行起），今天也一样。
+所以改 `max_loss` 改的是 registry 摘要，不是构造：在当时的代码里，M-010、M-G06、衰减规则都不清零，清零的是 M-Q08，
+它的比较窗口同时看两个摘要（`execution_fidelity.comparison_window`）。同日合入的 #280 改了这条：证据窗口也在 registry
+摘要变化处截断，只改 probe stop 的变更要在 `REGISTRY_ALIASES` 里声明才不清零。K-EX14 管 exit overlay 与信号参数，
+这条两样都不是。
+发现者是同日 Backtest guard 会话（#275），本节在代码上核过。「口径与阈值必须一起动」那条不受影响。
+
+**没做的。** 不改 registry，不改代码，不应用这条变更。应用要改 registry 的两个 `max_loss`、改 `probe_status` 读的口径，
+再重启一次；M-Q08 对现行构造的第一次判定因此从约 10-13 推到约 10-18。何时应用由操作者定。registry 里 flow 的
+`max_loss` 注释写着「随 vol_target 等比例调」（09-04 那次 0.01 → 0.02），09-14 与 09-27 两次改 k 都没跟。
+循环现在读的是已实现口径，今天 flow 的 30 天读数是权益的 −0.02%，离 −2% 很远，这道闸按哪个数都打不响，
+所以没有影响过交易。条目的 `note` 记了这一条。
+
+## 2026-09-30 · M-Q08 的 b8f215ab 窗口离线补完：整段 2.09 ± 0.54，去掉只在实盘发生的 8 次退出与再入场后 0.94 ± 0.13，落在带内
+
+来源：backtest-guard 09-30 体检第一遍 🟡。日报 09-23 至 09-26 读了四次（2.07 → 2.38），09-27 构造换了，
+这段窗口没判定过。操作者 09-30「修复所有发现的问题」。
+
+零 ledger、只读：`scratchpad/mq08_b8f215ab_window.py`，用仪器自己的函数（`turnover_fidelity`、`backtest_turnover`、
+`live_turnover`）。重放的模型取 #163 之前的 main `8895c422` 的三份配置，那时 k = 0.60。在 `8895c422` 自己的代码上核过：
+那份配置的构造摘要就是 `b8f215ab706c`，按别名是 `0c555e1c`。用今天的代码算会不同，因为构造指纹此后加了 v11、v12 两组字段。
+
+| 截到 | 比值 | 实盘 / 回测（倍权益） | 完整日 | 退出 实盘 / 回测 / 两边都有 |
+| --- | --- | --- | ---: | --- |
+| 09-26T15:00（复现当天日报） | 2.383 ± 0.557 | 1.878 / 0.788 | 8 | 12 / 4 / 4 |
+| 09-27T12:00（整段，构造最后一根） | 2.087 ± 0.540 | 2.041 / 0.978 | 9 | 12 / 4 / 4 |
+
+第一行与 09-26 日报逐位相同，说明这是同一台仪器、同一份输入。
+
+只在实盘发生的退出有 8 次，只在重放发生的 0 次：
+
+- UNIUSDT、ZECUSDT（09-18T03:00）；
+- HYPEUSDT（09-21T08:00）、BTCUSDT（09-21T09:00）、DOGEUSDT（09-21T18:00）、SOLUSDT（09-21T19:00）；
+- XRPUSDT（09-23T02:00）、ADAUSDT（09-23T03:00）。
+
+把这 8 次连同各自之后的第一笔成交（再入场）一起拿掉，共 16 格，占实盘换手 1.120。剩下的实盘 0.921 对回测 0.978，
+比值 **0.942 ± 0.125**，在 0.75–1.25 的带内。这是拆分，不是反事实：一次单边退出之后，两边的持仓要过一段才重新对齐。
+
+结论：
+
+- 09-23 的解释在整段上成立：差额在只于实盘发生的止盈，入场锚来自 09-13 平仓后的重建。09-23 之后又多了 2 次同类退出。
+- 剩下的换手与回测对得上。再平衡带对着漂移后的持仓判、漏掉的 bar，这两条在这个窗口里量不出差。
+- 所以证据的成本压力不必按 2 倍换手来读。实测到的只有单位成本，约是模型的 1.41 倍，已由 `slippage_stress_gate` 定价
+  （slip5.5 headroom +0.14）。
+- 仍然成立的一点：实盘每一次平仓重建（flatten、换池、隔离）都会让入场锚与回测分开一段，这段时间里单边退出的换手
+  回测看不见。本窗口一次重建约 1.1 倍权益的换手，按 7 bps 计约 7.8 bps 权益（k = 0.60）；k = 0.175 下约是它的三成。
+- 这仍不是 M-Q08 的判定：9 个完整日不到 14 个。10-03 的构造变更会再清零一次，下一次判定最早约 10-18。
+
+## 2026-10-01 · 选池按模型目标跳过开不了仓的币：代码落地，开关默认关
+
+起因是 09-30 的算法与模块审查与「取消钉住的证伪判据有了计数」一节：k 切到 0.175 之后，AKEUSDT、LSKUSDT、NEARUSDT
+占着池子名额，却在每个做计划的周期都被 D3 挡住。操作者 09-30 先选「选池时跳过开不了仓的币」；细化价钱之后
+（忠实做法要把选池搬进回测循环，约 2–3 天），仍选**忠实版：按模型目标选池**。开关是 `portfolio.pool_entry_gate`，
+下文写 pool entry gate，简称 gate。
+
+### 规则
+
+- 一个名字的潜在仓位 = 主书每个名字的风险（`per_name_risk`：有仓名字的 |w|·σ 取中位数）÷ 它自己的模型 σ（stage 1 的
+  `asset_vol`）。sign 模式下每个有仓名字的 |w|·σ 相同，所以这就是它进书后会拿到的仓位。
+- 潜在仓位低于 `entry_line`（D2 开着时是 `no_trade_band × band_entry_multiple`，今天 1%）的名字，刷新时跳过，
+  下一个按成交额补位。锚定的 BTCUSDT、ETHUSDT 不受 gate 影响。
+- 不看持仓：回测里 D2 把低于这条线的目标一律当平，持没持仓都一样（D-033 保证实盘同一条路径）。
+
+### 两半怎么读同一个数
+
+- 实盘（`LiveEngine._entry_gate`）：每日刷新时，主书风险取刷新日零点之前最新一行周期记录的 `book_weights` 与
+  `asset_vol`；每个候选的 σ 由截到零点之前的小时线算。读数写进当周期 `universe_update` 的 `gate` 字段。
+  读不到（例如刚起的进程还没有记录）就保留昨天的池子，同 T-P05。
+- 研究（`beidou data pool gate`，`beidou_cli/research_pool_gate.py`）：逐日前向模拟，一遍走完。按刷新日顺序，
+  每个刷新日先把主书推进到前一天收盘，用的是上一次刷新选出的成员（`MainBook`）；再用这本书定价、过 gate
+  （`ForwardGate`）。实盘每天读的是它当时持有的书，研究照做。
+- 实盘只量 24h 成交额前 `pool.candidates`（45）个名字，外加上次的成员与钉住的名字（`LivePool.select`），这是
+  shortlist。现有成员表没有这一刀。开 gate 的那一遍照实盘加上（`Shortlist`）。不加的话，顶部被挡得一多，
+  补位会补到实盘从不去量的名字。
+- 开关关着时，重排必须逐位复现现有成员表，否则拒跑。09-30 实测：本地日线加当天的 exchangeInfo，2,063 个刷新日
+  0 格之差。
+- 结果写成 gated table（`membership.gated.parquet`），带一份记录：构造（开关开）、主书的策略与参数、shortlist
+  大小、它重排的那张基础表。记录里还有三项核对，都是 0 才算可用：
+  - `targets_cells_differing`：在成品表上跑真模型，主书逐格比。
+  - `decisions_disagreeing`：每个判定，与真模型自己的书比。
+  - `admitted_unjudged`：放进池却没有小时线、判不了的 member-day。
+- profile 打开开关时，十个研究命令都经 `_pit_table` 读 gated table。记录不再描述这次运行或不可用就拒读，
+  并提示重跑 `data pool gate`。
+
+### 为什么一遍走完：两种做法在真实数据上失败（10-01）
+
+- 全局不动点：用整张表建书，开着 gate 重排整段历史，再重复。5 遍不收敛，变动的格数 11,470 → 3,385。
+  操作者改裁「逐日前向模拟」。
+- 第一版前向模拟按上一遍的表读信号，再走一遍，直到表不动。两遍第一次不同的日期，恰好是旧的那遍第一次错的日期，
+  所以已核实的前缀每遍至少前进一天。实测也就这么慢：
+  - 前 5 遍变动 7,696 → 3,260 → 2,406 → 2,186 → 1,854 格，第 5 遍时 7,309 个判定与真模型不一致。
+  - 40 遍用 1,128 秒（每遍约 28 秒），前缀只核实到 2021-08-30。第 40 遍还有 145 格在动，落在 2021-08-30 至
+    2022-06-25 之间。
+  - 原因：每一天的成员会改变第二天的书，从而改变「每个名字的风险」这个中位数，压线的名字随之翻转。
+- crowding modifier 不是原因。`crowding_window` 设为 0 的对照照样不收敛：5 遍 7,813 → 1,735 格，6,375 个判定
+  不一致。耦合在 hold：一个名字的目标取决于它哪天进的池。
+- 所以改成一遍走完。与成员无关的部分用信号自己的函数整段算一次：tsmom 的分数，crowding modifier 排名用的滚动
+  funding。与成员有关的部分逐根推进：crowding 排名、hold、非成员置 0、ensemble。
+- 推进的那几段照抄 `crowding_mask`、`strategy_targets`、`scores_to_targets`，有漂移的风险。兜底是每次运行的
+  逐格核对：照抄的部分一旦与真模型不一致，表就不可用，研究拒读。
+- 测试用自造面板逐位比对：带 funding、晚上市、缺 bar、反复进出池。五个变异都被抓到：去掉 crowding 排名、hold、
+  非成员置 0、listing history，以及改成每次刷新重置 `seen`。
+- 只复现「主书只有 tsmom、ensemble 为 mean」这一种。别的主书直接拒跑，不近似。
+
+### 真实数据读数（10-01，零 ledger，输出只写 scratchpad）
+
+- 一遍走完、不带 shortlist：主书 0 格之差，0 个判定分歧，但有 408 个 member-day 判不了。这 43 个名字在被放进池的
+  那些天按 30 天成交额排第 45 名以后，深的到一百三十多名。2025-02-04、2024-12-05 这类日子，gate 挡掉的名字
+  多到池子要往很深处补位。
+- 对照实盘的 shortlist：
+  - 现有成员表有 24 个 member-day 落在 shortlist 外，涉及 24 个刷新日。这是开关之外、早就存在的研究/实盘差异，
+    这一步不动它。
+  - 开着 gate、不带 shortlist 的那一遍有 773 个，涉及 260 个刷新日。
+  - 只加 shortlist、不开 gate：移出 110 个 member-day，加入 257 个，波及 279 个刷新日（约占 36,256 的 1%）。
+    下面 gated table 相对现有表的差别里含着这一份。
+- 带 shortlist 的正式结果：载入 668 个候选、51,672 根 bar，用时 123 秒。
+  - 三项核对都是 0：主书 0 格之差，0 个判定分歧，0 个判不了的 member-day。可用。
+  - 相对现有成员表：移出 5,965 个 member-day，加入 4,509 个（共 36,256）。
+  - 最后一个刷新日（2026-09-24）：AKEUSDT、LSKUSDT、NEARUSDT 不在池里，正是证伪判据数着的那三个；
+    1000PEPEUSDT、ENAUSDT、UNIUSDT 也出池；AAVEUSDT、LINKUSDT、TAOUSDT、WLDUSDT 补进。共 16 个，现有表是 18 个。
+
+### 关着时什么都不动
+
+- 开关只在打开时写进记录（`RECORDED_WHEN_ON`，先例是 ledger 摘要里的 `impact`）。关着时，构造指纹、证据构造摘要、
+  ledger 的 fold key 都逐字节不变，`SHIPPED_USDT_CAP` 仍是出厂摘要，不用升 payload 版本，也不用声明别名。
+- 打开时它是构造变更，摘要变，没有别名，M-010 等窗口随重启清零。startup gate 比对这个键时，报告里没有它就按
+  「关」读，所以拿开关之前的证据打开它，会被拒绝启动。
+
+### 不在这一步
+
+打开开关是下一个 PR：先写预登记，跑 `beidou data pool gate`，在 gated table 上重出 tsmom 证据（约 2 笔 ledger，
+花之前先问操作者），换 registry 指针，再由操作者定重启时机。操作者 09-30 裁定 10-03 那次重启之后冻结 60 天
+（约到 12-02），不改构造也不改 registry，所以最早在那之后。
+
+## 2026-10-01 · 预登记：tsmom 证据按同一协议重出，带上每段 regime 的 q10 与均值波动（D-049，写在跑之前）
+
+起因：操作者 2026-10-01 答「现在就条件化」。问题是 M-010 与衰减规则要不要按 regime 条件化，证据分段读
+低 2.97 / 中 1.44 / 高 0.91。条件化要两样东西，只能从证据跑里来：
+
+- 每段的 30 天窗口 q10。衰减规则拿实盘窗口比它。
+- 每段的年化均值与波动。M-010 按实盘各段占比混合期望，Sharpe 本身不能相加。
+
+手放在 registry 旁边的分位数会在下一次构造变更时静默过期（D-026，`WalkForwardResult.summary` 的注释）。
+所以按协议重出一次证据，让报告自己带上这两组字段。代码在本分支的 `8c2c598a`。
+
+### 8. 本次服务四个目标里的哪一个
+
+都不直接服务，它不产出新 alpha。它让两台在跑的仪器（M-010、衰减规则）拿对的期望比。
+
+### 1. 假设
+
+判定与 09-29 那份相同：WEAK_PASS，理由是 `oos_is_full_sample_tail`（两折同选一格，D-043 封顶）；样本外 Sharpe
+高于 family gate。若不成立，报告会读出 FAIL，或样本外低于门。
+
+### 2. 这是「新信息」还是「新网格」
+
+都不是。配置、网格、构造与 09-29 相同。这次把 `--to` 钉在 2026-09-29，窗口只比 09-29 那份多 7 根 bar
+（09-28T16:00Z → 23:00Z），range_end 留在同一个 7 天桶里。
+
+代码有一处变化会动读数：#281 把资金费改记在结算时刻持有的仓位上，在跑配置全样本 Sharpe 1.915202 → 1.914861。
+
+选择污染先声明：
+
+1. 条件化的动机来自在位证据的 regime 表（2.97 / 1.44 / 0.91）。条件化是监控规则的设计，不挑配置，不计 trial。
+   切点用证据自己的样本内三分位，这是 09-30 卡片上写明、操作者认可的默认，不是看了数再选的。
+2. 09-29 之后看过 tsmom 别的配置的只有 09-30 的 16 格（#279），它已经在 ledger 里，算进下面的 N。
+   同期的零 ledger 运行（资金费时点 #281、M-Q08 窗口补完 #284、信号对照）都只读在跑配置。所以申报维持 172。
+
+### 3. 协议
+
+```bash
+# 在 worktree 里；config 一个字不改（vol_target 0.175）
+PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+  --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+  --grid '{"crowding_window": [0, 72]}' --to 2026-09-29 \
+  --prior-trials 172 --charge 2 --prereg <本节的 commit>
+```
+
+- 其余参数全部用默认值，与 09-25、09-29 相同。
+- ledger 与报告写进这个 worktree 的 `reports/research/`，随 PR 入库。
+- 开跑前确认没有别的 `beidou data` 或 `research` 进程，避开 17:20Z 的数据任务，环境里不设 `BEIDOU_TRIALS_LEDGER`。
+- 开跑前先印 `beidou_alpha.validation.stability.__file__`，确认加载的是本 worktree 的代码。
+
+### 4. 计费与桶
+
+2 行，进 `tsmom` 桶。今天 `trials.jsonl` 22,231 行，sha256 前 16 位 `7fd3c3bfe6c825fc`，与主 checkout 逐字节相同。
+
+- tsmom 按 7 天折叠后有 185 个不同的 fold key。09-29 那两行的 fold key 在其中，去掉它们剩 183。
+- 这次的 range_end 是 09-28T23:00Z，落在桶 2960（09-24 至 09-30）。起点、币数 212、construction `0f903fb27452`、
+  overlay `3eb03166f268`、symbol set `3cf25156a7fc` 都与 09-29 那两行相同。
+- 所以报告应读 replayed 2、N = 183 + 172 + 2 = 357。tsmom 行数 230 → 232，fold key 仍是 185。
+  实际花费是 2 行、0 个新 trial。
+- 不钉 `--to` 的话 range_end 进桶 2961，这两行就是 2 个新 trial，N 359。钉住是更便宜的那个，信息量不少：
+  多出来的只是 09-29 以后的几天数据。
+- 若报告的 N 不是 357，说明有指纹变了。那是另一件事，要查明原因记下来，判定仍按报告的 N。
+
+### 5. 功效读数
+
+不做选择，功效只作参考。N = 341 时门 1.5720（09-29）；N 357 时预计约 1.58。
+
+### 7. 预期与两种结果
+
+预期 WEAK_PASS，样本外约 1.825（09-29：1.8257；#281 使它略低），门约 1.58。
+
+新字段的预期，只写结构，不写数：
+
+- 三段窗口数之和等于 `walk_forward.oos_windows`（预计 63）。每段约 21 个，都过 10 个的下限，三段都给 q10。
+- 三段按各自 bar 占比混合，还原样本外 Sharpe，误差在千分之一以内。
+- 各段 q10 读出多少就用多少。它们不是门，是两条规则的比较线；读数不改变下面的做法。
+
+两种结果：
+
+- WEAK_PASS 或 PASS：armed 与 candidate 两份 registry 一起换指针。条件化从这份报告的新字段起生效，RESEARCH_LOG 记读数。
+- FAIL：不换指针，条件化不生效（两条规则读到旧证据，会写明「不分 regime」）。FAIL 会挡 armed 启动
+  （`registry.evidence_problems`），读数交操作者按 D-020 定。只多 7 根 bar 就翻成 FAIL，本身就是要报告的新情况。
+
+已知代价，跑之前写下：每段的 Sharpe 只有约 1.9 年样本，标准误约 0.75；每段的 q10 只有约 21 个窗口，落在第 2 与
+第 3 小之间。M-010 的 z 只计实盘一侧的标准误，不计证据一侧的。条件化之前这个缺口也在（1.83 的标准误约 0.43），
+分段后它变大。
+
+### 9. 实盘失效方式（How this fails）
+
+换指针不改构造：evidence 块不进 registry digest，也不进构造指纹。合入前跑两个构造测试核对。
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若启动证据门对新报告读出问题，则下一次 armed 重启被挡 | `live.stderr.log` 的 evidence 行；`live status --check` 报心跳过期 | 心跳年龄 > 7,200 秒 | 合入前离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者都要为空；跑 `test_the_shipped_registry_runs_what_its_evidence_validated` |
+| 2 | 若归档读不出状态（缺数据、滞后），则两条规则悄悄退回不分 regime | 日报 M-010 行与衰减行 | 行内出现「不分 regime：」 | 日报印出原因；`regime_state` 记 `through_ms`，滞后一眼可见 |
+| 3 | 若平静月里低段期望 2.97 本身偏高，则 M-010 在低段误报 | 小时检查的「策略收益漂移告警」 | 告警行写「按 regime 混合 low …」 | 告警行同时印不分段的数，复审时两个都看 |
+
+## 2026-10-01 · 结果：tsmom 证据按同一协议重出——WEAK_PASS，样本外 1.8234 对门 1.5771，N 357 不动；三段 q10 低 −0.02 / 中 −2.67 / 高 −1.59
+
+按「预登记：tsmom 证据按同一协议重出，带上每段 regime 的 q10 与均值波动」一节的协议，一字不改地跑。
+
+- 预登记提交 `4c169a01`，提交时刻 2026-10-01T14:53:02Z，开跑前已推上远端。
+- 用时 89 秒：14:53:21Z 到 14:54:50Z。config 没改，`BEIDOU_TRIALS_LEDGER` 没设，开跑前没有别的 `data` 或 `research` 进程。
+- 代码是 main `97eefc30` 加本分支的 `8c2c598a`。开跑前印过 `stability.__file__`，指向本 worktree。
+- 报告：`reports/research/tsmom-validation-20261001T145450Z.json`，sha256 `acdbb594a9a9c90100700e2f0e28da260174645685887fa4335e8814f1e1dc30`。
+- `trials.jsonl`：22,231 行变成 22,233 行，sha256 前 16 位从 `7fd3c3bfe6c825fc` 变成 `7bb6f1951089674b`。
+
+### 读数
+
+| 项 | 值 |
+| --- | --- |
+| verdict | **WEAK_PASS**，理由是 `oos_is_full_sample_tail`，与 09-29 相同 |
+| 窗口 | 2021-01-31T01:00Z 到 2026-09-28T23:00Z，49,607 根（09-29 那份到 16:00Z） |
+| 样本外 Sharpe | 1.8234（09-29：1.8257） |
+| family gate | 1.5771，N = 357，headroom +0.2463 |
+| N 的构成 | ledger 183 + 申报 172 + 本次 2 = 357；报告记 `replayed_rows` 2 |
+| tsmom 桶 | 232 行，fold key 仍是 185 |
+| 其余 | CPCV 15 条路径负的 0，q05 1.55；成本 x2 1.69；PBO 0.015；不分段 q10 −1.8487 |
+
+每段 regime（状态是篮子 30 天年化波动，切点是这份样本自己的三分位）：
+
+| 段 | 波动区间 | bars | Sharpe | 年化均值 | 年化波动 | 30 天窗口 | 窗口 q10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| low | 0.4031–0.7068 | 15,203 | 2.9606 | 0.5385 | 0.1819 | 23 | −0.0234 |
+| mid | 0.7068–0.8789 | 15,202 | 1.4424 | 0.2510 | 0.1740 | 16 | −2.6691 |
+| high | 0.8789–2.2313 | 15,202 | 0.9039 | 0.1351 | 0.1495 | 24 | −1.5864 |
+
+### 对照预登记
+
+- N 357、replayed 2、0 个新 trial：与预测相同。
+- 门 1.5771：预测约 1.58，相同。
+- 样本外 1.8234：预测约 1.825，低了 0.0016。来源已知：#281 的资金费时点，加多出的 7 根 bar。
+- 三段窗口 23 + 16 + 24 = 63，等于 `oos_windows`。预测「每段约 21 个」不准：窗口按起点归段，三段 bar 数相等，窗口数不必相等。三段都过 10 个的下限。
+- 三段按 bar 占比混合得 1.82333，样本外 1.82337，差 4e-5，在千分之一以内。
+
+### 两处没预料到的读数
+
+- **高波动段的书波动最低**（0.15 对低段 0.18）。所以高段 Sharpe 低主要是收益低，不是风险高。为什么书在高段更安静，这里没有量。
+- **中段 q10 低于高段**（−2.67 对 −1.59），不单调。中段只有 16 个窗口，q10 落在第 2 与第 3 小之间。预登记写过这个代价；这里是它的样子，不据此改切点或下限。
+
+### 换指针
+
+- armed 与 candidate 两份 registry 一起换指针，candidate 照「头注 + armed」重新生成。
+- `registry_digest` 换前换后都是 `7f8adb754962`；两个构造测试绿。
+- 启动门离线读：`registry_evidence_problems` 为空，`registry_dataset_problems` 的 blocking 为空。
+  旧证据那条 tsmom 的 dataset advisory（「store contents changed since this result was produced」）随新 manifest 消失；flow 那条照旧。
+- 治理 replay 的 ADOPTIONS 补 10-01 这一行。
+
+### 对今天日报的影响（快照上渲染，什么都没发）
+
+10-01T14:56Z 复制 `.beidou/live/`，新旧代码各出一份 10-01 的日报。
+
+- 状态：研究口径读 0.675（归档读到 09-30T16:00Z），落在 low 段。#283 的近似篮子读 0.72，会把今天放进 mid 段。
+- M-010：tsmom 期望 1.83 → 2.96（52 根 bar 全在 low 段），z −0.72 → −0.81。flow 照旧（证据是 book 报告，没有 regime 表）。
+- 衰减规则：仍是 INSUFFICIENT_DATA（52/1440 根）。整窗起点若在 low 段，比较线是 −0.02，不再是 −1.85。
+- 告警逐字相同，今天没有新告警。
+
+含义：平静持续时，两条规则都比条件化之前严得多。M-010 期望 2.96，衰减线 −0.02。这是裁定要的方向，代价写在 D-049。

@@ -41,6 +41,7 @@ from beidou_alpha.validation.ledger import (
     unique_trials,
 )
 from beidou_alpha.validation.metrics import (
+    DECAY_WINDOW_DAYS,
     cagr,
     calmar,
     payoff_ratio,
@@ -52,6 +53,7 @@ from beidou_alpha.validation.multiple_testing import (
 )
 from beidou_alpha.validation.pipeline import layers_applied, score_book
 from beidou_alpha.validation.stability import (
+    REGIME_MIN_WINDOWS,
     REGIME_VOL_WINDOW_DAYS,
     break_even_cost_multiple,
     cost_stress,
@@ -259,7 +261,7 @@ def research_validate(
     # already known here - afterwards the only thing left to do about it is to have not run it.
     combos = _grid(strategy, grid, entry.params)
     _refuse_an_undeclared_charge(strategy, registry_path, grid, len(combos), charge)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, profile_payload)
     # DL-D4 and DL-D5: carry the metrics or spot columns only when this strategy declares it reads
     # them, so a run that reads none does not pay for the alignment - and does not carry the one place
     # a look-ahead could enter data it never uses.
@@ -298,7 +300,7 @@ def research_validate(
             f"holdout: reserving {holdout['bars_reserved']} bars from {cutoff.date()} to {last.date()} "
             f"({holdout_months} months); this run sees {holdout['bars_used']} bars"
         )
-    membership = _membership(root, universe_mode, panel, min_tenure)
+    membership = _membership(root, universe_mode, panel, min_tenure, profile_payload)
     cost = cost_model(load_yaml(costs_path), use_funding=funding)
     impact = impact_model(load_yaml(costs_path), capital=capital)
     # the combos, not `entry.params`: a grid may set the funding term to 0 in every arm it evaluates
@@ -668,7 +670,10 @@ def research_validate(
         "multiple_testing": mt,
         "stability": {
             "time_split_sharpes": time_split_sharpes(wf.oos_returns, 4, bpy),
-            "regime_split_sharpes": regime_split_sharpes(wf.oos_returns, regime_vol, bpy),
+            # The window is `WalkForwardResult.summary`'s own expression, so the terciles split the same windows its q10 reads.
+            "regime_split_sharpes": regime_split_sharpes(
+                wf.oos_returns, regime_vol, bpy, window_bars=round(DECAY_WINDOW_DAYS * bpy / 365.0)
+            ),
             # What the three rows were computed from, in the artefact: "it happened to be 30 days" and
             # "the report says 30 days" are different facts (the `embargo` key's lesson, 2026-09-13).
             "regime_split_basis": {
@@ -679,6 +684,11 @@ def research_validate(
                 "label_on_bar_t_reads": "benchmark bars through t-1: what was known when bar t's position was decided",
                 "cut_points": "this sample's own terciles: the state is ex-ante, the cut points are not.  Volatility "
                 "trends over years, so a tercile is partly a calendar period: read it against time_split_sharpes",
+                "mean_annual, vol_annual": "the tercile's bars' mean x bars_per_year and std (ddof 1) x sqrt(bars_per_year): "
+                "a mix of terciles is priced from these, since Sharpe ratios do not mix (D-049)",
+                "window_sharpe_q10": f"q10 of the whole non-overlapping {DECAY_WINDOW_DAYS}-day OOS windows that START in the "
+                f"tercile (walk_forward's oos_windows, each filed by its first bar's label); null below "
+                f"{REGIME_MIN_WINDOWS} windows",
             },
             "parameter_neighborhood": neighbourhood,
         },

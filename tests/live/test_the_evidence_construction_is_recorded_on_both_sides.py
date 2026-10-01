@@ -18,8 +18,11 @@ passing for the wrong reason.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import yaml
 
+from beidou_alpha.portfolio import RECORDED_WHEN_ON
 from beidou_alpha.registry import CONSTRUCTION_KEYS, evidence_construction_digest
 from beidou_live.config import live_overlay_blocks
 from beidou_live.engine import evidence_construction, evidence_construction_of
@@ -39,8 +42,15 @@ def test_the_two_builders_of_the_live_blocks_agree() -> None:
 
 
 def test_the_portfolio_block_covers_exactly_what_the_gate_compares() -> None:
-    """Neither more nor less: a key the gate ignores would make the digest stricter than the rule."""
-    assert set(evidence_construction(live_config_for_profile())["portfolio"]) == set(CONSTRUCTION_KEYS)
+    """Neither more nor less: a key the gate ignores would make the digest stricter than the rule.
+
+    A `RECORDED_WHEN_ON` key is written only when on (2026-09-30, the pool entry gate), so the block covers the
+    gate's keys exactly with it on, and all but that one with it off - which the gate reads as off.
+    """
+    shipped = live_config_for_profile()
+    gated = replace(shipped, portfolio=replace(shipped.portfolio, pool_entry_gate=True))
+    assert set(evidence_construction(gated)["portfolio"]) == set(CONSTRUCTION_KEYS)
+    assert set(evidence_construction(shipped)["portfolio"]) == set(CONSTRUCTION_KEYS) - set(RECORDED_WHEN_ON)
 
 
 def test_a_report_and_the_loop_produce_the_same_digest_from_the_same_construction() -> None:

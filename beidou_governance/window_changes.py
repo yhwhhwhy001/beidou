@@ -8,9 +8,9 @@ is it in the other direction - not a closed hypothesis nobody reopens, but an op
 applies.
 
 The concrete cost, measured 2026-09-12: the probe stop's caliber was ruled, recalibrated, and all four
-of its falsifiers passed - and it cannot ship, because `max_loss` is inside `construction_fingerprint`
-and changing it clears M-010's window.  So it waits for 2026-10-03.  Without this file, the record of
-"what to apply, with which measured values, and why it waited" would be one log entry among thirty.
+of its falsifiers passed - and it was queued for 2026-10-03 on the belief that `max_loss` sat in
+`construction_fingerprint` (it sits in `registry_digest`; corrected 2026-09-30).  Without this file, the
+record of "what to apply, with which measured values, and why it waited" would be one log entry among thirty.
 
 **This module applies nothing.**  A batch window is an operator running `governance apply` through a
 transaction; a command that could apply its own queue on a date is exactly the shape R10 forbids.  What

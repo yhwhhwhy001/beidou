@@ -79,6 +79,7 @@ from beidou_live.report_decay import (  # noqa: F401  (re-exported at its histor
     _decay_lines,
     _long_run_sharpe_lines,
     _probe_correlation_note,
+    _regime_note,
     _series_by_strategy,
     attribution_coverage,
     decay_verdict,
@@ -89,6 +90,7 @@ from beidou_live.report_decay import (  # noqa: F401  (re-exported at its histor
     long_run_sharpe,
     probe_correlation,
     probe_rows,
+    regime_state,
 )
 from beidou_live.report_events import _event_risk_lines, event_risk
 from beidou_live.report_execution import (
@@ -208,6 +210,7 @@ def daily_payload(
             traded += float(trade["executed_qty"]) * float(trade["avg_price"])
     guard_events = [reason for row in cycles for reason in (row.get("guard_reasons") or [])]
     window = evidence_window(store)
+    regime = regime_state(store, data_root)  # D-049: the state M-010 and the decay rule condition on
     flows = [row.get("external_flows") or {} for row in cycles]
     return {
         "day": day,
@@ -278,11 +281,17 @@ def daily_payload(
         # else, and M-010 is the evidence KILL-006 rests on.  A reading, with no threshold.
         "attribution_coverage": attribution_coverage(store),
         "income_drift": income_drift(
-            store, expectations or {}, equity=equities[-1] if equities else None, since_ms=window["since_ms"]
+            store,
+            expectations or {},
+            equity=equities[-1] if equities else None,
+            since_ms=window["since_ms"],
+            regime=regime,
         ),
         # §12.9's decay rule, in the hourly check since 2026-09-23 (G1).  The weekly's own call, so the
         # two reports cannot read the rule differently; `daily_alerts` pages on REVIEW and nothing else.
-        "decay": decay_watch(store, expectations or {}, equity=equities[-1] if equities else None),
+        "decay": decay_watch(store, expectations or {}, equity=equities[-1] if equities else None, regime=regime),
+        # The series stays out of the json: 700-odd floats a day, and the rows above say what they took from it.
+        "regime_state": {key: value for key, value in regime.items() if key != "by_bar"},
         # M-G06 (§19 Q2's lagging half).  INSUFFICIENT_DATA for the next year and a half, on purpose:
         # the row that says how far off it is is the only honest thing it can say today.
         "long_run_sharpe": long_run_sharpe(store, equity=equities[-1] if equities else None),
@@ -363,7 +372,8 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
         block = payload.get(key) or {}
         if str(block.get("status")) == "ALERT":
             detail = block.get("reasons") or [
-                f"{strategy}: z={row.get('z'):.1f}"
+                f"{strategy}: z={row.get('z'):.1f}（期望 {_fmt_num(row.get('expected_sharpe'))}"
+                + (f"，{_regime_note(row)}）" if _regime_note(row) else "）")
                 for strategy, row in (block.get("by_strategy") or {}).items()
                 if row.get("z") is not None and row["z"] < -2.0
             ]
@@ -502,6 +512,7 @@ def weekly_payload(
     source_lines: Mapping[str, int] | None = None,
     source_lines_week_ago: Mapping[str, int] | None = None,
     usdt_baseline: float | None = RiskBudgetParams().usdt_baseline,
+    data_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """The plan's weekly research report, which was listed as a deliverable and never built.
 
@@ -515,8 +526,11 @@ def weekly_payload(
     cycles = [row for row in _cycles(store) if int(row.get("bar_open_ms") or 0) >= since_ms]
     window = evidence_window(store)
     equities = [float(row["equity"]) for row in cycles if row.get("equity") is not None]
-    income = income_drift(store, expectations or {}, equity=equities[-1] if equities else None, since_ms=since_ms)
-    decay = decay_watch(store, expectations or {}, equity=equities[-1] if equities else None)
+    regime = None if data_root is None else regime_state(store, data_root)  # D-049, the daily's own state
+    income = income_drift(
+        store, expectations or {}, equity=equities[-1] if equities else None, since_ms=since_ms, regime=regime
+    )
+    decay = decay_watch(store, expectations or {}, equity=equities[-1] if equities else None, regime=regime)
     constructions = sorted({str(row.get("construction")) for row in cycles if row.get("construction")})
     first_day = (end - timedelta(days=7)).strftime("%Y-%m-%d")
     return {
@@ -596,7 +610,7 @@ def weekly_markdown(payload: dict[str, Any]) -> str:
                 {
                     strategy: (
                         f"pnl={_fmt_num(row.get('pnl'))} sharpe={_fmt_num(row.get('realised_sharpe'))} "
-                        f"vs {_fmt_num(row.get('expected_sharpe'))} over {_fmt_num(row.get('days'))}d"
+                        f"vs {_fmt_num(row.get('expected_sharpe'))}{_regime_note(row, wrap=True)} over {_fmt_num(row.get('days'))}d"
                     )
                     for strategy, row in income_rows.items()
                 }
@@ -745,8 +759,11 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 "Evidence window (D-026 construction)",
                 {
                     "construction": (payload.get("evidence_window") or {}).get("construction"),
+                    # Since 2026-09-30 a registry change ends the window too (operator ruling; `evidence_window`).
+                    "registry": (payload.get("evidence_window") or {}).get("registry"),
                     "bars_under_it": (payload.get("evidence_window") or {}).get("bars"),
                     "construction_changes_last_7d": (payload.get("evidence_window") or {}).get("changes_7d"),
+                    "registry_changes_last_7d": (payload.get("evidence_window") or {}).get("registry_changes_7d"),
                     # O3: the window says how long; these say whether it is whole.
                     **_attribution_coverage_lines(payload.get("attribution_coverage") or {}),
                 },
@@ -757,8 +774,9 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                     "status": (payload.get("income_drift") or {}).get("status"),
                     **{
                         strategy: (
-                            f"sharpe={_fmt_num(row.get('realised_sharpe'))} vs {_fmt_num(row.get('expected_sharpe'))} "
-                            f"z={_fmt_num(row.get('z'))} pnl={_fmt_num(row.get('pnl'))} days={_fmt_num(row.get('days'))}"
+                            f"sharpe={_fmt_num(row.get('realised_sharpe'))} vs {_fmt_num(row.get('expected_sharpe'))}"
+                            f"{_regime_note(row, wrap=True)} z={_fmt_num(row.get('z'))} pnl={_fmt_num(row.get('pnl'))} "
+                            f"days={_fmt_num(row.get('days'))}"
                         )
                         for strategy, row in ((payload.get("income_drift") or {}).get("by_strategy") or {}).items()
                     },

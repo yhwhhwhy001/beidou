@@ -72,13 +72,13 @@ def research_diagnose(
     """Signal-level diagnostics before any portfolio construction: IC by horizon, signal-only backtest, flips."""
     del out  # diagnostics write nothing
     entry = _entry(strategy, registry_path, params, grids)
-    chosen = _resolve_symbols(root, symbols, interval, universe_mode)
+    chosen = _resolve_symbols(root, symbols, interval, universe_mode, load_yaml(profile))
     panel = _load(root, chosen, interval, start, end, funding)
     _require_funding([entry], panel)
     if min_history is None:
         min_history = int((load_yaml(profile).get("portfolio", {}) or {}).get("min_history_bars", 720))
     eligible = panel.close.notna().cumsum() >= min_history
-    membership = _membership(root, universe_mode, panel, min_tenure)
+    membership = _membership(root, universe_mode, panel, min_tenure, load_yaml(profile))
     if membership is not None:
         eligible &= membership
     scores = feature_scores(strategy, entry.params, panel).where(eligible)

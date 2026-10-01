@@ -19,6 +19,7 @@ import click
 from beidou_alpha.mining import enumerate_candidates
 from beidou_alpha.mining.search import SearchResult, scoring_reproduction
 from beidou_alpha.panel import Panel
+from beidou_alpha.portfolio import as_recorded
 from beidou_alpha.signals import get_signal
 from beidou_alpha.validation.ledger import (
     TrialRecord,
@@ -155,7 +156,8 @@ def _construction_digest(portfolio: Mapping[str, Any], cost: Any, execution: str
     would give every future FLAT run a signature no archived row shares, which would charge genuine
     replays as new trials - the same shape, in the other direction.
     """
-    payload: dict[str, Any] = {"portfolio": dict(portfolio), "costs": dict(vars(cost)), "execution": execution}
+    # `as_recorded`: a construction field that is off is left out, so its arrival charges no replay as a new trial.
+    payload: dict[str, Any] = {"portfolio": as_recorded(portfolio), "costs": dict(vars(cost)), "execution": execution}
     if impact is not None and getattr(impact, "enabled", False):
         payload["impact"] = dict(vars(impact))
     return _short_digest(payload)
