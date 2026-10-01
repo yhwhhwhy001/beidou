@@ -21339,3 +21339,46 @@ PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research 
 - 告警逐字相同，今天没有新告警。
 
 含义：平静持续时，两条规则都比条件化之前严得多。M-010 期望 2.96，衰减线 −0.02。这是裁定要的方向，代价写在 D-049。
+
+## 2026-10-01 · 重启 #67：macOS 软件更新重启了主机，launchd 开机拉起循环；构造不变
+
+只记可观测的事实（CLAUDE.md「重启实盘循环」第 3 条）。这次不是按纪律做的重启：没有事前选窗口，也没有事前跑构造测试。
+两个测试事后在它载入的那个提交上补跑。
+
+### 发生了什么
+
+- `/var/log/install.log` 13:59:05Z：`SUOSUPostLogoutInstallOperation: Rebooting (success = 1, displayAsleep = 0, shutdown = 0)`。
+  `softwareupdated` 同一秒记 `nightInstall = 0`：这是注销后的安装，不是夜间自动安装。日志里看不出是否有人点了重启。
+- `kern.boottime` 14:01:41Z，`last reboot` 记同一时刻。开机后 14:04:34Z 的更新扫描是「0 updates found」。
+- `launchctl print gui/<uid>/com.beidou.live`：`runs = 1`，`pid = 1409`，从没退出过。开机后的 launchd 会话只拉起过它一次。
+- 进程：armed 循环 PID 1409、paper-l3 PID 1421，都从 14:03:47Z 起。
+- `state.restarts` 66 → 67，`restarted_at` 2026-10-01T14:03:50Z。paper-l3 的计数是 12，`restarted_at` 14:04:21Z。
+- shadow 没有重启，计数仍是 3。它的 soak 记录最后一行在 02:00:54Z，早就跑完了；开机时它报
+  「the latest soak … is finished; not starting another」，退出码 0，按设计不再拉起。
+
+### 载入的代码
+
+- reflog：主 checkout 从 09-30T15:12:22Z 到 10-01T14:09:38Z 停在 `1f8951e1`（#281 的 merge）。进程 14:03:47Z 起，载入的是它。
+- 在 `1f8951e1` 的临时 worktree 上跑两个构造测试，先印 `beidou_live.__file__` 确认路径：18 passed，退出码 0。CI 在这个提交上也是绿的。
+- 与重启 #66 载入的 `9c677701` 比，循环会读的包里多了两个文件：`beidou_live/construction.py`（#280）、
+  `beidou_live/risk_budget.py`（#278）。其余改动在报告层与回测里。
+- 15:00:32Z 的心跳：construction `e32f3856ac1e`、registry `7f8adb754962`，与重启 #66 之后相同。`live status --check` 读 registry
+  与正在运行的循环一致。
+- 进程起来之后，主 checkout 又被快进了两次：14:09:38Z 到 `97eefc30`（#286，只改一行 jsonl），15:47:49Z 到 `2d892028`
+  （#285、#288）。跑着的进程内存里仍是 `1f8951e1`，下一次重启才会载入后者。
+
+### 代价
+
+- 13:00Z 那根 bar 的周期没跑。新进程 14:04:51Z 把它补记为 SKIPPED，那一小时没有再平衡，也没有退出检查。
+- `install.log` 里由软件更新触发的重启共三次：09-10T04:42:47Z、09-14T18:57:37Z、10-01T13:59:05Z。
+
+### 同一天的另一件事，与重启无关
+
+- 09-30T17:00、18:00、19:00Z 三根 bar 的周期连续失败，都是 `httpcore.ProxyError: 503`，走的是本机代理 1082。
+  live、shadow、paper-l3 三处在同一时刻失败。
+- `live status --check` 因此在 10-01 退出码 1：周期成功率 87.0%，23 次里失败 3 次。三次都滚出 24 个周期的窗口后会自己转绿，
+  约在 10-01T20:00Z。
+
+### 与 09-30 那节的关系
+
+09-30「重启 #66 的后续」一节写「没有重启 #67」，说的是 webhook 不作废重发、不为它重启。那句仍然成立；计数上的 #67 是这一次。
