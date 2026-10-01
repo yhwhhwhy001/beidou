@@ -4423,6 +4423,22 @@ try/except 换成判 None，省 1 行。`calendar.py` -8：删掉原函数连空
 抬顶前实测 4_719，余量 13，装不下。实测 4_778，顶抬到「实测 + 政策」：4_826，余量 48（= `headroom_policy(4_826)`）。
 同一改动在 `beidou_cli` 是 +10（`advance` 印不计入的行），落在余量内，不抬。
 
+### 2026-10-01 · 顶 4_826 -> 4_927（D-048 操作者退役事件）
+
+操作者 2026-10-01 裁定（backtest-guard 09-30 体检「后续」里还开着的第一件）：给状态机加「操作者退役」事件。flow 已裁定
+10-03 退役，而状态机进 RETIRED 只有一条路，即 R7 末命上的 P&L 止损。治理记录会一直把 flow 当 probe、占一个 probe 位；
+手改状态文件也挡不住下一次 `advance --commit`。合入前 main 实测 4_790。
+
+花在哪（净增 88）：
+
+- +80 `rulings.py`（新文件）：模块 docstring 写明为什么不放进 `verdicts.jsonl`（会进 M-G05 的分歧分母），也不放进
+  `transactions.jsonl`（digest 会让 AC-G4 的链读成断开）；`Ruling` 的读写；`retirements` 把裁定行变成按时间排好的事件。
+- +8 `lifecycle.py`：`Event.OPERATOR_RETIRE`、它的转移分支（不计 R5 也不计 R7）、模块 docstring 两行。
+
+同一改动在 `beidou_cli` 是 +59（`retire` 命令与 `advance` 的折叠），落在余量内，不抬。
+
+实测 4_878。顶抬到「实测 + 政策」：4_927，余量 49（= `headroom_policy(4_927)`）。
+
 ## beidou_alpha
 
 原文：blob 里第 4276–4597 行，`"beidou_alpha": 11_110,` 之上的注释，共 322 行。

@@ -29,7 +29,7 @@
 与 `report weekly`。漏的不是边角——`governance` 是晋级线本身，而漏掉的三个任务里有两个正在这台
 机器上跑。下面两节补上。
 
-## 治理（`beidou governance`，18 个子命令）
+## 治理（`beidou governance`，19 个子命令）
 
 自主开关是**每个工作副本**的运行期状态，不入库：`governance/ENABLED` 存在时这个 checkout 才允许
 写 registry。没有它，`apply` 只会预演。
@@ -38,6 +38,7 @@
 | --- | --- |
 | 下一步该做什么（读证据 + 状态，只决定不执行） | `beidou governance next` |
 | 把记录里已经发生的事折进状态 | `beidou governance advance` |
+| 记一条操作者退役的裁定（D-048），再由 `advance --commit` 折进状态 | `beidou governance retire <策略> --ruling … --at …` |
 | 晋级计划 / family gate 读数 | `beidou governance plan`；`beidou governance gate` |
 | 事务化写 registry（需要 `governance/ENABLED`） | `beidou governance apply` |
 | 部署健康金丝雀（读 shadow soak，不判 alpha） | `beidou governance canary` |
@@ -238,6 +239,22 @@ INSUFFICIENT_DATA，只印不告警。（2026-09-30 更正：这里原写「当�
    已按归档重切，见 RESEARCH_LOG「O-5：BNX 2023-02 的 fixture 与归档」一节。它再红，就是归档又变了，照第 2 条先判断。
 2. 不要为了变绿去改夹具或归档。这条测试说的是「归档在夹具之后变了」，先判断哪一边对。
 3. 在主 checkout 上复现：`.venv/bin/python -m pytest -m archive -rfEs`，约 4 秒。
+
+## 操作者退役一本书（D-048，2026-10-01 起）
+
+状态机里，只有 R7 末命上的 P&L 止损会让一本书进 RETIRED。操作者直接让一本书退役（例如 2026-10-03 的 flow），
+要写成记录，治理状态才会跟着变：
+
+1. 先合 registry 的改动（把这本书设为不启用），按「重启实盘循环」的纪律重启。registry 仍启用它时，`retire` 拒绝执行。
+2. 从最新 `origin/main` 开 worktree，在里面先干跑、看输出，再加 `--commit`：
+   ```bash
+   beidou governance retire <策略> --ruling "<裁定所在的 RESEARCH_LOG 标题>" --at <重启的时刻，state.json 的 restarted_at>
+   beidou governance advance --cycles /Users/maguannan/beidou/.beidou/live/cycles.jsonl
+   ```
+   前者往 `governance/rulings.jsonl` 追一行（actor 记 operator），后者把它折进 `governance/governance_state.json`。
+   worktree 里没有实盘记录，所以 `--cycles` 指向主 checkout 那一份（只读）。
+3. 两个文件一起开 PR；`governance replay` 的未归因项仍应为 0。
+4. 合入后快进主 checkout，避开 18:30Z 与整点前后。
 
 ## 治理裁决入库（2026-09-29 起）
 
