@@ -97,6 +97,10 @@ ADOPTIONS = {
     # onto the 09-25 rows (one 7-day range_end bucket).  Missed on the first pass and caught by the test
     # below - the fourth time this list would have gone stale, and the first one the test was there for.
     "reports/research/tsmom-validation-20260929T023619Z.json": "2026-09-29",
+    # 2026-10-01 (the operator's 「现在就条件化」, D-049): the same protocol re-issued so the cited evidence carries
+    # each regime tercile's window q10 and moments, which M-010 and the decay rule now read.  Same WEAK_PASS under
+    # the same D-043 cap; `--to` pinned to 2026-09-29 kept range_end in the 09-24 bucket, so N 357 and 0 new trials.
+    "reports/research/tsmom-validation-20261001T145450Z.json": "2026-10-01",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 

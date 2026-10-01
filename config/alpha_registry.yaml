@@ -379,9 +379,20 @@ strategies:
     #     样本外 CAGR 34.2%。
     #   * 上一份：`tsmom-validation-20260925T143836Z.json`，sha256 `d06162dd…`。
     # 构造没变：`evidence` 块既不进 `registry_digest`，也不进构造指纹。
+    #
+    # **2026-10-01：同一协议重出，为的是带上每段 regime 的 q10 与均值波动（D-049）。** 操作者 10-01 答「现在就条件化」：
+    # M-010 与衰减规则改取当前 regime 的期望，这两组数只能从证据跑里来。
+    #   * 协议：预登记 `4c169a01`（RESEARCH_LOG 2026-10-01「预登记：tsmom 证据按同一协议重出……」），命令同 09-29，
+    #     只把 `--to` 钉在 2026-09-29，range_end 留在桶 2960；config 一个字没改。
+    #   * 读数：WEAK_PASS，理由同上。样本外 1.8234，门 1.5771，headroom +0.2463。N = 357（ledger 183 + 申报 172
+    #     + 本次 2），replayed 2，0 个新 trial。比 09-29 低 0.0023，来自 #281 的资金费时点与多出的 7 根 bar。
+    #   * 新字段（只供 M-010 与衰减规则读，不进判定）：低 / 中 / 高三段 Sharpe 2.96 / 1.44 / 0.90，
+    #     30 天窗口 23 / 16 / 24 个，各段 q10 −0.02 / −2.67 / −1.59（不分段 −1.85）。
+    #   * 上一份：`tsmom-validation-20260929T023619Z.json`，sha256 `b8f6890d…`。
+    # 构造没变：`evidence` 块既不进 `registry_digest`，也不进构造指纹。
     evidence:
-      report: reports/research/tsmom-validation-20260929T023619Z.json
-      sha256: b8f6890d4223a25acffce853399cc431834663bad3f39f8a9f7ed891b4ca67d8
+      report: reports/research/tsmom-validation-20261001T145450Z.json
+      sha256: acdbb594a9a9c90100700e2f0e28da260174645685887fa4335e8814f1e1dc30
       verdict: WEAK_PASS
     # 2026-09-09，操作者裁定「主账本必须要有止损」。在此之前主账本**连算都没算**：
     # `probes_from_registry` 无条件排除 main（无注释、无测试），于是承载全部 fraction 的那本书，

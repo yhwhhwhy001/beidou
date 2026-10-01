@@ -10,6 +10,7 @@
 3. **基准是书当时能持有的那些符号**：pit 下只算成员，static 下算全部面板符号。测试从面板独立重算
    两种基准的标签区间，断言报告对上的是该对上的那一个，并先证明两者在这份 fixture 上确实不同。
 4. verdict 的 reasons 里没有它。
+5. 三段的窗口数之和等于 `walk_forward.oos_windows`（D-049，2026-10-01）。
 """
 
 from __future__ import annotations
@@ -98,6 +99,8 @@ def test_a_pit_run_labels_every_oos_bar_from_the_members_benchmark(
     oos_bars = report["walk_forward"]["oos_bars"]
     assert set(split) == {"low", "mid", "high"}
     assert sum(row["bars"] for row in split.values()) == oos_bars, "有 OOS bar 没拿到标签"
+    # D-049：三段的窗口加起来就是 walk_forward 取 q10 的那些整窗，一个不多一个不少。
+    assert sum(row["windows"] for row in split.values()) == report["walk_forward"]["oos_windows"]
     panel = _load(str(root), list(SYMBOLS), "1h", None, None, False)
     members = _membership(str(root), "pit", panel, 0)
     expected = _label_span(root, oos_bars, members)
@@ -111,7 +114,7 @@ def test_a_pit_run_labels_every_oos_bar_from_the_members_benchmark(
     section = markdown.split(SECTION, 1)[1].split("\n## ", 1)[0]
     rows = [line for line in section.splitlines() if "annualised vol" in line]
     assert [row.split(" (", 1)[0] for row in rows] == ["| low", "| mid", "| high"]
-    assert all("sharpe=" in row and "bars=" in row for row in rows)
+    assert all("sharpe=" in row and "bars=" in row and "window_q10=" in row for row in rows)
     assert "| regime_split_sharpes | " not in markdown, "表被印成了一格 dict"
     assert "t-1" in section, "因果那句要跟着数走，不能只在 JSON 里"
 
