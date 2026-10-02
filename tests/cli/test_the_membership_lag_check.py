@@ -105,22 +105,19 @@ def test_an_empty_or_monthly_table_is_an_alert_even_when_its_last_row_is_recent(
 
 
 def test_the_hourly_check_gates_and_pages_on_it_like_its_other_lines() -> None:
-    """The wiring, read from the script: run with `--check`; on failure, `report daily`'s exact path.
+    """The wiring, read from the script: run with `--check`; on failure, gate and page through `notify`.
 
     One difference, on purpose (operator ruling 2026-09-23): this line pages once a day, so its `notify`
     carries a daily window and a state file of its own - why the file has to be its own is
-    `tests/live/test_the_membership_page_is_once_a_day.py`.  Everything else is `report daily`'s path.
+    `tests/live/test_the_membership_page_is_once_a_day.py`.  The rest is the shape `report daily`'s line had
+    until 2026-10-02, when that line grew an exit-3 branch for a page the report sent itself (09-30 audit
+    D2a, `test_the_hourly_check_does_not_page_what_the_report_paged.py`).  This command sends nothing itself,
+    so it has no such branch.
     """
     script = (ROOT / "deploy" / "run_check.sh").read_text(encoding="utf-8").splitlines()
     runs = [n for n, line in enumerate(script) if "data pool lag --check" in line]
     assert len(runs) == 1, runs
     assert script[runs[0]] == 'if output="$("$REPO/.venv/bin/beidou" data pool lag --check 2>&1)"; then'
-    report = script.index('if output="$("$REPO/.venv/bin/beidou" report daily --check 2>&1)"; then')
-    failure = [line.replace('"report"', '"membership"') for line in script[report + 2 : report + 6]]
-    assert failure[:3] == [
-        "else",
-        "  failed=1",
-        '  notify "membership" "$(echo "$output" | tail -n 3 | tr \'\\n\' \' \')"',
-    ]
-    daily = failure[2] + ' 86340 "$SUPPORT/alert-dedup-daily.json"'
-    assert script[runs[0] + 2 : runs[0] + 6] == [failure[0], failure[1], daily, failure[3]]
+    page = '  notify "membership" "$(echo "$output" | tail -n 3 | tr \'\\n\' \' \')"'
+    daily = page + ' 86340 "$SUPPORT/alert-dedup-daily.json"'
+    assert script[runs[0] + 2 : runs[0] + 6] == ["else", "  failed=1", daily, "fi"]

@@ -742,6 +742,11 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
 
 # DL-L3: shared by every process that can alert, beside the lock and the kill switch.
 ALERT_DEDUP_STATE = APP_SUPPORT / "alert-dedup.json"
+# `report daily --check` in ALERT with its page out - sent now, or inside the window.  The hourly check
+# (`deploy/run_check.sh`) then logs the FAIL and does not page the same content a second time (operator
+# ruling 2026-10-02, the 09-30 system audit's D2 option a).  1 still means "in ALERT, page not out", and a
+# crash exits 1 too, so both keep paging from there.
+REPORT_PAGED = 3
 
 
 def alert_transport() -> httpx.AsyncBaseTransport | None:
@@ -931,6 +936,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
     alerts, notices = daily_alerts(data)
     for notice in notices:
         click.echo(f"提示 {chosen}：{notice}")
+    delivered = False
     if alerts:
         message = f"北斗日报 {chosen}：" + " | ".join(alerts)
         click.echo(message, err=True)
@@ -942,10 +948,13 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
             secondary_url=str(alert_config.get("webhook_url_2", "")),
             state_path=ALERT_DEDUP_STATE,
         )
-        if daily.enabled and not asyncio.run(daily.send(message)):
+        # A page already out inside the window is delivered: `send` would suppress it and answer False,
+        # which is how a duplicate used to print the "not delivered" line below.
+        delivered = daily.enabled and (daily.recently_sent(message) or asyncio.run(daily.send(message)))
+        if daily.enabled and not delivered:
             click.echo(f"提示 {chosen}：上面这条告警没有送达任何通道", err=True)
     if check and alerts:
-        raise SystemExit(1)
+        raise SystemExit(REPORT_PAGED if delivered else 1)
 
 
 def _changed_lines(since: datetime, until: datetime) -> dict[str, int] | None:
