@@ -903,6 +903,7 @@ def _risk_budget_lines(block: Mapping[str, Any]) -> dict[str, Any]:
         "guards": f"pause {guards.get('daily_loss_pause_bars')} / capped {guards.get('gross_capped_bars')} bars"
         f" in {guards.get('window_days')}d",
         "reasons": block.get("reasons") or [],
+        **({"notices": block["notices"]} if block.get("notices") else {}),
     }
 
 

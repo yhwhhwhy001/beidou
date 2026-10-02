@@ -441,6 +441,9 @@ def daily_alerts(payload: Mapping[str, Any]) -> tuple[list[str], list[str]]:
             "风险预算读不出数（BLIND）："
             + "；".join(f"{entry.get('metric')}（{entry.get('why')}）" for entry in budget.get("unreadable") or [])
         )
+    if budget.get("notices"):
+        # A breach inside its own error bar (operator ruling 2026-10-02, the 09-30 audit's D2 b2): read, not paged.
+        notices.append("风险预算提示：" + "；".join(str(n) for n in budget["notices"]))
     window = payload.get("evidence_window") or {}
     if int(window.get("changes_7d") or 0) > 1:
         # the plan allowed one promotion per week and nothing ever counted them

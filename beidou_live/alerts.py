@@ -211,6 +211,14 @@ class WebhookAlerts:
         last = self._last_sent.get(key)
         return last is not None and (self._clock() - last) < self._window
 
+    def recently_sent(self, text: str, *, key: str | None = None) -> bool:
+        """True when this message was delivered inside the window - what `send` would suppress.
+
+        `send` answers False for a duplicate and for a failure alike.  A caller that has to say whether the
+        page is out (`report daily`, so the hourly check does not page it a second time) asks this first.
+        """
+        return self._suppressed(key if key is not None else text)
+
     async def send(self, text: str, *, key: str | None = None, force: bool = False) -> bool:
         """Deliver ``text``; return True only if a channel accepted it.
 
