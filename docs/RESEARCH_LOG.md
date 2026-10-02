@@ -21182,6 +21182,41 @@ entry_threshold 这一对组合，不是一片高原。
 花之前先问操作者），换 registry 指针，再由操作者定重启时机。操作者 09-30 裁定 10-03 那次重启之后冻结 60 天
 （约到 12-02），不改构造也不改 registry，所以最早在那之后。
 
+## 2026-10-01 · 操作者三条答复：flow 的治理记录加「操作者退役」事件（D-048）；regime 现在条件化；10-03 由操作者执行
+
+backtest-guard 09-30 体检「后续」一节列了三件要操作者定的事。本会话按价钱问了，操作者答（原选项照录）：
+
+| 问题 | 答案 |
+| --- | --- |
+| flow 10-03 退役后，治理记录里它仍是 probe（状态机没有「操作者退役」事件；手改状态文件会被下一次 `advance --commit` 改回去），怎么处理 | **加「操作者退役」事件** |
+| M-010 与衰减规则要不要按 regime 条件化（证据分段：低 2.97 / 中 1.44 / 高 0.91） | **现在就条件化** |
+| 10-03 的批次（合并 #282 flow 退役、main 止损重定阈、一次重启）由谁执行 | **操作者自己执行**，按 #282 的步骤 |
+
+**D-048 已实现**，就是本节所在的 PR：
+
+- `Event.OPERATOR_RETIRE`：除 RETIRED 外的任何状态都能接它，转到 RETIRED。它不计 R5（不是止损），也不计 R7（不是一条命）。
+- 裁定写进单独的 `governance/rulings.jsonl`，由 `beidou governance retire` 追加，actor 记 operator。
+  不放 `verdicts.jsonl`，因为它会进 M-G05 的分歧分母；不放 `transactions.jsonl`，因为那条链只记 registry 的写入。
+- `advance` 把裁定与 family gate 的 refuse 一起按时间折叠，第二次运行不改状态。
+- `retire` 有两道拒绝：状态里没有这本书或已退役就拒；registry 仍启用它也拒。
+- 测试 11 条。三处变异——去掉状态机分支、`advance` 不读裁定、去掉 registry 那道拒绝——各有测试变红。
+- 在 #282 的分支上（flow 已停用）跑 `governance replay`：15 reproduced、39 differences、0 unattributed，停用一个策略
+  不会产生要归因的差异。
+- `beidou_governance` 顶 4_826 → 4_927，理由在 `docs/SOURCE_BUDGET_LOG.md`。
+
+**10-03 怎么用它**（操作者执行，步骤写进 RUNBOOK「操作者退役一本书」与 #282 的描述）：合 #282 并重启之后，在 worktree 里跑
+`beidou governance retire flow --ruling "<本节标题>" --at <重启时刻> --commit`，再跑
+`beidou governance advance --cycles <主 checkout 的 cycles.jsonl> --commit`，两个文件一起开 PR。这一步要等本 PR 先合入。
+
+**regime 条件化**另起 PR。它要两样东西：证据给出每段 regime 的 q10（改 validate、再按协议重出一次），以及 M-010 与
+衰减规则改取当前那段的期望。同日已由 #288 落地（D-049），预登记与结果是下面两节。
+
+**另记一件**：主 checkout 14:09:38Z 按 RUNBOOK「治理裁决入库」收尾。#286 合入后，先核对 `governance/verdicts.jsonl`
+与 origin/main 逐字节相同，再撤本地副本，快进到 `97eefc30`。带进的是 #279、#283、#277、#284、#286，没有要重启的构造变更。
+主 checkout 15:47:49Z 再快进到 `2d892028`，带进 #285 与 #288。快进前状态干净、reflog 显示其间无人动过。
+#288 改了 validate 与日报、换了证据指针，`registry_digest` 不变；#285 改了 `engine.py`，开关默认关。两者都不重启循环，
+`engine.py` 的改动要到 10-03 那次重启才载入。
+
 ## 2026-10-01 · 预登记：tsmom 证据按同一协议重出，带上每段 regime 的 q10 与均值波动（D-049，写在跑之前）
 
 起因：操作者 2026-10-01 答「现在就条件化」。问题是 M-010 与衰减规则要不要按 regime 条件化，证据分段读
