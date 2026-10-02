@@ -962,6 +962,7 @@ def risk_budget_status(
     slippage = slippage_bps(trades, params, latest_ms=_latest_ms(rows), books_at=books_by_bar(rows))
     guards = guard_firings(rows, params)
     reasons: list[str] = []
+    notices: list[str] = []  # breaches read at review rather than paged; `daily_alerts` routes them
     if attributed["enforced"] and attributed["action"]:
         reasons.append(f"归因回撤 {attributed['value']:.1%}（R8 口径），已执行：{attributed['action']}")
     if drawdown["action"]:
@@ -982,11 +983,16 @@ def risk_budget_status(
             for name, group in (slippage.get("by_group") or {}).items()
             if group.get("value") is not None
         )
-        reasons.append(
+        line = (
             f"滑点（{'主书' if slippage.get('judged') == 'main_only' else '全书合并'}）"
             f"{slippage['value']:.1f} bps 高于假设的 {slippage['limit']:.0f} bps{detail}"
             + (f"；分书读：{split}" if split else "")
         )
+        # Operator ruling 2026-10-02 (09-30 system audit, D2 option b2): it pages only when it can be told
+        # from noise, |reading - limit| > 2 SE - `decisive`, the test the line above already prints.  From
+        # 09-17 it paged every hour at 5.1 +- 2.0 against 4.  `decisive` is None only with no reading at
+        # all, and then it pages as before.  M-Q08 reads `slippage` itself, so its judgement does not move.
+        (notices if slippage.get("decisive") is False else reasons).append(line)
     unreadable = [
         {"metric": name, "why": str(block.get("why", ""))}
         for name, block in (("realised_vol", volatility), ("slippage", slippage))
@@ -995,6 +1001,7 @@ def risk_budget_status(
     return {
         "status": "ALERT" if reasons else ("BLIND" if unreadable else "OK"),
         "reasons": reasons,
+        "notices": notices,
         "unreadable": unreadable,
         "drawdown": drawdown,
         "attributed_drawdown": attributed,

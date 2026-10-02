@@ -10,7 +10,8 @@ Three properties the shape enforces rather than documents:
   it, because the replay's whole job is to attribute a difference to something; "not promoted" with
   no rule attached is exactly the unattributed item AC-G0 forbids.
 * **RETIRED is absorbing.**  R7 gives a candidate three lives, and a fourth would have to come from
-  somewhere; there is no event that leaves RETIRED.
+  somewhere; there is no event that leaves RETIRED.  Since 2026-10-01 there are two ways in: R7, and a
+  written operator ruling (`OPERATOR_RETIRE`, read from `governance/rulings.jsonl`).
 * **A no-decision cycle produces no state change at all.**  A demo-account reset arrives as a
   TRANSFER row with no fills and the path to the venue answers 503 in bursts; letting either count
   would let the plumbing retire a strategy (KILL-AR-20).
@@ -46,6 +47,7 @@ class Event(StrEnum):
     WINDOW_SURVIVED = "window_survived"  # a batch window closed with it still running
     PNL_STOP = "pnl_stop"  # the pre-registered P&L stop fired
     FAMILY_GATE_FAILED = "family_gate_failed"  # the quantile gate no longer passes on recomputation
+    OPERATOR_RETIRE = "operator_retire"  # a written operator ruling retired the book (governance/rulings.jsonl)
 
 
 @dataclass(frozen=True)
@@ -253,6 +255,12 @@ def evaluate(book: Book, candidate: Candidate, event: Event, facts: Facts, polic
         return Decision(True, State.PROBE, ("R0: the quantile gate no longer passes on recomputation, back to probe",))
     if event is Event.FAMILY_GATE_FAILED and candidate.state is State.PROBE:
         return Decision(False, State.PROBE, ("R0: already probe, and this reading already blocks probe -> main",))
+
+    # D-048 (operator ruling 2026-10-01, for flow's retirement ruled 2026-09-30): the operator can retire a book
+    # outright.  It is not a stop, so R5 does not count it, and not a life, so R7 does not either: a written ruling,
+    # folded here like any other event.  Every state but RETIRED takes it - RETIRED is absorbing and answered above.
+    if event is Event.OPERATOR_RETIRE:
+        return Decision(True, State.RETIRED, ("D-048: retired by a written operator ruling",))
 
     return Decision(False, candidate.state, (f"§3: {event.value} is not a legal event in {candidate.state.value}",))
 

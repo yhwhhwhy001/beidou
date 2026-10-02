@@ -40,7 +40,7 @@ CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_live
     "beidou_live": 16_802,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_cli
-    "beidou_cli": 9_427,
+    "beidou_cli": 9_529,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_data
     "beidou_data": 3_682,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_exchange
@@ -48,7 +48,7 @@ CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_shared
     "beidou_shared": 329,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_governance
-    "beidou_governance": 4_826,
+    "beidou_governance": 4_927,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_alpha
     "beidou_alpha": 11_499,
 }

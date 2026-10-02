@@ -21182,6 +21182,41 @@ entry_threshold 这一对组合，不是一片高原。
 花之前先问操作者），换 registry 指针，再由操作者定重启时机。操作者 09-30 裁定 10-03 那次重启之后冻结 60 天
 （约到 12-02），不改构造也不改 registry，所以最早在那之后。
 
+## 2026-10-01 · 操作者三条答复：flow 的治理记录加「操作者退役」事件（D-048）；regime 现在条件化；10-03 由操作者执行
+
+backtest-guard 09-30 体检「后续」一节列了三件要操作者定的事。本会话按价钱问了，操作者答（原选项照录）：
+
+| 问题 | 答案 |
+| --- | --- |
+| flow 10-03 退役后，治理记录里它仍是 probe（状态机没有「操作者退役」事件；手改状态文件会被下一次 `advance --commit` 改回去），怎么处理 | **加「操作者退役」事件** |
+| M-010 与衰减规则要不要按 regime 条件化（证据分段：低 2.97 / 中 1.44 / 高 0.91） | **现在就条件化** |
+| 10-03 的批次（合并 #282 flow 退役、main 止损重定阈、一次重启）由谁执行 | **操作者自己执行**，按 #282 的步骤 |
+
+**D-048 已实现**，就是本节所在的 PR：
+
+- `Event.OPERATOR_RETIRE`：除 RETIRED 外的任何状态都能接它，转到 RETIRED。它不计 R5（不是止损），也不计 R7（不是一条命）。
+- 裁定写进单独的 `governance/rulings.jsonl`，由 `beidou governance retire` 追加，actor 记 operator。
+  不放 `verdicts.jsonl`，因为它会进 M-G05 的分歧分母；不放 `transactions.jsonl`，因为那条链只记 registry 的写入。
+- `advance` 把裁定与 family gate 的 refuse 一起按时间折叠，第二次运行不改状态。
+- `retire` 有两道拒绝：状态里没有这本书或已退役就拒；registry 仍启用它也拒。
+- 测试 11 条。三处变异——去掉状态机分支、`advance` 不读裁定、去掉 registry 那道拒绝——各有测试变红。
+- 在 #282 的分支上（flow 已停用）跑 `governance replay`：15 reproduced、39 differences、0 unattributed，停用一个策略
+  不会产生要归因的差异。
+- `beidou_governance` 顶 4_826 → 4_927，理由在 `docs/SOURCE_BUDGET_LOG.md`。
+
+**10-03 怎么用它**（操作者执行，步骤写进 RUNBOOK「操作者退役一本书」与 #282 的描述）：合 #282 并重启之后，在 worktree 里跑
+`beidou governance retire flow --ruling "<本节标题>" --at <重启时刻> --commit`，再跑
+`beidou governance advance --cycles <主 checkout 的 cycles.jsonl> --commit`，两个文件一起开 PR。这一步要等本 PR 先合入。
+
+**regime 条件化**另起 PR。它要两样东西：证据给出每段 regime 的 q10（改 validate、再按协议重出一次），以及 M-010 与
+衰减规则改取当前那段的期望。同日已由 #288 落地（D-049），预登记与结果是下面两节。
+
+**另记一件**：主 checkout 14:09:38Z 按 RUNBOOK「治理裁决入库」收尾。#286 合入后，先核对 `governance/verdicts.jsonl`
+与 origin/main 逐字节相同，再撤本地副本，快进到 `97eefc30`。带进的是 #279、#283、#277、#284、#286，没有要重启的构造变更。
+主 checkout 15:47:49Z 再快进到 `2d892028`，带进 #285 与 #288。快进前状态干净、reflog 显示其间无人动过。
+#288 改了 validate 与日报、换了证据指针，`registry_digest` 不变；#285 改了 `engine.py`，开关默认关。两者都不重启循环，
+`engine.py` 的改动要到 10-03 那次重启才载入。
+
 ## 2026-10-01 · 预登记：tsmom 证据按同一协议重出，带上每段 regime 的 q10 与均值波动（D-049，写在跑之前）
 
 起因：操作者 2026-10-01 答「现在就条件化」。问题是 M-010 与衰减规则要不要按 regime 条件化，证据分段读
@@ -21339,3 +21374,80 @@ PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research 
 - 告警逐字相同，今天没有新告警。
 
 含义：平静持续时，两条规则都比条件化之前严得多。M-010 期望 2.96，衰减线 −0.02。这是裁定要的方向，代价写在 D-049。
+
+## 2026-10-01 · 重启 #67：macOS 软件更新重启了主机，launchd 开机拉起循环；构造不变
+
+只记可观测的事实（CLAUDE.md「重启实盘循环」第 3 条）。这次不是按纪律做的重启：没有事前选窗口，也没有事前跑构造测试。
+两个测试事后在它载入的那个提交上补跑。
+
+### 发生了什么
+
+- `/var/log/install.log` 13:59:05Z：`SUOSUPostLogoutInstallOperation: Rebooting (success = 1, displayAsleep = 0, shutdown = 0)`。
+  `softwareupdated` 同一秒记 `nightInstall = 0`：这是注销后的安装，不是夜间自动安装。日志里看不出是否有人点了重启。
+- `kern.boottime` 14:01:41Z，`last reboot` 记同一时刻。开机后 14:04:34Z 的更新扫描是「0 updates found」。
+- `launchctl print gui/<uid>/com.beidou.live`：`runs = 1`，`pid = 1409`，从没退出过。开机后的 launchd 会话只拉起过它一次。
+- 进程：armed 循环 PID 1409、paper-l3 PID 1421，都从 14:03:47Z 起。
+- `state.restarts` 66 → 67，`restarted_at` 2026-10-01T14:03:50Z。paper-l3 的计数是 12，`restarted_at` 14:04:21Z。
+- shadow 没有重启，计数仍是 3。它的 soak 记录最后一行在 02:00:54Z，早就跑完了；开机时它报
+  「the latest soak … is finished; not starting another」，退出码 0，按设计不再拉起。
+
+### 载入的代码
+
+- reflog：主 checkout 从 09-30T15:12:22Z 到 10-01T14:09:38Z 停在 `1f8951e1`（#281 的 merge）。进程 14:03:47Z 起，载入的是它。
+- 在 `1f8951e1` 的临时 worktree 上跑两个构造测试，先印 `beidou_live.__file__` 确认路径：18 passed，退出码 0。CI 在这个提交上也是绿的。
+- 与重启 #66 载入的 `9c677701` 比，循环会读的包里多了两个文件：`beidou_live/construction.py`（#280）、
+  `beidou_live/risk_budget.py`（#278）。其余改动在报告层与回测里。
+- 15:00:32Z 的心跳：construction `e32f3856ac1e`、registry `7f8adb754962`，与重启 #66 之后相同。`live status --check` 读 registry
+  与正在运行的循环一致。
+- 进程起来之后，主 checkout 又被快进了两次：14:09:38Z 到 `97eefc30`（#286，只改一行 jsonl），15:47:49Z 到 `2d892028`
+  （#285、#288）。跑着的进程内存里仍是 `1f8951e1`，下一次重启才会载入后者。
+
+### 代价
+
+- 13:00Z 那根 bar 的周期没跑。新进程 14:04:51Z 把它补记为 SKIPPED，那一小时没有再平衡，也没有退出检查。
+- `install.log` 里由软件更新触发的重启共三次：09-10T04:42:47Z、09-14T18:57:37Z、10-01T13:59:05Z。
+
+### 同一天的另一件事，与重启无关
+
+- 09-30T17:00、18:00、19:00Z 三根 bar 的周期连续失败，都是 `httpcore.ProxyError: 503`，走的是本机代理 1082。
+  live、shadow、paper-l3 三处在同一时刻失败。
+- `live status --check` 因此在 10-01 退出码 1：周期成功率 87.0%，23 次里失败 3 次。三次都滚出 24 个周期的窗口后会自己转绿，
+  约在 10-01T20:00Z。
+
+### 与 09-30 那节的关系
+
+09-30「重启 #66 的后续」一节写「没有重启 #67」，说的是 webhook 不作废重发、不为它重启。那句仍然成立；计数上的 #67 是这一次。
+
+## 2026-10-02 · 操作者四条裁定：09-30 系统审查的 D2、D6、D8，以及研究成员表的 shortlist
+
+09-30 系统审查（`docs/analysis/2026-09-30-system-audit.md`「要操作者定的（带价）」）挂着的几项，操作者按价钱选了。
+
+| 项 | 裁定 | 怎么落地 |
+| --- | --- | --- |
+| D2 滑点告警 | 选项 a 加 b2：去掉重复推送；滑点只在与噪声可分辨时推送 | 本节所在的 PR |
+| D6 macOS 自动安装更新 | 维持 | 不改。软件更新重启已有三次：09-10、09-14、10-01（重启 #67） |
+| D8 实盘记录备份 | 先做本机夜间打包；Time Machine 等有盘再开 | 另一个 PR；Time Machine 由操作者开 |
+| 研究成员表缺实盘 shortlist | 随打开 pool entry gate 那次一起补 | 12-02 冻结期之后，与开 gate 共用一次重建和一次 tsmom 证据重出 |
+
+### D2 落地了什么
+
+- a：`report daily --check` 在 ALERT 且日报自己已推出时以 3 退出（`REPORT_PAGED`），窗口内推过也算推出。
+  `deploy/run_check.sh` 见到 3 只记日志、不再推；见到别的非零照旧推，作为兜底。
+- 顺带修掉一个误报：窗口内的重复会被 `send` 抑制并返回 False，日报此前因此印出「上面这条告警没有送达任何通道」。
+  现在先问 `recently_sent`，重复算已推出。
+- b2：风险预算块里，`decisive` 为 False（|读数 − 限| ≤ 2 SE）的滑点越线进 `notices`，不进 `reasons`。
+  日报把它归到「风险预算提示」。`decisive` 只在没有任何读数时才是 None，那时照旧告警。
+- M-Q08 读的是风险预算块里的 `slippage` 子字典，它没有动，所以 M-Q08 的判定不变。
+- 在 10-01 实盘状态的快照上，新旧两版各渲染一次（profile 的 `alerts` 清空，不会推送）。
+  - 唯一的差别：滑点那条从告警移到提示，风险预算块从 ALERT 变成 OK。
+  - M-Q03「周期失败丢掉 1 根 bar」那条照旧告警，它按设计红到 UTC 零点。
+- 推送条数：今天的读数（5.1 ± 2.0 对限 4）不再推。别的告警从每小时两条变成一条。
+
+### 其余几项的现状
+
+- D3（成员表 10-08 越线）：B 要重出证据并换 registry 指针，10-03 之后会碰 60 天冻结，所以只剩 A。
+  10-08 起每天一条落后告警，重建等研究真要新池子时与证据重出一起做。
+- D4（shadow canary 第 3 轮）：第 2 轮 10-01T02:00:54Z 已跑完。推荐的 A 是等 10-03 flow 退役之后再起。
+- D5（关机错过的夜间任务）：推荐维持，没有新情况。
+- D7（paper-l3 载入 #265/#266）：已经了结。10-01 主机重启时 paper-l3 14:03:47Z 被 launchd 拉起，
+  载入的 `1f8951e1` 以 #265（`de00ce3e`）、#266（`9d105537`）为祖先（重启 #67 一节）。

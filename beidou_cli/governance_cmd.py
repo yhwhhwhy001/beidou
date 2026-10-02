@@ -48,6 +48,11 @@ from beidou_governance.promote import apply as apply_transaction
 from beidou_governance.promote import closed, read_log
 from beidou_governance.promote import plan as plan_transaction
 from beidou_governance.replay import load_jsonl, render, replay_adoptions, replay_live
+from beidou_governance.rulings import LEDGER as RULINGS
+from beidou_governance.rulings import RETIRE as RETIRE_KIND
+from beidou_governance.rulings import Ruling, retirements
+from beidou_governance.rulings import read as read_rulings
+from beidou_governance.rulings import record as record_ruling
 from beidou_governance.scheduler import WAIT
 from beidou_governance.state import read as read_state
 from beidou_governance.state import write as write_state
@@ -1006,6 +1011,10 @@ def advance_cmd(
     in time order with the tenure's own events (operator ruling 2026-09-23: main -> probe).  Only the
     rows that judged the evidence the registry cites today become events (operator ruling 2026-09-29);
     the rest are printed as not counted.
+
+    `OPERATOR_RETIRE` (D-048) is the other one: `governance retire` writes a row to `governance/rulings.jsonl`,
+    `rulings.retirements` turns it into an event at the instant it took effect, and it folds in time order
+    beside the refusals.
     """
     checkout = Path(root).resolve()
     policy = Policy()
@@ -1040,6 +1049,7 @@ def advance_cmd(
         click.echo(f"gate     {reading.status:10s} {reading.strategy:20s} {reading.why}")
 
     verdicts = read_verdicts(checkout / VERDICTS)
+    rulings = read_rulings(checkout / RULINGS)
     starts = dict(pair.split("=", 1) for pair in started if "=" in pair)
     for name in books_in(rows):
         at = starts.get(name, anchor)
@@ -1063,7 +1073,10 @@ def advance_cmd(
                 break
             if pending is None:
                 cites = readings[strategy].evidence if strategy in readings else None
-                pending = list(refusals(verdicts, strategy, evidence=cites))
+                pending = sorted(
+                    [*refusals(verdicts, strategy, evidence=cites), *retirements(rulings, strategy)],
+                    key=lambda event: datetime.fromisoformat(event.at),
+                )
                 # Operator ruling 2026-09-29: a refusal counts against the evidence it judged.  Printed, not
                 # dropped, so a demotion that did not happen is as visible as one that did.
                 for verdict, about in set_aside(verdicts, strategy, evidence=cites):
@@ -1098,3 +1111,49 @@ def advance_cmd(
         return
     write_state(state_path, book)
     click.echo(f"wrote {state_path}")
+
+
+@governance.command("retire")
+@click.argument("strategy")
+@click.option("--root", default=".", help="Checkout holding the governance state and the rulings.")
+@click.option("--registry", "registry_path", default=REGISTRY, show_default=True)
+@click.option("--ruling", required=True, help="Where the operator's ruling is written, e.g. its RESEARCH_LOG heading.")
+@click.option("--at", "at", default="", help="ISO instant the retirement took effect (default: now, UTC).")
+@click.option("--commit/--dry-run", default=False, help="Append the ruling.  A dry run is the default.")
+def retire_cmd(strategy: str, root: str, registry_path: str, ruling: str, at: str, commit: bool) -> None:
+    """D-048: record a written operator ruling that retires a book; `advance --commit` folds it into the state.
+
+    The state machine had one way into RETIRED - a P&L stop on R7's third and last probe entry; a failed family
+    gate demotes since 2026-09-23 - so a book the operator retired outright (flow, ruled 2026-09-30) stayed a probe
+    in the record and kept a probe slot.  Hand-editing the state does not hold: the next `advance --commit` folds the record again.
+    So the ruling becomes part of the record (`governance/rulings.jsonl`), not an edit to what is derived from it.
+
+    Two refusals keep the row honest.  The strategy must be in the state and not retired already.  And the
+    registry must no longer enable it: retire after the registry change has merged and the loop has restarted,
+    so the record never says retired while the loop still trades the book.  This writes no registry and no state.
+    """
+    checkout = Path(root).resolve()
+    if not ruling.strip():
+        raise click.ClickException("--ruling names where the operator's ruling is written")
+    held = read_state(checkout / STATE).candidates.get(strategy)
+    if held is None:
+        raise click.ClickException(f"{strategy} is not in {STATE}: there is no candidate to retire")
+    if held.state is State.RETIRED:
+        raise click.ClickException(f"{strategy} is already retired")
+    if strategy in {entry.id for entry in parse_registry(load_yaml(registry_path)).enabled}:
+        raise click.ClickException(
+            f"{registry_path} still enables {strategy}: merge the registry change and restart the loop first, "
+            "or the record would say retired while the loop trades it"
+        )
+    when = at or datetime.now(UTC).isoformat()
+    try:
+        datetime.fromisoformat(when)
+    except ValueError as error:
+        raise click.ClickException(f"--at {when!r} is not an ISO instant") from error
+    row = Ruling(at=when, kind=RETIRE_KIND, subject=strategy, reasons=(ruling.strip(),))
+    click.echo(f"retire   {strategy}  {held.state.value} -> retired at {when}  ({ruling.strip()})")
+    if not commit:
+        click.echo(f"dry run: nothing written.  `--commit` appends to {checkout / RULINGS}")
+        return
+    record_ruling(checkout / RULINGS, row)
+    click.echo(f"wrote {checkout / RULINGS}; `governance advance --commit` folds it into {STATE}")

@@ -41,6 +41,7 @@ from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore, interval_ms
 from beidou_governance.policy import policy_digest
 from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts, redacted
+from beidou_live.backup import BACKUP_KEEP, BackupRefused, write_backup
 from beidou_live.benchmark import beta_reading
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
@@ -741,6 +742,11 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
 
 # DL-L3: shared by every process that can alert, beside the lock and the kill switch.
 ALERT_DEDUP_STATE = APP_SUPPORT / "alert-dedup.json"
+# `report daily --check` in ALERT with its page out - sent now, or inside the window.  The hourly check
+# (`deploy/run_check.sh`) then logs the FAIL and does not page the same content a second time (operator
+# ruling 2026-10-02, the 09-30 system audit's D2 option a).  1 still means "in ALERT, page not out", and a
+# crash exits 1 too, so both keep paging from there.
+REPORT_PAGED = 3
 
 
 def alert_transport() -> httpx.AsyncBaseTransport | None:
@@ -826,6 +832,35 @@ def live_kill_switch(profile: str, engage: bool) -> None:
             click.echo(f"kill switch was not engaged (checked {len(targets)} path(s))")
 
 
+@live.command("backup")
+@click.option("--profile", default="config/live.demo.yaml", show_default=True)
+@click.option("--keep", default=BACKUP_KEEP, show_default=True, type=click.IntRange(min=1), help="copies kept")
+@click.option("--to", "destination", default=None, help="directory for the copies [default: <app support>/backup]")
+def live_backup(profile: str, keep: int, destination: str | None) -> None:
+    """Copy the live record, newest --keep kept (`beidou_live/backup.py`); `deploy/run_data.sh` runs it nightly.
+
+    A failure pages: a backup nobody sees fail is the one that is missing on the day it is needed.
+    """
+    from beidou_live import lock
+
+    payload = load_profile(profile)
+    source = Path((payload.get("paths", {}) or {}).get("state_dir", ".beidou/live"))
+    try:
+        written = write_backup(source, Path(destination) if destination else lock.APP_SUPPORT / "backup", keep)
+    except (BackupRefused, OSError, tarfile.TarError) as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        config = payload.get("alerts", {}) or {}
+        channel = WebhookAlerts(
+            str(config.get("webhook_url", "")),
+            secondary_url=str(config.get("webhook_url_2", "")),
+            state_path=lock.APP_SUPPORT / "alert-dedup.json",
+        )
+        if channel.enabled and not asyncio.run(channel.send(f"北斗夜间备份失败：{reason}", key="live-backup")):
+            click.echo("提示：上面这条备份失败没有送达任何通道", err=True)
+        raise click.ClickException(f"backup failed: {reason}") from exc
+    click.echo(f"ok   backup: {written} ({written.stat().st_size / 1e6:.1f} MB)")
+
+
 def _interval(profile: dict[str, Any]) -> str:
     return str((profile.get("market_data", {}) or {}).get("interval", "1h"))
 
@@ -901,6 +936,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
     alerts, notices = daily_alerts(data)
     for notice in notices:
         click.echo(f"提示 {chosen}：{notice}")
+    delivered = False
     if alerts:
         message = f"北斗日报 {chosen}：" + " | ".join(alerts)
         click.echo(message, err=True)
@@ -912,10 +948,13 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
             secondary_url=str(alert_config.get("webhook_url_2", "")),
             state_path=ALERT_DEDUP_STATE,
         )
-        if daily.enabled and not asyncio.run(daily.send(message)):
+        # A page already out inside the window is delivered: `send` would suppress it and answer False,
+        # which is how a duplicate used to print the "not delivered" line below.
+        delivered = daily.enabled and (daily.recently_sent(message) or asyncio.run(daily.send(message)))
+        if daily.enabled and not delivered:
             click.echo(f"提示 {chosen}：上面这条告警没有送达任何通道", err=True)
     if check and alerts:
-        raise SystemExit(1)
+        raise SystemExit(REPORT_PAGED if delivered else 1)
 
 
 def _changed_lines(since: datetime, until: datetime) -> dict[str, int] | None:

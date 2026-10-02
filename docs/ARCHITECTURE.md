@@ -154,6 +154,14 @@ beta 报告的读数全在里面，09-23 那批并行合并的冲突也集中在
   - 仓库是公开的。图片进了 git 就收不回，还会和生成它的代码漂移，每次更正都要改两遍。
   - 操作者读日报、收告警，走的都是文字：Markdown 日报与 webhook。
   管的范围是进 `reports/` 与 `docs/` 的产物，以及被当作证据引用的东西。研究时在 scratchpad 里临时画图照常可以，只是图不入库、不当证据引用。`matplotlib` 留在可选的 `research` extra 里（`pyproject.toml`），CI 不装，没有模块 import 它。
+- **D-048** 操作者可以直接让一本书退役；退役写成记录，由状态机折叠（2026-10-01，操作者裁定）。起因是 flow 已裁定 10-03 退役，
+  而状态机进 RETIRED 只有一条路：R7 末命上的 P&L 止损（09-23 起 family gate 失败改为降级）。不加这一条，治理记录会一直把
+  flow 当 probe、占一个 probe 位；手改 `governance_state.json` 又挡不住下一次 `advance --commit` 按记录重折。
+  - 裁定写进单独的 `governance/rulings.jsonl`（`beidou governance retire`），actor 记 operator。不放进 `verdicts.jsonl`：
+    那是机器的裁决，会进 M-G05 的分歧分母。也不放进 `transactions.jsonl`：它只记 registry 的写入，digest 要首尾相接。
+  - `advance` 把它当 `OPERATOR_RETIRE` 事件，与 family gate 的 refuse 一起按时间折叠。不计 R5（不是止损），不计 R7
+    （不是一条命）；RETIRED 仍是吸收态。
+  - 两道拒绝让记录不说谎：状态里没有这本书、或它已退役，就拒；registry 仍启用它，也拒。先合 registry 的改动并重启，再记退役。
 - **D-049** M-010 与衰减规则按 regime 取期望（2026-10-01，操作者裁定「现在就条件化」）。起因是 backtest-guard 09-30 的 Ⅲ.1：在位 tsmom 证据的样本外 Sharpe 按篮子 30 天波动分三段是 2.96 / 1.44 / 0.90，两条规则却都拿不分段的 1.82 与 q10 比，波动大的一个月读成衰减，平静的一个月读成健康。
   - 状态与切点：状态是研究的 `trailing_benchmark_vol`（pit 成员等权篮子，30 天，读到 t−1）。实盘侧由 `regime_state` 在归档上用同两个函数复算，成员取循环每根 bar 记下的 universe。切点是证据自己的样本内三分位，随证据走，构造一变就随新证据重算。
   - M-010：期望 = 证据三段按实盘 bar 占比的混合。Sharpe 不能相加，所以混合的是均值与二阶矩（`regime_split_sharpes` 的 `mean_annual`、`vol_annual`）。z 的分母不变。
