@@ -77,7 +77,8 @@ def test_a_registry_that_declares_no_probe_keeps_the_digest_it_had() -> None:
 
 def test_the_shipped_registry_still_declares_the_main_book_stop() -> None:
     entry = _tsmom(_shipped())
-    assert entry["probe"]["stop"]["max_loss"] == 0.06
+    # 0.06 until the 2026-10-03 batch, which applied `probe-stop-caliber` (operator ruling D1 of 2026-10-02, pit).
+    assert entry["probe"]["stop"]["max_loss"] == 0.051
     assert entry["probe"]["stop"]["halts"] is False
 
 

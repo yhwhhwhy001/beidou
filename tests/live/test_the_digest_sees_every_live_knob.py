@@ -47,6 +47,23 @@ EXEMPT: dict[str, str] = {
     "strategies/5/probe/accepted_by": "prose",
     "strategies/5/probe/accepted_despite": "prose (D-029's written acknowledgement; the startup gate reads it)",
     "strategies/5/probe/reason": "prose",
+    # `probe-stop-caliber`'s provenance, moved next to the threshold when it was applied (2026-10-03 batch): what
+    # `max_loss` was measured on.  The guard in tests/governance/test_the_batch_window_has_a_list.py holds it to the
+    # configuration, and its `registry` field IS this digest, so it cannot sit inside it.
+    **{
+        f"strategies/0/probe/stop/measured_at/{key}": "provenance of `max_loss`; held by the batch-window guard"
+        for key in (
+            "population",
+            "quantile_228",
+            "sigma_30d",
+            "windows",
+            "vol_target",
+            "evidence_construction",
+            "registry",
+            "commit",
+            "measured",
+        )
+    },
     # `ensemble.turnover_penalty` is implemented by nothing, and `parse_registry` now refuses any value
     # but 0.  It stays parseable at 0 so archived `registry_fingerprint`s still reproduce.
     "ensemble/turnover_penalty": "unimplemented; `parse_registry` refuses a non-zero value",

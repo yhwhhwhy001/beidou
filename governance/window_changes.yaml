@@ -72,6 +72,7 @@ entries:
       这是任何一次构造变更都要付的同一笔钱，所以它应当与该窗口的其他构造变更**一起**付。
     prereg: b883d01e
     verdict: 3e584cbf
+    applied: "#282（10-03 那批：flow 退役与本条同一个 PR），合并后按 CLAUDE.md 的纪律重启一次；操作者 2026-10-02 裁定 D1 取 pit，main 5.1%"
     note: >-
       两个新数看起来更松，实际不是：现在这条规则在 14.6σ 上根本打不响，新的落在它自己声称的
       2.3% 尾部。从「不可触发」变成「按设计触发」是收紧。四条 falsifier（F1 权重逐位不变、
@@ -90,6 +91,12 @@ entries:
       flow 退役，之后 60 天不改构造与 registry。flow 退役后 flow_short 的阈值作废，要定的只剩 main 用哪个口径
       （pit 5.1% 或全面板 7.5%，2026-09-30 系统审查 D1）。那次的 registry 改动会让本条的守卫变红，这是设计：
       应用的 PR 把本条标 `applied`；若只退役 flow、本条不应用，就在新 registry 上重量 main，再改 `measured_at`。
+      ——
+      2026-10-02 应用（随 #282 在 10-03 载入）。操作者裁定 D1：main 用 pit 口径。在退役后的 registry（`b86b3a58d3b9`）上
+      重量 main（提交 `535def30`）：30 天 σ 4.053%、2.28% 分位数 −5.092%、48,361 个窗口，与 09-30 的读数一致，阈值 5.1%。
+      flow_short 随 flow 退役不再读，它的数作废；全面板口径没有重量。闸改读盯市；`accepted_on` 改成 10-03、
+      `review_after_days` 改成 60，下一次复核落在冻结结束。`measured_at` 搬进 registry main 的 `stop` 块，守卫随之改读那里；
+      其中 `registry` 记的是写入新阈值之后的摘要 `56e317fe2ea6`。本条的 `thresholds` 与 `measured_at` 留作历史。
 
   - id: vol-target-repricing
     subject: 在冲击成本模型下重推 `vol_target`

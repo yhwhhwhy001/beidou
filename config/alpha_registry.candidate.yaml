@@ -76,7 +76,8 @@
 # `tsmom-validation-20261001T145450Z.json`（同一协议重出，verdict 仍是 WEAK_PASS，多出每段 regime 的 q10 与均值波动）。
 #
 # 2026-10-03，随 flow 退役再同步一次（操作者 2026-09-30 裁定「10-03 直接退役」）。整份照旧按「头注 + armed」
-# 重新生成：armed 里 flow 的 `enabled` 变成 false，`books.flow_short` 的声明留着（惰性）。
+# 重新生成：armed 里 flow 的 `enabled` 变成 false，`books.flow_short` 的声明留着（惰性）；同批应用 `probe-stop-caliber`，
+# main 的 `stop.max_loss` 0.06 → 0.051（操作者 2026-10-02 裁定 D1，pit），`measured_at` 记在它旁边。
 # Strategies the live loop is allowed to run.  A strategy may only be enabled
 # when `evidence` points at a validation report produced by `beidou research validate`
 # and its sha256 matches; `beidou live run` verifies this at startup (KILL-015).
@@ -494,18 +495,46 @@ strategies:
     # 因为样本只有 5.8 天、区间内还有一次 +5000 TRANSFER，是 5 倍外推——本项目已经在小样本外推上
     # 错过三次。`review_after_days: 30` 就是为了拿满 30 天已实现归因后按 D-019 的 −2σ 重新定阈。
     # 实测当下：trailing 归因 −0.1364% 权益，0.5%～5% 任何一档都不触发；装上它今天不改变任何行为。
+    #
+    # **2026-10-03：重定阈，口径一起换（`probe-stop-caliber`，随 flow 退役同批载入）。** 操作者 2026-10-02 裁定 D1：
+    # main 的新阈值用 pit 口径。上面 6% 与「30 天后按已实现归因重定」都是历史。
+    #   * 规则不变：书自己 30 天盯市 P&L（w_{t-1}·r_t，占总权益）的经验 2.28% 分位数，取到 0.1%。
+    #   * 在退役后的 registry 上重量（`scratchpad/probe_stop_tails.py pit`，零 ledger）：30 天 σ 4.053%，
+    #     分位数 −5.092%，48,361 个窗口；与 09-30 在退役前量的一致，main 的权重路径不经过 flow。
+    #   * 闸从已实现归因改读盯市（`probe_status`），口径与阈值一起动；已实现那一侧只报告。
+    #   * 实盘记录上回放：main 有盯市读数以来（09-12 起）最差的 30 天是 −4.14%（09-16，k 0.60），没有越过 −5.1%。
+    #   * `accepted_on` 改成生效日，`review_after_days` 改成 60：重定阈就是这次复核，不改的话日报会在整个冻结期报
+    #     REVIEW_DUE。60 天让下一次复核落在冻结结束（约 12-02）。
+    #   * `halts` 仍是 false：主账本触发只告警、降级，不停交易（§3）。
+    # 这三处在 `registry_digest` 里（`stop_of`），不在构造指纹里。
     probe:
       accepted_by: operator
-      accepted_on: '2026-09-03'
+      accepted_on: '2026-10-03'
       reason: >-
         grandfathered main book (KILL-AR-06).  The stop was added 2026-09-09 because §3 says main
-        keeps one and nothing computed it; the threshold is D-019's rescaled by fraction, and it is
-        due for re-derivation on 30 days of realised attribution.
-      review_after_days: 30
+        keeps one and nothing computed it.  Re-derived for the 2026-10-03 batch (`probe-stop-caliber`,
+        operator ruling D1 of 2026-10-02): the empirical 2.28% quantile of the book's own 30-day
+        mark-to-market P&L on the pit panel, and the gate reads that same caliber.
+      review_after_days: 60
       stop:
         window_days: 30
-        max_loss: 0.06
+        max_loss: 0.051
         halts: false
+        # What `max_loss` was measured on - `probe-stop-caliber`'s guard, moved here when it was applied.
+        # tests/governance/test_the_batch_window_has_a_list.py goes red when the configuration moves away from
+        # it.  Never edit this block alone: re-measure, then change `max_loss` and this block together.
+        # `registry` is the digest WITH this threshold in it; `stop_of` puts `max_loss` in the digest, and the
+        # book's P&L path does not depend on its own stop while `halts` is false.
+        measured_at:
+          population: pit
+          quantile_228: -0.050917
+          sigma_30d: 0.040526
+          windows: 48361
+          vol_target: 0.175
+          evidence_construction: 221d001c3c07a626
+          registry: 56e317fe2ea6
+          commit: 535def30
+          measured: '2026-10-02T14:43:55Z'
   - id: xsmom
     enabled: false
     weight: 1.0

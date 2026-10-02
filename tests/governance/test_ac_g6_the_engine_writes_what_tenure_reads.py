@@ -59,7 +59,12 @@ def _model() -> AlphaModel:
 
 
 async def _run(panel: Panel, tmp_path: Path, *, loss: float | None, flows: dict | None) -> list[dict]:
-    """Two cycles of a real engine; the second one carries `loss` attributed to the probe sleeve."""
+    """Two cycles of a real engine; the second one sees the probe sleeve down `loss` of equity on the mark.
+
+    Since the 2026-10-03 batch the stop gates on the mark-to-market caliber, so the loss is two recorded bars
+    before the second cycle with the book fully in a name that falls by `loss` / equity.  The name is in no real
+    cycle's closes, so the pair joining these rows to the engine's own adds nothing.
+    """
     probe = ProbeParams(book="probe", strategy="breakout", window_days=30, max_loss=0.01, accepted_on="2026-08-01")
     cursor = 400
     market = FakeMarketData(panel, cursor)
@@ -72,14 +77,14 @@ async def _run(panel: Panel, tmp_path: Path, *, loss: float | None, flows: dict 
     bar = market.bar_open_ms(cursor - 1)
     await engine.run_cycle(bar)
     if loss is not None:
-        store.append_attribution(
-            {
-                "bar_open_ms": bar,
-                "until_ms": clock.now_ms(),
-                "basis": "net_exposure",
-                "by_strategy": {"breakout": loss, "tsmom": 40.0},
-            }
-        )
+        for offset, close in ((-2, 100.0), (-1, 100.0 * (1.0 + loss / 10_000.0))):
+            store.append_cycle(
+                {
+                    "bar_open_ms": bar + offset * 3_600_000,
+                    "book_weights": {"probe": {"LOSSUSDT": 1.0}},
+                    "closes": {"LOSSUSDT": close},
+                }
+            )
     market.cursor += 1
     await engine.run_cycle(bar + 3_600_000)
     if flows is not None:
