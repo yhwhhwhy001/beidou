@@ -4171,6 +4171,20 @@ beidou 模块 148 -> 137。多出的那 1 个是 `beidou_data.metrics_snapshot`�
 
 实测 9_333。顶抬到「实测 + 政策」：9_427，headroom 94（= `headroom_policy(9_427)`）。
 
+### 2026-10-02 · 顶 9_427 -> 9_529（`live backup`：实盘记录的夜间备份，09-30 系统审查 D8）
+
+操作者 2026-10-02 裁定 D8：先做本机夜间打包，有盘再开 Time Machine（RESEARCH_LOG 2026-10-02「操作者四条裁定」一节）。
+合入前 main 实测 9_404（`29fa956a`）。
+
+花在哪（净增 30）：
+
+- +30 `live_cmd.py`：`live backup` 命令。读 profile 的 `paths.state_dir`；默认目标在调用时取
+  `lock.APP_SUPPORT / "backup"`；失败时推「北斗夜间备份失败」并以 1 退出。
+- 打包、保留与「不写进仓库」的逻辑在 `beidou_live/backup.py`（+57），落在 `beidou_live` 的 headroom 内，不抬那个顶。
+
+实测 9_434。顶抬到「实测 + 政策」：9_529，headroom 95（= `headroom_policy(9_529)`）。在途的 #291 给 `beidou_cli` 加 9 行，
+两个都合进去后实测约 9_443，headroom 86。
+
 ## beidou_data
 
 原文：blob 里第 4032–4126 行，`"beidou_data": 3_677,` 之上的注释，共 95 行。
