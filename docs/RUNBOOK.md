@@ -240,6 +240,46 @@ INSUFFICIENT_DATA，只印不告警。（2026-09-30 更正：这里原写「当�
 2. 不要为了变绿去改夹具或归档。这条测试说的是「归档在夹具之后变了」，先判断哪一边对。
 3. 在主 checkout 上复现：`.venv/bin/python -m pytest -m archive -rfEs`，约 4 秒。
 
+## 实盘记录备份（2026-10-02 起）
+
+`.beidou/live` 是唯一的样本外记录，此前没有任何备份（09-30 系统审查 S3）。操作者 10-02 裁定 D8：先做本机
+夜间打包，有盘再开 Time Machine。
+
+**做了什么。** 每晚 data job 的第一步是 `beidou live backup`（`deploy/run_data.sh`）。它在 bar 之间运行：
+01:20 +08 即 17:20Z，周期写盘在 :00:20–:00:35。
+
+- 位置：`~/Library/Application Support/beidou/backup/live-<UTC 时刻>.tar.gz`，只留最新 14 份。
+- 权限：目录 700，文件 600，因为记录里有账户的权益与持仓。
+- 写法：先以隐藏名写完再改名，中途失败不会留下看似完整的包。
+- 目标目录落在仓库里就拒绝：这个仓库是公开的。
+
+**它防不了什么。** 只防误删与覆盖，防不了这块盘本身坏掉。那是 Time Machine 的事，由操作者接盘后打开。
+
+**告警「北斗夜间备份失败：……」。** 正文是失败的原因：
+
+- `BackupRefused …holds no cycles.jsonl`：状态目录里没有实盘记录。先查 profile 的 `paths.state_dir` 与 `.beidou/live` 本身。
+- `BackupRefused …inside the repository`：`--to` 指进了仓库，命令拒绝写。
+- `OSError`：盘满或权限，看正文里的路径。
+
+失败也会让 data job 以 1 退出。去重用共享的 `alert-dedup.json` 与小时窗口，所以一夜推一次。
+
+**怎么查看。** 先解到临时目录，不要直接解到 `.beidou/` 上：
+
+```bash
+tar -tzvf ~/Library/Application\ Support/beidou/backup/live-20261002T172000Z.tar.gz
+```
+
+```bash
+mkdir -p /tmp/beidou-restore && tar -xzf ~/Library/Application\ Support/beidou/backup/live-20261002T172000Z.tar.gz -C /tmp/beidou-restore
+```
+
+**怎么恢复（操作者动作）。** 恢复会替换循环正在写的记录，等同一次重启：按 CLAUDE.md「重启实盘循环」选窗口、
+先跑两个构造测试、事后记进 RESEARCH_LOG。现有目录改名留着，不要删：
+
+```bash
+launchctl bootout gui/$(id -u)/com.beidou.live && mv .beidou/live .beidou/live.$(date -u +%Y%m%dT%H%M%SZ) && tar -xzf ~/Library/Application\ Support/beidou/backup/live-20261002T172000Z.tar.gz -C .beidou && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.beidou.live.plist
+```
+
 ## 操作者退役一本书（D-048，2026-10-01 起）
 
 状态机里，只有 R7 末命上的 P&L 止损会让一本书进 RETIRED。操作者直接让一本书退役（例如 2026-10-03 的 flow），
@@ -398,5 +438,5 @@ python3 -c "import time,json,urllib.request;s=json.load(urllib.request.urlopen('
 - 时钟漂移下的两个工具（见上文《主机时钟漂移》）：`beidou live status --check` 会探测交易所服务器时间并在偏差超过 `--max-skew-seconds`（默认 60s）时非零退出；`beidou live verify` 以 `as_of_ms`（数据自带的 bar）而不是 `state.last_bar_ms`（本机时钟写的标签）为准比对，并在 `bar_label_skew_ms` / `clock_note` 里给出两者的差。
 - **每周期的时钟测量**（D-023 / D-025）：循环每周期用行情端口已有的服务器时间调用测一次偏差，写进 `cycles.jsonl.clock` （`skew_ms` / `alignment_ms` / `whole_bars` / `jumped`）与心跳。**主机时钟是基准**，所以恒定的整数 bar 偏移不告警；只有对齐误差超过 `guards.max_bar_alignment_seconds`（默认 60）或发生跳变才告警，且是边沿触发。探测失败不影响周期。
 - 2026-09-04 实测（今天的读数见上文《主机时钟漂移》）：偏移 −3,612 s ≈ 整 1 根 bar，对齐误差 12 s，属于可接受状态；循环交易的始终是刚收盘的真实 bar，`cycles.jsonl` 的 `bar` 标注会比 `as_of_ms` 早 1 小时（前者出自本机时钟，后者出自数据），日报按 `as_of_ms` 分桶因而不受影响。
-- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data metrics` + `data pool refresh`（`data spot` 2026-09-09 加入，`data metrics` 2026-09-27 加入；每日 01:20，`com.beidou.data.plist`）。2026-09-28 起最后再跑 `pytest -m archive`，失败推送，见「归档专属测试告警」一节。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。`data metrics` 不带参数：取快照 store 里的全部币，截到昨天，每个币从自己的水位续传。M-011 每小时拿这份归档和快照比；此前归档只在 09-09 手动灌过一次，停在 09-07，见 RESEARCH_LOG「M-011 读了十九天的 09-07」一节。
+- **定时数据刷新**：`deploy/run_data.sh` 跑 `data sync` + `data spot` + `data metrics` + `data pool refresh`（`data spot` 2026-09-09 加入，`data metrics` 2026-09-27 加入；每日 01:20，`com.beidou.data.plist`）。2026-09-28 起最后再跑 `pytest -m archive`，失败推送，见「归档专属测试告警」一节。2026-10-02 起第一步是 `live backup`，见「实盘记录备份」一节。`data sync` 同步三类名字：24h 成交额前 2N、`universe.json` 里的池子、上次刷新刚移出的名字。后两类 2026-09-23 加入：此前只看 24h 排名，LSKUSDT 还在池里，K 线却停在 09-18。在此之前研究数据没有任何定时刷新，审计时落后 16 小时且有池成员完全没有本地数据——验证因此跑在「比被验证的书更早结束」的数据上。只读，不碰账户。`data metrics` 不带参数：取快照 store 里的全部币，截到昨天，每个币从自己的水位续传。M-011 每小时拿这份归档和快照比；此前归档只在 09-09 手动灌过一次，停在 09-07，见 RESEARCH_LOG「M-011 读了十九天的 09-07」一节。
 - **定时健康检查**：`deploy/run_check.sh` 跑 `live status --check`、`live verify --check`、`report daily --check` 与 `data pool lag --check`（成员表落后，见上文「成员表落后告警」），失败推送到告警 webhook；`deploy/com.beidou.check.plist` 每小时 :10 触发。**装载它是操作者的动作**（上表命令）；只读，不写交易所。`report daily` 不带 `--date` 时渲染最新一行周期行所在的 UTC 日（`newest_day`），不是主机时钟的今天：00:10Z 那次给前一天定稿，含 23:00 那根 bar；当天的文件从 01:10Z 起才有。所以 `reports/daily/D.json` 最后写于 D+1 日 00:10Z，只差 01:00:2x 才写的归因行（每天 00:00 那次资金费结算）。这条规则生效（合入并快进主 checkout）之前写的归档，最后写于 D 日 23:10Z，缺 23:00 那根（RESEARCH_LOG 2026-09-28「归档日报缺每天 23:00 那根 bar」一节）。

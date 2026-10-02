@@ -32,6 +32,12 @@ BEIDOU="$REPO/.venv/bin/beidou"
 [ -x "$BEIDOU" ] || BEIDOU="beidou"
 stamp() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 fail=0
+# 2026-10-02 (the 09-30 system audit's D8, operator ruling): the live record is the only out-of-sample
+# evidence there is, and nothing copied it.  First in the job, while the loop is between bars - 01:20 +08 is
+# 17:20Z, and the cycle writes at :00:20-:00:35 - before the feeds below can run long.  `live backup` pages
+# its own failure; here it only sets the exit code, as the other steps do.
+echo "[$(stamp)] live backup"
+"$BEIDOU" live backup || { echo "[$(stamp)] FAIL live backup"; fail=1; }
 echo "[$(stamp)] data sync"
 "$BEIDOU" data sync || { echo "[$(stamp)] FAIL data sync"; fail=1; }
 echo "[$(stamp)] data spot"
