@@ -151,12 +151,26 @@ fi
 # The drift verdict used to be computed and then discarded: nothing ever sent it anywhere.  `report daily
 # --check` exits non-zero on an ALERT - equity drift, per-strategy income drift (M-002/M-010), or more
 # construction changes in a week than the plan allows.
-if output="$("$REPO/.venv/bin/beidou" report daily --check 2>&1)"; then
-  echo "[$(stamp)] ok   report"
-else
-  failed=1
-  notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
-fi
+#
+# Exit 3 is an ALERT the report has already paged itself (REPORT_PAGED in beidou_cli/live_cmd.py): from
+# 2026-09-17 the same content went out twice an hour, once from the report and once from here.  Operator
+# ruling 2026-10-02 (the 09-30 system audit's D2 option a): log it and do not page it again.  Any other
+# non-zero - a page that did not go out, a crash - pages here as before; this line is the fallback.
+check_report() {
+  local output code
+  output="$("$REPO/.venv/bin/beidou" report daily --check 2>&1)"
+  code=$?
+  if [ "$code" -eq 0 ]; then
+    echo "[$(stamp)] ok   report"
+  elif [ "$code" -eq 3 ]; then
+    failed=1
+    echo "[$(stamp)] FAIL report (the report paged this itself): $(echo "$output" | tail -n 3 | tr '\n' ' ')"
+  else
+    failed=1
+    notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+  fi
+}
+check_report
 # G10, operator ruling 2026-09-23: the point-in-time membership table stays rebuilt by hand, and this
 # says how far it trails.  Gated like the lines above because it is the alert the operator asked for.
 # It PAGES once a day, not hourly (second ruling, same day): a lag is a standing condition that waits
