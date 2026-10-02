@@ -389,7 +389,7 @@ M-010（30 天 income 归因）在当前构造指纹下不满 30 天连续记录
 
 - `books.<name>.fraction` —— 独立小书的风险预算比例；策略用 `book: <name>` 归属，未写的属于主书。
 - **资金费率**：round 6b（D-023）之后行情端口提供 `funding_history`，实盘面板与研究面板由同一份结算费率构成，消费资金费率的设置（tsmom 的 `crowding_window > 0`、`carry` 信号）**不再会被静默跳过**——信号自己声明需求，拿不到历史时 `AlphaModel.targets` 报错、`beidou live run` 拒绝启动（第六轮 KILL-027 的结构性关闭）。tsmom 现在跑 `crowding_window: 72`，修饰器已重新打开。打开它是**证据问题**而不是管线问题：按 D-013/D-020 在时点 universe 上重验，再更新 evidence 指针。经过见 `config/alpha_registry.yaml` tsmom 条目 `params` 之上的「2026-09-05 RE-ENABLED」一段。
-- 探针书（D-019）：`evidence.verdict: ACCEPT`（来自 `beidou research book`）+ `probe` 块（`accepted_by`、`accepted_on`、`stop: {window_days, max_loss}`、`review_after_days`）。书级判定是 REJECT 也能跑，但 `probe` 块还要写明 `accepted_despite: REJECT` 与 `reason`（D-029）。启动时核对报告种类、对象与 fraction；缺任何一项 `beidou live run` 拒绝启动。当前：`flow_short`（flow 只做空，1/3 预算）。它引用的书级报告判 REJECT，靠 `accepted_despite` 运行。止损是 30 天归因 P&L ≤ −2% 权益（`max_loss: 0.02`）。复审期 30 天，自 `accepted_on` 起算，到期时日报标 REVIEW_DUE。
+- 探针书（D-019）：`evidence.verdict: ACCEPT`（来自 `beidou research book`）+ `probe` 块（`accepted_by`、`accepted_on`、`stop: {window_days, max_loss}`、`review_after_days`）。书级判定是 REJECT 也能跑，但 `probe` 块还要写明 `accepted_despite: REJECT` 与 `reason`（D-029）。启动时核对报告种类、对象与 fraction；缺任何一项 `beidou live run` 拒绝启动。2026-10-03 之前：`flow_short`（flow 只做空，1/3 预算），引用的书级报告判 REJECT，靠 `accepted_despite` 运行；止损是 30 天已实现归因 P&L ≤ −2% 权益。10-03 起 flow 退役（记录走 D-048 的 `governance retire`），没有启用的探针书。主书留一个只告警的 stop（`halts: false`，§3：触发即降级，不停交易）：30 天盯市 P&L ≤ −5.1% 权益（`max_loss: 0.051`，`probe-stop-caliber`，操作者 2026-10-02 裁定 D1 取 pit 口径），阈值旁边的 `stop.measured_at` 记着它在什么配置上量的。复审期 60 天，自 `accepted_on`（2026-10-03）起算，到期时日报标 REVIEW_DUE。
 
 ## 主机时钟漂移（2026-09-04 实测到 −3,612 秒）
 

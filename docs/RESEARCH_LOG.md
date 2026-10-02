@@ -21451,3 +21451,63 @@ PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research 
 - D5（关机错过的夜间任务）：推荐维持，没有新情况。
 - D7（paper-l3 载入 #265/#266）：已经了结。10-01 主机重启时 paper-l3 14:03:47Z 被 launchd 拉起，
   载入的 `1f8951e1` 以 #265（`de00ce3e`）、#266（`9d105537`）为祖先（重启 #67 一节）。
+
+## 2026-10-02 · probe-stop-caliber 的应用备好：D1 取 pit，main 5.1%，闸改读盯市；随 #282 在 10-03 载入
+
+### 裁定从哪来
+
+- 操作者 10-02 在「北斗量化交易系统算法检查」会话里定 D1（09-30 系统审查）：main 的新停损阈值用 pit 口径 5.1%，不用全面板 7.5%。
+- 同时定了分工：应用由 Backtest guard 会话备，因为 #282 的分支与 10-03 那批在这边，两边同时改 registry 会冲突。
+- 那边发给这边的两条消息停在投递审批里，没到。裁定读自那边对操作者的汇报与它补记的记忆。这边收到操作者「继续，按你的建议执行」后开始备。
+
+### 重量（零 ledger）
+
+`scratchpad/probe_stop_tails.py pit`，在 #282 的分支（`535def30`，flow 已停用，registry `b86b3a58d3b9`）上跑，数据读主 checkout 的
+`.beidou/data`。用时 13 秒。
+
+| 项 | 值 |
+| --- | --- |
+| 配置 | k 0.175，pit 212 币，面板 2021-01-31 → 2026-09-07，49,080 根 |
+| main 年化 σ / 30 天 σ | 17.32% / 4.053% |
+| 2.28% 分位数 | −5.092%（48,361 个 30 天窗口） |
+| 现行 6.0% | 1.48σ，窗口触发比例 1.069% |
+| 规则值 5.1% | 1.26σ，窗口触发比例 2.266% |
+
+与 09-30 在退役前量的逐项相同。main 的权重路径不经过 flow，守卫要的就是核过这一点。flow_short 随 flow 退役不再读，全面板没有重量。
+
+### 改了什么
+
+- 闸（`beidou_live/probe.py` 的 `probe_status`）从 30 天已实现归因改读 30 天盯市 P&L（`marked_pnl`）。已实现那一侧留在行里，记为 `realised_would_stop`，只报告。
+  盯市读不出时不触发，这是停损安全的一侧。
+- 告警文案（`engine._check_probes`）改用触发的那个读数。原文案格式化 `pnl_pct`：新闸下盯市越线时，窗口里没有平仓的话已实现一侧是 None，会抛 TypeError。
+- registry 的 main：`stop.max_loss` 0.06 → 0.051；`stop.measured_at` 记下量的配置；`accepted_on` 改成 2026-10-03，`review_after_days` 30 → 60。
+- `governance/window_changes.yaml` 的 `probe-stop-caliber` 标 `applied`。守卫（`test_the_batch_window_has_a_list.py`）在已应用时改读 registry 的 `measured_at`：
+  阈值要等于分位数取到 0.1%，`vol_target`、证据构造摘要、registry 摘要都要与记的一致。
+  同文件的「窗口开了要喊」那条改用合成条目：队列里已没有在等窗口的条目。
+- 日报 probe 行先印闸读的盯市读数，再印只报告的已实现读数。RUNBOOK 探针书一行与 ARCHITECTURE 的 D-019 改成 10-03 之后的样子。
+- registry digest：在跑的 `7f8adb754962` → 只退役 flow 的 `b86b3a58d3b9` → 加本条的 `56e317fe2ea6`。构造指纹随 flow 退役已是 `0a82ff40`，本条不改它。
+
+### 不会当场触发（F3）
+
+实盘记录里有盯市输入的周期从 09-12 起，共 446 个。main 的 30 天盯市读数：
+
+- 10-02T14:3xZ 读 +22.88%（445 根）。
+- 逐周期回看，最差一次是 09-16 的 −4.14%，当时 k 还是 0.60，没有越过 −5.1%。
+
+10-03 重启后第一个周期不会报 STOP_REPORTED，治理记录也不会因此把 main 降回 probe。
+
+### 这边补的一项选择，操作者可在合并前否掉
+
+`accepted_on` 改成生效日、`review_after_days` 改成 60。
+
+- 重定阈就是 main 这一次的 30 天复核。不改的话，日报会从 10-03 起一直报 REVIEW_DUE，整个冻结期都如此，而复核其实已经做完。
+- 60 天让下一次复核落在冻结结束（约 12-02）。
+- 这两个字段在 `registry_digest` 里，和阈值同一次改，不另付清零的钱。只影响复核日与已实现一侧窗口的起点，治理的 tenure 不读它们。
+
+### 实盘失效方式（How this fails）
+
+| # | 失效方式：若 X 则 Y | 最早的症状落在哪个仪器 | 盯的读数与证伪线 | 亏钱之前怎么抓 |
+| --- | --- | --- | --- | --- |
+| 1 | 若周期记录没有写 `book_weights` 或 `closes`，则闸读不出、永不触发 | 日报 Probe books 行 | 行内出现「盯市读不出」 | 日报印出原因；合并前已在 446 个周期上核过有输入 |
+| 2 | 若 k 或 registry 以后变了而阈值没跟，则阈值描述的是另一本书 | `test_the_batch_window_has_a_list.py` 的守卫 | 守卫变红 | 守卫读 registry 的 `measured_at`，配置一动就红，要求重量 |
+| 3 | 若平静时期盯市一个月跌过 5.1%，则 main 告警并在治理记录里降回 probe | 小时检查的「主账本触发 P&L stop」告警 | 告警行写盯市读数与 bar 数 | `halts: false`，不停交易；降级是治理动作，由人读告警再定 |

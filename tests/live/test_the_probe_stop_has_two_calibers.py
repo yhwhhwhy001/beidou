@@ -1,19 +1,19 @@
-"""The probe stop reads a quantity 17x quieter than the one it was calibrated against.
+"""The probe stop read a quantity 17x quieter than the one it was calibrated against; since 2026-10-03 it does not.
 
 Operator ruling 2026-09-12 (option C of the EXP-G6′ close-out).  Measured, both of them:
 
-    realised attributed income (what it reads)   30-day sigma 0.137% of equity -> -2% is 14.6 sigma
+    realised attributed income (what it read)    30-day sigma 0.137% of equity -> -2% is 14.6 sigma
     mark-to-market (what its evidence is in)     30-day sigma 3.239%           -> -2% is  0.62 sigma
 
 Neither is the "-2 sigma" D-019 claimed, and they miss in opposite directions.  Realised income only
 moves when a position closes, and the no-trade band held 197 symbol-cycles on the day this was
 measured - a sleeve can bleed on the mark for a month while that series barely moves.
 
-The GATE is deliberately not moved here.  The 09-12 reason was that `max_loss` sat in
-`construction_fingerprint` and changing it would clear M-010; `stop_of` sits in `registry_digest`, so what it
-resets is M-Q08's window (corrected 2026-09-30, #275).  The replacement waits in `governance/window_changes.yaml`
-(`probe-stop-caliber`): the empirical 2.28% quantile of each book's own 30-day mark-to-market P&L, with the
-numbers and the vol target they were measured at kept there - 09-12's -7.5% / -11.2% belong to k 0.30.
+The gate moved with the 2026-10-03 batch (`probe-stop-caliber` in `governance/window_changes.yaml`, operator
+ruling D1 of 2026-10-02): it reads the mark-to-market P&L, with `max_loss` re-derived on that caliber as the
+empirical 2.28% quantile of the book's own 30-day P&L - main 5.1% on the pit panel at k 0.175.  The realised
+reading stays in the row as `realised_would_stop`, gating nothing.  Caliber and threshold moved together: alone,
+the caliber would have fired at once (flow's marked -3.197% against -2% on 09-12, falsifier F3).
 """
 
 from __future__ import annotations
@@ -82,8 +82,8 @@ def test_bars_outside_the_window_are_not_counted() -> None:
     assert inside["bars"] == 4 and narrow["bars"] == 2
 
 
-def test_the_gate_still_reads_the_realised_caliber_and_says_what_the_other_would_say() -> None:
-    """The two disagreeing IS the finding, so both are reported and only one gates - for now."""
+def test_the_gate_reads_the_marked_caliber_and_says_what_the_realised_one_would_say() -> None:
+    """The two disagreeing IS the finding, so both are reported - and since 2026-10-03 the marked one gates."""
     params = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.02)
     attribution = [
         {"bar_open_ms": BASE + HOUR, "basis": "net_exposure", "by_strategy": {"flow": -1.0}}
@@ -93,17 +93,28 @@ def test_the_gate_still_reads_the_realised_caliber_and_says_what_the_other_would
         _cycle(1, {"BTCUSDT": 1.0}, {"BTCUSDT": 96.0}),  # -4% marked, past the -2% threshold
     ]
     status = probe_status(params, attribution, equity=10_000.0, now_ms=_now(1), cycles=cycles)
-    assert status["stop"] is False, "the gate is the realised caliber until the batch window"
-    assert status["marked_would_stop"] is True, "and it says the other caliber has crossed"
+    assert status["gate"] == "marked"
+    assert status["stop"] is True and status["status"] == "STOP", "the marked reading crossed"
+    assert status["realised_would_stop"] is False, "and the realised one, reported beside it, did not"
     assert status["marked_pnl_pct"] < -0.02
-    assert status["status"] == "OK"
 
 
-def test_a_real_realised_breach_still_stops_the_book() -> None:
-    """The falsifier: adding a second reading must not disarm the gate that exists."""
+def test_a_realised_breach_alone_no_longer_stops_the_book_and_says_so() -> None:
+    """The old gate's reading is kept, gating nothing: a -5% realised month with no marked reading reads OK."""
     params = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.02)
     attribution = [
         {"bar_open_ms": BASE + HOUR, "basis": "net_exposure", "by_strategy": {"flow": -500.0}}
     ]  # -5% of equity
     status = probe_status(params, attribution, equity=10_000.0, now_ms=_now(1), cycles=[])
-    assert status["stop"] is True and status["status"] == "STOP"
+    assert status["stop"] is False and status["status"] == "OK"
+    assert status["realised_would_stop"] is True
+    assert status["marked_pnl_pct"] is None, "no marked inputs is no claim of a loss - the safe direction for a stop"
+
+
+def test_a_zero_threshold_does_not_fire_on_a_flat_month() -> None:
+    """`max_loss` 0 means "any loss", and a reading of exactly zero is not a loss."""
+    params = ProbeParams(book="flow_short", strategy="flow", window_days=30, max_loss=0.0)
+    flat = [_cycle(0, {"BTCUSDT": 1.0}, {"BTCUSDT": 100.0}), _cycle(1, {"BTCUSDT": 1.0}, {"BTCUSDT": 100.0})]
+    assert probe_status(params, [], equity=10_000.0, now_ms=_now(1), cycles=flat)["stop"] is False
+    down = [_cycle(0, {"BTCUSDT": 1.0}, {"BTCUSDT": 100.0}), _cycle(1, {"BTCUSDT": 1.0}, {"BTCUSDT": 99.9})]
+    assert probe_status(params, [], equity=10_000.0, now_ms=_now(1), cycles=down)["stop"] is True

@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
+from beidou_alpha.registry import MAIN_BOOK
 from beidou_governance.window_changes import (
     APPLIED,
     DUE,
@@ -106,11 +108,12 @@ def test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_th
     registry's probe block (see the entry's note).
     """
     stop = {c.id: c for c in load(Path(LIST))}["probe-stop-caliber"]
-    if stop.applied:
-        return  # applied: the thresholds moved into the registry and this entry is history
-    measured_at = stop.extra["measured_at"]
     profile = load_yaml(Path("config/live.demo.yaml"))
     model, registry = build_model_from_profile(profile)
+    if stop.applied:
+        _the_registry_threshold_belongs_to_what_it_was_measured_on(profile, model, registry)
+        return
+    measured_at = stop.extra["measured_at"]
     # Said in the failure itself, because the likely first reader is whoever merges the 10-03 flow retirement (#282):
     # that registry change turns this red by design, and the entry's note is where the two ways out are written.
     remedy = (
@@ -135,12 +138,49 @@ def test_the_queued_thresholds_belong_to_the_configuration_that_would_receive_th
     )
 
 
+def _the_registry_threshold_belongs_to_what_it_was_measured_on(profile: Any, model: Any, registry: Any) -> None:
+    """The same guard once `probe-stop-caliber` is applied: the threshold and its `measured_at` live in the registry.
+
+    Applied with the 2026-10-03 batch (operator ruling D1, pit).  Without this the entry's note predicted the
+    09-30 failure would repeat inside the registry - k moves, the stop does not - with nothing to say so.
+    `registry` is the digest with the threshold written in: `stop_of` puts `max_loss` in the digest, and the
+    book's P&L path does not depend on its own stop while `halts` is false.
+    """
+    main = next(entry for entry in registry.enabled if entry.book == MAIN_BOOK)
+    block = main.probe["stop"]
+    measured_at = block["measured_at"]
+    remedy = (
+        "re-measure (`scratchpad/probe_stop_tails.py pit`, zero ledger), then change `max_loss` and `measured_at` "
+        "together - see the main probe block in config/alpha_registry.yaml"
+    )
+    assert float(block["max_loss"]) == round(abs(float(measured_at["quantile_228"])), 3), (
+        "`max_loss` is the measured 2.28% quantile rounded to 0.1%"
+    )
+    assert measured_at["population"] == "pit", "the operator's ruling D1 (2026-10-02)"
+    assert float(measured_at["vol_target"]) == float(profile["portfolio"]["vol_target"]), (
+        f"portfolio.vol_target moved since the main stop was measured; {remedy}"
+    )
+    config = live_config(profile, [], registry, dry_run=True)
+    assert str(measured_at["evidence_construction"]) == evidence_construction_of(config), (
+        f"the evidence construction moved since the main stop was measured; {remedy}"
+    )
+    assert str(measured_at["registry"]) == registry_digest(model), (
+        f"the registry digest moved since the main stop was measured "
+        f"({measured_at['registry']} -> {registry_digest(model)}); {remedy}"
+    )
+
+
 def test_the_summary_shouts_when_a_window_has_opened() -> None:
-    changes = load(Path(LIST))
+    """On a queue of its own: with `probe-stop-caliber` applied (2026-10-03 batch), the live file has nothing left
+    waiting for a window, so reading it here would test whatever happens to be queued, not the summary."""
+    changes = [Change(id="x", subject="s", earliest_window="2026-10-03", cost="c", why_it_waits="w")]
     quiet = render(survey(changes, NOW))
     assert "DUE 0" in quiet and "窗口已经开了" not in quiet
     loud = render(survey(changes, datetime(2026, 10, 5, tzinfo=UTC)))
     assert "窗口已经开了" in loud and "本命令不改任何东西" in loud
+    assert "窗口已经开了" not in render(survey(load(Path(LIST)), datetime(2026, 10, 5, tzinfo=UTC))), (
+        "the live queue has nothing waiting once the batch is applied"
+    )
 
 
 def test_every_entry_names_what_it_costs() -> None:

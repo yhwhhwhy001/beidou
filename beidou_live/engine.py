@@ -1901,7 +1901,12 @@ class LiveEngine:
         return step.block
 
     async def _check_probes(self, bar_open_ms: int) -> list[dict[str, Any]]:
-        """D-019: evaluate every probe book's stop rule on the attributed P&L; a stopped book leaves the model."""
+        """D-019: evaluate every probe book's stop rule on its mark-to-market P&L; a stopped book leaves the model.
+
+        The message quotes the reading that fired, the marked one (`probe_status`, since the 2026-10-03 batch).
+        It used to format `pnl_pct`, which on the new gate can be None while the marked reading crosses - the
+        realised series is empty whenever no position closed in the window.
+        """
         if not self.config.probes:
             return []
         rows = self.store.read_jsonl(self.store.attribution_path)
@@ -1922,8 +1927,8 @@ class LiveEngine:
             )
             if status["stop"]:
                 reason = (
-                    f"近 {probe.window_days} 天归因盈亏 {status['pnl']:.2f}"
-                    f"（占权益 {status['pnl_pct']:.4f}）已跌破 -{probe.max_loss}"
+                    f"近 {probe.window_days} 天盯市盈亏占权益 {status['marked_pnl_pct']:.4f}"
+                    f"（{status['marked_bars']} 根 bar）已跌破 -{probe.max_loss}"
                 )
                 if probe.halts:
                     self.state.stopped_books[probe.book] = {
@@ -1931,6 +1936,7 @@ class LiveEngine:
                         "bar_open_ms": bar_open_ms,
                         "pnl": status["pnl"],
                         "pnl_pct": status["pnl_pct"],
+                        "marked_pnl_pct": status["marked_pnl_pct"],
                         "reason": reason,
                     }
                     self.model = _without_books(self.model, [probe.book])

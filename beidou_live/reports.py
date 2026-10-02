@@ -910,9 +910,14 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                 {
                     str(row.get("book")): (
                         f"{row.get('status')} strategy={row.get('strategy')} "
-                        f"pnl_{row.get('window_days')}d={_fmt_num(row.get('pnl'))} "
-                        f"({_fmt_pct(row.get('pnl_pct_usdt'))} of USDT；stop 仍按总权益判："
-                        f"{_fmt_pct(row.get('pnl_pct'))} of equity, stop at -{_fmt_pct(row.get('max_loss'))}) "
+                        # The gate since the 2026-10-03 batch (`probe-stop-caliber`): the book's own mark-to-market
+                        # P&L over the window, a share of total equity, the denominator its threshold was derived on.
+                        + (
+                            f"盯市 {row['marked_pnl_pct']:+.2%}/{row.get('marked_bars')} bars（闸）"
+                            if row.get("marked_pnl_pct") is not None
+                            else f"盯市读不出（{row.get('marked_why')}；闸不会触发）"
+                        )
+                        + f" stop at -{_fmt_pct(row.get('max_loss'))} of equity "
                         f"days={_fmt_num(row.get('days_running'))}/{row.get('review_after_days')}"
                         # M-014 beside the countdown it belongs to.  The correlation was computed
                         # every day and read by nothing, and the one moment it decides anything is
@@ -920,15 +925,12 @@ def daily_markdown(payload: dict[str, Any]) -> str:
                         # correlates closely with the main book is a tilt whose separate risk budget
                         # is a fiction.  2026-09-12: tsmom~flow 0.80 over 148 bars, review due 10-02.
                         + _probe_correlation_note(payload, str(row.get("strategy") or ""))
-                        # The caliber the stop will read from the next batch window on, printed beside
-                        # the one it reads today.  They differ by 17x in sigma, so the gap between the
-                        # two numbers is the finding rather than a rounding detail.
-                        + (
-                            f" | 盯市 {row['marked_pnl_pct']:+.2%}/{row.get('marked_bars')} bars"
-                            + ("（该口径下已越线）" if row.get("marked_would_stop") else "")
-                            if row.get("marked_pnl_pct") is not None
-                            else f" | 盯市读不出（{row.get('marked_why')}）"
-                        )
+                        # The realised caliber the stop read until then, beside it and gating nothing.  The two
+                        # differed by 17x in sigma on 2026-09-12, so the gap between them is a reading too.
+                        + f" | 已实现 pnl_{row.get('window_days')}d={_fmt_num(row.get('pnl'))}"
+                        f"（{_fmt_pct(row.get('pnl_pct'))} of equity，{_fmt_pct(row.get('pnl_pct_usdt'))} of USDT；只报告"
+                        + ("，该口径下已越线" if row.get("realised_would_stop") else "")
+                        + "）"
                     )
                     for row in (payload.get("probes") or [])
                 }

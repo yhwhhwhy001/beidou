@@ -77,15 +77,23 @@ def test_a_registry_that_declares_no_probe_keeps_the_digest_it_had() -> None:
 
 def test_the_shipped_registry_still_declares_the_main_book_stop() -> None:
     entry = _tsmom(_shipped())
-    assert entry["probe"]["stop"]["max_loss"] == 0.06
+    # 0.06 until the 2026-10-03 batch, which applied `probe-stop-caliber` (operator ruling D1 of 2026-10-02, pit).
+    assert entry["probe"]["stop"]["max_loss"] == 0.051
     assert entry["probe"]["stop"]["halts"] is False
 
 
 def test_removing_one_probe_of_two_is_visible() -> None:
-    """The flow probe's stop is the one that can actually halt a book; deleting it must be loud."""
-    before = _digest(_shipped())
+    """A probe's stop is what can halt a book; deleting one of two must be loud.
+
+    Flow was the second probe until its retirement (2026-10-03), so the shipped registry now carries one enabled
+    probe.  The property is about two, so flow is switched back on here rather than the test being dropped.
+    """
+    two = _shipped()
+    next(s for s in two["strategies"] if s["id"] == "flow")["enabled"] = True
+    before = _digest(two)
     payload = _shipped()
     flow = next(s for s in payload["strategies"] if s["id"] == "flow")
+    flow["enabled"] = True
     flow.pop("probe", None)
     assert _digest(payload) != before
 
