@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -129,6 +130,67 @@ async def breaker_stop(
     raise RuntimeError(f"{consecutive_errors} consecutive cycle failures and no alert channel: {detail}")
 
 
+#: Where a mainnet loop reads its capital cap.  An environment variable rather than a profile key because the
+#: repository is public and the cap says how much money is on the account (cutover plan §10 item 9); the
+#: launcher hands every `BEIDOU_*` variable through, and like the API key it has no default.
+MAINNET_EQUITY_CAP_ENV = "BEIDOU_MAINNET_MAX_EQUITY_USDT"
+
+
+@dataclass(frozen=True)
+class AccountGate:
+    """The three startup refusals a mainnet loop adds (MAINNET_READINESS B3, B4, B8; cutover plan M3).
+
+    Built only for a profile whose venue is a mainnet host, so demo and testnet start exactly as before.
+    Each describes the ACCOUNT, not the construction - the same reason `expect_multi_assets` stays out of
+    `construction_fingerprint` - so none of them moves a digest.
+
+    1. The state directory is this venue's own.  A copy of demo's state carries demo's `equity_hwm`, and the
+       first mainnet cycle would read a deep drawdown against it and fire the ladder.
+    2. A first start meets a flat account with no open orders.  Refuse rather than cancel or close: what is
+       on the account was put there by someone, and the loop cannot know whom.
+    3. Equity at or under the operator's cap.  Over it at startup refuses; over it while running sizes the
+       book as if equity were the cap (`sizing_equity`), so growth past the cap never adds risk.
+    """
+
+    host: str
+    cap_env: str = MAINNET_EQUITY_CAP_ENV
+
+    def max_equity_usdt(self) -> float:
+        raw = os.environ.get(self.cap_env, "").strip()
+        if not raw:
+            raise RuntimeError(f"{self.cap_env} is not set; a mainnet loop has no default capital cap")
+        try:
+            cap = float(raw)
+        except ValueError:
+            raise RuntimeError(f"{self.cap_env} is not a number") from None
+        if not math.isfinite(cap) or cap <= 0:
+            raise RuntimeError(f"{self.cap_env} must be a positive number")
+        return cap
+
+
+def account_gate_refusal(gate: AccountGate, state: LiveState, snapshot: Snapshot, *, cap: float) -> str | None:
+    """Why this mainnet start must not proceed, or None.  Pure, so every branch is a unit test."""
+    if state.cycles > 0 or state.venue_host is not None:
+        if state.venue_host != gate.host:
+            return (
+                f"the state directory holds {state.cycles} cycles written against "
+                f"{state.venue_host or 'an unrecorded venue'}, not {gate.host}; a mainnet loop starts from "
+                "its own fresh state directory"
+            )
+    else:
+        if state.equity_hwm is not None or state.last_equity is not None:
+            return "a first mainnet start found an equity history in the state file; use a fresh state directory"
+        held = sorted({*snapshot.positions, *snapshot.foreign_positions})
+        if held:
+            return f"a first mainnet start needs a flat account; it holds {', '.join(held)}"
+        if snapshot.open_orders:
+            ids = sorted(order.client_order_id for order in snapshot.open_orders)
+            return f"a first mainnet start needs no open orders; the account has {', '.join(ids)}"
+    if snapshot.equity > cap:
+        return f"equity {snapshot.equity:,.2f} is above the {cap:,.2f} cap in {gate.cap_env}"
+    return None
+
+
 @dataclass(frozen=True)
 class LiveConfig:
     interval: str
@@ -213,6 +275,8 @@ class LiveConfig:
     # different risk from measuring it.  Baseline measured 2026-09-07: nearest reachable liquidation
     # 242 units (TUTUSDT), so this floor is 24x below where the book actually sits.
     min_liq_distance: float = 10.0
+    # Mainnet only (cutover plan M3); None on demo and testnet, which start exactly as before.
+    account_gate: AccountGate | None = None
 
     @property
     def interval_ms(self) -> int:
@@ -325,6 +389,8 @@ class LiveEngine:
         self.spot_verification: Verification | None = spot_verification
         self.missed_rebalances = 0
         self.startup_seconds = 0.0
+        # `AccountGate.max_equity_usdt()`, read once at startup.  None without a gate.
+        self.equity_cap: float | None = None
         #: The rebalance window this process allows, written onto every cycle row.  Until 2026-09-10 it
         #: was computed for the startup check and thrown away, so the only rows carrying it were the
         #: restart misses - and M-Q03's "迟到周期占比" therefore had a numerator that could contain
@@ -501,11 +567,23 @@ class LiveEngine:
             )
             if refusal is not None:
                 raise RuntimeError(refusal)
+        gate = self.config.account_gate
+        first_gated_start = gate is not None and self.state.cycles == 0 and self.state.venue_host is None
         snapshot = await startup_reconcile(
-            self.venue, self.managed_symbols(), cancel_stale_orders=not self.config.dry_run
+            self.venue,
+            self.managed_symbols(),
+            # a first mainnet start refuses an account with open orders instead of tidying it (AccountGate 2)
+            cancel_stale_orders=not self.config.dry_run and not first_gated_start,
         )
         if not snapshot.account.can_trade:
             raise RuntimeError("venue reports canTrade=false for this account")
+        if gate is not None:
+            # before the first write below (`_ensure_leverage`), so a refused start has sent nothing
+            self.equity_cap = gate.max_equity_usdt()
+            refusal = account_gate_refusal(gate, self.state, snapshot, cap=self.equity_cap)
+            if refusal is not None:
+                raise RuntimeError(refusal)
+            self.state.venue_host = gate.host
         self.state.leaving = [symbol for symbol in self.state.leaving if symbol in snapshot.positions]
         if not self.config.dry_run:
             if self.config.leverage_mode != "by_vol":
@@ -1003,6 +1081,16 @@ class LiveEngine:
         breach = liquidation_alert(record["min_liq_distance"], threshold=self.config.min_liq_distance)
         if breach is not None:
             await self.alerts.send(breach, key="liquidation-distance")
+        if self.equity_cap is not None:
+            record["equity_cap"] = {"cap": self.equity_cap, "sizing_equity": self.sizing_equity(snapshot.equity)}
+            if snapshot.equity > self.equity_cap:
+                await self.alerts.send(
+                    f"北斗实盘：权益 {snapshot.equity:,.0f} U 超过上限 {self.equity_cap:,.0f} U，"
+                    "按上限定仓位，不再加风险",
+                    key="equity-cap",
+                )
+            else:
+                self.alerts.clear("equity-cap")
         if decision.skip_cycle:
             self._finish_cycle(
                 record, targets.contributions, getattr(targets, "book_weights", None), latest_closes(usable)
@@ -1013,7 +1101,7 @@ class LiveEngine:
         orders, skipped = plan_rebalance(
             decision.targets,
             managed_symbols=managed,
-            equity=snapshot.equity,
+            equity=self.sizing_equity(snapshot.equity),
             positions=snapshot.positions,
             prices=snapshot.prices,
             rules=self.rules,
@@ -1192,6 +1280,18 @@ class LiveEngine:
         return reports
 
     # --- helpers ----------------------------------------------------------------
+    def sizing_equity(self, equity: float) -> float:
+        """The equity target weights are multiplied by: the account's, capped on mainnet (AccountGate 3).
+
+        Only sizing reads the cap.  Guards, the drawdown ladder and attribution keep reading the real
+        equity, so a capped book still sees its own losses.
+        """
+        if self.config.account_gate is None:
+            return equity
+        if self.equity_cap is None:
+            raise RuntimeError("a gated loop sized a cycle before startup read its capital cap")
+        return min(equity, self.equity_cap)
+
     async def _quarantine(self, reports: Sequence[ExecutionReport]) -> list[str]:
         """D-031: a symbol the venue keeps rejecting leaves the universe and takes the reduce-only exit path.
 
@@ -1502,7 +1602,9 @@ class LiveEngine:
             standing=self.state.leverage_set,
             tiered=set(self.state.leverage_tiered),
             streaks=self.state.leverage_streaks,
-            target_notional={symbol: float(weights.get(symbol, 0.0)) * snapshot.equity for symbol in managed},
+            target_notional={
+                symbol: float(weights.get(symbol, 0.0)) * self.sizing_equity(snapshot.equity) for symbol in managed
+            },
             position_notional={symbol: position.notional for symbol, position in snapshot.positions.items()},
             auto={symbol: derive_leverage(*cap, first.get(symbol)) for symbol in managed},
             tables=tables,

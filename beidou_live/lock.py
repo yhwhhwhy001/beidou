@@ -49,6 +49,17 @@ def account_kill_switch_path(api_key: str, *, root: Path | None = None) -> Path:
     return ((root or APP_SUPPORT) / f"{fingerprint}.KILL_SWITCH").resolve()
 
 
+def venue_kill_switch_path(host: str, *, root: Path | None = None) -> Path:
+    """The kill switch of a mainnet account, addressed by its venue host instead of its key (cutover plan M4).
+
+    Keyed by the API key, the switch moves whenever the key is rotated - a switch engaged under the old key
+    is invisible to a loop holding the new one - and `--release` cannot find it without the credential in
+    the shell (MAINNET_READINESS §5).  The host needs neither.  One mainnet account per host is the L-B
+    design (one sub-account), so the host names the account; demo keeps the key-derived path unchanged.
+    """
+    return ((root or APP_SUPPORT) / f"{host}.KILL_SWITCH").resolve()
+
+
 def describe_holder() -> str:
     return f"pid={os.getpid()} repo={Path.cwd()}"
 

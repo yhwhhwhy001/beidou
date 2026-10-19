@@ -8,6 +8,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from beidou_alpha.model import AlphaModel
 from beidou_alpha.overlays.exits import ExitParams
@@ -22,12 +23,12 @@ from beidou_data.pool import LivePool
 from beidou_data.universe import UniverseConfig
 from beidou_exchange.binance_usdm.rest_client import BinanceRestClient
 from beidou_exchange.binance_usdm.venue import BinanceUsdmVenue
-from beidou_exchange.guard import MainnetRelease, WriteGuard
+from beidou_exchange.guard import MAINNET_HOSTS, MainnetRelease, WriteGuard
 from beidou_live.composition import build_model, load_registry, portfolio_params, read_universe, write_universe
-from beidou_live.engine import LiveConfig
+from beidou_live.engine import AccountGate, LiveConfig
 from beidou_live.guards import GROSS_DENOMINATORS, GuardParams
 from beidou_live.leverage import VOL_TIERS
-from beidou_live.lock import account_kill_switch_path
+from beidou_live.lock import account_kill_switch_path, venue_kill_switch_path
 from beidou_live.ports import UniverseUpdate
 from beidou_live.probe import probes_from_registry
 from beidou_live.rebalancer import RebalanceParams
@@ -157,8 +158,12 @@ def account_kill_switches(profile: dict[str, Any]) -> tuple[Path, ...]:
     """The account-scoped kill switch, when the profile names an API key env var (L1-07).
 
     Empty when the credential is not available - paper and offline runs have no account to scope to,
-    and an absent switch is correctly "not engaged" rather than an error.
+    and an absent switch is correctly "not engaged" rather than an error.  A mainnet profile's switch is
+    addressed by host and needs no credential (`venue_kill_switch_path`).
     """
+    gate = account_gate(profile)
+    if gate is not None:
+        return (venue_kill_switch_path(gate.host),)
     venue = profile.get("venue", {}) or {}
     name = str(venue.get("api_key_env", ""))
     key = os.environ.get(name, "") if name else ""
@@ -246,7 +251,14 @@ def live_config(profile: dict[str, Any], universe: Sequence[str], registry: Regi
         # adding it must not reset M-010's evidence window the way a weight change would.
         expect_multi_assets=bool((profile.get("venue", {}) or {}).get("multi_assets_margin", True)),
         min_liq_distance=float((profile.get("risk_budget", {}) or {}).get("min_liq_distance", 10.0)),
+        account_gate=account_gate(profile),
     )
+
+
+def account_gate(profile: Mapping[str, Any]) -> AccountGate | None:
+    """The mainnet startup refusals, keyed on the venue host and on nothing a profile could leave out."""
+    host = (urlsplit(str((profile.get("venue", {}) or {}).get("rest_url", ""))).hostname or "").lower()
+    return AccountGate(host) if host in MAINNET_HOSTS else None
 
 
 def build_pool(profile: dict[str, Any], market: PublicMarketData) -> LivePool | None:

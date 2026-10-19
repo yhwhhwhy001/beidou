@@ -85,6 +85,9 @@ class LiveState:
     # book.  Persisting it meant a restart inherited a tripped breaker's count and tripped again at once
     # (L1-03 / KILL-R29).  `from_dict` drops the key, so an old state.json still loads.
     restarts: int = 0  # process restarts since the state file was created (M-004)
+    # The venue host this state was written against.  Set only by a mainnet loop (`AccountGate`), which
+    # refuses a state directory that is not its own; None everywhere else, including every older file.
+    venue_host: str | None = None
     restarted_at: str | None = None
     cycles: int = 0
     started_at: str = field(default_factory=utc_now_iso)
