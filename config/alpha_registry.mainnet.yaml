@@ -5,13 +5,9 @@
 # `tests/live/test_the_mainnet_profile_differs_from_demo_only_where_it_must.py` 核对两份启用的策略逐字相同，
 # 只许 `evidence` 与 `probe` 不同。demo 那份停用的策略这里不列：它们不进模型，列出来只是要人去核的行。
 #
-# **这份 registry 今天启动不了，这是有意的。** `evidence` 仍指着 demo 在 k = 0.175 上的报告，而
-# config/live.mainnet.yaml 的 `vol_target` 是 0.50。`vol_target` 是构造键，`registry_evidence_problems` 会拒绝
-# 「portfolio vol_target is 0.5 live but 0.175 in the cited evidence」。要按 0.50 重出证据（花 ledger，要操作者
-# 写全的授权句子），再把这里指过去。
-#
-# 同一次还要重量 `probe.stop`：`max_loss` 0.051 是 k = 0.175 上 30 天盯市 P&L 的 2.28% 分位，k = 0.50 上同一个
-# 分位约深 2.86 倍。上面那条测试在证据门放行之后要求 `measured_at.vol_target` 等于 profile 的 k。
+# `evidence` 与 `probe.stop` 都是 k = 0.50 上的（2026-10-19，预登记 76b996ce，结果见 docs/RESEARCH_LOG.md
+# 同日「结果：mainnet 的 tsmom 证据按 k = 0.50 重出」一节）。k 再变，两样要一起重出、重量：证据门拒绝构造对不上的
+# 证据，`tests/governance/test_the_batch_window_has_a_list.py` 拒绝 `measured_at` 对不上的止损。
 version: 1
 universe: []
 ensemble:
@@ -32,29 +28,30 @@ strategies:
       crowding_window: 72
       crowding_cut: 0.7
       crowding_penalty: 0.5
-    evidence:                   # demo's, at k = 0.175: refused here until re-issued at 0.50 (see above)
-      report: reports/research/tsmom-validation-20261019T021124Z.json
-      sha256: e4f2692a94e10359584f544f27a44557415d35e460581668c60c132117990db8
+    evidence:                   # k = 0.50, pre-registered 76b996ce
+      report: reports/research/tsmom-validation-20261019T090838Z.json
+      sha256: c6852bedf3c61ec7bbf92115355104293ea499809292675a9ee0400c30379159
       verdict: WEAK_PASS
-    probe:                      # demo's, measured at k = 0.175: re-measure with the evidence (see above)
+    probe:                      # measured at k = 0.50 with the evidence (pre-registration 76b996ce)
       accepted_by: operator
-      accepted_on: '2026-10-03'
+      accepted_on: '2026-10-19'
       reason: >-
         grandfathered main book (KILL-AR-06), copied from config/alpha_registry.yaml on 2026-10-19 for the
-        mainnet calibration loop.  The stop is the empirical 2.28% quantile of the book's own 30-day
-        mark-to-market P&L on the pit panel, and the gate reads that same caliber.
+        mainnet calibration loop and re-measured at its own k = 0.50.  The stop is the empirical 2.28%
+        quantile of the book's own 30-day mark-to-market P&L on the pit panel, and the gate reads that same
+        caliber.
       review_after_days: 60
       stop:
         window_days: 30
-        max_loss: 0.051
+        max_loss: 0.153
         halts: false
         measured_at:
           population: pit
-          quantile_228: -0.050917
-          sigma_30d: 0.040526
+          quantile_228: -0.152951
+          sigma_30d: 0.109682
           windows: 48361
-          vol_target: 0.175
-          evidence_construction: 221d001c3c07a626
-          registry: 56e317fe2ea6
-          commit: 535def30
-          measured: '2026-10-02T14:43:55Z'
+          vol_target: 0.5
+          evidence_construction: 4fbc028ea0bfc55e
+          registry: 7fdf8af41651
+          commit: 76b996ce
+          measured: '2026-10-19T09:09:35Z'

@@ -21,13 +21,14 @@ membership table ever names and masks each bar with it, the way `research book -
 
 Measures the configuration already in force.  No grid, no selection, no comparison: not a trial, so no ledger
 row (the 09-12 pre-registration states the same for its own run).  Run from the checkout root:
-`python scratchpad/probe_stop_tails.py [panel|pit] [out.json]`.  It reads `.beidou/data` and writes one JSON.
+`[PROBE_STOP_PROFILE=config/live.mainnet.yaml] python scratchpad/probe_stop_tails.py [panel|pit] [out.json]`.  It reads `.beidou/data` and writes one JSON.
 About 3 minutes and 17 GB peak on the 878-symbol panel; less on `pit`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -41,8 +42,10 @@ from beidou_live.composition import load_panel
 from beidou_live.config import build_model_from_profile, load_profile
 from beidou_live.probe import probes_from_registry
 
-ROOT = ".beidou/data"
-PROFILE = "config/live.demo.yaml"
+ROOT = os.environ.get("PROBE_STOP_ROOT", ".beidou/data")  # a research worktree reads the main checkout's store
+# 2026-10-19: mainnet re-measures its own stop on its own profile and registry (cutover plan M2), so the profile
+# can be named; unset keeps every earlier run reproducible as it was.
+PROFILE = os.environ.get("PROBE_STOP_PROFILE", "config/live.demo.yaml")
 WINDOW = 720  # 30 days of hourly bars, the probe stop's own window
 QUANTILE = 0.0228  # Phi(-2): the tail probability D-019 claimed for its stop
 REPORT = "reports/research/book-tsmom-flow-20260908T105322Z.json"  # the panel the 09-12 run used
