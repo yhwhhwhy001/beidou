@@ -37,7 +37,7 @@ class _Alerts:
 
 def _engine(tmp_path: Path) -> LiveEngine:
     engine = LiveEngine.__new__(LiveEngine)
-    engine.config = type("C", (), {"portfolio": type("P", (), {"vol_target": 0.60})()})()
+    engine.config = type("C", (), {"portfolio": type("P", (), {"vol_target": 0.60})(), "account_gate": None})()
     engine.store = StateStore(tmp_path)
     engine.state = LiveState()
     engine.alerts = _Alerts()

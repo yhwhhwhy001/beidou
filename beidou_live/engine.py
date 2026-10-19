@@ -31,7 +31,7 @@ from beidou_alpha.portfolio import PortfolioParams, asset_vol, enterable, entry_
 from beidou_alpha.registry import MAIN_BOOK, evidence_construction_digest
 from beidou_alpha.signals import get_signal
 from beidou_data.alignment import SPOT_BASIS_COLUMN, Verification, admits_live_signal
-from beidou_governance.policy import Policy, policy_digest
+from beidou_governance.policy import Policy, policy_digest, venue_drawdown_ladder
 from beidou_live import soak
 from beidou_live.account_shape import margin_mode_problems
 from beidou_live.alerts import WebhookAlerts
@@ -579,6 +579,7 @@ class LiveEngine:
             raise RuntimeError("venue reports canTrade=false for this account")
         if gate is not None:
             # before the first write below (`_ensure_leverage`), so a refused start has sent nothing
+            venue_drawdown_ladder(gate.host, float(self.config.portfolio.vol_target))
             self.equity_cap = gate.max_equity_usdt()
             refusal = account_gate_refusal(gate, self.state, snapshot, cap=self.equity_cap)
             if refusal is not None:
@@ -1981,19 +1982,33 @@ class LiveEngine:
         one, so a row that changes no registry digest would break the chain it is meant to prove.
         """
         policy = Policy()
+        base = float(self.config.portfolio.vol_target)
+        gate = self.config.account_gate
+        # mainnet acts on its own rungs (M2), which live outside `Policy` so demo's digest does not move; the
+        # ruler's `action` label is built from the same rungs, since the class defaults describe demo's
+        rungs, params = policy.drawdown_ladder, RiskBudgetParams()
+        if gate is not None:
+            rungs = venue_drawdown_ladder(gate.host, base)
+            (first_at, first_to), (last_at, last_to) = sorted(rungs, reverse=True)
+            params = RiskBudgetParams(
+                deescalate_at=-first_at, rollback_at=-last_at, deescalate_to=first_to, rollback_to=last_to
+            )
         step = ladder_step(
             reading=attributed_drawdown_state(
                 self.store.read_jsonl(self.store.cycles_path),
                 self.store.read_jsonl(self.store.attribution_path),
-                RiskBudgetParams(),
+                params,
             ),
             standing=dict(self.state.risk_ladder or {}),
-            base=float(self.config.portfolio.vol_target),
-            rungs=policy.drawdown_ladder,
+            base=base,
+            rungs=rungs,
             grace_cycles=policy.drawdown_grace_cycles,
             bar_open_ms=bar_open_ms,
             now=utc_now_iso(),
         )
+        if gate is not None:
+            # demo's are inside `policy_digest`, which every cycle records; these are not, so the block says them
+            step.block["rungs"] = [list(rung) for rung in rungs]
         if step.standing is not None:
             self.state.risk_ladder = step.standing
         for message in step.warnings:

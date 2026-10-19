@@ -293,6 +293,36 @@ class Policy:
         return rung_target(drawdown, self.drawdown_ladder)
 
 
+#: mainnet 自己的 R8 档位，按 venue 主机寻址（切换方案 M2，2026-10-19），与 `AccountGate`、kill switch 同一个键。
+#: 不是 `Policy` 的字段：`Policy` 每个字段都在 `policy_digest()` 里，demo 循环每个周期记它，加一个字段 demo 的
+#: digest 就动，`live status --check` 会报循环跑着过期规则，09-30 的 60 天冻结也就破了。先例是 `BOOK_RULE`。
+#: 规则是 0.3.3 转写的那条，与 `drawdown_ladder` 相同：`deescalate_at` = 预算的 70%，`rollback_at` = 预算，目标
+#: 0.75k 与 0.50k。输入：k = 0.50（操作者 2026-10-19 07:26:40Z 的卡片，预登记答案是 0.55，取了更保守的一侧），
+#: 预算 -70%，全 USDT 账户因子 1.0。`venue_drawdown_ladder` 拒绝与 profile 的 k 对不上的档位。
+VENUE_DRAWDOWN_LADDERS: dict[str, tuple[tuple[float, float], ...]] = {
+    "fapi.binance.com": ((-0.49, 0.375), (-0.70, 0.25)),
+}
+
+
+def venue_drawdown_ladder(host: str, vol_target: float) -> tuple[tuple[float, float], ...]:
+    """这个主机的档位；没有声明，或者目标不是 0.75k 与 0.50k，就拒绝，而不是退回 demo 的那份。
+
+    k 写在 profile 里，档位写在这里，两处没有别的东西连着。改了 k 忘了改档位，梯子就在错的位置上动手，
+    而且不会报错：`rung_scalar` 只夹住高于 k 的档位。
+    """
+    rungs = VENUE_DRAWDOWN_LADDERS.get(host)
+    if rungs is None:
+        raise RuntimeError(f"no R8 ladder is declared for {host} (VENUE_DRAWDOWN_LADDERS)")
+    targets = tuple(round(target, 9) for _, target in sorted(rungs, reverse=True))
+    expected = tuple(round(share * vol_target, 9) for share in (0.75, 0.50))
+    if targets != expected:
+        raise RuntimeError(
+            f"the R8 ladder for {host} targets {targets}, but vol_target {vol_target} needs {expected}; "
+            "re-derive both together"
+        )
+    return rungs
+
+
 #: Where each rule comes from, so nobody reads the table above as measurement (KILL-AR-13).
 PROVENANCE: dict[str, str] = {
     "R0": "推导 - whole-library N fails the incumbent on an honest grid; N_eff only lowers the bar",
