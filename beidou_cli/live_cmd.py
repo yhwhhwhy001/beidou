@@ -179,6 +179,21 @@ def trades_the_account(*, dry_run: bool, paper: bool, state_dir: str, registry_o
     return not (dry_run or paper or state_dir or registry_override)
 
 
+def alert_label(profile: Mapping[str, Any]) -> str:
+    """「实盘」 on every page from a mainnet profile, nothing on demo's (切换方案 M6; see `WebhookAlerts.label`)."""
+    return "实盘" if account_gate(profile) is not None else ""
+
+
+def writes_the_data_root(profile: Mapping[str, Any], *, trades: bool) -> bool:
+    """`trades_the_account` and demo: `universe.json` and the metrics snapshot under `.beidou/data` have one writer.
+
+    The mainnet loop trades its own account and still only reads them (M6).  It re-ranks the pool in memory
+    on the same rule over the same public data, so it trades the population demo would; writing would make
+    two processes race one read-modify-write file and move the fingerprint demo's evidence was cited under.
+    """
+    return trades and account_gate(profile) is None
+
+
 def kill_switch_path(payload: dict[str, Any]) -> Path:
     """The configured kill switch, resolved.
 
@@ -364,10 +379,13 @@ def live_run(
         # `run_check.sh` share the file, so a standing problem announces itself once an hour rather
         # than once per process per hour.
         state_path=ALERT_DEDUP_STATE,
+        label=alert_label(payload),
     )
     pool = build_pool(payload, market)
-    if not trades_the_account(dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override):
+    trades = trades_the_account(dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override)
+    if not trades:
         pool = None
+    writes_data = writes_the_data_root(payload, trades=trades)
     engine = LiveEngine(
         config,
         model=model,
@@ -377,7 +395,7 @@ def live_run(
         store=store,
         alerts=alerts,
         pool=pool,
-        universe_sink=universe_sink(data_root) if pool is not None else None,
+        universe_sink=universe_sink(data_root) if pool is not None and writes_data else None,
         # DL-Q6: the loop records the metrics it could read, which is what makes research and live one
         # source rather than two (KILL-Q11).
         metrics_store=MetricsStore(data_root, kind="metrics_snapshot"),
@@ -387,10 +405,8 @@ def live_run(
         # profile, so the loop is authorised by the same ingest that produced the bars it trades on.
         # `None` when no measurement was ever taken here, which is the refusal `spot_refusal` prints.
         spot_verification=read_spot_verification(data_root),
-        # Read always, write only from the account's own process; see `trades_the_account`.
-        record_metrics=trades_the_account(
-            dry_run=dry_run, paper=paper, state_dir=state_dir, registry_override=registry_override
-        ),
+        # Read always, write only from demo's account process; see `trades_the_account` and `writes_the_data_root`.
+        record_metrics=writes_data,
     )
     leverage = config.leverage_mode if config.leverage_mode != "fixed" else str(config.leverage)
     click.echo(
@@ -814,6 +830,7 @@ def live_alert_test(profile: str, repeat: int) -> None:
         secondary_url=str(config.get("webhook_url_2", "")),
         dedup_window_seconds=float(config.get("dedup_window_seconds", HOURLY_CALLER_WINDOW_SECONDS)),
         transport=alert_transport(),
+        label=alert_label(payload),
     )
     if not alerts.enabled:
         click.echo("没有配置告警通道：请在 profile 里设置 alerts.webhook_url")
@@ -892,6 +909,7 @@ def live_backup(profile: str, keep: int, destination: str | None) -> None:
             str(config.get("webhook_url", "")),
             secondary_url=str(config.get("webhook_url_2", "")),
             state_path=lock.APP_SUPPORT / "alert-dedup.json",
+            label=alert_label(payload),
         )
         if channel.enabled and not asyncio.run(channel.send(f"北斗夜间备份失败：{reason}", key="live-backup")):
             click.echo("提示：上面这条备份失败没有送达任何通道", err=True)
@@ -985,6 +1003,7 @@ def report_daily(profile: str, paper: bool, day: str | None, out: str | None, ch
             str(alert_config.get("webhook_url", "")),
             secondary_url=str(alert_config.get("webhook_url_2", "")),
             state_path=ALERT_DEDUP_STATE,
+            label=alert_label(payload),
         )
         # A page already out inside the window is delivered: `send` would suppress it and answer False,
         # which is how a duplicate used to print the "not delivered" line below.

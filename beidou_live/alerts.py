@@ -127,8 +127,13 @@ class WebhookAlerts:
         wall_clock: Callable[[], float] = time.time,
         transport: httpx.AsyncBaseTransport | None = None,
         state_path: Path | None = None,
+        label: str = "",
     ) -> None:
         self.url = url.strip()
+        # Which loop is speaking (切换方案 M6, 2026-10-19).  The demo and mainnet loops send to the same channels
+        # and share one dedup file, so without it a mainnet page reads like a demo one and the second of two
+        # identical keys inside the window is swallowed.  Empty for demo: its messages and keys are unchanged.
+        self.label = label.strip()
         self.secondary_url = secondary_url.strip()
         self._timeout = timeout
         self._window = float(dedup_window_seconds)
@@ -202,9 +207,15 @@ class WebhookAlerts:
     def urls(self) -> tuple[str, ...]:
         return tuple(u for u in (self.url, self.secondary_url) if u)
 
+    def _scoped(self, key: str) -> str:
+        return f"{self.label}:{key}" if self.label else key
+
+    def _labelled(self, text: str) -> str:
+        return f"【{self.label}】{text}" if self.label else text
+
     def clear(self, key: str) -> None:
         """Forget a key so the next alert under it fires: the condition it described has cleared."""
-        if self._last_sent.pop(key, None) is not None:
+        if self._last_sent.pop(self._scoped(key), None) is not None:
             self._save_state()
 
     def _suppressed(self, key: str) -> bool:
@@ -217,7 +228,7 @@ class WebhookAlerts:
         `send` answers False for a duplicate and for a failure alike.  A caller that has to say whether the
         page is out (`report daily`, so the hourly check does not page it a second time) asks this first.
         """
-        return self._suppressed(key if key is not None else text)
+        return self._suppressed(self._scoped(key) if key is not None else self._labelled(text))
 
     async def send(self, text: str, *, key: str | None = None, force: bool = False) -> bool:
         """Deliver ``text``; return True only if a channel accepted it.
@@ -227,7 +238,8 @@ class WebhookAlerts:
         """
         if not self.enabled:
             return False
-        fingerprint = key if key is not None else text
+        text = self._labelled(text)
+        fingerprint = self._scoped(key) if key is not None else text
         if not force and self._suppressed(fingerprint):
             logger.debug("alert suppressed as a duplicate: %s", fingerprint)
             return False
