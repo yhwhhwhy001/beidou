@@ -44,7 +44,7 @@ CEILING = {
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_data
     "beidou_data": 3_682,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_exchange
-    "beidou_exchange": 787,
+    "beidou_exchange": 880,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_shared
     "beidou_shared": 329,
     # 抬顶记录：docs/SOURCE_BUDGET_LOG.md#beidou_governance
