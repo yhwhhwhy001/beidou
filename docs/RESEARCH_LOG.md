@@ -21540,3 +21540,28 @@ N 会因 ledger 与新数据窗口而变（不再是 357），以报告为准。
 - 换指针后离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者 blocking 都要为空；
   再跑两个构造测试（#282 已把钉子改到新摘要 0a82ff40，预期绿）。
 
+
+## 2026-10-19 · 重启 #69：成员表重建 + tsmom 证据重出 + flow 退役，一次载入
+
+可观测事实：
+- 旧进程 PID 753（10-08T14:03Z 起，带 `--allow-unvalidated`），新进程 PID 56675（10-19T02:33:30Z 起，`--armed` 无 `--allow-unvalidated`）。
+- `state.restarts` 68 → 69，`restarted_at` 2026-10-19T02:33:30Z。
+- 心跳：construction `e32f3856ac1e` → `0a82ff40868d`，registry `7f8adb754962` → `56e317fe2ea6`，governance `9cc96461276f` 不变。
+- 启动日志：`run_live.sh: D-041 bridge EXPIRED on 2026-10-13`（严格证据门回来），随后通过门读到 clock offset，未失败。
+- 首周期 `--immediate` 距收盘 2022.5s（窗口 91.5s），reconcile 而未再平衡；flow_short 的平仓落在下一根正常周期。
+
+重启前：
+- 两个构造测试绿（`test_the_construction_is_frozen_until_the_holdout_matures` + `test_construction_identity`）。
+- 启动门离线核：`registry_evidence_problems` 空、`registry_dataset_problems` blocking/advisory 均空、enabled 只剩 tsmom。
+
+这次重启载入三件事（10-02 裁定的 10-03 批次，10-19 执行，见 #294）：
+1. 成员表重建（末行 09-24 → 10-18，并集 212 → 213，刷新 2063 → 2087）。
+2. tsmom 证据重出（预登记 `176275d6`）：WEAK_PASS，样本外 1.76 门 1.57，指针 `tsmom-validation-20261019T021124Z.json`。
+3. flow 退役（#282）：registry digest `7f8adb754962` → `56e317fe2ea6`，构造 `e32f3856` → `0a82ff40`；main 停损重定阈 0.06 → 0.051（pit 口径 D1）、闸改读 30 天盯市 P&L。
+
+M-010 / M-G06 / realised_vol 的钟从这次重启重新起算；之后 60 天不改构造/registry（约到 12-18）。
+
+flow 退役的治理记录（D-048）：
+- `governance retire flow --ruling "2026-09-30 · 操作者四条裁定：backtest-guard 09-30 体检的四张卡" --at 2026-10-19T02:33:30Z --commit`。
+- `governance advance --commit`：flow `probe -> retired`，probe 位空出。
+
