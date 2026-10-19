@@ -100,14 +100,15 @@ async def test_a_firing_main_book_is_not_removed_from_the_model(tmp_path: Any) -
     engine.model = object()
     sentinel = engine.model
 
-    engine.store.append_attribution(
-        {
-            "at": "2026-09-09T02:00:00+00:00",
-            "until_ms": 1_788_919_200_000,
-            "basis": "net_exposure",
-            "by_strategy": {"tsmom": -500.0},
-        }
-    )
+    # A mark-to-market loss of the main book - the caliber the gate reads since the 2026-10-03 batch.
+    for offset, close in ((-2, 100.0), (-1, 95.0)):
+        engine.store.append_cycle(
+            {
+                "bar_open_ms": 1_788_919_200_000 + offset * 3_600_000,
+                "book_weights": {"main": {"BTCUSDT": 1.0}},
+                "closes": {"BTCUSDT": close},
+            }
+        )
     statuses = await LiveEngine._check_probes(engine, 1_788_919_200_000)
 
     assert statuses[0]["stop"] is True
@@ -123,4 +124,5 @@ def test_the_shipped_registry_gives_main_a_reporting_stop() -> None:
     books = {p.book: p for p in probes_from_registry(shipped)}
     assert "main" in books, "§3 says the main book keeps a P&L stop"
     assert books["main"].halts is False
-    assert books["main"].max_loss == 0.06
+    # 0.06 until the 2026-10-03 batch; then the pit 2.28% quantile of its 30-day mark-to-market P&L (D1, 2026-10-02)
+    assert books["main"].max_loss == 0.051

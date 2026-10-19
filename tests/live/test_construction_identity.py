@@ -196,6 +196,15 @@ SHIPPED_BY_VOL = "2ee491c139714bf1dd8e79d2824b93330c65053a6fbc628bddc8918c9a67b1
 #: proof, so like the two above it is NOT in `CONSTRUCTION_ALIASES`, and the window restarts with it.
 SHIPPED_USDT_CAP = "e32f3856ac1e359295272aee491bd1def4bdefbf111aaaaa40936dd8df827bcf"
 
+#: flow retired on top of `SHIPPED_USDT_CAP` (operator ruling 2026-09-30, card 3: "10-03 直接退役").  Not a new
+#: field and not a new payload version: `strategy_weights` loses `flow` because the entry is no longer enabled.
+#: The book changes - one sleeve fewer - so there is no alias, and M-010's window restarts with it.
+SHIPPED_FLOW_RETIRED = "0a82ff40868dab5a249627154e06cd2ddc97f582d14b9cc1357ce1adda4e29a7"
+
+#: What `strategy_weights` held from 2026-09-03 until flow's retirement: tsmom at 1.0 and flow at its book's 1/3.
+#: The historical rebuilds below put it back, because they reproduce books in which flow was running.
+FLOW_WEIGHT = {"flow": 0.333333}
+
 
 def test_the_definitional_digests_since_the_freeze_resolve_to_the_frozen_book() -> None:
     """The freeze test compares the CANONICAL digest, so a field set that grows must not trip it.
@@ -223,6 +232,7 @@ def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
     the next real change, so the shipped digest is `SHIPPED_K0175` and resolves to itself - not to
     `SHIPPED_D3`, not to `FROZEN`.  `by_vol` is the one after that: `SHIPPED_BY_VOL`, resolving to itself and to
     none of the three before it.  2026-09-28: the gross cap on the USDT balance is the next, `SHIPPED_USDT_CAP`.
+    2026-10-03: flow's retirement, `SHIPPED_FLOW_RETIRED`.
     Asserting the inequality rather than deleting the test is what keeps a future alias - which would quietly
     re-declare two books to be one - from passing unnoticed.
     """
@@ -230,9 +240,10 @@ def test_the_shipped_construction_is_the_new_book_and_says_so() -> None:
     from tests.live.helpers_construction import live_config_for_profile
 
     digest = construction_fingerprint(live_config_for_profile())["digest"]
-    assert digest == SHIPPED_USDT_CAP, digest
-    assert canonical_construction(digest) == digest, "gross 上限改按可动用 USDT 是一次构造变更，不能声明成旧账的别名"
-    assert canonical_construction(digest) not in (SHIPPED_BY_VOL, SHIPPED_K0175, SHIPPED_D3, FROZEN)
+    assert digest == SHIPPED_FLOW_RETIRED, digest
+    assert canonical_construction(digest) == digest, "flow 退役是一次构造变更，不能声明成旧账的别名"
+    assert canonical_construction(digest) not in (SHIPPED_USDT_CAP, SHIPPED_BY_VOL, SHIPPED_K0175, SHIPPED_D3, FROZEN)
+    assert canonical_construction(SHIPPED_USDT_CAP) == SHIPPED_USDT_CAP, "gross 上限改按可动用 USDT 是一次构造变更"
     assert canonical_construction(SHIPPED_BY_VOL) == SHIPPED_BY_VOL, "交易所分档是一次构造变更，不能声明成旧账的别名"
     assert canonical_construction(SHIPPED_K0175) == SHIPPED_K0175, (
         "k 0.60 -> 0.175 是真的构造变更，不能声明成旧账的别名"
@@ -259,6 +270,8 @@ def test_by_vol_moved_only_the_leverage_block() -> None:
     payload["leverage"] = {**leverage, "mode": "auto"}
     # v12's key comes out too: this test is about what v11 moved.
     payload["guards"] = {key: value for key, value in payload["guards"].items() if key != "max_gross_denominator"}
+    # And flow goes back in: #163's book still ran it (retired 2026-10-03).
+    payload["strategy_weights"] = dict(sorted({**payload["strategy_weights"], **FLOW_WEIGHT}.items()))
     rebuilt = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     assert out["payload_version"] == 12 and out["leverage"]["mode"] == "by_vol"
     assert rebuilt == SHIPPED_K0175, "`by_vol` 只该动杠杆那一块；拿掉三个新键、改回 auto 应当逐字节复现 #163 的构造"
@@ -278,8 +291,29 @@ def test_the_usdt_cap_moved_only_the_guards_block() -> None:
     out = construction_fingerprint(live_config_for_profile())
     payload = {key: value for key, value in out.items() if key not in ("digest", "payload_version")}
     assert payload["guards"].pop("max_gross_denominator") == "usdt_equity"
+    # flow goes back in: the by_vol book still ran it (retired 2026-10-03).
+    payload["strategy_weights"] = dict(sorted({**payload["strategy_weights"], **FLOW_WEIGHT}.items()))
     rebuilt = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     assert rebuilt == SHIPPED_BY_VOL, "约束侧改分母只该动 guards 那一个键；拿掉它应当逐字节复现 by_vol 的构造"
+
+
+def test_retiring_flow_moved_only_the_strategy_weights() -> None:
+    """Put flow's 1/3 back into `strategy_weights` and the hash is `SHIPPED_USDT_CAP` exactly.
+
+    So the retirement moved one entry of one block - no band, cap, exit, leverage or guard knob rode along.
+    """
+    import hashlib
+    import json
+
+    from beidou_live.engine import construction_fingerprint
+    from tests.live.helpers_construction import live_config_for_profile
+
+    out = construction_fingerprint(live_config_for_profile())
+    payload = {key: value for key, value in out.items() if key not in ("digest", "payload_version")}
+    assert payload["strategy_weights"] == {"tsmom": 1.0}, payload["strategy_weights"]
+    payload["strategy_weights"] = dict(sorted({**payload["strategy_weights"], **FLOW_WEIGHT}.items()))
+    rebuilt = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    assert rebuilt == SHIPPED_USDT_CAP, "flow 退役只该动 strategy_weights 里的一项；放回去应当逐字节复现 v12 的构造"
 
 
 # --- the readers.  A canonicaliser nothing calls leaves M-010 reset exactly as before ----------------

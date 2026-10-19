@@ -156,14 +156,14 @@ def probe_rows(
 ) -> list[dict[str, Any]]:
     """Status of every probe book (D-019) from the attribution file and the persisted stop records.
 
-    `pnl_pct_usdt` is the same P&L over the USDT equity (operator, 2026-09-30).  Reported only: the stop the
-    loop acts on (`engine._check_probes`) still reads `pnl_pct` on total equity, and which denominator the
-    stop takes belongs to the 2026-10-03 probe-stop-caliber window, whose thresholds were derived on it.
+    `pnl_pct_usdt` is the same realised P&L over the USDT equity (operator, 2026-09-30), reported only.  Since
+    the 2026-10-03 batch the stop the loop acts on (`engine._check_probes`) reads `marked_pnl_pct`: the book's
+    mark-to-market P&L as a share of TOTAL equity, the denominator `probe-stop-caliber` derived its threshold on.
     """
     if not probes:
         return []
     attributions = store.read_jsonl(store.attribution_path)
-    cycles = store.read_jsonl(store.cycles_path)  # `book_weights` + `closes`, for the second caliber
+    cycles = store.read_jsonl(store.cycles_path)  # `book_weights` + `closes`, the inputs of the gate's caliber
     stopped = readable_state(store)[0].stopped_books
     rows: list[dict[str, Any]] = []
     for probe in probes:

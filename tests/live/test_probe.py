@@ -57,11 +57,15 @@ def test_probe_status_windows_stop_and_review() -> None:
     status = probe_status(probe, rows, equity=10_000.0, now_ms=NOW)
     assert status["rows"] == 2 and status["pnl"] == -90.0 and status["pnl_pct"] == pytest.approx(-0.009)
     assert status["status"] == "OK" and status["days_running"] == pytest.approx(40.0)
+    # Since the 2026-10-03 batch the realised reading gates nothing: it is reported beside the marked one, which
+    # is the gate (`test_the_probe_stop_has_two_calibers.py`).  Its window arithmetic is what these lines pin.
     stopped = probe_status(probe, rows + _rows((NOW - 2 * DAY_MS, -20.0)), equity=10_000.0, now_ms=NOW)
-    assert stopped["stop"] and stopped["status"] == "STOP" and stopped["pnl_pct"] == pytest.approx(-0.011)
-    # a literal "any loss stops" rule
-    assert probe_status(ProbeParams("b", "flow", max_loss=0.0), _rows((NOW, -1.0)), equity=1.0, now_ms=NOW)["stop"]
-    assert not probe_status(ProbeParams("b", "flow", max_loss=0.0), _rows((NOW, 1.0)), equity=1.0, now_ms=NOW)["stop"]
+    assert stopped["realised_would_stop"] and stopped["pnl_pct"] == pytest.approx(-0.011)
+    assert not stopped["stop"] and stopped["status"] == "OK", "no marked reading, no claim of a loss"
+    # a literal "any loss" rule on the realised side
+    any_loss = ProbeParams("b", "flow", max_loss=0.0)
+    assert probe_status(any_loss, _rows((NOW, -1.0)), equity=1.0, now_ms=NOW)["realised_would_stop"]
+    assert not probe_status(any_loss, _rows((NOW, 1.0)), equity=1.0, now_ms=NOW)["realised_would_stop"]
     dated = ProbeParams(book="b", strategy="flow", review_after_days=90, accepted_on="2025-06-01")
     review = probe_status(dated, _rows((NOW - DAY_MS, 5.0)), equity=10_000.0, now_ms=NOW)
     assert review["status"] == "REVIEW_DUE" and review["days_running"] > 90
@@ -69,7 +73,7 @@ def test_probe_status_windows_stop_and_review() -> None:
     recent = ProbeParams(book="b", strategy="flow", accepted_on="2025-09-01")
     mixed = _rows((NOW - 3 * DAY_MS, -900.0), (NOW - DAY_MS, -20.0))
     before = probe_status(recent, mixed, equity=10_000.0, now_ms=NOW)
-    assert before["rows"] == 1 and before["pnl"] == -20.0 and not before["stop"]
+    assert before["rows"] == 1 and before["pnl"] == -20.0 and not before["realised_would_stop"]
     assert before["days_running"] == pytest.approx(1.0 + 8 / 24)
     with pytest.raises(ValueError):
         ProbeParams("b", "flow", window_days=0)
@@ -125,20 +129,24 @@ async def test_engine_stops_a_probe_book_and_keeps_it_stopped(august_panel: Pane
     first = await engine.run_cycle(bar)
     assert first["probes"][0]["status"] == "OK" and set(engine.state.last_contributions) == {"tsmom", "breakout"}
     assert store.read_heartbeat()["probes"] == {"probe": "OK"}
-    # losses attributed to the sleeve inside the trailing window: -2% of equity
-    store.append_attribution(
-        {
-            "bar_open_ms": bar,
-            "until_ms": clock.now_ms(),
-            "basis": "net_exposure",
-            "by_strategy": {"breakout": -200.0, "tsmom": 40.0},
-        }
-    )
+    # A mark-to-market loss of the sleeve inside the trailing window - the caliber the gate reads since the
+    # 2026-10-03 batch: two recorded bars with the book fully in a name that falls 5%.  The name is in no real
+    # cycle's closes, so the pair joining these rows to the engine's own contributes nothing.
+    for offset, close in ((-2, 100.0), (-1, 95.0)):
+        store.append_cycle(
+            {
+                "bar_open_ms": bar + offset * 3_600_000,
+                "book_weights": {"probe": {"LOSSUSDT": 1.0}},
+                "closes": {"LOSSUSDT": close},
+            }
+        )
     market.cursor += 1
     second = await engine.run_cycle(bar + 3_600_000)
     status = second["probes"][0]
-    assert status["stop"] and status["status"] == "STOPPED" and status["pnl_pct"] == pytest.approx(-0.02, rel=0.05)
-    assert "probe" in engine.state.stopped_books and "reason" in engine.state.stopped_books["probe"]
+    assert status["stop"] and status["status"] == "STOPPED"
+    assert status["marked_pnl_pct"] == pytest.approx(-0.05, abs=0.01), status["marked_pnl_pct"]
+    stopped = engine.state.stopped_books["probe"]
+    assert "盯市" in stopped["reason"] and stopped["marked_pnl_pct"] == status["marked_pnl_pct"]
     assert [e.id for e in engine.model.entries] == ["tsmom"]
     assert set(engine.state.last_contributions) == {"tsmom"}
     assert store.read_heartbeat()["probes"] == {"probe": "STOPPED"}

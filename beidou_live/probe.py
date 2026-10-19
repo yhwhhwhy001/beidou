@@ -2,9 +2,10 @@
 
 A probe book is enabled on a *book-level* ACCEPT (``beidou research book``) rather than a
 signal-level PASS, so it exists to earn out-of-sample evidence, not because the evidence is in.
-Two things bound it: ``stop`` closes the book automatically when its trailing attributed P&L
-falls below ``-max_loss`` of equity, and ``review_after_days`` flags the review date in the
-daily report.  Pure functions over attribution rows; the engine does the I/O.
+Two things bound it: ``stop`` closes the book automatically when its trailing mark-to-market P&L
+falls below ``-max_loss`` of equity (realised attributed income until the 2026-10-03 batch, see
+`probe_status`), and ``review_after_days`` flags the review date in the daily report.  Pure
+functions over the record's rows; the engine does the I/O.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ class ProbeParams:
     book: str
     strategy: str
     window_days: int = 30
-    max_loss: float = 0.01  # trailing attributed net P&L <= -max_loss x equity stops the book (0 = any loss)
+    max_loss: float = 0.01  # trailing mark-to-market P&L <= -max_loss x equity stops the book (0 = any loss)
     review_after_days: int = 90
     accepted_on: str = ""
     halts: bool = True
@@ -135,7 +136,7 @@ def marked_pnl(
     A short window UNDER-states the loss, because it sums fewer bars.  For a stop that is the safe
     direction - it can only delay a stop, never cause one - so the reading is returned with its bar
     count rather than refused while it warms up.  `bars` is how a reader tells a quiet month from a
-    window that has not filled.
+    window that has not filled.  Since the 2026-10-03 batch this is the reading the stop gates on.
     """
     usable = sorted(
         (row for row in cycles if row.get("book_weights") and row.get("closes")),
@@ -175,28 +176,26 @@ def probe_status(
 ) -> dict[str, Any]:
     """Trailing-window P&L of the probe's book and whether the stop / review rules fire.
 
-    Two calibers, and the gate is deliberately still on the OLD one.  2026-09-12, and the reason is
-    the plan's own rule rather than a preference:
+    Two calibers, and since the 2026-10-03 batch the gate reads the mark-to-market one (`marked_pnl`).
+    `probe-stop-caliber` (`governance/window_changes.yaml`), applied with flow's retirement on the operator's
+    ruling D1 of 2026-10-02; until then the gate read realised attributed income, for these reasons:
 
-    * the sleeve's evidence is a mark-to-market P&L (30-day sigma **3.239%** of equity, recomputed over
-      the validated panel); the stop reads realised attributed income (sigma **0.137%**).  So `-2%`
-      sits at **14.6 sigma** of the series it reads and **0.62 sigma** of the series it was calibrated
-      against - neither is the "-2 sigma" D-019 claimed, and they miss in opposite directions;
-    * so caliber and threshold have to move TOGETHER.  Measured: moving the caliber alone would fire
-      immediately - flow_short's marked 30-day reading is -3.197%, already past -2% (falsifier F3 of
-      the 2026-09-12 pre-registration);
-    * and changing `max_loss` resets M-Q08's comparison window, which reads the registry digest.  The
-      09-12 text said it sat in `construction_fingerprint` and cleared M-010; `stop_of` is and was in
-      `registry_digest` (corrected 2026-09-30, #275), so M-010, M-G06 and K-EX14 are untouched by it.
+    * the sleeve's evidence is a mark-to-market P&L; the stop read realised attributed income.  On 2026-09-12
+      flow's 30-day sigma was **3.239%** of equity on the first and **0.137%** on the second, so its `-2%`
+      sat at **0.62 sigma** of what it was calibrated against and **14.6 sigma** of what it read - it could
+      not fire, and neither was the "-2 sigma" D-019 claimed;
+    * caliber and threshold have to move TOGETHER.  Moving the caliber alone would have fired at once:
+      flow's marked 30-day reading was -3.197% against -2% (falsifier F3 of the 09-12 pre-registration);
+    * `max_loss` sits in `registry_digest` (`stop_of`), so changing it resets M-Q08's window and, since #280,
+      the evidence window; it waited for a restart that resets them anyway.
 
-    The pre-registered replacement waits in `governance/window_changes.yaml` (`probe-stop-caliber`):
-    `max_loss` becomes the empirical 2.28% quantile of each book's own 30-day mark-to-market P&L.  The
-    entry, not this docstring, holds the numbers and the vol target they belong to: 09-12's 7.5% / 11.2%
-    were measured at k 0.30 and went stale when k moved.  Looser-looking, and not: today's rule cannot fire.
+    The threshold now is the empirical 2.28% quantile of the book's own 30-day mark-to-market P&L on the pit
+    panel - main 5.1% at k 0.175, re-measured on the post-retirement registry - and what it was measured on
+    sits beside it in the registry (`stop.measured_at`).  The realised reading stays in the row as
+    `realised_would_stop`: it gates nothing, and the day the two disagree is the day somebody needs both.
 
-    Until then `marked` is computed and printed beside the gated number, which is what the same day's
-    L3, M-015 and M-Q08 rulings did in the other direction: a reading that gates nothing is still a
-    reading, and the day the two disagree is the day somebody needs to see both.
+    A record without marked inputs (`marked_pnl` returns None) does not fire.  That is the safe direction for
+    a stop and the one `marked_pnl` already takes for a short window: no reading is no claim of a loss.
     """
     accepted_ms = _accepted_ms(params.accepted_on)
     # rows before the acceptance belong to whatever ran under this strategy id before the probe (not its record)
@@ -239,11 +238,9 @@ def probe_status(
     days_running = None if start_ms is None else max(0.0, (now_ms - start_ms) / DAY_MS)
     marked = marked_pnl(cycles, params.book, window_days=params.window_days, now_ms=now_ms)
     marked_value = marked["value"]
-    stop = pnl_pct is not None and pnl_pct <= -params.max_loss and pnl < 0
-    # What the gate WOULD say on the other caliber at today's threshold - reported, gating nothing.
-    # It reads True on 2026-09-12 (-3.197% against -2%), which is exactly why the threshold cannot be
-    # left behind when the caliber moves.
-    marked_would_stop = marked_value is not None and marked_value <= -params.max_loss
+    stop = marked_value is not None and marked_value < 0 and marked_value <= -params.max_loss
+    # What the realised caliber would say at the same threshold - reported, gating nothing since 2026-10-03.
+    realised_would_stop = pnl_pct is not None and pnl_pct <= -params.max_loss and pnl < 0
     review_due = days_running is not None and days_running >= params.review_after_days
     return {
         "book": params.book,
@@ -262,7 +259,8 @@ def probe_status(
         "marked_pnl_pct": marked_value,
         "marked_bars": marked["bars"],
         "marked_why": marked["why"],
-        "marked_would_stop": marked_would_stop,
+        "gate": "marked",  # the caliber `stop` reads; the other one is `realised_would_stop`
+        "realised_would_stop": realised_would_stop,
         "review_due": review_due,
         "status": "STOP" if stop else ("REVIEW_DUE" if review_due else "OK"),
     }
