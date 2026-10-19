@@ -62,6 +62,7 @@ from beidou_live.config import (
     resolve_universe,
     universe_sink,
 )
+from beidou_live.deadman import LOOP_URL_ENV, MAINNET_URL_ENV, loop_url, mainnet_watch_problems
 from beidou_live.engine import (
     BreakerTripped,
     LiveEngine,
@@ -386,6 +387,13 @@ def live_run(
     if not trades:
         pool = None
     writes_data = writes_the_data_root(payload, trades=trades)
+    # WP-R1 / M7: only the process trading the account pings, each loop its own check (`deadman` says why)
+    deadman_url = loop_url(MAINNET_URL_ENV if account_gate(payload) is not None else LOOP_URL_ENV) if trades else ""
+    if trades and account_gate(payload) is not None:
+        # M7, operator's card 2026-10-19「作为硬门」: a mainnet loop does not start unwatched
+        problems = mainnet_watch_problems(alerts.urls, deadman_url)
+        if problems:
+            raise click.ClickException("mainnet refuses to start unwatched: " + "; ".join(problems))
     engine = LiveEngine(
         config,
         model=model,
@@ -407,6 +415,7 @@ def live_run(
         spot_verification=read_spot_verification(data_root),
         # Read always, write only from demo's account process; see `trades_the_account` and `writes_the_data_root`.
         record_metrics=writes_data,
+        deadman_url=deadman_url,
     )
     leverage = config.leverage_mode if config.leverage_mode != "fixed" else str(config.leverage)
     click.echo(
