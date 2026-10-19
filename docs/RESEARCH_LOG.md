@@ -21565,3 +21565,19 @@ flow 退役的治理记录（D-048）：
 - `governance retire flow --ruling "2026-09-30 · 操作者四条裁定：backtest-guard 09-30 体检的四张卡" --at 2026-10-19T02:33:30Z --commit`。
 - `governance advance --commit`：flow `probe -> retired`，probe 位空出。
 
+## 2026-10-19 · 补记重启 #68（2026-10-08）：主机离线 5.5 天后冷启动；#68 到 #69 之间丢的 bar
+
+只记可观测的事实。这次重启此前没有进 RESEARCH_LOG；重启 #69 见上一节（#295）。
+
+- 最后一轮巡检在 10-03T01:10:08Z，全部 ok；循环最后一个完整周期是 10-03T00:00Z 那根 bar。
+- `kern.boottime` 10-08T14:03:12Z。`last reboot shutdown` 在 10-01 与 10-08 两次开机之间没有关机记录，像断电或电池耗尽。
+  `pmset -g log` 只留约一周，10-19 读时最早一行是 10-12，原因已查不到。
+- 新进程 10-08T14:03:52Z 起，`restarted_at` 14:03:56Z，`restarts` 67 → 68，仍走 bridge（`D-041 bridge ACTIVE`）。
+  载入 `7d27baa6`（主 checkout 从 10-02T02:11:54Z 停到 10-19T02:32:29Z），构造 `e32f3856ac1e`、registry `7f8adb754962`，与 #67 相同。
+- 重启补了 132 根 `no process was running at this bar's close` 行（10-03T01:00 至 10-08T12:00），13:00 那根是
+  `restart outside the rebalance window`。这 5.5 天没有再平衡也没有退出检查；巡检在同一台机器上，一条告警都没发出（D-P4）。
+- 可动用 USDT 从 10-03T00:00Z 的 7,555.9 U 到 10-08T15:00Z 的 7,359.6 U。
+- #68 到 #69 之间丢了 14 根 bar：13 次 ConnectError，加 10-16T06:00 一根 backoff 跳过。10-16 收盘在 00:00–07:00Z 的 8 根连续失败，
+  当时 verify 读到 `ProxyError: 503`。
+- 冻结起点：上一节写「之后 60 天不改构造/registry（约到 12-18）」，按重启算；registry 里 main 的 `accepted_on` 是 2026-10-03、
+  `review_after_days` 60，复核日约 12-02。两者差 16 天，留给操作者定。
