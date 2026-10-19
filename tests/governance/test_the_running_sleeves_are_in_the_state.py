@@ -14,7 +14,6 @@ So the two sleeves the plan grandfathered have to be IN the state, not merely tr
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 from beidou_governance.lifecycle import Book, Candidate, Event, Facts, State, evaluate
@@ -24,8 +23,8 @@ from beidou_governance.state import read as read_state
 STATE = Path("governance/governance_state.json")
 
 
-def test_the_shipped_state_holds_the_two_sleeves_the_plan_grandfathered() -> None:
-    """KILL-AR-06: both running sleeves are IN the state, holding the slots they hold in the world.
+def test_the_shipped_state_holds_the_running_main_and_records_flow_retired() -> None:
+    """KILL-AR-06, post-retirement: the running sleeve is IN the state, and the retired one is recorded.
 
     Until 2026-09-29 this also pinned tsmom as main, the seed's value.  That day `governance advance --commit`
     folded the 2026-09-19 family-gate refusal (10-13 ruling table #8) and tsmom went main -> probe under the
@@ -36,20 +35,28 @@ def test_the_shipped_state_holds_the_two_sleeves_the_plan_grandfathered() -> Non
     report the registry stopped citing on 09-27, so the state went back to main.  PROBE stays allowed:
     a refusal of the evidence the registry cites today still demotes it.
 
-    2026-10-19: flow was retired by the operator's written ruling (D-048, RESEARCH_LOG 2026-09-30), recorded
-    after restart #69 stopped the loop trading it.  It stays IN the state as RETIRED: the slot and the 1/3
-    share are free, and R7's lifetime count is not reset by leaving.
+    2026-10-19 the operator retired flow (D-048, `governance retire flow` + `advance --commit`): it left
+    probe -> retired, released its 1/3 share, and freed its R3 slot.  tsmom stays main.  This test pins the
+    post-retirement shape: the running sleeve is in the state, the retired one is recorded (not headroom),
+    and R7's lifetime `probe_entries` survives the retirement.
     """
     book = read_state(STATE)
-    assert set(book.candidates) >= {"tsmom", "flow"}, "the grandfathered sleeves are not in the governance state"
+    assert set(book.candidates) >= {"tsmom", "flow"}, "the running sleeve is not in the governance state"
     assert book.candidates["tsmom"].state in {State.MAIN, State.PROBE}, "tsmom runs; it cannot read as gone"
     assert book.candidates["flow"].state is State.RETIRED
-    assert book.candidates["flow"].fraction == 0.0, "a retired sleeve holds no share of the book"
-    assert book.candidates["flow"].probe_entries == 1, "R7 counts entries on entry, and flow has entered once"
+    # retirement releases the 1/3 share AND its R3 slot; §3 says a second probe no longer waits on flow.
+    assert book.candidates["flow"].fraction == 0.0
+    assert book.candidates["flow"].probe_entries == 1, "R7 counts entries on entry, and flow entered once"
 
 
-def test_without_the_seed_a_second_full_probe_would_be_admitted() -> None:
-    """The measurement the seed exists for, kept executable so it cannot quietly stop being true."""
+def test_after_flows_retirement_a_probe_slot_is_free() -> None:
+    """The measurement the seed existed for, updated for its 2026-10-19 retirement.
+
+    Before the retirement flow occupied one of R3's two slots AND the whole 1/3 share, so a second probe
+    was refused (the `seeded` arm asserted `not allowed` with an R3 reason).  `governance retire flow`
+    freed the slot, so a second probe is now admitted -- exactly the headroom the retirement was meant to
+    create.  The `empty` arm still documents the original finding (an empty book PERMITS).
+    """
     policy = Policy()
     facts = Facts(window_open=True, is_queue_head=True, canary_healthy=True, clean_days_under_current_construction=30)
     newcomer = Candidate(id="newcomer", state=State.QUEUED, fraction=policy.probe_budget_share)
@@ -57,18 +64,9 @@ def test_without_the_seed_a_second_full_probe_would_be_admitted() -> None:
     empty = evaluate(Book(candidates={"newcomer": newcomer}), newcomer, Event.PROMOTE, facts, policy)
     assert empty.allowed, "if this now refuses, the seed is no longer what is holding R3 up - say so"
 
-    # The seed's book as it stood while flow ran (2026-09-09 to restart #69): flow a probe at the full share.
-    shipped = read_state(STATE)
-    flow = replace(shipped.candidates["flow"], state=State.PROBE, fraction=policy.probe_budget_share)
-    seeded = evaluate(
-        replace(shipped, candidates={**shipped.candidates, "flow": flow}), newcomer, Event.PROMOTE, facts, policy
-    )
-    assert not seeded.allowed
-    assert any("R3" in reason for reason in seeded.reasons), seeded.reasons
-
-    # Since flow's retirement (2026-10-19) the shipped state frees that slot, and a full probe is admitted:
-    # what used to refuse here was the running flow probe, not an empty-book accident.
-    assert evaluate(shipped, newcomer, Event.PROMOTE, facts, policy).allowed
+    seeded = evaluate(read_state(STATE), newcomer, Event.PROMOTE, facts, policy)
+    assert seeded.allowed
+    assert not any("R3" in reason for reason in seeded.reasons), seeded.reasons
 
 
 def test_the_state_file_is_tracked_rather_than_ignored() -> None:

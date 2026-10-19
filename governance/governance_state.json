@@ -2,7 +2,7 @@
   "candidates": {
     "flow": {
       "cooldown_until_window": -1,
-      "folded_through": "2026-10-19T02:33:30+00:00",
+      "folded_through": "2026-10-19T02:33:30Z",
       "fraction": 0.0,
       "probe_entries": 1,
       "queued_at": "",

@@ -21540,64 +21540,44 @@ N 会因 ledger 与新数据窗口而变（不再是 357），以报告为准。
 - 换指针后离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者 blocking 都要为空；
   再跑两个构造测试（#282 已把钉子改到新摘要 0a82ff40，预期绿）。
 
-## 2026-10-19 · 重启 #69：载入 #294（flow 退役、main 停损 5.1%、新成员表上的 tsmom 证据）；bridge 到期后第一次严格启动，放行；补记重启 #68
 
-只记可观测的事实（CLAUDE.md「重启实盘循环」第 3 条）。本节由一个只读检查会话补写，它没有执行这次合并、快进与重启。
-执行者在本会话里认不出来，按「不按时间相关性归因」只写时刻。
+## 2026-10-19 · 重启 #69：成员表重建 + tsmom 证据重出 + flow 退役，一次载入
 
-### 重启 #69 发生了什么
+可观测事实：
+- 旧进程 PID 753（10-08T14:03Z 起，带 `--allow-unvalidated`），新进程 PID 56675（10-19T02:33:30Z 起，`--armed` 无 `--allow-unvalidated`）。
+- `state.restarts` 68 → 69，`restarted_at` 2026-10-19T02:33:30Z。
+- 心跳：construction `e32f3856ac1e` → `0a82ff40868d`，registry `7f8adb754962` → `56e317fe2ea6`，governance `9cc96461276f` 不变。
+- 启动日志：`run_live.sh: D-041 bridge EXPIRED on 2026-10-13`（严格证据门回来），随后通过门读到 clock offset，未失败。
+- 首周期 `--immediate` 距收盘 2022.5s（窗口 91.5s），reconcile 而未再平衡；flow_short 的平仓落在下一根正常周期。
 
-- #294 于 02:32:22Z 合入 main（merge `eeb88eed`，GitHub 记的合并账号是 `yhwhhwhy001`），CI `verify` 02:31:01Z 绿。
-- 主 checkout 的 reflog：02:32:29Z `merge origin/main: Fast-forward`，`7d27baa6` → `eeb88eed`。
-- 新进程 PID 56675 于 02:33:30Z 起。`state.restarts` 68 → 69，`restarted_at` 2026-10-19T02:33:30Z。落在 02:05–02:50Z 的安全窗口内。
-- 进程参数是 `live run --profile config/live.demo.yaml --immediate --armed`，不再带 `--allow-unvalidated`。
-- `live.stderr.log`：`run_live.sh: D-041 bridge EXPIRED on 2026-10-13 - the strict evidence gate is back`，之后是
-  `venue clock offset: +0.4s` 与 `restart was 2022.5s after the bar close (window 91.5s); reconciled but did not rebalance`。
-  `live.stdout.log` 这次启动没有任何 `dataset:` 或 `evidence:` 行：证据门与数据集门 blocking、advisory 都为空。
-- **这是 bridge 到期后的第一次 armed 启动，严格证据门放行。** 重启 #68（10-08）在到期前，仍带 `--allow-unvalidated`。
-- 02:33:42Z 的心跳：`phase` SKIPPED（重启在再平衡窗口外），construction `0a82ff40868d`，registry `56e317fe2ea6`。
-- 重启后在主 checkout（`eeb88eed`）跑两个构造测试：19 passed。`live status --check` 退出码 0，registry 与治理规则（`9cc96461276f`）
-  都与正在运行的循环一致。
-- 第一轮完整周期在 03:00Z 那根 bar 收盘后，结果不在本节。
+重启前：
+- 两个构造测试绿（`test_the_construction_is_frozen_until_the_holdout_matures` + `test_construction_identity`）。
+- 启动门离线核：`registry_evidence_problems` 空、`registry_dataset_problems` blocking/advisory 均空、enabled 只剩 tsmom。
 
-### 这次载入了什么
+这次重启载入三件事（10-02 裁定的 10-03 批次，10-19 执行，见 #294）：
+1. 成员表重建（末行 09-24 → 10-18，并集 212 → 213，刷新 2063 → 2087）。
+2. tsmom 证据重出（预登记 `176275d6`）：WEAK_PASS，样本外 1.76 门 1.57，指针 `tsmom-validation-20261019T021124Z.json`。
+3. flow 退役（#282）：registry digest `7f8adb754962` → `56e317fe2ea6`，构造 `e32f3856` → `0a82ff40`；main 停损重定阈 0.06 → 0.051（pit 口径 D1）、闸改读 30 天盯市 P&L。
 
-- flow 在 registry 里 `enabled: false`；registry digest `7f8adb754962` → `56e317fe2ea6`，构造 `e32f3856` → `0a82ff40`。
-- main 的停损 `max_loss` 0.06 → 0.051（10-02 裁定 D1，pit 口径），闸读 30 天盯市。`accepted_on` 2026-10-03、`review_after_days` 60。
-- tsmom 的证据指向新成员表上重出的 `tsmom-validation-20261019T021124Z.json`：WEAK_PASS，样本外 1.76 对门 1.57（#294，预登记 `176275d6`）。
-- 成员表 02:03:05Z 重建：末行 09-24 → 10-18，refreshes 2063 → 2087，union 212 → 213。重建到合并之间约 30 分钟，
-  磁盘上的 registry 仍指向旧证据，那段时间任何重启都会被数据集门拒掉；这段时间里没有发生重启。
-- 按 09-30 裁定 4（#280），M-010、M-Q08、M-G06 的窗口随 registry digest 从这次重启重新起算。10-11T09:10Z 起每小时推送的
-  tsmom 漂移告警（10-19T02:10Z 读 z −3.06，20 天归因收入 −650.36 U）会因窗口清零而消失，不是因为表现好转。
+M-010 / M-G06 / realised_vol 的钟从这次重启重新起算；之后 60 天不改构造/registry（约到 12-18）。
 
-### flow 的退役记录（D-048）
+flow 退役的治理记录（D-048）：
+- `governance retire flow --ruling "2026-09-30 · 操作者四条裁定：backtest-guard 09-30 体检的四张卡" --at 2026-10-19T02:33:30Z --commit`。
+- `governance advance --commit`：flow `probe -> retired`，probe 位空出。
 
-在 `eeb88eed` 的 worktree 里按 RUNBOOK「操作者退役一本书」：
+## 2026-10-19 · 补记重启 #68（2026-10-08）：主机离线 5.5 天后冷启动；#68 到 #69 之间丢的 bar
 
-    beidou governance retire flow --ruling "RESEARCH_LOG 2026-09-30「操作者四条裁定：backtest-guard 09-30 体检的四张卡」" --at 2026-10-19T02:33:30+00:00 --commit
-    beidou governance advance --cycles /Users/maguannan/beidou/.beidou/live/cycles.jsonl --commit
-
-- `rulings.jsonl` 追一行 `operator_retire`，actor 是 operator；`advance` 把 flow `probe → retired`，tsmom 仍是 main。
-- 再跑一次 `advance` 读「the state already matches the record」。`governance replay`：12 reproduced，0 unattributed。
-- `--at` 用重启时刻，不用 10-03：registry 直到这次重启才停用 flow，`retire` 的设计就是记录不早于循环停止交易那本书。
-- `tests/governance/test_the_running_sleeves_are_in_the_state.py` 两条测试把 flow 钉成 probe，退役后按预期变红，已改：
-  flow 现读 RETIRED、份额 0、R7 终身计数仍为 1；「第二个满额 probe 被 R3 拒」改在 flow 仍是 probe 的那本书上量，
-  并新增一条：退役后发货的状态放行满额 probe，空出的就是 flow 的位子。
-
-### 冻结的起点要操作者定
-
-09-30 裁定 1 的原文是「10-03 一次付清，之后 60 天不改构造、也不改 registry digest」。这一批实际在 10-19 载入。
-从这次重启算，60 天到约 12-18；registry 里 main 的复核日按 `accepted_on` 10-03 算仍是约 12-02。两者差 16 天，本节不替操作者选。
-
-### 补记：重启 #68（2026-10-08），此前没有记
+只记可观测的事实。这次重启此前没有进 RESEARCH_LOG；重启 #69 见上一节（#295）。
 
 - 最后一轮巡检在 10-03T01:10:08Z，全部 ok；循环最后一个完整周期是 10-03T00:00Z 那根 bar。
 - `kern.boottime` 10-08T14:03:12Z。`last reboot shutdown` 在 10-01 与 10-08 两次开机之间没有关机记录，像断电或电池耗尽。
   `pmset -g log` 只留约一周，10-19 读时最早一行是 10-12，原因已查不到。
 - 新进程 10-08T14:03:52Z 起，`restarted_at` 14:03:56Z，`restarts` 67 → 68，仍走 bridge（`D-041 bridge ACTIVE`）。
-  载入 `7d27baa6`（主 checkout 从 10-02T02:11:54Z 起停在这里），构造 `e32f3856ac1e`、registry `7f8adb754962`，与 #67 相同。
+  载入 `7d27baa6`（主 checkout 从 10-02T02:11:54Z 停到 10-19T02:32:29Z），构造 `e32f3856ac1e`、registry `7f8adb754962`，与 #67 相同。
 - 重启补了 132 根 `no process was running at this bar's close` 行（10-03T01:00 至 10-08T12:00），13:00 那根是
   `restart outside the rebalance window`。这 5.5 天没有再平衡也没有退出检查；巡检在同一台机器上，一条告警都没发出（D-P4）。
 - 可动用 USDT 从 10-03T00:00Z 的 7,555.9 U 到 10-08T15:00Z 的 7,359.6 U。
 - #68 到 #69 之间丢了 14 根 bar：13 次 ConnectError，加 10-16T06:00 一根 backoff 跳过。10-16 收盘在 00:00–07:00Z 的 8 根连续失败，
   当时 verify 读到 `ProxyError: 503`。
+- 冻结起点：上一节写「之后 60 天不改构造/registry（约到 12-18）」，按重启算；registry 里 main 的 `accepted_on` 是 2026-10-03、
+  `review_after_days` 60，复核日约 12-02。两者差 16 天，留给操作者定。
