@@ -47,6 +47,7 @@ from beidou_live.backup import BACKUP_KEEP, BackupRefused, write_backup
 from beidou_live.benchmark import beta_reading
 from beidou_live.composition import build_model, load_registry, portfolio_params
 from beidou_live.config import (
+    account_gate,
     account_kill_switches,
     build_market_data,
     build_model_from_profile,
@@ -849,7 +850,8 @@ def live_kill_switch(profile: str, engage: bool) -> None:
     # released.  Release therefore refuses before touching anything; engage still writes what it can,
     # because a kill switch fails toward stopping, and only then says the stop is weaker than it looks.
     name = str((payload.get("venue", {}) or {}).get("api_key_env", ""))
-    blind = bool(name) and not os.environ.get(name)
+    # a mainnet switch is addressed by host (`venue_kill_switch_path`), so no credential is missing there
+    blind = bool(name) and not os.environ.get(name) and account_gate(payload) is None
     if blind and not engage:
         raise click.ClickException(
             f"{name} 不在环境里：账户级 kill switch 的路径由 API key 派生，这次只会清掉配置路径，"

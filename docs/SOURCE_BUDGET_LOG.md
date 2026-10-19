@@ -3709,6 +3709,32 @@ registry digest 里，只改信号参数的重启会让 M-010 把两本书拼进
 
 实测 16_634（本 PR 第一次量是 16_581，合并 #285 后重量）。顶抬到「实测 + 政策」：16_802，余量 168（= `headroom_policy(16_802)`）。
 
+### 2026-10-19 · 顶 16_802 -> 17_023（mainnet 启动前的三道拒绝、按主机寻址的 kill switch，切换方案 M3 与 M4）
+
+操作者 2026-10-19 在项目线程「实盘交易切换方案」选了「先小额校准」（RESEARCH_LOG 同日一节）。MAINNET_READINESS 的门
+B3、B4、B8 要求 mainnet 循环在第一次写之前拒绝三种账户：状态目录不是它自己的、第一次启动时不空仓或有挂单、权益超过操作者的上限。
+只对 venue 是 mainnet 主机的 profile 生效，demo 与 testnet 的启动不变。合入前实测 16_725。
+
+花在哪（净增 128）：
+
+M3：
+
+- +102 `engine.py`：
+  - `AccountGate` 与它的 docstring：三条各为什么、为什么不进 `construction_fingerprint`；上限从环境变量读（公开仓库不放资金规模），
+    没有默认值，非数、非正、非有限都拒绝。
+  - `account_gate_refusal`：纯函数，三条的判定都在这里，便于逐条单测。
+  - `startup` 接上：第一次启动不撤自己的旧挂单（要拒绝而不是收拾），判定放在 `_ensure_leverage` 之前，被拒的启动什么都没发。
+  - `sizing_equity`：运行中超上限按上限定仓位，只有定仓位读它；周期行记 `equity_cap`，超限告警按 key 去重。
+- +8 `config.py`：`account_gate(profile)` 按 venue 主机决定有没有这道门。
+- +3 `state.py`：`venue_host`，只有 mainnet 循环写；旧的 state.json 照常读成 None。
+
+M4（MAINNET_READINESS §5：按 key 寻址，换 key 开关就挪了位置，`--release` 没凭据找不到它）：
+
+- +11 `lock.py`：`venue_kill_switch_path` 与 docstring，mainnet 的开关按主机寻址。demo 的路径不变。
+- +4 `config.py`：`account_kill_switches` 在 mainnet profile 上返回按主机的路径，不再要凭据。
+
+实测 16_853。顶抬到「实测 + 政策」：17_023，余量 170（= `headroom_policy(17_023)`）。
+
 ## beidou_cli
 
 原文：blob 里第 3615–4030 行，`"beidou_cli": 8_740,` 之上的注释，共 416 行。
