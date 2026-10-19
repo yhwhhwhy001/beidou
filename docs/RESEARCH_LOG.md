@@ -21607,3 +21607,26 @@ flow 退役的治理记录（D-048）：
 本节同一个 PR 里的代码（M1）：`beidou_exchange/guard.py` 的三件同时（`MainnetRelease`、`mainnet_refusal`、
 `MAINNET_HOSTS`）、`BinanceRestClient` 的主机检查、`ORDER_PATHS` 加 `/fapi/v1/algoOrder`、`live run` 与
 `live flatten` 的 `--mainnet`。没有签字文件，合入后 mainnet 照旧在 guard 构造时被拒。
+
+## 2026-10-19 · 预登记：mainnet 全 USDT 保证金下重量 k（零 ledger）
+
+来源：上一节「现在重推」。脚本 `scratchpad/k_mainnet_all_usdt_20261019.py`，与本节同一个 commit 入库，跑之前提交。
+
+- **规则**：D-035 原样。取自助 q95 回撤在声明预算 −70% 以内的最大网格 k，pit 与 static 都要满足。
+- **因子 1.0**：全 USDT 账户上可动用就是总权益。阶梯 = `rescaled(k, budget=0.70)` = ((−0.49, 0.75k), (−0.70, 0.50k))，
+  base = k。这是 09-25 `k_remeasure_honest_drift_20260925.py` 的 K-4 臂（`ladder@k`、`unit`）。
+- **书**：今天的 `config/alpha_registry.yaml`（flow 已退役，只剩 tsmom）与 `config/live.demo.yaml`。数据末端钉在
+  2026-10-19 01:00（不含），与在架证据 `tsmom-validation-20261019T021124Z.json` 的 range 末端相同。
+- **网格**：0.60、0.55 … 0.20，步长 0.05，共 9 格。插值只作读数，不作答案。
+- **漂移两臂，答案取两臂 D-035 的较小者**：`h0919` = 1.2306419157745636（09-19 证据，k=0.60）；
+  `h0930` = 1.583996462786068（09-30 证据，k=0.175，FAIL 差 0.0144）。`orig` 与 `none`（无梯）只作对照，不进规则。
+- **零 ledger**：跑前跑后核 `reports/research/trials.jsonl` 的 sha256；`BEIDOU_TRIALS_LEDGER` 指向一个必须不存在的哨兵文件。
+- **不改任何 config**。采纳是 mainnet profile 与 registry 的 PR（M2），另裁；按采纳的 k 重出证据要花 ledger，要操作者一句完整授权。
+
+写在结果之前、不看结果改的两条：
+
+1. 两臂答案都落在网格内（≥ 0.20）时，答案就是较小者，哪怕它低于 09-25 的 0.45。
+2. 任一臂在网格里没有答案（0.20 也守不住），本次答案为「无」，不往下补格子；回到项目线程报告，由操作者定。
+
+已知不在模型里的：成本是平费率 7 bps、无冲击，L-B 资金下是好近似，L-C 之前要按真实成交校准冲击再量一次
+（MAINNET_READINESS §6）；周块 bootstrap 抹掉多月 regime；CAGR 只有差值有意义。
