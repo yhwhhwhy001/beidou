@@ -38,6 +38,14 @@ fail=0
 # its own failure; here it only sets the exit code, as the other steps do.
 echo "[$(stamp)] live backup"
 "$BEIDOU" live backup || { echo "[$(stamp)] FAIL live backup"; fail=1; }
+# 切换方案 M6 (2026-10-19): the mainnet loop's record too, once it has one.  Its own directory of copies, because
+# `write_backup` keeps the newest N `live-*.tar.gz` of whatever directory it writes to, and one shared directory
+# would rotate demo's copies out with mainnet's.
+if [ -d "$REPO/.beidou/live-mainnet" ]; then
+  echo "[$(stamp)] live backup mainnet"
+  "$BEIDOU" live backup --profile config/live.mainnet.yaml --to "$SUPPORT/backup-mainnet" \
+    || { echo "[$(stamp)] FAIL live backup mainnet"; fail=1; }
+fi
 echo "[$(stamp)] data sync"
 "$BEIDOU" data sync || { echo "[$(stamp)] FAIL data sync"; fail=1; }
 echo "[$(stamp)] data spot"

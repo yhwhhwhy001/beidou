@@ -83,7 +83,7 @@ def test_a_directory_without_the_record_is_refused(tmp_path: Path) -> None:
 class _Channel:
     sent: list[tuple[str, str | None]]
 
-    def __init__(self, url: str, *, secondary_url: str = "", state_path: Any = None) -> None:
+    def __init__(self, url: str, *, secondary_url: str = "", state_path: Any = None, label: str = "") -> None:
         self.enabled = bool(url or secondary_url)
 
     async def send(self, text: str, *, key: str | None = None, force: bool = False) -> bool:

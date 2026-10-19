@@ -43,7 +43,7 @@ class _Channel:
     delivers: bool
     recent: bool
 
-    def __init__(self, url: str, *, secondary_url: str = "", state_path: Any = None) -> None:
+    def __init__(self, url: str, *, secondary_url: str = "", state_path: Any = None, label: str = "") -> None:
         self.enabled = bool(url or secondary_url)
 
     def recently_sent(self, text: str, *, key: str | None = None) -> bool:
@@ -189,4 +189,5 @@ def test_a_clean_report_is_ok_and_pages_nothing(tmp_path: Path, webhook: tuple[s
 def test_the_script_runs_the_function_it_defines() -> None:
     lines = [line.rstrip() for line in SCRIPT.read_text(encoding="utf-8").splitlines()]
     assert "check_report" in lines, "defining check_report is not running it"
-    assert sum("report daily --check" in line for line in lines if not line.lstrip().startswith("#")) == 1
+    # the `--profile` slot is empty for demo and names the mainnet profile on its pass (M6)
+    assert sum("report daily ${PROFILE:+" in line for line in lines if not line.lstrip().startswith("#")) == 1

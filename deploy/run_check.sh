@@ -53,9 +53,10 @@ alerts = WebhookAlerts(
     secondary_url=os.environ["BEIDOU_ALERTS_WEBHOOK_URL_2"],
     state_path=Path(sys.argv[3]),
     dedup_window_seconds=window,
+    label=sys.argv[5],
 )
 sys.exit(0 if asyncio.run(alerts.send(sys.argv[1], key=sys.argv[2])) else 1)
-' "北斗巡检失败（$1）：$2" "check-$1" "${4:-$SUPPORT/alert-dedup.json}" "${3:-}" \
+' "北斗巡检失败（${1}）：${2}" "check-$1" "${4:-$SUPPORT/alert-dedup.json}" "${3:-}" "${NOTIFY_LABEL:-}" \
       || echo "[$(stamp)] webhook did NOT deliver the line above (or it was a duplicate inside the window)"
   fi
 }
@@ -77,22 +78,33 @@ reading() {
 # one bar it did not live to write puts it near 4,170s.  `live status --check` defaults to two bars
 # (7,200s), which left a dead loop unpaged until the SECOND :10: two bars without an exit check.
 HEARTBEAT_MAX_AGE_SECONDS=4000
+# Which loop the per-loop checks below read (切换方案 M6, 2026-10-19).  demo first, under the names it has always
+# had; then mainnet, only when its plist is installed - installing it is the operator's "this loop should be
+# running", and a mainnet state directory left behind by a stopped loop must not page hourly.  Its checks are
+# named `mainnet-*` and its pages carry 「实盘」 (`WebhookAlerts.label`), so the two never share a dedup key.
+PROFILE=
+PREFIX=
+NOTIFY_LABEL=
 live_check() {
   if [ "$1" = status ]; then
-    "$REPO/.venv/bin/beidou" live status --check --max-age-seconds "$HEARTBEAT_MAX_AGE_SECONDS"
+    "$REPO/.venv/bin/beidou" live status ${PROFILE:+--profile "$PROFILE"} --check --max-age-seconds "$HEARTBEAT_MAX_AGE_SECONDS"
   else
-    "$REPO/.venv/bin/beidou" live "$1" --check
+    "$REPO/.venv/bin/beidou" live "$1" ${PROFILE:+--profile "$PROFILE"} --check
   fi
 }
 failed=0
-for check in status verify; do
-  if output="$(live_check "$check" 2>&1)"; then
-    echo "[$(stamp)] ok   $check$(reading "$check" "$output")"
-  else
-    failed=1
-    notify "$check" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
-  fi
-done
+loop_checks() {
+  local check output
+  for check in status verify; do
+    if output="$(live_check "$check" 2>&1)"; then
+      echo "[$(stamp)] ok   ${PREFIX:-}${check}$(reading "$check" "$output")"
+    else
+      failed=1
+      notify "${PREFIX:-}${check}" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+    fi
+  done
+}
+loop_checks
 # The plists launchd actually reads.  `deploy/com.beidou.paper-l3.plist` carried `--paper` inside an XML
 # comment for a day: two dashes end a comment, so the file was not well-formed XML.  launchd took it
 # anyway (CFPropertyList is more forgiving than expat) and the soak ran, so nothing said a word - but a
@@ -158,19 +170,29 @@ fi
 # non-zero - a page that did not go out, a crash - pages here as before; this line is the fallback.
 check_report() {
   local output code
-  output="$("$REPO/.venv/bin/beidou" report daily --check 2>&1)"
+  output="$("$REPO/.venv/bin/beidou" report daily ${PROFILE:+--profile "$PROFILE"} --check 2>&1)"
   code=$?
   if [ "$code" -eq 0 ]; then
-    echo "[$(stamp)] ok   report"
+    echo "[$(stamp)] ok   ${PREFIX:-}report"
   elif [ "$code" -eq 3 ]; then
     failed=1
-    echo "[$(stamp)] FAIL report (the report paged this itself): $(echo "$output" | tail -n 3 | tr '\n' ' ')"
+    echo "[$(stamp)] FAIL ${PREFIX:-}report (the report paged this itself): $(echo "$output" | tail -n 3 | tr '\n' ' ')"
   else
     failed=1
-    notify "report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
+    notify "${PREFIX:-}report" "$(echo "$output" | tail -n 3 | tr '\n' ' ')"
   fi
 }
 check_report
+if [ -f "$HOME/Library/LaunchAgents/com.beidou.live-mainnet.plist" ]; then
+  PROFILE=config/live.mainnet.yaml
+  PREFIX=mainnet-
+  NOTIFY_LABEL=实盘
+  loop_checks
+  check_report
+  PROFILE=
+  PREFIX=
+  NOTIFY_LABEL=
+fi
 # G10, operator ruling 2026-09-23: the point-in-time membership table stays rebuilt by hand, and this
 # says how far it trails.  Gated like the lines above because it is the alert the operator asked for.
 # It PAGES once a day, not hourly (second ruling, same day): a lag is a standing condition that waits

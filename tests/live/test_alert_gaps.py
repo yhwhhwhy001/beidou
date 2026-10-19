@@ -150,7 +150,7 @@ def test_the_check_script_keeps_the_readings_from_the_runs_that_PASSED() -> None
     is written when a check passes - mentioning it in a comment would keep none of them."""
     script = Path("deploy/run_check.sh").read_text(encoding="utf-8")
 
-    assert 'ok   $check$(reading "$check" "$output")' in script
+    assert 'ok   ${PREFIX:-}${check}$(reading "$check" "$output")' in script
     assert "max_contribution_diff" in script
 
 
