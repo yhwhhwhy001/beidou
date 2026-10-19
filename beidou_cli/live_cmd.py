@@ -26,6 +26,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import click
 import httpx
@@ -39,6 +40,7 @@ from beidou_cli.governance_cmd import _gate as startup_gate
 from beidou_data.alignment import read_spot_verification
 from beidou_data.binance_public import DEFAULT_BASE_URL, PublicClient
 from beidou_data.store import MetricsStore, interval_ms
+from beidou_exchange.guard import MAINNET_HOSTS, MainnetRelease
 from beidou_governance.policy import policy_digest
 from beidou_live.alerts import HOURLY_CALLER_WINDOW_SECONDS, WebhookAlerts, redacted
 from beidou_live.backup import BACKUP_KEEP, BackupRefused, write_backup
@@ -53,6 +55,7 @@ from beidou_live.config import (
     build_venue,
     live_config,
     load_profile,
+    mainnet_release,
     registry_dataset_problems,
     registry_evidence_problems,
     resolve_universe,
@@ -209,6 +212,27 @@ def engage_kill_switch(payload: dict[str, Any], reason: str) -> Path:
     return written[0] if written else kill_switch_path(payload)
 
 
+MAINNET_OPTION_HELP = (
+    "one of the three conditions for a mainnet host (docs/MAINNET_READINESS.md §4.2): this run is meant to trade "
+    "real money.  The other two are the operator's sign-off in governance/MAINNET_ENABLED naming this profile, and "
+    "a profile whose file name and `profile:` key both say mainnet; the guard refuses unless all three hold"
+)
+
+
+def venue_release(profile_path: str, payload: dict[str, Any], *, flag: bool) -> MainnetRelease:
+    """The release this command presents, refusing `--mainnet` on a profile whose venue is not mainnet.
+
+    The guard only consults the release for a mainnet host, so `--mainnet` on the demo profile would be
+    accepted and mean nothing - and a flag that is typed every day without effect stops being read, which is
+    `--armed`'s lesson (§4.3).  Saying so out loud keeps the flag meaning exactly one thing.
+    """
+    venue = payload.get("venue", {}) or {}
+    host = (urlsplit(str(venue.get("rest_url", ""))).hostname or "").lower()
+    if flag and host not in MAINNET_HOSTS:
+        raise click.ClickException(f"--mainnet was passed but this profile's venue host {host!r} is not mainnet")
+    return mainnet_release(payload, profile_path, flag=flag)
+
+
 def refuse_second_instance(busy: LockBusy) -> tuple[int, str]:
     """Exit code and message for an instance that lost the lock.
 
@@ -237,6 +261,7 @@ def refuse_second_instance(busy: LockBusy) -> tuple[int, str]:
     is_flag=True,
     help="required for a non-dry-run, non-paper loop: this sends real orders to the configured account",
 )
+@click.option("--mainnet", is_flag=True, help=MAINNET_OPTION_HELP)
 @click.option("--data-root", default=".beidou/data", show_default=True)
 @click.option(
     "--registry",
@@ -270,10 +295,11 @@ def live_run(
     symbols: str,
     allow_unvalidated: bool,
     armed: bool,
+    mainnet: bool,
     data_root: str,
     verbose: bool,
 ) -> None:
-    """Run the bar-driven live loop against the configured (demo) venue."""
+    """Run the bar-driven live loop against the configured venue (demo unless the guard releases mainnet)."""
     _logging(verbose)
     # DL-L1: sending real orders is opt-in.  Before this, the only thing between a worktree
     # experiment and the live account was remembering to type --dry-run (KILL-R20).
@@ -295,6 +321,9 @@ def live_run(
             if value:
                 raise click.ClickException(f"{flag} requires --dry-run or --paper")
     payload = load_profile(profile)
+    if mainnet and paper:
+        raise click.ClickException("--mainnet and --paper together mean nothing: paper never reaches a venue")
+    release = venue_release(profile, payload, flag=mainnet)
     if registry_override:
         payload["registry"] = registry_override
     model, registry = build_model_from_profile(payload)
@@ -324,7 +353,7 @@ def live_run(
     if paper:
         venue = _paper_venue(market.base_url, paper_balance, store.directory / "paper_venue.json")
     else:
-        venue = build_venue(payload, (config.kill_switch_path, *config.kill_switch_paths))
+        venue = build_venue(payload, (config.kill_switch_path, *config.kill_switch_paths), mainnet=release)
     alert_config = payload.get("alerts", {}) or {}
     alerts = WebhookAlerts(
         str(alert_config.get("webhook_url", "")),
@@ -690,8 +719,9 @@ def live_verify(profile: str, paper: bool, tolerance: float, check: bool, data_r
 @live.command("flatten")
 @click.option("--profile", default="config/live.demo.yaml", show_default=True)
 @click.option("--yes", is_flag=True, help="confirm closing every position with reduce-only market orders")
+@click.option("--mainnet", is_flag=True, help=MAINNET_OPTION_HELP)
 @click.option("--data-root", default=".beidou/data", show_default=True)
-def live_flatten(profile: str, yes: bool, data_root: str) -> None:
+def live_flatten(profile: str, yes: bool, mainnet: bool, data_root: str) -> None:
     """Close all positions now (reduce-only market orders); works while the kill switch is engaged."""
     if not yes:
         raise click.ClickException("pass --yes to confirm flattening every position")
@@ -700,7 +730,13 @@ def live_flatten(profile: str, yes: bool, data_root: str) -> None:
     model, registry = build_model_from_profile(payload)
     universe = resolve_universe(payload, None, data_root)
     config = live_config(payload, universe, registry, dry_run=False)
-    venue = build_venue(payload, (config.kill_switch_path, *config.kill_switch_paths))
+    # The same three conditions as `live run`, decided by the same guard: flatten is the command a mainnet
+    # rollback reaches for first (§7.2 step 2), so it must not be weaker or stronger than the loop it stops.
+    venue = build_venue(
+        payload,
+        (config.kill_switch_path, *config.kill_switch_paths),
+        mainnet=venue_release(profile, payload, flag=mainnet),
+    )
     # L1-06: take the trading rights away BEFORE closing anything.  `flatten` used to leave the loop
     # running, so the next cycle rebuilt every position it had just closed - the 2026-09-04 incident
     # path, and the root KILL-R2 identified under the watchdog problem.  The switch is durable, so

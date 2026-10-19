@@ -130,6 +130,11 @@ Owner 写「会话」的，指写代码或跑测量的 Claude 会话；采纳与
 
 ### 4.1 今天的 `guard.py`
 
+> **2026-10-19 更正：§4.2 已实现，本节描述的是 `074b451` 之前的 guard。** 操作者当天选了「先小额校准」
+> （RESEARCH_LOG 同日一节），Q1 从 B 改为「实现进 scope，启用仍要签字」。`MAINNET_HOSTS`、`MainnetRelease`、
+> `mainnet_refusal` 入库，`BinanceRestClient` 的口已堵，`ORDER_PATHS` 加了 `/fapi/v1/algoOrder`。
+> `governance/MAINNET_ENABLED` 仍不在仓库里，所以 mainnet 照旧在构造时被拒。下面的行号是旧文件的。
+
 - **常量三个**：`ALLOWED_HOSTS`（:16，只有 `demo-fapi.binance.com` 与 `testnet.binancefuture.com`）、`MUTATING_METHODS`（:17）、`ORDER_PATHS`（:18）。
 - **检查点一**：`normalize_host`（:25-40）。要求 https、有主机名、URL 不带凭据、端口 443、不带 path/query/fragment。
   主机不在 `ALLOWED_HOSTS` 就抛 `GuardError`（:38-39）。

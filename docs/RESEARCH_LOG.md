@@ -21581,3 +21581,29 @@ flow 退役的治理记录（D-048）：
   当时 verify 读到 `ProxyError: 503`。
 - 冻结起点：上一节写「之后 60 天不改构造/registry（约到 12-18）」，按重启算；registry 里 main 的 `accepted_on` 是 2026-10-03、
   `review_after_days` 60，复核日约 12-02。两者差 16 天，留给操作者定。
+
+## 2026-10-19 · 操作者：mainnet 先做小额校准（L-B）；guard 放行的机制入库，签字另算
+
+来源：项目线程「实盘交易切换方案」。方案是 `/mnt/project-files/plans/mainnet-cutover-plan.md`（项目私有目录，不入库），
+从 `docs/MAINNET_READINESS.md` 接着写。操作者在四张卡片上的选择，原样：
+
+| 问题 | 选择 |
+| --- | --- |
+| 实盘先怎么上：小额校准、直接上目标资金，还是暂不开 | **先小额校准** |
+| 小额实盘用哪个 k：沿用 0.175，还是现在按全 USDT 重推 | **现在重推** |
+| 离机告警和第二告警通道，要不要作为开实盘的硬门 | **作为硬门** |
+| 实盘的新 k 单独用一份 registry 和阶梯、不动 demo，算不算违反 60 天冻结 | **不算，现在做** |
+
+含义，写在执行之前：
+
+- 09-28 Q1 = B「设计进 scope，启用仍不在」改为：mainnet 的**实现**进 scope，先开 L-B。**启用**仍要三样东西，
+  一样都不随本节入库：操作者亲自打字的放行、`governance/MAINNET_ENABLED`（HC-3，操作者合并）、一份 mainnet profile。
+  卡片只回答了卡片问的事，不构成放行 guard 的授权。
+- k 按全 USDT 保证金（因子 1.0）重推，先零 ledger 重量，再按选中的 k 重出证据；后者花 ledger，要操作者一句完整授权。
+- 冻结的读法：09-30「一次付清，之后 60 天不改」管的是 demo 的构造与 registry digest。mainnet 用自己的 registry
+  与阶梯，不改 demo 的任何摘要，按操作者的选择不算违反。demo 的证据窗口照旧从重启 #69 起算。
+- B5（第二通道）与 B6（宿主外告警）是开 L-B 的硬门，与 09-28「O-2、O-3 不做」只针对 demo 的那一条一致。
+
+本节同一个 PR 里的代码（M1）：`beidou_exchange/guard.py` 的三件同时（`MainnetRelease`、`mainnet_refusal`、
+`MAINNET_HOSTS`）、`BinanceRestClient` 的主机检查、`ORDER_PATHS` 加 `/fapi/v1/algoOrder`、`live run` 与
+`live flatten` 的 `--mainnet`。没有签字文件，合入后 mainnet 照旧在 guard 构造时被拒。

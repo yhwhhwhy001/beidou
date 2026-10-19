@@ -4319,6 +4319,15 @@ client id 去查。代理拒绝 CONNECT 的 `ProxyError`（本机最常见的故
 
 实测 747，余量 0 -> 40（= `headroom_policy(787)`）。理由不在这里重述，见文末「2026-09-28 headroom 政策（WP-C2）」一节。
 
+### 2026-10-19 · 顶 787 -> 880（mainnet 放行的三件同时，M1）
+
+实测 747 -> 840，+93，余量 40（= `headroom_policy(880)`）。操作者 10-19 在项目线程的卡片上选了「先小额校准」，
+这是 `docs/MAINNET_READINESS.md` §4.2 设计的那次实现：`guard.py` 加 `MAINNET_HOSTS`、`MainnetRelease` 与
+`mainnet_refusal`（签字文件、`--mainnet`、profile 名三件同时，判定只在这一处）；`rest_client.py` 堵上 §4.1 的口
+（不带 guard 时按 demo 白名单查主机，带 guard 时 URL 主机必须是 guard 批过的）；`ORDER_PATHS` 加
+`/fapi/v1/algoOrder`。签字文件不随本次入库，所以合入后 mainnet 照旧被拒。净增大半是解释为什么三件缺一不可的
+docstring，它们是这道门唯一的说明书，不压缩。
+
 ## beidou_shared
 
 原文：`"beidou_shared": 289,`（blob 里第 4146 行）之上没有注释，所以这一节没有代码块。

@@ -22,7 +22,7 @@ from beidou_data.pool import LivePool
 from beidou_data.universe import UniverseConfig
 from beidou_exchange.binance_usdm.rest_client import BinanceRestClient
 from beidou_exchange.binance_usdm.venue import BinanceUsdmVenue
-from beidou_exchange.guard import WriteGuard
+from beidou_exchange.guard import MainnetRelease, WriteGuard
 from beidou_live.composition import build_model, load_registry, portfolio_params, read_universe, write_universe
 from beidou_live.engine import LiveConfig
 from beidou_live.guards import GROSS_DENOMINATORS, GuardParams
@@ -100,6 +100,9 @@ PROFILE_KEY_READERS: dict[str, str] = {
     "paths.reports_dir": "beidou_cli.live_cmd",  # where `report daily` / `weekly` write; the loop never reads it
     "alerts.webhook_url": "beidou_cli.live_cmd",  # `live run` wires both into the loop's alerts
     "alerts.webhook_url_2": "beidou_cli.live_cmd",
+    # A label for people until 2026-10-19; now the third of the guard's three mainnet conditions
+    # (`mainnet_release`), so a profile copied from this one keeps `profile: demo` and is refused.
+    "profile": "beidou_live.config",
 }
 REPORT_ONLY_KEYS: frozenset[str] = frozenset(
     {
@@ -120,8 +123,7 @@ REPORT_ONLY_KEYS: frozenset[str] = frozenset(
         "risk_budget.usdt_baseline",
     }
 )
-# `profile: demo` is a label for people.  Nothing reads it: the loop knows its profile by the `--profile` path.
-UNREAD_KEYS: frozenset[str] = frozenset({"profile"})
+UNREAD_KEYS: frozenset[str] = frozenset()
 
 
 def load_profile(path: str | Path) -> dict[str, Any]:
@@ -386,10 +388,17 @@ def build_market_data(profile: dict[str, Any]) -> PublicMarketData:
     return PublicMarketData(str(market.get("rest_url", "https://fapi.binance.com")))
 
 
-def build_venue(profile: dict[str, Any], kill_switch_path: Path | Sequence[Path]) -> BinanceUsdmVenue:
+def mainnet_release(profile: Mapping[str, Any], profile_path: str, *, flag: bool) -> MainnetRelease:
+    """What this command brings to the guard's mainnet question; the guard alone decides (MAINNET_READINESS §4.2)."""
+    return MainnetRelease(profile_path=str(profile_path), profile_label=str(profile.get("profile", "")), flag=flag)
+
+
+def build_venue(
+    profile: dict[str, Any], kill_switch_path: Path | Sequence[Path], *, mainnet: MainnetRelease | None = None
+) -> BinanceUsdmVenue:
     venue_cfg = profile.get("venue", {}) or {}
     rest_url = str(venue_cfg.get("rest_url", "https://demo-fapi.binance.com"))
-    guard = WriteGuard(rest_url, kill_switch_path)
+    guard = WriteGuard(rest_url, kill_switch_path, mainnet=mainnet)
     client = BinanceRestClient(
         rest_url,
         env_secret(str(venue_cfg.get("api_key_env", "BEIDOU_DEMO_API_KEY"))),

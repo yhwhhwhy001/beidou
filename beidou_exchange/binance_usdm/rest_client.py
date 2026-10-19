@@ -17,11 +17,11 @@ import random
 import time
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
-from beidou_exchange.guard import WriteGuard
+from beidou_exchange.guard import GuardError, WriteGuard, normalize_host
 from beidou_shared.types import OrderOutcomeUnknown, VenueError
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,15 @@ class BinanceRestClient:
         max_retries: int = 3,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        # docs/MAINNET_READINESS.md §4.2, the hole §4.1 names: `guard` is optional, and without one nothing
+        # checked the host at all.  Now a client with no guard gets the plain allow-list (demo/testnet only,
+        # so it can never reach mainnet), and a client with one must point at the host that guard approved -
+        # a guard built for demo cannot be paired with a mainnet URL.
+        host = (urlsplit(rest_url).hostname or "").lower()
+        if guard is None:
+            normalize_host(rest_url.rstrip("/"))
+        elif host != guard.host:
+            raise GuardError(f"REST URL host {host!r} is not the host its guard approved ({guard.host!r})")
         self.rest_url = rest_url.rstrip("/")
         self._api_key = api_key
         self._api_secret = api_secret.encode("utf-8")
