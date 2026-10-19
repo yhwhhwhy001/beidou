@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Small mainnet calibration loop (cutover plan M5), next to the demo loop
+      in com.beidou.live.plist, which it does not replace.  Same restart
+      semantics: exchange positions are the only truth and client order ids
+      derive from the bar, so KeepAlive relaunches a crash after
+      ThrottleInterval seconds.  Credentials and the capital cap come from the
+      environment read by run_live_mainnet.sh, never from this plist.
+      Installing it is the operator's step and comes last, after the sign-off
+      file, the evidence at k 0.50 and the dead-man drill: cp to
+      ~/Library/LaunchAgents/ and
+      `launchctl load -w ~/Library/LaunchAgents/com.beidou.live-mainnet.plist`.
+    -->
+    <key>Label</key>
+    <string>com.beidou.live-mainnet</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/maguannan/beidou/deploy/run_live_mainnet.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/maguannan/beidou</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>ExitTimeOut</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/live-mainnet.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/maguannan/Library/Application Support/beidou/live-mainnet.stderr.log</string>
+</dict>
+</plist>
