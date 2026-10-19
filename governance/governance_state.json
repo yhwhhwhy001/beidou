@@ -2,15 +2,19 @@
   "candidates": {
     "flow": {
       "cooldown_until_window": -1,
-      "fraction": 0.3333333333333333,
+      "folded_through": "2026-10-19T02:33:30Z",
+      "fraction": 0.0,
       "probe_entries": 1,
-      "state": "probe",
-      "windows_survived": 0
+      "queued_at": "",
+      "state": "retired",
+      "windows_survived": 1
     },
     "tsmom": {
       "cooldown_until_window": -1,
+      "folded_through": "2026-10-03T00:00:00+00:00",
       "fraction": 0.0,
       "probe_entries": 0,
+      "queued_at": "",
       "state": "main",
       "windows_survived": 0
     }
@@ -20,5 +24,5 @@
   "promotions_this_window": 0,
   "to_main_this_window": 0,
   "version": 1,
-  "window": 0
+  "window": 1
 }
