@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from beidou_governance.policy import Policy
-from beidou_live.engine import LiveEngine
+from beidou_live.engine import AccountGate, LiveEngine
 from beidou_live.risk_budget import RiskBudgetParams, attributed_drawdown_state
 from beidou_live.state import LiveState, StateStore
 
@@ -38,9 +38,11 @@ class _Alerts:
 
 # 0.175 is the k the rungs are derived for since 2026-09-27 (0.60 from 2026-09-14); at a different k the
 # scalars below mean something else, which is the dependence `engine._risk_ladder` now clamps rather than hides.
-def _engine(tmp_path: Path, *, vol_target: float = 0.175) -> LiveEngine:
+def _engine(tmp_path: Path, *, vol_target: float = 0.175, account_gate: AccountGate | None = None) -> LiveEngine:
     engine = LiveEngine.__new__(LiveEngine)
-    engine.config = type("C", (), {"portfolio": type("P", (), {"vol_target": vol_target})()})()
+    engine.config = type(
+        "C", (), {"portfolio": type("P", (), {"vol_target": vol_target})(), "account_gate": account_gate}
+    )()
     engine.store = StateStore(tmp_path)
     engine.state = LiveState()
     engine.alerts = _Alerts()
@@ -208,3 +210,33 @@ def test_pnl_on_an_unpriced_bar_reaches_the_next_row_and_newer_pnl_is_reported_p
     assert reading["enforced"] and reading["rows"] == 2 and reading["path"] == pytest.approx(9_700.0)
     assert reading["pending_rows"] == 1 and reading["pending_pnl"] == pytest.approx(-5_000.0)
     assert reading["value"] == pytest.approx(-0.03), "the pending row is not silently folded in either"
+
+
+# --- M2 (2026-10-19): mainnet acts on its own rungs, which `Policy` does not hold -------------
+
+
+async def test_a_mainnet_book_acts_on_its_own_rungs_and_records_them(tmp_path: Path) -> None:
+    """-30% crosses demo's first rung and not mainnet's; mainnet's first rung is -49%, at 0.75k of 0.50."""
+    engine = _engine(tmp_path, vol_target=0.50, account_gate=AccountGate("fapi.binance.com"))
+    store = engine.store
+    bar = _cycle(store, 0, 10_000.0)
+    _attribute(store, bar, -3_000.0)
+    bar = _cycle(store, 1, 10_000.0)
+    shallow = await LiveEngine._risk_ladder(engine, bar)
+    assert shallow["drawdown"] == pytest.approx(-0.30) and "rung" not in shallow
+    # `policy_digest` does not cover these, so the record carries them
+    assert shallow["rungs"] == [[-0.49, 0.375], [-0.70, 0.25]]
+    _attribute(store, bar, -2_000.0)
+    bar = _cycle(store, 2, 10_000.0)
+    crossed = await LiveEngine._risk_ladder(engine, bar)
+    assert crossed["rung"] == 0.375 and crossed["cycles"] == 1 and not crossed["acting"]
+    demo = _engine(tmp_path / "demo")
+    _cycle(demo.store, 0, 10_000.0)
+    assert "rungs" not in await LiveEngine._risk_ladder(demo, START), "demo's block is unchanged"
+
+
+async def test_a_mainnet_k_its_rungs_were_not_derived_for_is_refused(tmp_path: Path) -> None:
+    engine = _engine(tmp_path, vol_target=0.55, account_gate=AccountGate("fapi.binance.com"))
+    _cycle(engine.store, 0, 10_000.0)
+    with pytest.raises(RuntimeError, match=r"vol_target 0\.55 needs \(0\.4125, 0\.275\)"):
+        await LiveEngine._risk_ladder(engine, START)

@@ -21655,3 +21655,29 @@ flow 退役的治理记录（D-048）：
 3. 成本是平费率 7 bps、无冲击。L-B 资金下够用；L-C 之前按真实成交校准冲击后要再量一次。
 
 采纳不在本节：mainnet 的 k 写进它自己的 profile 与 registry 是 M2 的 PR，按采纳的 k 重出证据要花 ledger，两件都等操作者定。
+
+## 2026-10-19 · 操作者：mainnet 的 k 取 0.50；mainnet 的 profile、registry 与阶梯入库（M2）
+
+来源：项目线程「实盘交易切换方案」，07:26:40Z 卡片「mainnet 小额实盘的 k 定为多少？」，选 **0.50**（选项是 0.50 / 0.55 / 0.175）。
+
+- **偏离预登记，方向是更保守的一侧。** 上一节的预登记答案是 0.55，它的 q95 区间两边都跨过 −70%；0.50 是网格上往下一格，
+  区间完整在线内。按点估计取格的规则没有改，0.55 仍是记录下的答案；0.50 是操作者在答案之下的取用。
+- **mainnet 自己的档位**：`rescaled(0.50, budget=0.70)`、因子 1.0 = ((−0.49, 0.375), (−0.70, 0.25))。写在
+  `beidou_governance/policy.py` 的 `VENUE_DRAWDOWN_LADDERS`，按 venue 主机寻址，**不是 `Policy` 的字段**，所以
+  `policy_digest()` 不动、demo 的循环看不见它。`venue_drawdown_ladder` 在 mainnet 启动时（第一次写之前）和每个周期核对
+  档位目标是不是 profile 的 0.75k 与 0.50k，对不上就拒绝。mainnet 周期记录的 `risk_ladder` 块带 `rungs`，因为
+  `policy_digest` 不覆盖它们。
+- **`config/live.mainnet.yaml`**：与 demo 逐键相同，只差 16 个键：`profile`、主机、两个凭据变量名、
+  `multi_assets_margin: false`、`registry`、`vol_target`、`risk_budget` 的四档、`vol_band` 与 `usdt_baseline`、
+  `guards.kill_switch_path`、状态目录、报告目录。`usdt_baseline` 是 null：入金额是账户事实，仓库是公开的。报告目录在 `.beidou/` 下，整个被 .gitignore 忽略。
+  `test_the_mainnet_profile_differs_from_demo_only_where_it_must.py` 钉住这张清单，构造上只许 `vol_target` 不同。
+- **`config/alpha_registry.mainnet.yaml`**：启用的信号与 demo 逐字相同。`evidence` 与 `probe` 暂时仍是 demo 在 0.175 上的，
+  所以**这份 profile 今天启动不了**：证据门报 `tsmom: portfolio vol_target is 0.5 live but 0.175 in the cited evidence`。
+
+还没做、按顺序：
+
+1. 按 0.50 重出 tsmom 证据（花 ledger，要操作者写全的授权句子：worktree、ledger 行数、推哪个分支）。
+2. 同一次重量主书的 `probe.stop`：0.051 是 0.175 上 30 天盯市 P&L 的 2.28% 分位，0.50 上约深 2.86 倍。上面那条测试在证据门
+   放行之后要求 `measured_at.vol_target` 等于 profile 的 k。
+3. 读数：`guards.daily_loss_pause` −5% 与 demo 相同。0.175 上它约是 5.4 个日波动，0.50 上约 1.9 个，按正态近似约每月触发一次（推算，没量）。它在证据的
+   `book_guards` 里，第 1 步的重出会把它算进去；改不改是另一个裁定，本节不动它。

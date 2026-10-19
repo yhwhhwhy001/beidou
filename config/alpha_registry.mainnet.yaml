@@ -1,0 +1,60 @@
+# mainnet 小额校准循环的 registry（切换方案 M2，2026-10-19；操作者卡片「不算，现在做」：mainnet 有自己的
+# registry 与阶梯，demo 的 digest 不动，09-30 的 60 天冻结不受影响）。
+#
+# 信号与 config/alpha_registry.yaml 相同：只有 tsmom 启用，参数逐字相同，参数的来历写在那份文件里。
+# `tests/live/test_the_mainnet_profile_differs_from_demo_only_where_it_must.py` 核对两份启用的策略逐字相同，
+# 只许 `evidence` 与 `probe` 不同。demo 那份停用的策略这里不列：它们不进模型，列出来只是要人去核的行。
+#
+# **这份 registry 今天启动不了，这是有意的。** `evidence` 仍指着 demo 在 k = 0.175 上的报告，而
+# config/live.mainnet.yaml 的 `vol_target` 是 0.50。`vol_target` 是构造键，`registry_evidence_problems` 会拒绝
+# 「portfolio vol_target is 0.5 live but 0.175 in the cited evidence」。要按 0.50 重出证据（花 ledger，要操作者
+# 写全的授权句子），再把这里指过去。
+#
+# 同一次还要重量 `probe.stop`：`max_loss` 0.051 是 k = 0.175 上 30 天盯市 P&L 的 2.28% 分位，k = 0.50 上同一个
+# 分位约深 2.86 倍。上面那条测试在证据门放行之后要求 `measured_at.vol_target` 等于 profile 的 k。
+version: 1
+universe: []
+ensemble:
+  method: mean
+  turnover_penalty: 0.0
+strategies:
+  - id: tsmom
+    enabled: true
+    weight: 1.0
+    params:
+      horizons: [168, 336, 720]
+      horizon_weights: [0.2, 0.3, 0.5]
+      return_scale: 0.20
+      slope_scale: 0.01
+      entry_threshold: 0.20
+      vol_window: 400
+      conviction_mode: sign
+      crowding_window: 72
+      crowding_cut: 0.7
+      crowding_penalty: 0.5
+    evidence:                   # demo's, at k = 0.175: refused here until re-issued at 0.50 (see above)
+      report: reports/research/tsmom-validation-20261019T021124Z.json
+      sha256: e4f2692a94e10359584f544f27a44557415d35e460581668c60c132117990db8
+      verdict: WEAK_PASS
+    probe:                      # demo's, measured at k = 0.175: re-measure with the evidence (see above)
+      accepted_by: operator
+      accepted_on: '2026-10-03'
+      reason: >-
+        grandfathered main book (KILL-AR-06), copied from config/alpha_registry.yaml on 2026-10-19 for the
+        mainnet calibration loop.  The stop is the empirical 2.28% quantile of the book's own 30-day
+        mark-to-market P&L on the pit panel, and the gate reads that same caliber.
+      review_after_days: 60
+      stop:
+        window_days: 30
+        max_loss: 0.051
+        halts: false
+        measured_at:
+          population: pit
+          quantile_228: -0.050917
+          sigma_30d: 0.040526
+          windows: 48361
+          vol_target: 0.175
+          evidence_construction: 221d001c3c07a626
+          registry: 56e317fe2ea6
+          commit: 535def30
+          measured: '2026-10-02T14:43:55Z'

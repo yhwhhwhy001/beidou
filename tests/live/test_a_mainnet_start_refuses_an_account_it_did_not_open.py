@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from beidou_alpha.panel import Panel
+from beidou_alpha.portfolio import PortfolioParams
 from beidou_live.config import account_gate
 from beidou_live.engine import MAINNET_EQUITY_CAP_ENV, AccountGate, LiveEngine
 from beidou_live.state import LiveState, StateStore
@@ -40,8 +41,9 @@ def world(august_panel: Panel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def _engine(world: dict, *, gate: AccountGate | None = GATE, state_dir: str = "live-mainnet") -> LiveEngine:
+    # a gated start also checks the venue's R8 ladder against k (M2), and mainnet's is derived at 0.50
     return LiveEngine(
-        _config(world["tmp"], account_gate=gate),
+        _config(world["tmp"], account_gate=gate, portfolio=PortfolioParams(vol_target=0.50)),
         model=_model(),
         market=world["market"],
         venue=world["venue"],

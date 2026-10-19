@@ -1,0 +1,102 @@
+# Binance USDⓈ-M mainnet 的小额校准循环（切换方案 M2，2026-10-19，L-B：demo 照跑，旁边多一个 mainnet 循环）。
+#
+# 除了下面标着「mainnet」的行，每个值都与 config/live.demo.yaml 逐字相同。值的来历与历史写在那份文件里，这里不抄：
+# 抄过来的注释说的是 demo 的账户（BTC 抵押品、因子 1.7479、5000 USDT 的重置），放在这里就是错的。
+# `tests/live/test_the_mainnet_profile_differs_from_demo_only_where_it_must.py` 逐键核对两份，多改一个键就红。
+#
+# 这份文件不放行任何东西。guard 要三条同时成立才写 mainnet：`governance/MAINNET_ENABLED`、`live run --mainnet`、
+# 以及这里的 `profile: mainnet`（M1）。启动前还有三道拒绝（M3）：状态目录是这个主机自己的、第一次启动空仓无挂单、
+# 权益不超过环境变量 `BEIDOU_MAINNET_MAX_EQUITY_USDT`。上限不写进这里：仓库是公开的。
+profile: mainnet                                   # mainnet: the guard's third condition
+venue:
+  rest_url: https://fapi.binance.com               # mainnet
+  # mainnet: names only, never values.  Different from demo's on purpose, so a shell holding the demo key
+  # cannot start this profile and the two kill switches can never be the same file.
+  api_key_env: BEIDOU_MAINNET_API_KEY
+  api_secret_env: BEIDOU_MAINNET_API_SECRET
+  recv_window_ms: 10000
+  # mainnet: single-asset margin, USDT only (operator's card 2026-09-26「只放 USDT」).  Startup asserts it and
+  # never sets it.  This is what makes the D-035 factor 1.0 here, against demo's 1.7479.
+  multi_assets_margin: false
+market_data:
+  rest_url: https://fapi.binance.com
+  interval: 1h
+  history_bars: 400
+universe: config/universe.yaml
+registry: config/alpha_registry.mainnet.yaml       # mainnet: its own registry, so its evidence can be its own
+costs: config/costs.yaml
+portfolio:
+  leverage: by_vol
+  leverage_sigma_ref: 0.90
+  leverage_tiers: [1, 2, 3, 4, 5, 6, 8, 10, 12, 15]
+  leverage_hysteresis: 168
+  margin_cap: 0.40
+  max_leverage: 5
+  margin_buffer: 0.10
+  max_participation: 0.02
+  # mainnet: D-035 on an all-USDT account (factor 1.0), operator's card 2026-10-19T07:26:40Z.  The
+  # pre-registered answer was 0.55 (`b0372404`, results in docs/RESEARCH_LOG.md 2026-10-19), whose q95 CI
+  # crosses -70%; 0.50 is the next grid point down and its CI sits wholly inside (pit [-68.27, -66.16]%,
+  # static [-68.08, -65.94]%).  `vol_target` is a construction key, so the cited evidence must be re-issued
+  # at 0.50 before this profile can start: until then `registry_evidence_problems` refuses it.
+  vol_target: 0.50
+  max_gross: 2.0
+  max_gross_denominator: usdt_equity
+  max_weight: 0.15
+  no_trade_band: 0.005
+  no_trade_rel_band: 0.40
+  exempt_crossings: true
+  flat_inside_band: true
+  band_entry_multiple: 2.0
+  min_history_bars: 720
+pool:
+  refresh: daily
+  candidates: 45
+  liquidity_window: 24
+  quarantine_after: 3
+exits:
+  stop_loss: 6.0
+  trailing_stop: 0.0
+  take_profit: 6.0
+  cooldown_bars: 24
+  vol_halflife: 48
+drawdown_throttle:
+  enabled: false
+  start: 0.05
+  stop: 0.20
+  floor: 0.25
+risk_budget:
+  # mainnet: the reporting copy of `VENUE_DRAWDOWN_LADDERS["fapi.binance.com"]` (beidou_governance/policy.py),
+  # by the rule demo's rungs use: 70% of the -70% budget and the budget itself, at 0.75k and 0.50k.  Factor 1.0,
+  # so these are the budget itself in total-equity units.  The loop acts on the policy copy, never on these.
+  deescalate_at: 0.49
+  rollback_at: 0.70
+  deescalate_to: 0.375
+  rollback_to: 0.25
+  vol_band: [0.4333333333, 0.6333333333]  # mainnet: 0.8667x / 1.2667x of vol_target, demo's relative width
+  vol_window_days: 30
+  min_vol_bars: 240
+  model_slippage_bps: 2.0
+  slippage_multiple: 2.0
+  slippage_window_days: 30
+  min_slippage_fills: 30
+  max_late_cycle_share: 0.05
+  max_missed_rebalances: 0
+  min_liq_distance: 10.0
+  guard_window_days: 90
+  # mainnet: the deposit is an account fact and this repository is public, so it is not written here.  None
+  # prints no USDT P&L rather than one counted from zero.
+  usdt_baseline: null
+guards:
+  daily_loss_pause: -0.05
+  stale_bars_max: 2
+  max_bar_alignment_seconds: 60
+  kill_switch_path: .beidou/live-mainnet/KILL_SWITCH  # mainnet; the host-addressed account switch is separate (M4)
+paths:
+  state_dir: .beidou/live-mainnet                    # mainnet: AccountGate refuses demo's state directory anyway
+  # mainnet: under `.beidou/`, which .gitignore ignores whole.  A real account's daily report carries its equity
+  # and positions, and `reports/` is where committed research lives.
+  reports_dir: .beidou/reports-mainnet
+alerts:
+  webhook_url: "${BEIDOU_ALERTS_WEBHOOK_URL:-}"
+  webhook_url_2: "${BEIDOU_ALERTS_WEBHOOK_URL_2:-}"

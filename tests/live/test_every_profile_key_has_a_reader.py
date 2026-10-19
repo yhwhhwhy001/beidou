@@ -54,6 +54,8 @@ from beidou_live.risk_budget import RiskBudgetParams
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIPPED = ROOT / "config" / "live.demo.yaml"
+#: 2026-10-19（切换方案 M2）。键集与 demo 相同，所以同一套表对两份都成立；多一个或少一个键，下面那条就红。
+MAINNET = ROOT / "config" / "live.mainnet.yaml"
 TABLES: dict[str, frozenset[str]] = {
     "PROFILE_KEY_READERS": frozenset(PROFILE_KEY_READERS),
     "REPORT_ONLY_KEYS": REPORT_ONLY_KEYS,
@@ -204,8 +206,9 @@ def keys_read_by(name: str) -> frozenset[str]:
     return frozenset(keys_read(*_module(name)))
 
 
-def test_every_key_of_the_shipped_profile_is_in_exactly_one_table() -> None:
-    assert_the_tables_cover(SHIPPED)
+@pytest.mark.parametrize("profile", [SHIPPED, MAINNET], ids=["demo", "mainnet"])
+def test_every_key_of_the_shipped_profile_is_in_exactly_one_table(profile: Path) -> None:
+    assert_the_tables_cover(profile)
 
 
 def test_a_key_added_without_a_reader_is_named(tmp_path: Path) -> None:
