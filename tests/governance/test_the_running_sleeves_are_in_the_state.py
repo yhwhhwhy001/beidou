@@ -14,6 +14,7 @@ So the two sleeves the plan grandfathered have to be IN the state, not merely tr
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from beidou_governance.lifecycle import Book, Candidate, Event, Facts, State, evaluate
@@ -34,14 +35,16 @@ def test_the_shipped_state_holds_the_two_sleeves_the_plan_grandfathered() -> Non
     Later the same day the operator ruled that refusals count per evidence.  Both refusals had judged a
     report the registry stopped citing on 09-27, so the state went back to main.  PROBE stays allowed:
     a refusal of the evidence the registry cites today still demotes it.
+
+    2026-10-19: flow was retired by the operator's written ruling (D-048, RESEARCH_LOG 2026-09-30), recorded
+    after restart #69 stopped the loop trading it.  It stays IN the state as RETIRED: the slot and the 1/3
+    share are free, and R7's lifetime count is not reset by leaving.
     """
     book = read_state(STATE)
-    assert set(book.candidates) >= {"tsmom", "flow"}, "the running sleeves are not in the governance state"
+    assert set(book.candidates) >= {"tsmom", "flow"}, "the grandfathered sleeves are not in the governance state"
     assert book.candidates["tsmom"].state in {State.MAIN, State.PROBE}, "tsmom runs; it cannot read as gone"
-    assert book.candidates["flow"].state is State.PROBE
-    # flow occupies one of R3's two slots AND the whole 1/3 share; §3 says a second probe therefore
-    # has to wait for it to leave or come in at 1/6 with its own book report.
-    assert book.candidates["flow"].fraction == Policy().probe_budget_share
+    assert book.candidates["flow"].state is State.RETIRED
+    assert book.candidates["flow"].fraction == 0.0, "a retired sleeve holds no share of the book"
     assert book.candidates["flow"].probe_entries == 1, "R7 counts entries on entry, and flow has entered once"
 
 
@@ -54,9 +57,18 @@ def test_without_the_seed_a_second_full_probe_would_be_admitted() -> None:
     empty = evaluate(Book(candidates={"newcomer": newcomer}), newcomer, Event.PROMOTE, facts, policy)
     assert empty.allowed, "if this now refuses, the seed is no longer what is holding R3 up - say so"
 
-    seeded = evaluate(read_state(STATE), newcomer, Event.PROMOTE, facts, policy)
+    # The seed's book as it stood while flow ran (2026-09-09 to restart #69): flow a probe at the full share.
+    shipped = read_state(STATE)
+    flow = replace(shipped.candidates["flow"], state=State.PROBE, fraction=policy.probe_budget_share)
+    seeded = evaluate(
+        replace(shipped, candidates={**shipped.candidates, "flow": flow}), newcomer, Event.PROMOTE, facts, policy
+    )
     assert not seeded.allowed
     assert any("R3" in reason for reason in seeded.reasons), seeded.reasons
+
+    # Since flow's retirement (2026-10-19) the shipped state frees that slot, and a full probe is admitted:
+    # what used to refuse here was the running flow probe, not an empty-book accident.
+    assert evaluate(shipped, newcomer, Event.PROMOTE, facts, policy).allowed
 
 
 def test_the_state_file_is_tracked_rather_than_ignored() -> None:
