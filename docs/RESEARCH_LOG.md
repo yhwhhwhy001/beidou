@@ -21770,3 +21770,63 @@ probe stop 预期约 0.051 × 2.86 ≈ 0.145，截断会让它浅一些。
 | 1 | 若上限截断在实盘比回测更频繁，则实际波动低于 0.50 | mainnet 日报的已实现波动 | 30 天已实现波动跌出 vol_band [0.433, 0.633] | 风险预算的 vol_band 检查告警 |
 | 2 | 若 `daily_loss_pause` −5% 在 0.50 上约每月触发（1.9 个日 σ，推算），则 mainnet 频繁停一天 | 循环日志 `daily_loss_pause` | 30 天内触发 ≥ 2 次 | 告警带【实盘】前缀；要不要放宽是另一个裁定 |
 | 3 | 若 probe stop 在 0.50 上量得过浅，则平常行情就把 main 降回 probe | 小时检查的「主账本触发 P&L stop」告警 | 30 天盯市读数越过新 `max_loss` | `halts: false`，不停交易，降级要人读告警再定 |
+
+## 2026-10-19 · 结果：mainnet 的 tsmom 证据按 k = 0.50 重出——WEAK_PASS，样本外 1.6465 对门 1.5788；probe stop 0.051 → 0.153
+
+上一节的预登记在 `76b996ce`（09:01:54Z）提交并推送后才开跑。在操作者 Mac 的独立 worktree
+`/Users/maguannan/beidou-wt/evidence-mainnet-k050` 里跑：validate 09:07:07Z → 09:08:38Z（91 秒，exit 0），
+probe 09:09:22Z → 09:09:35Z。开跑前机器上没有别的 research / data 进程。
+
+### 证据
+
+报告 `tsmom-validation-20261019T090838Z.json`（sha256 `c6852bed…30379159`），`preregistration.commit` 是 `76b996ce`，
+`portfolio.vol_target` 0.5，`evidence_construction` `4fbc028ea0bfc55e`。
+
+| 项 | k = 0.175（在架 demo，`…021124Z`） | k = 0.50（本次） |
+| --- | ---: | ---: |
+| verdict | WEAK_PASS | WEAK_PASS |
+| 样本外 Sharpe | 1.7591 | 1.6465 |
+| 门（N） | 1.5701（359） | 1.5788（361） |
+| 余量 | +0.1890 | +0.0677 |
+| 成本 ×1.5 余量 | +0.0772 | +0.0011 |
+| 成本 ×2 余量 | −0.0346 | −0.0657 |
+| 滑点 9.2 bps 余量 | −0.0410 | −0.0696 |
+| DSR / PBO | 0.7005 / 0.0274 | 0.5728 / 0.208 |
+
+- range 与在架证据逐根相同：2021-01-31 01:00 → 2026-10-19 00:00，50,088 根。best_params 两份逐键相同（5 折都选 crowding_window 72）。
+- reasons 只有 `oos_is_full_sample_tail`，与 0.175 那次相同。walk-forward 一致性 1.00；CPCV 均值 1.67、q05 1.42、负路径 0。
+- PBO 0.208 低于 `max_pbo` 0.30，且网格 2 格少于 `min_trials_for_pbo` 4，按 verdict.py 只报告、不执行。
+- ledger：`trials.jsonl` 跑前 `9fb9e255…` 22,235 行，跑后 `b4ec7780…` 22,237 行，正好 +2，只追加（前 22,235 行 sha 不变）；
+  probe 前后不变。两行 run_id 都是本报告，crowding_window 0 / 72 的 Sharpe 1.6013 / 1.7126。
+
+**按预登记第 6 节判定：采纳。** verdict 是 WEAK_PASS，样本外 1.6465 > 1.5788 + 0.0001。
+`config/alpha_registry.mainnet.yaml` 的 tsmom `evidence` 指向本报告。离线核：mainnet 与 demo 的 `registry_evidence_problems` 都为空。
+
+预期的样本外区间是 1.65–1.76，实测 1.6465，略低于下沿；挂得最近的是成本 ×1.5，余量只剩 +0.0011。它不进判定，但它是这本书在
+mainnet 上最薄的一条：真实成本只要比模型高一半，样本外就落到门上。这正是 MAINNET_READINESS §6 要 L-C 之前按真实成交校准冲击的原因。
+
+### probe stop
+
+`PROBE_STOP_PROFILE=config/live.mainnet.yaml scratchpad/probe_stop_tails.py pit`，方法与 10-02 相同。面板是脚本常量 `REPORT`
+（09-08 book 报告）的 pit range：2021-01-31 01:00 → 2026-09-07 16:00，49,080 根，213 币，48,361 个 30 天窗口。
+这个窗口与证据的 range 不同，10-02 那次也是如此，口径与 demo 的止损一致。
+
+| 项 | 值 |
+| --- | ---: |
+| main 年化 σ / 30 天 σ | 47.07% / 10.968% |
+| 2.28% 分位数 | −15.295% |
+| 现行 5.1%（demo 的） | 0.46σ，窗口触发比例 13.90% |
+| 规则值 15.3% | 1.39σ，窗口触发比例 2.277% |
+
+`max_loss` 0.051 → **0.153**（|q2.28| 取到 0.1%），`measured_at` 写进 registry，`halts` 仍是 false。预登记预期约 0.145，
+说截断会让它浅一些；实测更深。30 天 σ 是 0.175 上的 2.71 倍，比 k 的比例 2.86 小，这一侧与「截断」的预期同向，分位数更深说明尾部
+比 σ 放大得多。若不重量，demo 的 5.1% 在 0.50 上是 0.46σ，约七分之一的 30 天窗口会触发。
+
+守卫：`test_the_mainnet_stop_belongs_to_what_it_was_measured_on`（`tests/governance/test_the_batch_window_has_a_list.py`）对 mainnet
+registry 跑 demo 那条同样的核对：阈值等于分位数、pit、`vol_target`、证据构造摘要与 registry 摘要（`7fdf8af41651`）都与记的一致。
+
+### 没改的
+
+demo 的 profile、registry、证据都不动，demo 循环不需要重启。mainnet 仍启动不了，剩下的拒绝是：没有 `governance/MAINNET_ENABLED`、
+没有 mainnet 凭据与权益上限、缺第二告警通道或 dead-man URL（M7 的硬门）。`daily_loss_pause` −5% 在本报告的 `book_guards` 里，
+按预登记第 9 节只盯不改。

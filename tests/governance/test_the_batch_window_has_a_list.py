@@ -170,6 +170,17 @@ def _the_registry_threshold_belongs_to_what_it_was_measured_on(profile: Any, mod
     )
 
 
+def test_the_mainnet_stop_belongs_to_what_it_was_measured_on() -> None:
+    """The same guard on the mainnet registry (cutover plan M2): its own k (0.50), so its own stop.
+
+    Re-measured with the k = 0.50 evidence on 2026-10-19 (pre-registration 76b996ce).  A later k change that
+    re-issues the evidence and forgets the stop turns this red, the way the demo guard above catches it.
+    """
+    profile = load_yaml(Path("config/live.mainnet.yaml"))
+    model, registry = build_model_from_profile(profile)
+    _the_registry_threshold_belongs_to_what_it_was_measured_on(profile, model, registry)
+
+
 def test_the_summary_shouts_when_a_window_has_opened() -> None:
     """On a queue of its own: with `probe-stop-caliber` applied (2026-10-03 batch), the live file has nothing left
     waiting for a window, so reading it here would test whatever happens to be queued, not the summary."""
