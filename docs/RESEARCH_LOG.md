@@ -21511,3 +21511,32 @@ PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research 
 | 1 | 若周期记录没有写 `book_weights` 或 `closes`，则闸读不出、永不触发 | 日报 Probe books 行 | 行内出现「盯市读不出」 | 日报印出原因；合并前已在 446 个周期上核过有输入 |
 | 2 | 若 k 或 registry 以后变了而阈值没跟，则阈值描述的是另一本书 | `test_the_batch_window_has_a_list.py` 的守卫 | 守卫变红 | 守卫读 registry 的 `measured_at`，配置一动就红，要求重量 |
 | 3 | 若平静时期盯市一个月跌过 5.1%，则 main 告警并在治理记录里降回 probe | 小时检查的「主账本触发 P&L stop」告警 | 告警行写盯市读数与 bar 数 | `halts: false`，不停交易；降级是治理动作，由人读告警再定 |
+
+
+## 2026-10-19 · 预登记：tsmom 证据在新成员表上重出（随成员表重建 + flow 退役同批，一次重启）
+
+起因：成员表末行 09-24、落后 25 天（10-08 起每天一条告警）。10-02 已裁定 flow 退役（#282）+ main 停损
+0.06 → 0.051，但 10-03 的合并与重启从未执行。操作者 10-19 说「现在做」，本会话把两件一起做：重建成员表、
+在新表上重出 tsmom 证据、合并 #282，一次重启载入，之后 60 天不改构造/registry。
+
+协议：照抄 09-25 / 09-29 / 10-01 的同一协议，config 一个字不改：
+
+    PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
+      --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
+      --grid '{"crowding_window": [0, 72]}' \
+      --prior-trials 172 --charge 2 --prereg <本节 commit>
+
+- `--to` 不钉：窗口延到新成员表末行（约 10-18）。与 10-01 那次钉 09-29 不同——这次要的是让新证据的
+  membership manifest 与重建后的表一致，窗口必须含新数据。
+- 其余参数全部默认，与 09-25 相同。报告与 ledger 写进本 worktree 的 reports/research/，随 PR 入库。
+
+预期：WEAK_PASS（`oos_is_full_sample_tail`，5 折同选 crowding_window 72），样本外约 1.82，门约 1.57。
+N 会因 ledger 与新数据窗口而变（不再是 357），以报告为准。
+
+计费：2 行进 `tsmom` 桶。开跑前确认没有别的 `beidou data` 或 `research` 进程（成员表重建已跑完）。
+
+失效方式：
+- FAIL（或样本外低于门）：不换指针，记下读数交操作者。成员表已重建，dataset 门会挡到有合格证据为止。
+- 换指针后离线跑 `registry_evidence_problems` 与 `registry_dataset_problems`，两者 blocking 都要为空；
+  再跑两个构造测试（#282 已把钉子改到新摘要 0a82ff40，预期绿）。
+
