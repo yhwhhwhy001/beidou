@@ -21607,3 +21607,51 @@ flow 退役的治理记录（D-048）：
 本节同一个 PR 里的代码（M1）：`beidou_exchange/guard.py` 的三件同时（`MainnetRelease`、`mainnet_refusal`、
 `MAINNET_HOSTS`）、`BinanceRestClient` 的主机检查、`ORDER_PATHS` 加 `/fapi/v1/algoOrder`、`live run` 与
 `live flatten` 的 `--mainnet`。没有签字文件，合入后 mainnet 照旧在 guard 构造时被拒。
+
+## 2026-10-19 · 预登记：mainnet 全 USDT 保证金下重量 k（零 ledger）
+
+来源：上一节「现在重推」。脚本 `scratchpad/k_mainnet_all_usdt_20261019.py`，与本节同一个 commit 入库，跑之前提交。
+
+- **规则**：D-035 原样。取自助 q95 回撤在声明预算 −70% 以内的最大网格 k，pit 与 static 都要满足。
+- **因子 1.0**：全 USDT 账户上可动用就是总权益。阶梯 = `rescaled(k, budget=0.70)` = ((−0.49, 0.75k), (−0.70, 0.50k))，
+  base = k。这是 09-25 `k_remeasure_honest_drift_20260925.py` 的 K-4 臂（`ladder@k`、`unit`）。
+- **书**：今天的 `config/alpha_registry.yaml`（flow 已退役，只剩 tsmom）与 `config/live.demo.yaml`。数据末端钉在
+  2026-10-19 01:00（不含），与在架证据 `tsmom-validation-20261019T021124Z.json` 的 range 末端相同。
+- **网格**：0.60、0.55 … 0.20，步长 0.05，共 9 格。插值只作读数，不作答案。
+- **漂移两臂，答案取两臂 D-035 的较小者**：`h0919` = 1.2306419157745636（09-19 证据，k=0.60）；
+  `h0930` = 1.583996462786068（09-30 证据，k=0.175，FAIL 差 0.0144）。`orig` 与 `none`（无梯）只作对照，不进规则。
+- **零 ledger**：跑前跑后核 `reports/research/trials.jsonl` 的 sha256；`BEIDOU_TRIALS_LEDGER` 指向一个必须不存在的哨兵文件。
+- **不改任何 config**。采纳是 mainnet profile 与 registry 的 PR（M2），另裁；按采纳的 k 重出证据要花 ledger，要操作者一句完整授权。
+
+写在结果之前、不看结果改的两条：
+
+1. 两臂答案都落在网格内（≥ 0.20）时，答案就是较小者，哪怕它低于 09-25 的 0.45。
+2. 任一臂在网格里没有答案（0.20 也守不住），本次答案为「无」，不往下补格子；回到项目线程报告，由操作者定。
+
+已知不在模型里的：成本是平费率 7 bps、无冲击，L-B 资金下是好近似，L-C 之前要按真实成交校准冲击再量一次
+（MAINNET_READINESS §6）；周块 bootstrap 抹掉多月 regime；CAGR 只有差值有意义。
+
+## 2026-10-19 · 结果：mainnet 全 USDT 下 D-035 的预登记答案 k = 0.55（零 ledger）
+
+上一节的预登记在 `b0372404` 提交并推送后才开跑（脚本 sha256 `cbe7535b…57244`，与预登记时相同）。在操作者 Mac 上一个独立 worktree
+里跑，04:43:51Z 到 05:01:01Z，1,025 秒。输出在 `scratchpad/k-mainnet-20261019/`：`k-mainnet-all-usdt-20261019.json`
+（sha256 `360e025a…429d728`）与 `run.log`（sha256 `73cb1dba…e82737e`），两张表的原文都在 `run.log` 里。
+
+- **面板**：pit 与 static 各 50,088 根，2021-01-01 到 2026-10-19T00:00Z，pit 213 个名字、static 16 个。与在架证据
+  `tsmom-validation-20261019T021124Z.json` 的 `range.bars` 相同。
+- **ladder@k_h0919**：最大守住格 0.55，余量 pit +0.73pp、static +0.35pp；0.60 两边都破线（−1.67pp、−1.49pp）。
+  插值交点 pit 0.565、static 0.560。
+- **ladder@k_h0930**：9 格全守住，0.60 是网格上限而不是交点（余量 +4.18pp、+3.98pp）。
+- **预登记答案**：两臂取较小者，**k = 0.55**。
+- 对照（不进规则）：`ladder@k_orig` 0.60；`none_h0919` 0.45；`none_h0930`、`none_orig` 0.60。
+- **零 ledger**：`trials.jsonl` 跑前跑后 sha256 都是 `9fb9e255…0b12e3721`，哨兵文件不存在。
+
+写下来给采纳用、不改答案的三条：
+
+1. 0.55 的余量在抽样噪声以内。q95 的 bootstrap 95% 区间两边都跨过 −70%：pit [−70.56%, −68.77%]、static [−70.69%, −68.78%]。
+   0.50 两边都完整在线内：[−68.27%, −66.16%]、[−68.08%, −65.94%]。规则按点估计取格，所以答案仍是 0.55。
+2. 09-25 K-4 诚实臂用的是同一个漂移 1.2306，当时给 0.45。之间书变了（flow 退役）、成员表 10-19 重建、序列多了 632 根，
+   哪一项造成这 0.10 的差没有拆。
+3. 成本是平费率 7 bps、无冲击。L-B 资金下够用；L-C 之前按真实成交校准冲击后要再量一次。
+
+采纳不在本节：mainnet 的 k 写进它自己的 profile 与 registry 是 M2 的 PR，按采纳的 k 重出证据要花 ledger，两件都等操作者定。
