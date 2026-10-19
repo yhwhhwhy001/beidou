@@ -101,6 +101,10 @@ ADOPTIONS = {
     # each regime tercile's window q10 and moments, which M-010 and the decay rule now read.  Same WEAK_PASS under
     # the same D-043 cap; `--to` pinned to 2026-09-29 kept range_end in the 09-24 bucket, so N 357 and 0 new trials.
     "reports/research/tsmom-validation-20261001T145450Z.json": "2026-10-01",
+    # 2026-10-19 (the operator's 「现在做」): the same protocol re-issued on the REBUILT membership table (末行 09-24 → 10-18),
+    # so the cited evidence's membership manifest matches disk again and the dataset gate clears.  Same WEAK_PASS under the
+    # same D-043 cap; `--to` unpinned so the window extends to the new table's last row.  N = 359, 2 new trials.
+    "reports/research/tsmom-validation-20261019T021124Z.json": "2026-10-19",
 }
 ACKNOWLEDGED = ("book-tsmom-flow-20260908T105322Z.json",)
 
