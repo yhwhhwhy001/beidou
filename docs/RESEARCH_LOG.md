@@ -21711,9 +21711,10 @@ tsmom 的样本外 Sharpe 对 vol target 近似不变：k 从 0.175 到 0.50，�
     PYTHONPATH=$PWD /Users/maguannan/beidou/.venv/bin/python -m beidou_cli research validate \
       --strategy tsmom --universe pit --root /Users/maguannan/beidou/.beidou/data \
       --profile config/live.mainnet.yaml --registry config/alpha_registry.mainnet.yaml \
-      --grid '{"crowding_window": [0, 72]}' --to 2026-10-19 \
+      --grid '{"crowding_window": [0, 72]}' --to '2026-10-19 01:00' \
       --prior-trials 172 --charge 2 --prereg <本节 commit>
 
+`--to` 不含端点：最后一根 bar 开盘 10-19T00:00Z，与在架证据的 `range.end` 相同（与 k 重量那次的 `END` 同一写法）。
 在 worktree `/Users/maguannan/beidou-wt/evidence-mainnet-k050`（本分支）里跑。报告与 ledger 行写进这个 worktree 的
 `reports/research/`，随本分支入库。期望 `range.bars` 与在架证据一样是 50,088；不一样就照实记，不重跑。
 
